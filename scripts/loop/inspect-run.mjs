@@ -210,9 +210,8 @@ async function fetchCopilotLoopIterations({ repo, pr, snapshot }, { env, ghComma
   if (Array.isArray(reviewsPayload) && reviewsPayload.length >= 100) degradedReasons.push("reviews_page_cap");
   if (Array.isArray(reviewCommentsPayload) && reviewCommentsPayload.length >= 100) degradedReasons.push("review_comments_page_cap");
   if (Array.isArray(commitsPayload) && commitsPayload.length >= 100) degradedReasons.push("commits_page_cap");
-  if (reviewThreadsPayload?.data?.repository?.pullRequest?.reviewThreads?.pageInfo?.hasNextPage) {
-    degradedReasons.push("review_threads_has_next_page");
-  }
+  // Review threads carry no page-cap reason: fetchGithubReviewThreadsPayload
+  // paginates the full connection, so the source is always complete.
   return summarizeCopilotLoopIterations({
     reviewRequestEvents: normalizeTimelineReviewRequestEvents(timelinePayload),
     reviews: normalizeReviewPayload(reviewsPayload),

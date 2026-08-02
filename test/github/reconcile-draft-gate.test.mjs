@@ -331,7 +331,7 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
       },
       {
         assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
-        assertArgContains: ["reviewThreads(first: 100)"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
       {
@@ -417,7 +417,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
       },
       {
         assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
-        assertArgContains: ["reviewThreads(first: 100)"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
       {
@@ -504,7 +504,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
       },
       {
         assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
-        assertArgContains: ["reviewThreads(first: 100)"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
       {
@@ -582,7 +582,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
       },
       {
         assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
-        assertArgContains: ["reviewThreads(first: 100)"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
       {
@@ -664,7 +664,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
       },
       {
         assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
-        assertArgContains: ["reviewThreads(first: 100)"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
         stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
       },
       {

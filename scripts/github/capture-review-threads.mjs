@@ -15,10 +15,14 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isGhBinaryMissing, restGraphqlJson } from "./_gh-rest-fallback.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export const REVIEW_THREADS_QUERY = [
-  "query($owner: String!, $name: String!, $pr: Int!) {",
+  "query($owner: String!, $name: String!, $pr: Int!, $after: String) {",
   "  repository(owner: $owner, name: $name) {",
   "    pullRequest(number: $pr) {",
-  "      reviewThreads(first: 100) {",
+  "      reviewThreads(first: 100, after: $after) {",
+  "        pageInfo {",
+  "          hasNextPage",
+  "          endCursor",
+  "        }",
   "        nodes {",
   "          id",
   "          isResolved",
@@ -121,12 +125,11 @@ export function parseCaptureCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token));
       continue;
     }
-    if (token.name === "unresolved") {
-      options.unresolved = true;
-      continue;
-    }
-    if (token.name === "bodies") {
-      options.bodies = true;
+    if (token.name === "unresolved" || token.name === "bodies") {
+      if (token.value !== undefined) {
+        throw new Error(`${token.rawName} is a bare flag and takes no value (got "${token.value}")`);
+      }
+      options[token.name] = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
@@ -145,20 +148,50 @@ export function parseCaptureCliArgs(argv) {
   }
   return options;
 }
+function readThreadsConnection(payload) {
+  const connection = payload?.data?.repository?.pullRequest?.reviewThreads ?? payload?.data?.node?.reviewThreads;
+  if (connection && typeof connection === "object" && !Array.isArray(connection)) {
+    const pageInfo = connection.pageInfo ?? {};
+    return {
+      nodes: Array.isArray(connection.nodes) ? connection.nodes : [],
+      hasNextPage: Boolean(pageInfo.hasNextPage),
+      endCursor: typeof pageInfo.endCursor === "string" ? pageInfo.endCursor : null,
+    };
+  }
+  // Legacy/snapshot shapes (plain array, { threads }, { reviewThreads } — the
+  // same candidates parseReviewThreads accepts): a single page, no pagination.
+  const candidates = [payload, payload?.threads, payload?.reviewThreads, payload?.reviewThreads?.nodes];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return { nodes: candidate, hasNextPage: false, endCursor: null };
+    }
+  }
+  throw new Error("Could not find review threads in payload");
+}
+
 // Falls back to a direct GraphQL POST (GH_TOKEN/GITHUB_TOKEN) ONLY when spawning
 // the `gh` binary itself fails (ENOENT — not on PATH), so a gh-less session can
 // still verify review-thread resolution state (#1358). Any other `gh` failure
 // (auth, rate limit) surfaces as a real error, unchanged.
+//
+// Paginates past 100 threads (resolved threads consume the same page budget, so
+// the working-set view must walk every page to honor "exactly the unresolved
+// threads"). Returns the merged raw thread-node array, which the parsers accept
+// directly.
 export async function fetchGithubReviewThreadsPayload(
   { repo, pr },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
-  let result;
-  try {
-    result = await runChild(
-      ghCommand,
-      [
+  const nodes = [];
+  let after = null;
+  let useRestFallback = false;
+  while (true) {
+    let payload;
+    if (useRestFallback) {
+      payload = await restGraphqlJson(REVIEW_THREADS_QUERY, { owner, name, pr, after }, env);
+    } else {
+      const args = [
         "api",
         "graphql",
         "--field",
@@ -169,20 +202,40 @@ export async function fetchGithubReviewThreadsPayload(
         `pr=${pr}`,
         "--field",
         `query=${REVIEW_THREADS_QUERY}`,
-      ],
-      env,
-    );
-  } catch (error) {
-    if (isGhBinaryMissing(error)) {
-      return await restGraphqlJson(REVIEW_THREADS_QUERY, { owner, name, pr }, env);
+      ];
+      if (typeof after === "string" && after.length > 0) {
+        args.push("--field", `after=${after}`);
+      }
+      let result;
+      try {
+        result = await runChild(ghCommand, args, env);
+      } catch (error) {
+        if (isGhBinaryMissing(error)) {
+          useRestFallback = true;
+          continue;
+        }
+        throw error;
+      }
+      if (result.code !== 0) {
+        const detail = result.stderr.trim() || `exit code ${result.code}`;
+        throw new Error(`gh command failed: ${detail}`);
+      }
+      payload = parseJsonText(result.stdout);
     }
-    throw error;
+    const page = readThreadsConnection(payload);
+    nodes.push(...page.nodes);
+    if (!page.hasNextPage) {
+      break;
+    }
+    if (!page.endCursor) {
+      throw new Error("Invalid review-threads GraphQL payload: pageInfo.hasNextPage is true but endCursor is missing");
+    }
+    if (page.endCursor === after) {
+      throw new Error("Invalid review-threads GraphQL payload: pagination did not advance (endCursor repeated)");
+    }
+    after = page.endCursor;
   }
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout);
+  return nodes;
 }
 function createSuccessPayload(source, result, outputPath) {
   return {

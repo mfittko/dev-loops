@@ -325,3 +325,75 @@ test("the live GraphQL query fetches the working-set location fields", () => {
     assert.equal(REVIEW_THREADS_QUERY.includes(field), true, `query must fetch ${field}`);
   }
 });
+
+test("the working-set threads are id-sorted, not payload-ordered", async () => {
+  const stdin = await readFile(fixturePath, "utf8");
+  const result = await runNode(["--unresolved", "--bodies"], { stdin });
+
+  assert.equal(result.code, 0);
+  const output = JSON.parse(result.stdout);
+  // The fixture lists threads in reverse order (t-3 before t-1); the view sorts.
+  assert.deepEqual(output.threads.map((thread) => thread.threadId), ["t-1", "t-3"]);
+});
+
+test("--jq '.threads[]' composes with the working-set view (the documented one-call read)", async () => {
+  const snapshot = JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: [
+      { id: "t-1", isResolved: false, path: "a.mjs", line: 4, comments: { nodes: [{ id: "c-1", body: "one" }] } },
+      { id: "t-2", isResolved: true, comments: { nodes: [{ id: "c-2", body: "gone" }] } },
+    ] } } } },
+  });
+  const result = await runNode(["--unresolved", "--bodies", "--jq", ".threads[]"], { stdin: snapshot });
+
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    threadId: "t-1", path: "a.mjs", line: 4, isOutdated: false, bodies: ["one"],
+  });
+});
+
+test("a value on the bare working-set flags fails closed (--unresolved=false is not a negation)", async () => {
+  const stdin = await readFile(fixturePath, "utf8");
+  const result = await runNode(["--unresolved=false", "--bodies"], { stdin });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /takes no value/);
+});
+
+test("live mode paginates past 100 threads and feeds the working-set parser", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-capture-paginate-"));
+  const page = (nodes, pageInfo) => JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes, pageInfo } } } },
+  });
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: page(
+          [{ id: "t-a", isResolved: false, path: "x.mjs", line: 1, comments: { nodes: [{ id: "c-1", body: "page one" }] } }],
+          { hasNextPage: true, endCursor: "CURSOR-1" },
+        ),
+      },
+      {
+        assertArgs: ["after=CURSOR-1"],
+        stdout: page(
+          [
+            { id: "t-b", isResolved: true, comments: { nodes: [{ id: "c-2", body: "resolved" }] } },
+            { id: "t-c", isResolved: false, isOutdated: true, comments: { nodes: [{ id: "c-3", body: "page two" }] } },
+          ],
+          { hasNextPage: false, endCursor: null },
+        ),
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "9", "--unresolved", "--bodies"], { env: gh.env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.summary.totalThreads, 3, "both pages are merged before summarizing");
+    assert.deepEqual(output.threads, [
+      { threadId: "t-a", path: "x.mjs", line: 1, isOutdated: false, bodies: ["page one"] },
+      { threadId: "t-c", path: null, line: null, isOutdated: true, bodies: ["page two"] },
+    ]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

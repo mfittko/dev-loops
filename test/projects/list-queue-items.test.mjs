@@ -960,3 +960,66 @@ describe("table mode (--table)", () => {
     }
   });
 });
+
+describe("table mode wiring through runCli (--table)", () => {
+  function tableResponses(items) {
+    return [
+      { payload: { data: { user: { id: "U_kgDOABC123" } } } },
+      { payload: { data: { user: { projectsV2: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: "PVT_proj1", number: 1, title: "Dev Loop Queue", url: "u" }] } } } } },
+      { payload: { data: { node: { fields: { nodes: [{ id: "PVTSSF_status", name: "Status", options: [{ id: "opt2", name: "Next Up" }, { id: "opt3", name: "In Progress" }] }], pageInfo: { hasNextPage: false } } } } } },
+      { payload: { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } } },
+    ];
+  }
+  const item = (n, title, status) => ({
+    id: `it-${n}`,
+    fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: status }] },
+    content: { __typename: "Issue", id: `c-${n}`, number: n, title, url: `https://x/${n}` },
+  });
+
+  it("runCli with --table renders the aligned rows to stdout (flag actually wired)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1", "--table"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([
+        item(7, "Short one", "Next Up"),
+        item(1234, "A longer title here", "In Progress"),
+      ])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    assert.equal(out, "#7     Next Up      Short one\n#1234  In Progress  A longer title here\n");
+  });
+
+  it("runCli --table composes with --limit (renders only the limited rows)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1", "--table", "--limit", "1"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([
+        item(7, "Short one", "Next Up"),
+        item(1234, "A longer title here", "In Progress"),
+      ])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    assert.equal(out, "#7  Next Up  Short one\n");
+  });
+
+  it("default mode emits JSON with the documented item keys (no shape change without --table)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([item(7, "Short one", "Next Up")])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(
+      Object.keys(parsed.items[0]).sort(),
+      ["contentId", "issueNumber", "itemId", "prNumber", "status", "title", "url"],
+    );
+  });
+});

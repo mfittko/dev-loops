@@ -7,9 +7,9 @@ import { authorMatchesFilter } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 // Dedicated query: unlike capture-review-threads.mjs's REVIEW_THREADS_QUERY
-// (all comments, no path/line/isOutdated, no pagination past 100), this tool
-// needs only the FIRST comment per thread (the reply-resolve target) plus the
-// thread-level path/line/isOutdated fields, and must paginate past 100 threads.
+// (which fetches ALL comments per thread), this tool needs only the FIRST
+// comment per thread (the reply-resolve target), so the smaller page keeps
+// listings cheap. Both queries paginate past 100 threads.
 export const LIST_REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!, $after: String) {",
   "  repository(owner: $owner, name: $name) {",
@@ -220,6 +220,9 @@ export async function fetchAllReviewThreads(
     }
     if (!endCursor) {
       throw new Error("Invalid review-threads GraphQL payload: pageInfo.hasNextPage is true but endCursor is missing");
+    }
+    if (endCursor === after) {
+      throw new Error("Invalid review-threads GraphQL payload: pagination did not advance (endCursor repeated)");
     }
     after = endCursor;
   }

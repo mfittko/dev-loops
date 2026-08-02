@@ -347,7 +347,8 @@ test("fetchGithubReviewThreadsPayload falls back to the GraphQL REST endpoint wh
       { env: { GITHUB_TOKEN: "test-token" }, ghCommand: "gh", runChild: enoentRunChild("gh") },
     );
 
-    assert.deepEqual(payload.data.repository.pullRequest.reviewThreads.nodes, []);
+    // The fetcher returns the merged raw thread-node array (paginated walk).
+    assert.deepEqual(payload, []);
     assert.equal(fetchCalls[0].url, "https://api.github.com/graphql");
     assert.equal(JSON.parse(fetchCalls[0].options.body).variables.pr, 17);
   } finally {
