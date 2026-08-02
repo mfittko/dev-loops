@@ -129,8 +129,11 @@ the worktree. Refused entirely (`guard.ok: false`, nothing written):
 
 - `core.hooksPath` is already configured to point elsewhere: installing into
   `$GIT_DIR/hooks` would never run.
-- A resolved branch name is not shell-safe (contains a character the
-  generated hook's own shell would expand).
+- The resolved DEFAULT branch name is not shell-safe (contains a character
+  the generated hook's own shell would expand). An unsafe EXPLICIT base does
+  not refuse the install: it is dropped (reported in
+  `droppedExplicitBranches` with a `reason`) and the default guard installs
+  without it.
 - `gitDir` does not resolve to a real git directory, or the installer itself
   fails (e.g. `git` unavailable, `repoRoot` not a git checkout).
 

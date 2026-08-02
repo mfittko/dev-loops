@@ -317,6 +317,46 @@ test("install: explicitBaseBranches is REPLACED, not unioned — a later call wi
   }
 });
 
+// Must-fix (round 2): a git-legal but shell-unsafe explicit base must not
+// kill the whole install — that left `main` unguarded while the worktree
+// reported ok. Only the unsafe explicit entry is dropped (recorded in
+// droppedExplicitBranches); the default guard installs regardless, and the
+// unsafe text never reaches the generated hook.
+test("install: a shell-unsafe explicit base is dropped, the default guard still installs", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    const result = installDefaultBranchGuard({ gitDir, defaultBranches: "main", explicitBaseBranches: "feat(auth)" });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.defaultBranches, ["main"], "the default guard must install despite the unsafe explicit base");
+    assert.deepEqual(result.droppedExplicitBranches, ["feat(auth)"], "the dropped explicit base is recorded");
+    assert.match(result.reason, /explicit base/, "the drop is surfaced in reason");
+    assert.equal(commitAttempt(dir, "on-main-still-guarded.txt").blocked, true, "a commit on main must still be refused");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Negative injection test for the explicit slot: command-substitution text
+// passed as an explicit base must never be baked into the hook.
+test("install: shell-injection text in explicitBaseBranches never reaches the generated hook", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    const payload = "x$(touch /tmp/dev-loops-guard-pwned)";
+    const result = installDefaultBranchGuard({ gitDir, defaultBranches: "main", explicitBaseBranches: payload });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.droppedExplicitBranches, [payload]);
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    for (const hook of ["pre-commit", "pre-merge-commit", "pre-push"]) {
+      const text = readFileSync(path.join(gitDir, "hooks", hook), "utf8");
+      assert.ok(!text.includes("touch /tmp"), `${hook} must not contain the injection payload`);
+    }
+    assert.equal(commitAttempt(dir, "safe-after-injection-attempt.txt").blocked, true, "main stays guarded");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // `git symbolic-ref --short` DISAMBIGUATES to "heads/main" when a tag also
 // named "main" exists — comparing that short form against the bare branch
 // name would then never match, letting the commit land while the install

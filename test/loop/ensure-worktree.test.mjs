@@ -557,7 +557,7 @@ test("ensure: stacking --base on a live worktree branch does not permanently gua
 
     // The owning worktree's OWN branch is refused while stacked.
     assert.throws(
-      () => execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work"], { cwd: owner.path, encoding: "utf8" }),
+      () => execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work"], { cwd: owner.path, encoding: "utf8", env: REPO_GIT_ENV }),
       (err) => /refusing to commit on the default branch \(issue-100\)/.test(String(err.stderr)),
       "issue-100's own commit must be refused while its branch is a stacked explicit base",
     );
@@ -571,7 +571,7 @@ test("ensure: stacking --base on a live worktree branch does not permanently gua
     assert.ok(freed.guard.defaultBranches.includes("main"), "the real default must still be guarded");
 
     // issue-100's own commits now pass.
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work after drop"], { cwd: owner.path, encoding: "utf8" });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work after drop"], { cwd: owner.path, encoding: "utf8", env: REPO_GIT_ENV });
   } finally {
     repo.cleanup();
   }

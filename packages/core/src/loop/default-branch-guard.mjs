@@ -278,8 +278,8 @@ export function installDefaultBranchGuard({
   }
 
   const branches = normalizeBranchList(defaultBranches);
-  const explicitBranches = normalizeBranchList(explicitBaseBranches);
-  const unsafeBranch = [...branches, ...explicitBranches].find((branch) => !SHELL_SAFE_BRANCH.test(branch));
+  const allExplicitBranches = normalizeBranchList(explicitBaseBranches);
+  const unsafeBranch = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
 
   if (unsafeBranch) {
     return refuse(
@@ -287,6 +287,14 @@ export function installDefaultBranchGuard({
       "the resolved default branch name is not shell-safe",
     );
   }
+
+  // A shell-unsafe EXPLICIT base (git-legal names like "feat(auth)" or
+  // "fix#123") must not kill the whole install — that would leave the real
+  // default branch unguarded while reporting the worktree ok. Drop only the
+  // unsafe explicit entries, install the default guard regardless, and record
+  // what was dropped so the caller can surface it.
+  const droppedExplicitBranches = allExplicitBranches.filter((branch) => !SHELL_SAFE_BRANCH.test(branch));
+  const explicitBranches = allExplicitBranches.filter((branch) => SHELL_SAFE_BRANCH.test(branch));
 
   const hooksDir = path.join(gitDir, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -355,6 +363,8 @@ export function installDefaultBranchGuard({
     reason = anyWritten
       ? "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect"
       : "every guarded hook slot is already occupied by a foreign hook; nothing was written, so nothing is enforced";
+  } else if (droppedExplicitBranches.length > 0) {
+    reason = `explicit base ${droppedExplicitBranches.map((branch) => JSON.stringify(branch)).join(", ")} contains characters the generated hook's shell would expand; the default guard was installed without it`;
   }
   return {
     ok: true,
@@ -362,6 +372,7 @@ export function installDefaultBranchGuard({
     refreshed,
     skipped,
     defaultBranches: reportedBranches,
+    ...(droppedExplicitBranches.length > 0 ? { droppedExplicitBranches } : {}),
     ...(reason ? { reason } : {}),
   };
 }
