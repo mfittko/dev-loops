@@ -91,7 +91,7 @@ For each gap, in order:
 - **Bounded choice gap:** use `AskUserQuestion` with the question text and the choice options, plus an "Other / free text" option. Block until the user answers.
 - **Open-ended gap:** present the question as a plain text turn. Block until the user answers.
 
-Record each answer with its source: `human`.
+Record each answer's source as the operator's GitHub handle: resolve it once per run with `gh api user --jq .login` (a read-only self-lookup — the "never raw `gh`" rule targets issue/PR mutations, not self-reads) and use the resolved handle (e.g. `mfittko`) as the `Source` value for every human-answered gap. Fall back to the literal `human` only when the login cannot be resolved (unauthenticated / offline). `--auto` mode is unaffected — its evidence-source tokens are not human answers.
 
 > `AskUserQuestion` is a Claude Code–native construct. If you are running outside Claude Code, use `--auto` mode instead.
 
@@ -160,7 +160,7 @@ Three distinct artifacts for tracker-first (two for PR-body/local-planning, whic
 
 1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, `## Acceptance criteria`, `## Definition of done`, and `## Non-goals`. No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
-2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. Same `#<number>` hygiene rule applies.
+2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. For an interactive run the preamble reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`). Same `#<number>` hygiene rule applies.
 
 3. **Raw Q&A transcript** (ephemeral `tmp/issues/issue-<n>/grill/<timestamp>.md` only — never the body, never the comment):
 
@@ -171,7 +171,7 @@ Three distinct artifacts for tracker-first (two for PR-body/local-planning, whic
 
 | # | Gap | Question | Answer | Source |
 |---|-----|----------|--------|--------|
-| 1 | Missing AC | <question text> | <answer text> | codebase \| docs \| context \| inferred \| human |
+| 1 | Missing AC | <question text> | <answer text> | codebase \| docs \| context \| inferred \| <operator-handle> (interactive; fallback `human`) |
 
 ### Unresolved gaps
 

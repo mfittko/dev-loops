@@ -165,3 +165,28 @@ test("each write-back hygiene detector independently fires on its own defect (no
   // enumeration-vs-reference call to agent judgment, not this regex.
   assert.doesNotMatch("tracked in `#1389`", BARE_HASH_RE);
 });
+
+// Interactive-source attribution (issue 1451): the SKILL must instruct
+// resolving the operator's handle for interactive answers, keep the literal
+// `human` only as the unresolvable fallback, and leave --auto's evidence
+// tokens untouched. Doc pins over SKILL.md, matching this file's style.
+test("interactive answers attribute to the resolved operator handle, with human as the documented fallback", () => {
+  assert.match(skill, /gh api user --jq \.login/, "the SKILL names the read-only self-lookup for the handle");
+  assert.match(
+    skill,
+    /Fall back to the literal `human` only when the login cannot be resolved/,
+    "the fallback is documented as unresolvable-login-only",
+  );
+  assert.match(
+    skill,
+    /<operator-handle> \(interactive; fallback `human`\)/,
+    "the Source-column enum carries the interactive handle with the human fallback",
+  );
+  assert.match(
+    skill,
+    /source: <handle> answers via operator Q&A/,
+    "the results-comment preamble uses the resolved handle",
+  );
+  // --auto evidence tokens unchanged, and not attributed to a human.
+  assert.match(skill, /codebase \\\| docs \\\| context \\\| inferred/, "auto evidence tokens remain in the enum");
+});
