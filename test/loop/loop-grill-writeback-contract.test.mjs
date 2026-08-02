@@ -165,3 +165,50 @@ test("each write-back hygiene detector independently fires on its own defect (no
   // enumeration-vs-reference call to agent judgment, not this regex.
   assert.doesNotMatch("tracked in `#1389`", BARE_HASH_RE);
 });
+
+// Interactive-source attribution: the SKILL must instruct
+// resolving the operator's handle for interactive answers, keep the literal
+// `human` only as the unresolvable fallback, and leave --auto's evidence
+// tokens untouched. Doc pins over SKILL.md, matching this file's style.
+test("interactive answers attribute to the resolved operator handle, with human as the documented fallback", () => {
+  assert.match(skill, /gh api user --jq \.login/, "the SKILL names the read-only self-lookup for the handle");
+  assert.match(
+    skill,
+    /In every other case fall back to the literal `human`/,
+    "the fallback is documented as the only alternative to a validated handle",
+  );
+  assert.match(
+    skill,
+    /<operator-handle> \(interactive; fallback `human`\)/,
+    "the Source-column enum carries the interactive handle with the human fallback",
+  );
+  assert.match(
+    skill,
+    /source: <handle> answers via operator Q&A/,
+    "the results-comment preamble uses the resolved handle",
+  );
+  // --auto evidence tokens unchanged, and not attributed to a human. Pin the
+  // DEFINITIONAL source-priority list and the unresolved flag rule, not just
+  // enum rows — renaming a token at its definition must fail these.
+  assert.match(skill, /codebase \\\| docs \\\| context \\\| inferred/, "auto evidence tokens remain in the enum");
+  assert.match(
+    skill,
+    /1\. \*\*`codebase`\*\*[\s\S]*2\. \*\*`docs`\*\*[\s\S]*3\. \*\*`context`\*\*[\s\S]*4\. \*\*`inferred`\*\*/,
+    "the four auto evidence tokens stay defined in the source-priority list",
+  );
+  assert.match(skill, /Flag a question as \*\*`unresolved`\*\* when:/, "the fifth auto token stays documented at its definition");
+  // The superseded literal instruction must be GONE, not merely superseded.
+  assert.doesNotMatch(
+    skill,
+    /Record each answer with its source: `human`/,
+    "the replaced literal-human instruction must not survive alongside the handle rule",
+  );
+  // The preamble fallback is pinned, not just the Source-value fallback.
+  assert.match(
+    skill,
+    /fallback: `source: human answers via operator Q&A`/,
+    "the results-comment preamble fallback is documented",
+  );
+  // The resolved-handle acceptance shape is pinned (exit 0, non-empty, not null, plain handle).
+  assert.match(skill, /\^\[A-Za-z0-9-\]\{1,39\}\$/, "the handle allowlist shape is documented");
+});
