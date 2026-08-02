@@ -5,6 +5,7 @@ export {
   parseJsonText,
   classifyReviewThreadsSignal,
   parseReviewThreads,
+  parseUnresolvedThreadBodies,
   readInput,
 } from "@dev-loops/core/github/review-threads";
 

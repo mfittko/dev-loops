@@ -21,6 +21,11 @@ Options:
   --limit <n>             Return at most <n> items (flat mode only).
   --summary               Whole-board digest grouped by Status column, in board
                           column order. Emits { ok, groups: { <status>: { count, items } } }.
+  --table                 Render the flat item list as aligned human-readable
+                          columns (number, status, title) instead of JSON.
+                          Composes with --column/--limit. Mutually exclusive
+                          with --summary, --jq, and --silent. JSON stays the
+                          default and is unchanged when --table is omitted.
   --group-by status       Alias for --summary. Only "status" is supported.
   --done-limit <n>        With --summary: cap the "Done" group's items array to
                           <n> (or the last/terminal board column if no column is
@@ -66,6 +71,7 @@ function parseCliArgs(argv) {
       column: { type: "string" },
       limit: { type: "string" },
       summary: { type: "boolean" },
+      table: { type: "boolean" },
       "group-by": { type: "string" },
       "done-limit": { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -114,6 +120,12 @@ function parseCliArgs(argv) {
         }
         args.summary = true;
         break;
+      case "table":
+        if (token.value !== undefined) {
+          throw parseError(`Unknown flag: ${token.rawName}=${token.value}`);
+        }
+        args.table = true;
+        break;
       case "group-by": {
         const val = requireValue(token, "--group-by requires a value (only \"status\" is supported)");
         if (val !== "status") {
@@ -140,6 +152,27 @@ function parseCliArgs(argv) {
   return args;
 }
 
+export function renderItemsTable(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return "No items.\n";
+  }
+  const rows = items.map((item) => [
+    item.issueNumber !== null && item.issueNumber !== undefined
+      ? `#${item.issueNumber}`
+      : item.prNumber !== null && item.prNumber !== undefined
+        ? `PR #${item.prNumber}`
+        : "-",
+    typeof item.status === "string" && item.status.length > 0 ? item.status : "-",
+    typeof item.title === "string" ? item.title : "",
+  ]);
+  const numberWidth = Math.max(...rows.map(([number]) => number.length));
+  const statusWidth = Math.max(...rows.map(([, status]) => status.length));
+  return rows
+    .map(([number, status, title]) => `${number.padEnd(numberWidth)}  ${status.padEnd(statusWidth)}  ${title}`.trimEnd())
+    .map((line) => `${line}\n`)
+    .join("");
+}
+
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
 async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild } = {}) {
@@ -155,12 +188,21 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     stdout.write(USAGE);
     return;
   }
+  if (args.table && (args.summary || args.jq !== undefined || args.silent)) {
+    stderr.write(`${formatCliError(Object.assign(new Error("--table is a human-readable flat render; it is mutually exclusive with --summary, --jq, and --silent"), { usage: USAGE }))}\n`);
+    process.exitCode = 1;
+    return;
+  }
 
   // Resolve the board from .devloops when --project is absent.
   applyDevloopsBoard(args, cwd);
 
   try {
     const result = await main(args, { env, runChild });
+    if (args.table) {
+      stdout.write(renderItemsTable(result.items));
+      return;
+    }
     process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
   } catch (err) {
     stderr.write(JSON.stringify({ ok: false, error: err.message, code: err.code ?? "UNKNOWN" }) + "\n");

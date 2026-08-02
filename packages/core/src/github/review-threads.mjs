@@ -166,6 +166,34 @@ export function parseReviewThreads(payload) {
   };
 }
 
+/**
+ * The fix-loop's re-entry working set: only unresolved threads, each with its
+ * comment bodies joined in thread order. Location fields come from the thread
+ * node when the payload carries them (`path`/`line`/`isOutdated`); snapshots
+ * without them yield `path: null`, `line: null`, `isOutdated: false`.
+ *
+ * @returns {{ summary: object, threads: Array<{ threadId: string, path: string|null, line: number|null, isOutdated: boolean, bodies: string[] }> }}
+ */
+export function parseUnresolvedThreadBodies(payload) {
+  const rawThreads = extractRawThreads(payload);
+  const { summary } = parseReviewThreads(payload);
+  const threads = rawThreads
+    .map((thread, threadIndex) => ({ thread, threadIndex }))
+    .filter(({ thread }) => !thread?.isResolved)
+    .map(({ thread, threadIndex }) => ({
+      threadId: normalizeId(thread?.id ?? thread?.databaseId, `thread-${threadIndex + 1}`),
+      path: typeof thread?.path === "string" && thread.path.length > 0 ? thread.path : null,
+      line: Number.isInteger(thread?.line) ? thread.line : null,
+      isOutdated: Boolean(thread?.isOutdated),
+      bodies: extractRawComments(thread).map((comment) =>
+        normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? ""),
+      ),
+    }))
+    .sort((left, right) => compareIds(left.threadId, right.threadId));
+
+  return { summary, threads };
+}
+
 // ── Signal classification heuristics ──────────────────────────────────────
 
 const HIGH_SIGNAL_PATTERNS = [

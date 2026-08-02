@@ -233,3 +233,95 @@ test("capture-review-threads reports gh failures deterministically", async () =>
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("--unresolved --bodies emits only unresolved threads with joined bodies (fix-loop working set)", async () => {
+  const snapshot = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              {
+                id: "t-1",
+                isResolved: false,
+                isOutdated: true,
+                path: "src/a.mjs",
+                line: 12,
+                comments: { nodes: [
+                  { id: "c-1", body: "first" },
+                  { id: "c-2", body: "second" },
+                ] },
+              },
+              {
+                id: "t-2",
+                isResolved: true,
+                path: "src/b.mjs",
+                line: 3,
+                comments: { nodes: [{ id: "c-3", body: "resolved" }] },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+  const result = await runNode(["--unresolved", "--bodies"], { stdin: snapshot });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, true);
+  assert.deepEqual(output.threads, [
+    { threadId: "t-1", path: "src/a.mjs", line: 12, isOutdated: true, bodies: ["first", "second"] },
+  ]);
+  assert.equal(output.summary.totalThreads, 2);
+  assert.equal(output.summary.unresolvedThreads, 1);
+  assert.equal(output.comments, undefined, "the working-set view carries no separate comments array");
+});
+
+test("--unresolved --bodies with an empty working set emits an empty threads array", async () => {
+  const snapshot = JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+  });
+  const result = await runNode(["--unresolved", "--bodies"], { stdin: snapshot });
+
+  assert.equal(result.code, 0);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output.threads, []);
+  assert.equal(output.summary.totalThreads, 0);
+});
+
+test("a snapshot without path/line/isOutdated degrades to null/null/false in the working-set view", async () => {
+  const stdin = await readFile(fixturePath, "utf8");
+  const result = await runNode(["--unresolved", "--bodies"], { stdin });
+
+  assert.equal(result.code, 0);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.threads.length, 2);
+  for (const thread of output.threads) {
+    assert.equal(thread.path, null);
+    assert.equal(thread.line, null);
+    assert.equal(thread.isOutdated, false);
+    assert.equal(Array.isArray(thread.bodies), true);
+  }
+});
+
+test("a lone --unresolved or --bodies flag fails closed, and the default shape is unchanged without them", async () => {
+  const stdin = await readFile(fixturePath, "utf8");
+  for (const args of [["--unresolved"], ["--bodies"]]) {
+    const result = await runNode(args, { stdin });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /only valid together/);
+  }
+
+  const plain = await runNode([], { stdin });
+  const output = JSON.parse(plain.stdout);
+  assert.deepEqual(Object.keys(output).sort(), ["comments", "ok", "source", "summary", "threads"]);
+  assert.equal(output.threads.some((thread) => thread.isResolved), true, "default output keeps resolved threads");
+});
+
+test("the live GraphQL query fetches the working-set location fields", () => {
+  for (const field of ["path", "line", "isOutdated"]) {
+    assert.equal(REVIEW_THREADS_QUERY.includes(field), true, `query must fetch ${field}`);
+  }
+});

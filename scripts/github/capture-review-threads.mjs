@@ -6,6 +6,7 @@ import {
   isDirectCliRun,
   parseJsonText,
   parseReviewThreads,
+  parseUnresolvedThreadBodies,
   readInput,
 } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
@@ -21,6 +22,9 @@ export const REVIEW_THREADS_QUERY = [
   "        nodes {",
   "          id",
   "          isResolved",
+  "          isOutdated",
+  "          path",
+  "          line",
   "          comments(first: 100) {",
   "            nodes {",
   "              id",
@@ -38,13 +42,22 @@ export const REVIEW_THREADS_QUERY = [
   "  }",
   "}",
 ].join("\n");
-const HELP = `Usage: capture-review-threads.mjs [--input <path> | --repo <owner/name> --pr <number>] [--output <path>]
+const HELP = `Usage: capture-review-threads.mjs [--input <path> | --repo <owner/name> --pr <number>] [--unresolved --bodies] [--output <path>]
 Capture review threads from a GitHub PR or from a local JSON snapshot.
 Modes:
   --input <path>                Read JSON snapshot from file
   (no mode flag)                Read JSON snapshot from stdin
   --repo <owner/name> --pr <n>  Fetch live review threads from GitHub PR
 Options:
+  --unresolved --bodies
+                    Emit the fix-loop working set instead of the full capture:
+                    only unresolved threads, each as
+                    { threadId, path, line, isOutdated, bodies: [...] } with the
+                    thread's comment bodies joined in order (plus the summary
+                    block). Resolved threads are absent. The two flags are only
+                    valid together; the default output shape is unchanged when
+                    they are omitted. Canonical loop re-entry read — no
+                    post-processing needed beyond --jq '.threads[]'.
   --output <path>   Write JSON output to file in addition to stdout
   --help, -h        Show this help
 ${JQ_OUTPUT_USAGE}
@@ -62,6 +75,8 @@ export function parseCaptureCliArgs(argv) {
       output: { type: "string" },
       repo: { type: "string" },
       pr: { type: "string" },
+      unresolved: { type: "boolean" },
+      bodies: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -73,6 +88,8 @@ export function parseCaptureCliArgs(argv) {
     outputPath: undefined,
     repo: undefined,
     pr: undefined,
+    unresolved: false,
+    bodies: false,
     help: false,
     jq: undefined,
     silent: false,
@@ -104,8 +121,19 @@ export function parseCaptureCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token));
       continue;
     }
+    if (token.name === "unresolved") {
+      options.unresolved = true;
+      continue;
+    }
+    if (token.name === "bodies") {
+      options.bodies = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
     throw new Error(`Unknown argument: ${token.rawName}`);
+  }
+  if (options.unresolved !== options.bodies) {
+    throw new Error("--unresolved and --bodies are only valid together (the working-set view has one shape)");
   }
   const hasLiveArgs = options.repo !== undefined || options.pr !== undefined;
   const hasCompleteLiveArgs = options.repo !== undefined && options.pr !== undefined;
@@ -182,6 +210,7 @@ export async function runCli(
     stdout.write(HELP);
     return;
   }
+  const parse = options.unresolved ? parseUnresolvedThreadBodies : parseReviewThreads;
   let source;
   let parsed;
   if (options.repo && options.pr !== undefined) {
@@ -190,7 +219,7 @@ export async function runCli(
       repo: options.repo,
       pr: options.pr,
     };
-    parsed = parseReviewThreads(await fetchGithubReviewThreadsPayload(
+    parsed = parse(await fetchGithubReviewThreadsPayload(
       { repo: options.repo, pr: options.pr },
       { env, ghCommand },
     ));
@@ -199,10 +228,10 @@ export async function runCli(
       type: "input",
       inputPath: options.inputPath,
     };
-    parsed = parseReviewThreads(parseJsonText(await readInput({ inputPath: options.inputPath, stdin })));
+    parsed = parse(parseJsonText(await readInput({ inputPath: options.inputPath, stdin })));
   } else {
     source = { type: "stdin" };
-    parsed = parseReviewThreads(parseJsonText(await readInput({ stdin })));
+    parsed = parse(parseJsonText(await readInput({ stdin })));
   }
   const payload = createSuccessPayload(source, parsed, options.outputPath);
   if (options.outputPath) {

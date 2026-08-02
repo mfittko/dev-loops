@@ -54,6 +54,10 @@ dev-loops queue list --repo mfittko/dev-loops --project 1 --column "Next Up"
 
 # Limit to top 5 items
 dev-loops queue list --repo mfittko/dev-loops --project 1 --limit 5
+
+# Human-readable board triage: aligned number/status/title columns
+# (JSON stays the default; --table composes with --column/--limit)
+dev-loops queue list --repo mfittko/dev-loops --project 1 --table
 ```
 
 ### Add an item to the queue

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { main, parseCliArgs, runCli } from "../../scripts/projects/list-queue-items.mjs";
+import { main, parseCliArgs, renderItemsTable, runCli } from "../../scripts/projects/list-queue-items.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -925,5 +925,38 @@ describe("list-queue-items", () => {
         process.exitCode = 0; // avoid leaking a failure code into the test runner
       });
     });
+  });
+});
+
+describe("table mode (--table)", () => {
+  it("renderItemsTable aligns number, status, and title columns", () => {
+    const out = renderItemsTable([
+      { issueNumber: 7, prNumber: null, title: "Short one", status: "Next Up" },
+      { issueNumber: 1234, prNumber: null, title: "A longer title here", status: "In Progress" },
+      { issueNumber: null, prNumber: 88, title: "A PR item", status: "Done" },
+    ]);
+    assert.equal(out, [
+      "#7      Next Up      Short one",
+      "#1234   In Progress  A longer title here",
+      "PR #88  Done         A PR item",
+    ].map((line) => `${line}\n`).join(""));
+  });
+
+  it("renderItemsTable on an empty list prints a single placeholder line", () => {
+    assert.equal(renderItemsTable([]), "No items.\n");
+  });
+
+  it("--table is mutually exclusive with --summary, --jq, and --silent (exit 1, no fetch)", async () => {
+    for (const extra of [["--summary"], ["--jq", ".ok"], ["--silent"]]) {
+      let err = "";
+      process.exitCode = 0;
+      await runCli(["--repo", "mfittko/dev-loops", "--table", ...extra], {
+        env: {}, cwd: process.cwd(), runChild: mockRunChild([]),
+        stdout: { write() {} }, stderr: { write(s) { err += s; } },
+      });
+      assert.equal(process.exitCode, 1, `expected exit 1 for --table with ${extra[0]}`);
+      assert.match(err, /mutually exclusive/);
+      process.exitCode = 0;
+    }
   });
 });
