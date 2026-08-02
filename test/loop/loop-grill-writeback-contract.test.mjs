@@ -166,7 +166,7 @@ test("each write-back hygiene detector independently fires on its own defect (no
   assert.doesNotMatch("tracked in `#1389`", BARE_HASH_RE);
 });
 
-// Interactive-source attribution (issue 1451): the SKILL must instruct
+// Interactive-source attribution: the SKILL must instruct
 // resolving the operator's handle for interactive answers, keep the literal
 // `human` only as the unresolvable fallback, and leave --auto's evidence
 // tokens untouched. Doc pins over SKILL.md, matching this file's style.
