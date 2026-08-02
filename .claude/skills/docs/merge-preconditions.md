@@ -56,6 +56,8 @@ Before merge, ALL of the following MUST hold:
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
+> Stranded Copilot review request (human-only): a review requested on a head that already carries Copilot's own clean submitted review is never delivered — Copilot does not re-engage a change it effectively approved — so below the round cap the loop waits indefinitely and `pre_approval_gate` cannot post. (At the cap the loop already routes to `round_cap_clean_fallback`, so the gate is not blocked and there is nothing to unstick.) Withdraw it explicitly with `node <resolved-skill-scripts>/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> --reason <why>`. It withdraws only when a request is pending (no request is an exit-0 no-op) and refuses outright unless Copilot has already submitted a review and no unresolved threads remain, and it verifies the withdrawal took effect — so prefer it over a raw `gh pr edit --remove-reviewer`, which has none of those guards. This is an operator judgement about a model's behavior: it is deliberately NOT in the sanctioned-command set and an agent must not invoke it. It also does not help when the head has advanced past the last review (the loop simply re-requests) — that case is tracked in issue 1441.
+
 ### Items 3 and 4 apply to every path, not just the dev-loop tooling
 
 Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts) are
@@ -68,9 +70,20 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, and a standalone review comment — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned green
-  stale on the thread axis. (There is no `pull_request_review_thread` Actions
+  a submitted review, a standalone review comment, and a created/edited PR issue
+  comment that starts with the gate-comment marker (`### Gate review:`) from a
+  trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`) — so a newly-opened
+  unresolved thread re-evaluates the check instead of leaving a SHA-pinned
+  green stale on the thread axis, and posting a gate verdict itself
+  re-evaluates the check instead of leaving a stale pre-verdict
+  `pending`/`failure` blocking a satisfied PR (`created` for each verdict on a
+  new head — the upsert creates a fresh comment per head; `edited` for a
+  same-head verdict update or a manual recovery edit). Evaluation always runs the DEFAULT BRANCH's
+  detector (trusted code; the resolved PR head SHA is only the status target).
+  Recovery for a lost/failed run when the verdict comment already exists: edit
+  that comment by its id (`scripts/github/edit-comment.mjs --comment-id <id>`)
+  — the `edited` event re-fires the check. `gh run rerun` is NOT a recovery
+  path (it replays the stale original event payload). (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
   comment, both of which do re-fire. One narrow residual remains: a bare
@@ -78,10 +91,10 @@ practice:
   accompanying review or comment, fires only that non-triggerable event and so
   does not re-fire the check — bounded by the maintainer-gated merge, and
   re-caught on the next push, review, or comment.) The `gate-evidence`
-  context itself is always an explicit commit status posted to the PR's actual
-  head SHA (not the triggering job's own check-run, which for the
-  review/thread/comment event types would land on the base branch's latest
-  commit instead of the PR head). This is what closes the ready/merge bypass —
+  context itself is always an explicit commit status posted to the resolved PR
+  head SHA (not the triggering job's own check-run, which for
+  review and comment event types would land on the wrong commit — the base
+  branch's latest for review events, the default branch's for issue_comment). This is what closes the ready/merge bypass —
   a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
   hook) skips the client-side path entirely but still cannot merge without a
   green `gate-evidence` check **once branch protection on `main` requires it**.
@@ -189,6 +202,14 @@ human(s).
 
 ## Post-merge
 
+- Sync the merged item's board Status to Done (issue #1458), run BEFORE worktree removal below:
+  `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue> || true`
+  (omit `--issue` when the merged PR is itself the queue item; the `|| true` masks the residual usage-error exits the
+  same way the archive step's does). Resolves the board from `.devloops`
+  (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using local `gh` auth, so it
+  must run from the main checkout: the next step removes the worktree, leaving it with no cwd. Best-effort and NON-FATAL on a parsed
+  invocation: a board that is not configured, an item not on the board, or any API failure logs a warning to stderr
+  and exits 0 instead of failing the merge; a usage/argument error still exits 1 and an invalid `--jq` filter exits 2.
 - Remove merged worktree (canonical, `WORKTREE-CLEANUP`): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
   See [Worktree usage guidance](./worktree-guidance.md#post-merge-cleanup).
 - Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name> || true`.

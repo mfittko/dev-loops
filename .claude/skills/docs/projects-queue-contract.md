@@ -33,6 +33,17 @@ position and Status field values.
 
 ## Board identification
 
+<!-- rule: QUEUE-BOARD-DEVLOOPS-RESOLUTION -->
+Every operator-facing `scripts/projects/*` queue command **MUST** resolve the board from
+`.devloops` (`tracker.board` first, falling back to the deprecated `queue.board`; number or
+title) when `--project` is omitted; an explicit `--project` overrides. The structural halves
+(the `applyDevloopsBoard` call and `projectTitle` delegation forwarding) are enforced by
+`test/contracts/queue-board-resolution-contract.test.mjs`, which inspects commands that read
+`--project`/`args.project` and exempts the `_resolve-project.mjs` helper itself and the board
+bootstrap `ensure-queue-board.mjs`. Omitted-flag and override behaviors are covered
+behaviorally where suites exist (`resolve-active-board-item`, `list-queue-items`); the
+remaining siblings are covered structurally only.
+
 ### Owner and project
 
 A board is identified by its owning entity (user or organization) and project title.
@@ -269,14 +280,17 @@ When a queue board is configured, the queue driver may optionally write bounded 
 Board integration is active only when `.devloops` at repo root identifies a board:
 
 ```yaml
-queue:
+tracker:
   board:
     number: 5          # direct project number
     # OR title: "Dev Loop Queue"
+queue:
   nonSuccessStatus: Backlog # optional fallback column for non-success outcomes
 ```
 
-If `queue.board` is not set (neither `number` nor `title`), no board transitions are attempted and queue behavior is unchanged.
+`tracker.board` is the preferred key; the deprecated `queue.board` (same shape) is still
+honored as a fallback. If neither is set (no `number`, no `title`), no board transitions
+are attempted and queue behavior is unchanged.
 
 ### Result shape
 
@@ -353,7 +367,7 @@ The normative `Next Up` rule above currently assumes the **default** `Next Up` d
 ### Example
 
 ```yaml
-queue:
+tracker:
   board:
     number: 5
 ```
@@ -365,15 +379,16 @@ Queue board configuration lives under `.devloops` at repo root. All keys are opt
 the queue path works without a board.
 
 ```yaml
-queue:
-  # Maximum parallel entries the queue may process concurrently.
-  maxParallel: 3
-
+tracker:
   board:
     # GitHub Projects V2 project number for direct lookup (overrides title-based discovery).
     number: 1
     # Board title for Projects V2 lookup (used when number is not set).
     title: "Dev Loop Queue"
+
+queue:
+  # Maximum parallel entries the queue may process concurrently.
+  maxParallel: 3
 
   # Maximum bug issues the queue driver may auto-file in one run.
   maxAutoFiledIssues: 10
@@ -385,31 +400,33 @@ queue:
 
 ### Board title key
 
-The `queue.board.title` key is the primary opt-in signal for Projects-based queue ordering (`queue.board.number` is also available — see Project number key below):
+The board `title` key (under `tracker.board`, or the deprecated `queue.board`) is the primary opt-in signal for Projects-based queue ordering (`number` is also available — see Project number key below):
 
 | Value | Meaning |
 |---|---|
-| `queue.board` not set | Projects path not active; use positional ordering |
+| Neither `tracker.board` nor `queue.board` set | Projects path not active; use positional ordering |
 | `"Dev Loop Queue"` (recommended title) | Look up project by this title under the repo owner |
 | Any other string | Look up project by that exact title |
 
-If `queue.board.title` is set but the project does not exist, queue operations that depend on board
+If the board `title` is set but the project does not exist, queue operations that depend on board
 ordering fail closed — they do not treat the missing board as equivalent to "not opted in."
 
 ### Project number key
 
-The `queue.board.number` key provides direct project lookup by number, bypassing title-based
-discovery. When both `number` and `title` are set under `queue.board`, `number` takes precedence.
+The board `number` key provides direct project lookup by number, bypassing title-based
+discovery. When both `number` and `title` are set on the same board entry, `number` takes precedence.
 
 ### Settings source
 
-Queue board settings (`queue.board.title` / `queue.board.number`) are read only from `.devloops` at the
-repo root. The queue tooling does not consult the shipped defaults
+Queue board settings (`tracker.board` first, then the deprecated `queue.board`; `title` /
+`number`) are read only from `.devloops` at the repo root. The queue tooling does not consult the shipped defaults
 (`packages/core/src/config/extension-defaults.yaml`) or the repo-local
 `.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.
 
-Project number and URL are discoverable at runtime via the GraphQL API — no explicit config
-entry is required.
+Project number and URL are discoverable at runtime via the GraphQL API; per
+`QUEUE-BOARD-DEVLOOPS-RESOLUTION`, commands resolve the board from the `.devloops` entry
+when `--project` is omitted, so the config entry is how a repo opts into automatic
+resolution.
 
 ## Required GraphQL operations
 

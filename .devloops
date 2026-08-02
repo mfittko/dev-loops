@@ -36,9 +36,34 @@ gates:
       - name: renderer-security
         enabled: false
     requireCi: true
+    # Draft gate blocks on must-fix only. With worth-fixing-now also blocking,
+    # this gate did not converge on a non-trivial change: correctness settled
+    # while worth-fixing-now renewed itself every round, because each fix round
+    # creates fresh surface for the next round to review. Measured over eight
+    # rounds on one PR (72 reviewer dispatches), must-fix per round ran
+    # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
+    #
+    # worth-fixing-now findings still go through the normal fan-in flow
+    # (ledger + findings comment) as long as that flow is followed; this key
+    # does not itself force a count or a ledger entry for worth-fixing-now
+    # (upsert-checkpoint-verdict only requires explicit counts for the
+    # severities listed here). They just stop blocking the draft-to-ready
+    # transition.
+    # preApproval blocks on both, but it re-reviews through its own, mostly
+    # disjoint angle pool (draft and preApproval share only contradiction-lens)
+    # and does not carry a specific unblocked draft-gate finding forward — the
+    # ledger records it "deferred" and nothing re-raises it. A worth-fixing-now
+    # finding from a draft-only angle is not "caught later"; it is recorded and
+    # left. This also affects light-mode dispatch: resolveGateDispatchMode
+    # escalates inline to full fan-out only on a blocking-severity inline
+    # finding, so a light-dispatched draft PR whose inline pass surfaces only
+    # worth-fixing-now now stays inline instead of escalating.
+    #
+    # Interim: the better shape is the full severity set with a round cap, so
+    # the first rounds still block and only a demonstrated plateau softens.
+    # Revisit this once that lands.
     blockCleanOnFindingSeverities:
       - must-fix
-      - worth-fixing-now
   preApproval:
     dynamic:
       subtractive: true
@@ -61,9 +86,23 @@ gates:
       - name: renderer-security
         persona: review
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
+    # Operator-directed, and narrower in justification than the draft-gate
+    # entry above: the pre-approval gate showed the same non-convergence on the
+    # PR that carries this change. Two rounds ran 2 must-fix / 17
+    # worth-fixing-now and 2 / 16 — correctness flat, the soft column flat
+    # beside it, each pass creating fresh surface for the next.
+    #
+    # Unlike the draft gate, this IS a relaxation below the shipped default's
+    # intent: pre-approval is the last bar before merge, and a worth-fixing-now
+    # finding unblocked here is not caught anywhere later. Surviving findings
+    # are filed as follow-up issues and named in the verdict, which is the only
+    # thing that keeps this from being lossy.
+    #
+    # Revisit when the round cap lands: the correct shape is the full severity
+    # set for the first N rounds, softening only on a demonstrated plateau,
+    # rather than a permanently softened final gate.
     blockCleanOnFindingSeverities:
       - must-fix
-      - worth-fixing-now
 
 workflow:
   requireRetrospective: true

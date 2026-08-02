@@ -210,6 +210,9 @@ const GatesConfig = z.strictObject({
   // parallel. When the resolved angle set exceeds this cap, the overflow runs
   // in sequential batches and the degradation is recorded in the gate evidence.
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
+  // #1462 GATE-EXEC-PRIME is MANDATORY (not a flag): every gate fan-out primes the
+  // byte-identical briefing prefix before the reviewers read it — see
+  // skills/docs/gate-review-sub-loop-contract.md.
   // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
   // comment so they are auditable and Copilot/humans are aware of them. Default
   // true (opt-out). The disposition ledger is written regardless; this flag only
@@ -1231,6 +1234,20 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
       `Update ${path.basename(filePath)} to use "tracker-first"; the alias will be removed in a future version.`
     );
     data = { ...data, strategy: "tracker-first" };
+  }
+
+  // Removed `gates.primeSharedPrefix` (#1462): GATE-EXEC-PRIME cache priming is
+  // now mandatory, not a knob. The schema is strictObject, so a stale key would
+  // otherwise drop the WHOLE gates layer as invalid. Strip it before validation
+  // with a deprecation warning — old configs keep loading; priming happens
+  // unconditionally regardless of the removed value.
+  if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
+    warnings.push(
+      `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
+      `Remove it from ${path.basename(filePath)}; the key is ignored.`
+    );
+    const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
+    data = { ...data, gates: gatesRest };
   }
 
   // Validate the file's structure before merging. Pre-existing behavior

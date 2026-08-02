@@ -16,7 +16,8 @@ template.
 | Caller options (`repoRoot`, `worktreeCwd`) | `cwd` |
 | Gate state (detectors) + strategy defaults | `currentGate`, `worktreeRequired` |
 | Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules`, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
-| Gate state (detectors) | `currentHeadSha`, `ciStatus`, `unresolvedThreadCount`, `copilotRoundCount` |
+| Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
+| Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
 
 ## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
@@ -86,7 +87,6 @@ When absent, strategy defaults apply:
 ```typescript
 interface HandoffEnvelope {
   handoffVersion: 1;
-  derivedAt: string; // ISO timestamp
 
   target: {
     kind: "issue" | "pr" | "local_branch" | "local_phase";
@@ -99,10 +99,6 @@ interface HandoffEnvelope {
   };
 
   currentGate: string;
-  currentHeadSha: string | null;
-  ciStatus: string | null;
-  unresolvedThreadCount: number;
-  copilotRoundCount: number;
   maxCopilotRounds: number;
   executionMode: "bounded_handoff" | "durable_auto";
 
@@ -149,6 +145,20 @@ interface HandoffEnvelope {
     forbidden: string[];
     orchestratorOwned: string[];
   };
+
+  // #1462: the ONLY per-round-varying block, ALWAYS LAST. Every field here changes
+  // between builds/rounds, so isolating it as the envelope tail keeps everything
+  // above it byte-stable — a fresh reviewer spawn cache-READS that stable prefix
+  // instead of re-billing the full contract scaffolding each round. Treat gateState
+  // as volatile: read it last, or re-derive it fresh via detectors. Never add a
+  // per-round-varying field above this block.
+  gateState: {
+    derivedAt: string;         // ISO timestamp
+    currentHeadSha: string | null;
+    ciStatus: string | null;
+    unresolvedThreadCount: number;
+    copilotRoundCount: number;
+  };
 }
 ```
 
@@ -160,12 +170,36 @@ interface HandoffEnvelope {
 4. Respect `stopRules` — do not proceed past a gated stop point without authorization.
 5. Use `acceptance` to self-validate before declaring completion.
 6. Use `sanctionedCommands` as the authoritative operation → wrapper map: never call a raw `gh`/`node -e`/`python -c` for an operation the map covers, and never perform an `orchestratorOwned` action.
+7. Treat `gateState` as **volatile and last**: read it after the stable body + `requiredReads`. Its detector-sourced fields (head SHA, CI status, thread/round counts) may be re-derived fresh via detectors right before acting; `derivedAt` is a build timestamp, not detector-derived. Never rely on `gateState` being cached.
+
+## Byte-stable prefix (issue #1462)
+
+Everything in the envelope **above `gateState`** is derived only from the target,
+strategy, gate, and settings — it is **byte-identical across builds/rounds for the
+same target+gate**. All per-round-varying values (`derivedAt`, the head SHA, CI
+status, thread/round counts) live in the trailing `gateState` block, and nothing
+else may.
+
+This is deliberate: we spawn **fresh** review subagents each round (independent,
+bias-free reads). Because the stable body + `requiredReads` are byte-identical,
+each fresh spawn **cache-reads** the whole contract scaffolding instead of
+re-billing it, and only the tiny `gateState` tail is a cache write. **Contract
+rule:** never add a field that varies per round anywhere except inside `gateState`
+— doing so re-poisons the cacheable prefix. A test
+(`#1462: the envelope minus gateState is byte-stable ...`) enforces this.
 
 ## Backward compatibility
 
 The `acceptance` block maps 1:1 into the existing `subagent()` acceptance
 contract shape. When the envelope is present, no separate prose task
 parameter is required.
+
+#1462 relocated the per-round-varying fields (`derivedAt`, `currentHeadSha`,
+`ciStatus`, `unresolvedThreadCount`, `copilotRoundCount`) from the envelope top
+level into the trailing `gateState` block; `handoffVersion` is intentionally left
+at `1` because envelopes are ephemeral (rebuilt each pass, never persisted) and all
+live consumers were updated in the same change — there is no stored envelope to
+migrate. Read moved fields from `envelope.gateState.*`.
 
 ## Non-goals
 

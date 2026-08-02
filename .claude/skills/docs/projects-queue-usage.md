@@ -23,8 +23,8 @@ order (`.pi/dev-loop-queue.json`).
 
 ## How to opt in
 
-The queue board is discovered at runtime by project number or node ID via `--project`.
-No configuration file entry is required — helpers use explicit CLI arguments.
+The queue board resolves from `.devloops` (`tracker.board` / `queue.board`, by number or
+title) in every operator-facing queue command; an explicit `--project <number|id>` overrides it.
 
 First, bootstrap the board (one-time):
 
@@ -32,8 +32,9 @@ First, bootstrap the board (one-time):
 dev-loops queue ensure --repo <owner/name>
 ```
 
-The wrapper emits the project number and URL. Use the project number in subsequent
-helper invocations.
+The wrapper emits the project number and URL. Record the board in `.devloops`
+(`tracker.board` number or title) so subsequent helper invocations resolve it
+automatically; `--project` remains available as an explicit override.
 
 ## How to use the helpers
 

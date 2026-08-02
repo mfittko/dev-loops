@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { createCliRuntime, runCli } from "../cli/index.mjs";
+import { compareSemver, createCliRuntime, fetchLatestPublishedVersion, isPlausibleDistTagVersion, runCli } from "../cli/index.mjs";
+import { EventEmitter } from "node:events";
 import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -164,7 +166,7 @@ test("CLI help leads with dev-loop as the primary workflow entry", async () => {
 });
 
 
-test("loop category exposes the five ui-review stage subcommands (issue #1362)", async () => {
+test("loop category exposes every running-app stage subcommand (five ui-review stages + visual-grill capture)", async () => {
   const helpStdout = createBufferStream();
   const categoryStdout = createBufferStream();
 
@@ -191,10 +193,21 @@ test("loop category exposes the five ui-review stage subcommands (issue #1362)",
     "ui-review-diagnose",
     "ui-review-report",
     "ui-review-teardown",
+    // The visual-grill capture is the sixth running-app stage: it ships in the
+    // same tree and is routed the same way, so it belongs to the same contract.
+    "visual-grill-capture",
   ];
   for (const sub of uiReviewSubcommands) {
     assert.match(topLevelHelp, new RegExp(`\\b${sub}\\b`), `top-level help should list ${sub}`);
     assert.match(categoryHelp, new RegExp(`\\b${sub}\\b`), `loop --help should list ${sub}`);
+    // A route registered without a matching description renders as a bare name,
+    // which reads as a rendering glitch rather than a missing entry — so require
+    // the listing line to carry description text, not just the subcommand.
+    assert.match(
+      categoryHelp,
+      new RegExp(`^\\s*${sub}\\s+\\S.*$`, "m"),
+      `loop --help should give ${sub} a one-line description`,
+    );
 
     const helpRun = spawnSync("node", ["./cli/index.mjs", "loop", sub, "--help"], {
       cwd: repoRoot,
@@ -492,4 +505,174 @@ node "$(dirname "$0")/gh-impl.mjs" "$@"
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+// compareSemver: direct unit coverage of the SemVer 2.0.0 precedence rules
+// `doctor`'s freshness check depends on (build metadata ignored, prerelease <
+// release, numeric prerelease-identifier ordering).
+test("compareSemver: a stable release outranks any prerelease of the same core", () => {
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0") < 0, true);
+  assert.equal(compareSemver("1.0.0", "1.0.0-rc.3") > 0, true);
+});
+
+test("compareSemver: numeric prerelease identifiers order numerically, not lexically (rc.3 < rc.10)", () => {
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0-rc.10") < 0, true);
+  assert.equal(compareSemver("1.0.0-rc.10", "1.0.0-rc.3") > 0, true);
+});
+
+test("compareSemver: equal versions (including build metadata, which is ignored) compare equal", () => {
+  assert.equal(compareSemver("1.2.3", "1.2.3"), 0);
+  assert.equal(compareSemver("1.2.3+build1", "1.2.3+build2"), 0);
+  assert.equal(compareSemver("1.0.0-rc.3", "1.0.0-rc.3"), 0);
+});
+
+test("compareSemver: malformed input degrades to a 0.0.0-shaped core rather than throwing", () => {
+  assert.doesNotThrow(() => compareSemver("bogus", "alsobogus"));
+  assert.equal(compareSemver("bogus", "alsobogus"), 0);
+  assert.equal(compareSemver("1.2.3", "bogus") > 0, true);
+});
+
+// `doctor` self-diagnoses a stale install (#1481): a dangling scripts/
+// reference or an unexplained tooling failure is often really an old
+// global/local `dev-loops` shadowing a newer checkout. These exercise the
+// injected `fetchLatestVersion` seam so the registry call never actually
+// leaves the process in tests.
+const runningVersion = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")).version;
+
+test("doctor warns when the running install is behind the latest published version", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => "9999.0.0",
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, new RegExp(`Running dev-loops@${runningVersion.replace(/[.+]/g, "\\$&")} from `));
+  assert.match(out, /⚠️ Install freshness/);
+  assert.match(out, /latest published is 9999\.0\.0/);
+  assert.match(out, /npx dev-loops@latest/);
+});
+
+test("doctor does not warn when the running install matches the latest published version", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => runningVersion,
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, /✅ Install freshness/);
+  assert.match(out, /Running the latest published version/);
+});
+
+test("doctor degrades gracefully (no crash, no warning) when the registry is unreachable", async () => {
+  const doctorStdout = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["doctor"],
+    runtime: createRuntime(),
+    stdout: doctorStdout.stream,
+    stderr: createBufferStream().stream,
+    fetchLatestVersion: async () => { throw new Error("ETIMEDOUT"); },
+  });
+
+  assert.equal(exitCode, 0);
+  const out = doctorStdout.read();
+  assert.match(out, /✅ Install freshness/);
+  assert.match(out, /latest-version check skipped \(registry unreachable\)/);
+});
+
+// ---------------------------------------------------------------------------
+// fetchLatestPublishedVersion: drive the status/size-cap/dist-tag paths via
+// the injectable getImpl seam (no network). The fake mimics https.get's
+// (url, opts, cb) shape: cb receives a response emitter; the returned request
+// emitter records destroy().
+// ---------------------------------------------------------------------------
+
+function fakeGet(handler) {
+  return (url, opts, cb) => {
+    const req = new EventEmitter();
+    req.destroy = () => { req.destroyed = true; };
+    const res = new EventEmitter();
+    res.resume = () => {};
+    queueMicrotask(() => handler({ req, res, cb }));
+    return req;
+  };
+}
+
+test("fetchLatestPublishedVersion: max across dist-tags wins, implausible tag values filtered", async () => {
+  const body = JSON.stringify({
+    "dist-tags": {
+      latest: "0.9.0",
+      rc: "1.0.0-rc.3",
+      weird: "not-a-version",
+      huge: `1.0.${"9".repeat(80)}`,
+      empty: "",
+    },
+  });
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 200;
+      cb(res);
+      res.emit("data", body);
+      res.emit("end");
+    }),
+  });
+  assert.equal(version, "1.0.0-rc.3");
+});
+
+test("fetchLatestPublishedVersion: non-200 resolves null", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 404;
+      cb(res);
+    }),
+  });
+  assert.equal(version, null);
+});
+
+test("fetchLatestPublishedVersion: response-size cap aborts and resolves null", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    getImpl: fakeGet(({ res, cb }) => {
+      res.statusCode = 200;
+      cb(res);
+      const chunk = "x".repeat(1024 * 1024);
+      res.emit("data", chunk);
+      res.emit("data", chunk);
+      res.emit("data", chunk); // > 2MB cap
+    }),
+  });
+  assert.equal(version, null);
+});
+
+test("fetchLatestPublishedVersion: wall-clock deadline settles null on a silent request", async () => {
+  const version = await fetchLatestPublishedVersion("dev-loops", {
+    timeoutMs: 20,
+    getImpl: fakeGet(() => { /* never calls back — deadline must fire */ }),
+  });
+  assert.equal(version, null);
+});
+
+test("isPlausibleDistTagVersion: accepts x.y.z (with prerelease), rejects junk", () => {
+  assert.equal(isPlausibleDistTagVersion("1.0.0"), true);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.3"), true);
+  assert.equal(isPlausibleDistTagVersion(""), false);
+  assert.equal(isPlausibleDistTagVersion("latest"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0"), false);
+  assert.equal(isPlausibleDistTagVersion(`1.0.0-${"a".repeat(80)}`), false);
+});
+
+test("isPlausibleDistTagVersion: rejects a plausible numeric core carrying control/escape bytes in the suffix", () => {
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.3\x1b[31m"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0+\x07"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-<!--marker-->"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-`ls`"), false);
+  assert.equal(isPlausibleDistTagVersion("1.0.0-rc.1\nRunning the latest published version (9.9.9)"), false);
 });

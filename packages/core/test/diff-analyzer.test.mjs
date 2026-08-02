@@ -60,6 +60,24 @@ test("classifyFile: unknown for unrecognized", () => {
   assert.equal(classifyFile("assets/logo.png"), "unknown");
 });
 
+test("classifyFile: docs for .markdown files", () => {
+  assert.equal(classifyFile("docs/guide.markdown"), "docs");
+  assert.equal(classifyFile("CHANGELOG.markdown"), "docs");
+});
+
+test("classifyFile: config for allowlisted extensionless dotfiles", () => {
+  assert.equal(classifyFile(".devloops"), "config");
+  // Runtime-version dotfiles stay unknown (fail-closed): a .nvmrc bump must
+  // re-run ci-guard/determinism, not carry their stale clean verdicts.
+  assert.equal(classifyFile(".nvmrc"), "unknown");
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+  assert.equal(classifyFile("packages/core/.nvmrc"), "unknown");
+});
+
+test("classifyFile: unrecognized extensionless dotfile stays unknown (no content sniffing)", () => {
+  assert.equal(classifyFile(".env"), "unknown");
+});
+
 // ---------------------------------------------------------------------------
 // analyzeT0
 // ---------------------------------------------------------------------------
@@ -392,5 +410,58 @@ test("analyzeDiff: pure single-surface diffs keep exclusive semantics (no over-u
   assert.deepEqual(
     analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md" }).t1.changeCategories,
     ["DOCS_ONLY"],
+  );
+});
+
+test("analyzeDiff: .markdown-only diff → DOCS_ONLY", () => {
+  // Root-level, NOT under docs/ — the extension rule alone must classify it
+  // (the reported consumer shape is a root-level <branch>.markdown changelog).
+  const result = analyzeDiff({ nameStatusOutput: "M\tCHANGELOG.markdown" });
+  assert.equal(result.t0.allDocs, true);
+  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY"]);
+});
+
+test("analyzeDiff: .devloops-only diff → CONFIG_ONLY", () => {
+  const result = analyzeDiff({ nameStatusOutput: "M\t.devloops" });
+  assert.deepEqual(result.t1.changeCategories, ["CONFIG_ONLY"]);
+});
+
+test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifies docs+config, no fallback (#1450)", () => {
+  const result = analyzeDiff({
+    nameStatusOutput: "M\t.devloops\nA\tfoo.markdown",
+    diffOutput:
+      "--- a/.devloops\n+++ b/.devloops\n@@ -1,1 +1,1 @@\n-old\n+new\n" +
+      "--- /dev/null\n+++ b/foo.markdown\n@@ -0,0 +1,1 @@\n+# hi\n",
+  });
+  assert.equal(result.ambiguous, false);
+  assert.ok(result.t1.changeCategories.includes("DOCS_ONLY"));
+  assert.ok(result.t1.changeCategories.includes("CONFIG_ONLY"));
+
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: result.t1.changeCategories,
+    ambiguous: result.ambiguous,
+  });
+  assert.equal(dyn.fallbackToAll, false);
+  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
+  assert.ok(dyn.recommendedAngles.includes("config-drift"), "config file must pull config-drift");
+  // Pin the exact pruned set: a loose length check hid that the .devloops
+  // hunk's -old/+new lines also emit LOGIC_CHANGE (analyzeT1's hasLogicChange
+  // is not file-kind-gated), which pulls the code-review core alongside the
+  // docs/config lenses. Any change to that behavior must surface here.
+  assert.deepEqual(
+    [...dyn.recommendedAngles].sort(),
+    [
+      "config-drift",
+      "contract-surface",
+      "correctness",
+      "coverage",
+      "determinism",
+      "gate-evidence",
+      "input-validation",
+      "link-check",
+      "pr-description",
+      "scope",
+    ],
   );
 });

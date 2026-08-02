@@ -6,7 +6,11 @@
  * scripts and other packages/core modules.
  */
 
-const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
+// Exported so anything deciding "is there a real prior review" uses the same
+// whitelist as the loop-state reader — two copies could drift, and a guard
+// acting on the gate's behalf must agree with the gate about what a submitted
+// review is.
+export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);

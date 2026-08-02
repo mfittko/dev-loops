@@ -114,7 +114,7 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
   // The park column is where the enqueue fail-safe diverts un-refined issues.
   const parkedColumn = nonSuccessBoardColumn(cwd);
   const listed = await listQueueItems(
-    { repo: args.repo, project: args.project, column: parkedColumn },
+    { repo: args.repo, project: args.project, projectTitle: args.projectTitle, column: parkedColumn },
     { env, runChild },
   );
   const items = listed.items ?? [];

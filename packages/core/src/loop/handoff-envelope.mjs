@@ -21,7 +21,7 @@ import {
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
-import { resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
+import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -356,14 +356,25 @@ function deriveGateConfig(settings, subGate) {
   const gateKey = subGate === "pre-approval" ? "preApproval" : subGate;
   if (!settings?.gates?.[gateKey]) return undefined;
 
-  // Route through the canonical resolver rather than re-parsing
-  // gates.<gate>.angles by hand: resolveGateConfig already folds the unified
-  // angle-entry shape (mandatory/enabled per-entry, D3) into this same
-  // exclude-filtered angles + separate excludeAngles list the envelope
-  // contract has always shipped.
+  // Route through the canonical resolvers rather than re-parsing
+  // gates.<gate>.angles by hand: resolveGateConfig folds the unified
+  // angle-entry shape (mandatory/enabled per-entry, D3) into excludeAngles/
+  // blockCleanOnFindingSeverities/requireCi, the envelope contract's
+  // long-standing shape. `angles` is the RUN-set (the configured angles the
+  // orchestrator is told to dispatch) with every validator-MANDATORY angle
+  // merged in — never resolveGateAngleContract's `pool`, which is the
+  // enforcement CEILING and deliberately widens to the whole lens catalog
+  // under gates.<gate>.dynamic.additive (advertising that as the run-set
+  // would tell the orchestrator to dispatch 20+ angles). The parity contract
+  // (test/contracts/envelope-validator-angle-parity.test.mjs) pins both
+  // invariants: everything advertised is within the validator pool, and
+  // every mandatory angle is advertised.
   const resolved = resolveGateConfig(settings, gateKey);
+  const { mandatoryAngles } = resolveGateAngleContract(settings, gateKey);
+  const runSet = resolveGateAngles(settings, gateKey) ?? [];
+  const angles = [...new Set([...runSet, ...mandatoryAngles])];
   return {
-    angles: resolved.angles ?? [],
+    angles,
     excludeAngles: resolved.excludeAngles.length > 0 ? resolved.excludeAngles : undefined,
     blockCleanOnFindingSeverities: resolved.blockCleanOnFindingSeverities,
     requireCi: resolved.requireCi,
@@ -613,14 +624,9 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   const envelope = {
     handoffVersion: ENVELOPE_HANDOFF_VERSION,
-    derivedAt: (now ?? new Date()).toISOString(),
 
     target,
     currentGate: subGate,
-    currentHeadSha: gs.currentHeadSha,
-    ciStatus: gs.ciStatus,
-    unresolvedThreadCount: gs.unresolvedThreadCount,
-    copilotRoundCount: gs.copilotRoundCount,
     maxCopilotRounds: settings?.refinement?.maxCopilotRounds ?? 5,
     executionMode,
 
@@ -673,6 +679,20 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   if (specSource) {
     envelope.specSource = specSource;
   }
+
+  // #1462: the ONLY per-round-varying block, kept LAST. Every field here changes
+  // between builds/rounds (the timestamp, the head SHA, CI status, thread/round
+  // counts); isolating them as the envelope's tail keeps everything above a
+  // byte-stable prefix that a fresh reviewer spawn can cache-READ instead of
+  // re-billing the full contract scaffolding each round. Consumers must treat
+  // gateState as volatile — read it last, or re-derive it fresh via detectors.
+  envelope.gateState = {
+    derivedAt: (now ?? new Date()).toISOString(),
+    currentHeadSha: gs.currentHeadSha,
+    ciStatus: gs.ciStatus,
+    unresolvedThreadCount: gs.unresolvedThreadCount,
+    copilotRoundCount: gs.copilotRoundCount,
+  };
 
   return deepFreeze(envelope);
 }
@@ -940,9 +960,10 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- derivedAt (informational, warn on missing) -----
-  if (typeof envelope.derivedAt !== "string" || !envelope.derivedAt.trim()) {
-    warnings.push({ field: "derivedAt", reason: "should be an ISO 8601 timestamp" });
+  // ----- gateState.derivedAt (informational, warn on missing) — #1462 moved the
+  // volatile timestamp into the gateState tail so the rest stays byte-stable -----
+  if (typeof envelope.gateState?.derivedAt !== "string" || !envelope.gateState.derivedAt.trim()) {
+    warnings.push({ field: "gateState.derivedAt", reason: "should be an ISO 8601 timestamp" });
   }
 
   return {

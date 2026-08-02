@@ -63,7 +63,17 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "@playwright/test": "^1.60.0",
+    "@axe-core/playwright": "^4.10.0"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "@axe-core/playwright": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.0",
@@ -83,7 +93,9 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^1.0.0-rc.1"
+    "@dev-loops/core": "^1.0.0-rc.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   },
   "repository": {
     "type": "git",
@@ -93,7 +105,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "files": [
     "cli/",
     "lib/",

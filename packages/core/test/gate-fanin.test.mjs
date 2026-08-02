@@ -80,6 +80,7 @@ describe("consolidateFanin — verdict", () => {
       [{ angle: "x", verdict: "findings_present", findings: [] }], // findings_present w/o findings
       [{ angle: "x", verdict: "clean", findings: [{ severity: "must-fix", summary: "y" }] }], // clean w/ findings
       [{ angle: "x", verdict: "findings_present", findings: [{ severity: "nope", summary: "y" }] }],
+      [{ angle: "x".repeat(201), verdict: "clean", findings: [] }], // pathologically long angle
     ];
     for (const angleResults of cases) {
       const result = consolidateFanin({ angleResults });
@@ -87,6 +88,16 @@ describe("consolidateFanin — verdict", () => {
       assert.ok(result.malformed.length > 0);
       assert.equal(result.findings.length, 0);
     }
+  });
+
+  // Boundary fixture for MAX_ANGLE_NAME_LENGTH (200): pins the accept side so
+  // the 201-char reject fixture above cannot be satisfied by silently
+  // tightening the guard from `>` to `>=` (which would also reject a
+  // legitimate 200-char name).
+  test("an angle name at exactly the 200-char cap is accepted, not malformed", () => {
+    const result = consolidateFanin({ angleResults: [cleanAngle("x".repeat(200))] });
+    assert.equal(result.verdict, "clean");
+    assert.equal(result.malformed.length, 0);
   });
 });
 
@@ -140,7 +151,7 @@ describe("toFindingsLogShape", () => {
     });
     const shaped = toFindingsLogShape(consolidated.findings);
     assert.deepEqual(shaped, [
-      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", files: ["src/a.mjs"] },
+      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", recommendation: "x", files: ["src/a.mjs"] },
       { severity: "defer", angle: "docs", summary: "b", disposition: "deferred" },
     ]);
   });

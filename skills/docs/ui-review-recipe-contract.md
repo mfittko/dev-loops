@@ -16,6 +16,33 @@ direction).
 Every value shown is a **generic example** — replace it with your project's own.
 No downstream or private identifiers belong in this repo.
 
+## Prerequisites — install the browser runner
+
+Before the recipe matters, the consuming repo needs the browser the loop drives.
+Playwright is an **optional peer dependency** of `dev-loops`: a repo that never
+runs a UI review carries none of its weight, so nothing installs it for you.
+
+```
+npm install --save-dev @playwright/test
+npx playwright install webkit
+```
+
+Stage 2 (`ui-review-drive`) and the loop-grill's `visual-grill-capture` stage
+launch headless WebKit through it. With either the package or the browser binary
+missing, both stages **stop with the install command as their stated reason** and
+report no failures — a setup gap on your machine is never charged to the PR under
+review.
+
+`@axe-core/playwright` is a separate opt-in, only needed for the
+computed-accessibility artifact:
+
+```
+npm install --save-dev @axe-core/playwright
+```
+
+Without it every `axe.json` is a deterministic JSON `null` and the rest of the
+review still works.
+
 ## Where the recipe lives
 
 The recipe is declared in your repo-root `.devloops` file (`.devloops.yaml`,

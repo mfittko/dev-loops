@@ -19,7 +19,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "owner/name", pr: 42 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
     };
     const html = renderHandoffEnvelopeSection(envelope);
     assert.ok(html.includes("owner/name#42"), "should show repo#pr identity");
@@ -32,14 +32,16 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
       currentGate: "draft",
-      currentHeadSha: "abc123def",
-      ciStatus: "success",
-      unresolvedThreadCount: 0,
-      copilotRoundCount: 2,
       maxCopilotRounds: 5,
       executionMode: "bounded_handoff",
+      gateState: {
+        derivedAt: "2026-01-01T00:00:00.000Z",
+        currentHeadSha: "abc123def",
+        ciStatus: "success",
+        unresolvedThreadCount: 0,
+        copilotRoundCount: 2,
+      },
     };
     const html = renderHandoffEnvelopeSection(envelope);
     assert.ok(html.includes("draft"), "should show current gate");
@@ -52,7 +54,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       nextAction: "run_draft_gate",
       requiredReads: ["docs/a.md", "docs/b.md"],
     };
@@ -66,7 +68,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       gateConfig: {
         angles: ["scope", "coverage", "correctness"],
         excludeAngles: [],
@@ -84,7 +86,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
     };
     const html = renderHandoffEnvelopeSection(envelope);
     assert.ok(!html.includes("Gate configuration"), "should not show gate config when absent");
@@ -94,7 +96,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       asyncStartMode: "required",
       requireDraftFirst: false,
       stopRules: ["draft-pr", "merge"],
@@ -109,7 +111,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       cwd: "/tmp/worktrees/pr-42",
       worktreeRequired: true,
     };
@@ -122,7 +124,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       acceptance: {
         criteria: [
           { severity: "required", id: "ci-green", must: "CI must pass" },
@@ -143,7 +145,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       control: {
         needsAttentionAfterMs: 300000,
         activeNoticeAfterMs: 300000,
@@ -157,7 +159,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       overrides: { copilotRound: 2 },
     };
     const html = renderHandoffEnvelopeSection(envelope);
@@ -168,10 +170,8 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1 },
       handoffVersion: 1,
-      derivedAt: null,
+      gateState: { derivedAt: null, currentHeadSha: null, ciStatus: null },
       currentGate: null,
-      currentHeadSha: null,
-      ciStatus: null,
       executionMode: null,
       asyncStartMode: null,
       requireDraftFirst: null,
@@ -185,7 +185,7 @@ describe("renderHandoffEnvelopeSection", () => {
     const envelope = {
       target: { kind: "pr", repo: "a/b", pr: 1, branch: "<script>alert(1)</script>" },
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
       currentGate: "<img src=x onerror=alert(1)>",
     };
     const html = renderHandoffEnvelopeSection(envelope);
@@ -197,7 +197,7 @@ describe("renderHandoffEnvelopeSection", () => {
   it("renders envelope with missing target gracefully", () => {
     const envelope = {
       handoffVersion: 1,
-      derivedAt: "2026-01-01T00:00:00.000Z",
+      gateState: { derivedAt: "2026-01-01T00:00:00.000Z" },
     };
     const html = renderHandoffEnvelopeSection(envelope);
     assert.ok(html.includes("unknown"), "should show unknown identity");

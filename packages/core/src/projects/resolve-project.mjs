@@ -139,7 +139,7 @@ function resolveProjectSelector(args) {
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or set queue.board.number / queue.board.title in .devloops)"),
+      new Error("--project is required (or set tracker.board — or the deprecated queue.board — number / title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }

@@ -21,7 +21,15 @@
  *   "must-fix" | "worth-fixing-now" | "defer"
  */
 
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
+// Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
+// scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
+// this single ordered copy of the severity vocabulary instead of each
+// hand-copying its own list (and its own load-time drift guard) — ORDER is
+// part of the contract here (most blocking first), not just membership, so a
+// consumer that only checked membership against a Set could accept a
+// silently reordered copy.
+export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -259,6 +267,19 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
  */
 export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
+// Every sanctioned angle name is a short, hand-authored slug (e.g.
+// "contradiction-lens", "pr-checklist-matrix"); nothing legitimate ever
+// approaches this length. Bounding it here, at the trust boundary this
+// function already owns, fails a pathological artifact closed as malformed —
+// the same place every other angle-result defect is caught — instead of
+// leaving an unbounded reviewer-supplied string to reach the render path,
+// where consolidate-fanin.mjs's per-angle budget marking cannot compress it.
+// This is a malformed-artifact guard, not a comment-budget guarantee: several
+// angles each right at this cap can still exceed the render budget on their
+// headers alone and force the withheld tier — that outcome is the render
+// budget's degradation ladder doing its job, not something this cap prevents.
+const MAX_ANGLE_NAME_LENGTH = 200;
+
 /**
  * Validate a single per-angle review result. Returns an error string when the
  * result is malformed, or null when it is well-formed.
@@ -273,6 +294,9 @@ function validateAngleResult(result) {
   const r = /** @type {Record<string, unknown>} */ (result);
   if (typeof r.angle !== "string" || r.angle.trim().length === 0) {
     return "angle result is missing a non-empty 'angle'";
+  }
+  if (r.angle.trim().length > MAX_ANGLE_NAME_LENGTH) {
+    return `angle result's 'angle' exceeds ${MAX_ANGLE_NAME_LENGTH} chars`;
   }
   if (typeof r.verdict !== "string" || !VALID_VERDICTS.has(r.verdict)) {
     return `angle '${r.angle}' has invalid verdict (expected clean|findings_present)`;
@@ -338,7 +362,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     if (err) malformed.push({ index, reason: err });
   });
 
-  const bySeverity = { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 };
+  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   /** @type {Array<{severity: string, angle: string, summary: string, file?: string, line?: number, recommendation?: string, disposition: string}>} */
   const findings = [];
   let blockingCount = 0;
@@ -395,8 +419,8 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
  * scripts/github/write-gate-findings-log.mjs (severity, angle, summary,
  * disposition, optional files). Pure.
  *
- * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string}>} findings
- * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[]}>}
+ * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string, recommendation?: string}>} findings
+ * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[], recommendation?: string}>}
  */
 export function toFindingsLogShape(findings) {
   const list = Array.isArray(findings) ? findings : [];
@@ -408,6 +432,9 @@ export function toFindingsLogShape(findings) {
     };
     if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
+    }
+    if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
+      entry.recommendation = f.recommendation.trim();
     }
     if (typeof f.file === "string" && f.file.trim().length > 0) {
       entry.files = [f.file.trim()];

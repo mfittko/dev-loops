@@ -6,10 +6,13 @@
 // depth-independent: each relative specifier is resolved against its importing
 // file and asserted to stay within that package's directory.
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isBuiltin } from "node:module";
 
 // Static import/export-from, dynamic import(), and side-effect import relative specifiers.
 const RELATIVE_SPECIFIER_RE = /(?:from\s*|import\s*\(\s*|import\s+)["'](\.\.?\/[^"']+)["']/g;
@@ -26,31 +29,677 @@ async function* walk(dirUrl) {
 }
 
 test("packages/*/src relative imports never resolve outside their package root", async () => {
-  const offenders = [];
   const packagesRoot = new URL("../../packages/", import.meta.url);
+  const packageDirs = (await readdir(packagesRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  const bareEscapeDirNames = repoTopLevelDirNames(new URL("../../", import.meta.url));
 
-  for (const entry of await readdir(packagesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const packageRootPath = fileURLToPath(new URL(`${entry.name}/`, packagesRoot));
-    const srcUrl = new URL(`${entry.name}/src/`, packagesRoot);
+  // Same scanner as the root-package check below: a package root is just another
+  // "shipped set", so `findEscapingImports` answers both questions and there is
+  // one implementation to keep correct rather than two that must be edited in
+  // lockstep.
+  const offenders = (
+    await Promise.all(
+      // Walk each package's src/, but allow anything inside that package root —
+      // a package ships standalone, so leaving its ROOT is the defect.
+      packageDirs.map((dir) =>
+        findEscapingImports({ repoRootUrl: packagesRoot, shippedDirs: [`${dir}/src`], allowDirs: [dir], bareEscapeDirNames }),
+      ),
+    )
+  ).flat();
+
+  assert.deepEqual(offenders.sort(), []);
+});
+
+// The same hazard one level up: the ROOT package ships only the dirs named in
+// its "files" field, so a shipped file importing something outside that set
+// (the classic case being a script reaching into test/) resolves fine in the
+// checkout and ERR_MODULE_NOT_FOUNDs from the tarball. Asserting against the
+// live "files" list rather than a hardcoded set means a future import into an
+// unshipped dir is caught by this same check.
+// Resolve a "files" entry to a directory name, by what it IS on disk rather than
+// by a trailing slash — npm treats "scripts" and "scripts/" identically, so a
+// suffix heuristic would silently drop a dir from the scan (and misreport
+// imports into it), in the very check whose point is to track the live list.
+export async function resolveShippedDirs(files, repoRootUrl) {
+  // A Set: "scripts/" and "./scripts" normalize to the same dir, and walking it
+  // twice would double-report every offender it finds.
+  const dirs = new Set();
+  for (const entry of files) {
+    // npm's "files" also accepts globs and negations. Those would stat as ENOENT
+    // and be dropped, silently shrinking BOTH the walk list and the allowlist —
+    // the guard would degrade toward scanning nothing and pass vacuously. Fail
+    // loudly instead, so adding one is a deliberate decision.
+    if (/[*?[\]{}!]/.test(entry)) {
+      throw new Error(`package.json "files" entry ${JSON.stringify(entry)} uses glob syntax, which this contract cannot resolve — teach it the pattern or list the directory explicitly`);
+    }
+    // Normalize "./scripts" and "scripts//" to "scripts" so the entry compares
+    // equal to a path.relative() result.
+    const name = path.normalize(entry).replace(/[\\/]+$/, "");
+    // Stat even a trailing-slash entry: npm resolves both spellings against the
+    // disk either way, but in THIS repo's manifest convention a trailing slash
+    // is the author saying "directory" — so an entry that is actually a
+    // FILE on disk is an author error — surface it here as a clear failure
+    // rather than deferring to findEscapingImports' own dir-exists stat, which
+    // would fail later with a raw ENOTDIR and no pointer to the bad entry. An ENOENT trailing-
+    // slash entry still passes through as an absent dir (unbuilt output, say) —
+    // findEscapingImports already tolerates a shipped dir that isn't there yet.
+    // stat inside the try, classification below it: the catch is strictly an
+    // errno filter for stat, so the deliberate author-error throw can never be
+    // coupled to (or later swallowed by) a widened errno filter.
+    let stats = null;
     try {
-      for await (const fileUrl of walk(srcUrl)) {
-        const relativePath = path.relative(process.cwd(), fileURLToPath(fileUrl));
-        if (!/\.(mjs|js|ts)$/.test(relativePath)) continue;
+      stats = await stat(new URL(name, repoRootUrl));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+    if (stats === null) {
+      if (entry.endsWith("/")) dirs.add(name); // absent dir: trust the declared trailing slash
+      continue;
+    }
+    if (stats.isDirectory()) {
+      dirs.add(name);
+    } else if (entry.endsWith("/")) {
+      throw new Error(`package.json "files" entry ${JSON.stringify(entry)} has a trailing slash but is a file on disk, not a directory — drop the slash to ship it as a file, or point the entry at the intended directory`);
+    } // a plain (non-slash) entry that is a file ships a single file, not a dir to scan
+  }
+  return [...dirs];
+}
 
-        const contents = await readFile(fileUrl, "utf8");
-        for (const match of contents.matchAll(RELATIVE_SPECIFIER_RE)) {
-          const specifier = match[1];
-          const resolved = fileURLToPath(new URL(specifier, fileUrl));
-          if (path.relative(packageRootPath, resolved).startsWith("..")) {
-            offenders.push(`${relativePath} -> ${specifier}`);
-          }
+// Bare specifiers resolve through node_modules, not relative to the importing
+// file — `scripts/projects/move-queue-item.mjs` (no leading "./" or "../") is
+// Node looking for a package literally named "scripts", not this repo's
+// scripts/ directory. Preventive sibling-class coverage for the crash shape
+// reported in issue #1458 (ERR_MODULE_NOT_FOUND under node_modules/scripts/…
+// from an installed layout): the specifier that actually shipped was a
+// relative escape, which RELATIVE_SPECIFIER_RE above already catches, but a
+// bare form producing the identical installed-layout crash would slip past a
+// relative-only match. So a bare specifier whose first path segment names one
+// of this repo's own top-level directories is flagged the same as a relative
+// escape — it is never a real npm dependency, always a forgotten "./".
+// Sourced from `git ls-tree` (committed state), not `readdir` (working-copy
+// state): a live directory listing picks up gitignored dirs (tmp/, dist/,
+// coverage/, ...) that exist on whichever machine happens to run the test, so
+// a fresh CI clone and a dev machine that has run the suite would enforce
+// different bare-specifier alternations. `git ls-tree -d --name-only HEAD`
+// (no -r) lists only the repo's immediate top-level tracked directories,
+// independent of what else is sitting in the working copy.
+function repoTopLevelDirNames(repoRootUrl) {
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const output = execFileSync("git", ["ls-tree", "-d", "--name-only", "HEAD"], {
+    cwd: repoRootPath,
+    encoding: "utf8",
+  });
+  return output
+    .split("\n")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0 && name !== "node_modules" && !name.startsWith("."));
+}
+
+// Pins that the derivation actually resolves to real top-level dirs, not an
+// empty or truncated set (a `git ls-tree` misconfiguration would otherwise
+// silently degrade every bare-specifier check above toward vacuous-green).
+test("repoTopLevelDirNames resolves the repo's git-tracked top-level directories", () => {
+  const names = repoTopLevelDirNames(new URL("../../", import.meta.url));
+  for (const expected of ["scripts", "packages", "test"]) {
+    assert.ok(names.includes(expected), `expected ${expected} in ${JSON.stringify(names)}`);
+  }
+});
+
+// Escaped regardless of the ponytail-documented convention that dir names on
+// disk are plain lowercase identifiers: that convention governs THIS repo's
+// tracked dirs, not every string this function could ever be called with (a
+// git-tracked dir containing a regex metacharacter would otherwise throw at
+// RegExp construction, or silently widen the match via an unescaped `.`).
+function bareLocalSpecifierRe(dirNames) {
+  if (dirNames.length === 0) return null;
+  const alt = dirNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(`(?:from\\s*|import\\s*\\(\\s*|import\\s+)["']((?:${alt})\\/[^"']+)["']`, "g");
+}
+
+/**
+ * Pure detector: every specifier in the shipped tree that would not resolve from
+ * the published tarball. Returned sorted so a failure diff is reproducible
+ * across filesystems (readdir order is not stable across APFS/ext4/fresh clones).
+ *
+ * `bareEscapeDirNames` (required) additionally flags a BARE specifier whose
+ * first path segment names one of the repo's own top-level directories (see
+ * `repoTopLevelDirNames` above) — the sibling defect class relative-only
+ * detection cannot see. Required (no permissive default) so dropping it at a
+ * call site fails loudly instead of silently disabling the detection.
+ *
+ * Exported shape is `<file> -> <specifier>` strings.
+ */
+export async function findEscapingImports({ repoRootUrl, shippedDirs, allowDirs = shippedDirs, bareEscapeDirNames }) {
+  if (!Array.isArray(bareEscapeDirNames)) {
+    throw new TypeError("findEscapingImports: bareEscapeDirNames is required (array of top-level dir names)");
+  }
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const bareRe = bareLocalSpecifierRe(bareEscapeDirNames);
+  // "files" entries are always "/"-separated; path.relative yields "\" on win32.
+  // Normalizing to "/" keeps both the membership test and the emitted offender
+  // strings platform-invariant (the sort order depends on the separator too).
+  const toPosix = (value) => value.split(path.sep).join("/");
+  // `shippedDirs` is what gets WALKED; `allowDirs` is where a resolved import may
+  // legally land. They are the same set for the root package, and differ for a
+  // workspace package, whose src/ is scanned but whose whole root is fair game.
+  const isShipped = (resolvedPath) => {
+    const relative = toPosix(path.relative(repoRootPath, resolvedPath));
+    return allowDirs.some((dir) => {
+      const posixDir = toPosix(dir);
+      return relative === posixDir || relative.startsWith(`${posixDir}/`);
+    });
+  };
+
+  const offenders = [];
+  for (const dir of shippedDirs) {
+    const dirUrl = new URL(`${dir}/`, repoRootUrl);
+    try {
+      await stat(dirUrl);
+    } catch (err) {
+      if (err.code === "ENOENT") continue; // a "files" dir that isn't present is fine
+      throw err;
+    }
+    // Deliberately NOT wrapped in an ENOENT-tolerant catch: past the dir-exists
+    // check above, an ENOENT means a dangling symlink or a concurrent delete,
+    // and swallowing it would silently truncate the rest of this dir's scan and
+    // still pass green — fail-open in a guard whose whole job is to fire.
+    for await (const fileUrl of walk(dirUrl)) {
+      const filePath = fileURLToPath(fileUrl);
+      if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
+      // node_modules is not part of the published tree and its contents are
+      // resolved by npm, not by this repo's relative specifiers.
+      if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
+
+      const contents = await readFile(fileUrl, "utf8");
+      const relativeFile = toPosix(path.relative(repoRootPath, filePath));
+      for (const match of contents.matchAll(RELATIVE_SPECIFIER_RE)) {
+        const specifier = match[1];
+        if (!isShipped(fileURLToPath(new URL(specifier, fileUrl)))) {
+          offenders.push(`${relativeFile} -> ${specifier}`);
         }
       }
+      if (bareRe) {
+        for (const match of contents.matchAll(bareRe)) {
+          offenders.push(`${relativeFile} -> ${match[1]}`);
+        }
+      }
+    }
+  }
+  return offenders.sort();
+}
+
+// ponytail: relative specifiers only. Bare-specifier escapes are the sibling
+// defect class, answered below by `findUndeclaredBareImports` — without a
+// parser, because the two false-hit modes that would need one (prose bridging
+// into a quoted string; a minified vendor bundle) are closed by the matcher's
+// binding-list span and the vendor path skip. The residual is a bounded false
+// NEGATIVE, the direction a guard can afford to be wrong in.
+async function rootPackageOffenders() {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const pkg = JSON.parse(await readFile(new URL("package.json", repoRootUrl), "utf8"));
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+  const bareEscapeDirNames = repoTopLevelDirNames(repoRootUrl);
+  return findEscapingImports({ repoRootUrl, shippedDirs, bareEscapeDirNames });
+}
+
+test("root package relative imports never resolve outside the shipped files set", async () => {
+  assert.deepEqual(await rootPackageOffenders(), []);
+});
+
+// The optional peers must be loaded through a guarded dynamic import: a
+// top-level `import ... from "@playwright/test"` resolves fine here (it is a
+// devDependency) but breaks the module graph in a consumer install that never
+// opted in. The packed-install smoke is the end-to-end proof, but it self-skips
+// on registry trouble — so pin the invariant hermetically too. A closed set of
+// two names needs no resolver: a static specifier is enough to flag.
+// Derived from the manifest, not hardcoded: a third optional peer added later
+// is then guarded by this same check, which is the property the escaping-import
+// contract above is built on.
+async function readRootPackage() {
+  return JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+}
+
+function optionalPeersOf(pkg) {
+  return Object.entries(pkg.peerDependenciesMeta ?? {})
+    .filter(([, meta]) => meta?.optional === true)
+    .map(([name]) => name);
+}
+
+// STATIC import/re-export statements only, anchored at line start —
+// `await import("...")` is exactly the allowed form here, so it must not match.
+// The `export … from` branch keeps `from` MANDATORY (an optional group would
+// false-positive on `export default "…"`), and it matters because this repo's
+// convention is re-export shims: `export { webkit } from "@playwright/test"`
+// breaks a consumer module graph identically to a top-level import.
+// `import\s*` (not `\s+`) so the minified no-whitespace form
+// `import{webkit}from"@playwright/test"` is caught too — a shipped dir here
+// contains a minified vendor bundle. `import("x")` still cannot match: the
+// optional group requires a literal `from`, and the fallback requires a quote
+// immediately after `import`.
+// The span between the keyword and `from` accepts only BINDING-LIST characters
+// (identifiers, braces, commas, `*`, whitespace). It must keep matching across
+// newlines — `import {\n  a,\n  b\n} from "pkg"` is the dominant multi-name
+// style here — but a permissive `[^'"]*?` spans newlines through arbitrary
+// prose, pairing an `export` line with a quoted string far below it: a thrown
+// template literal reading `…version from "${spec}"` registered as a specifier
+// that way. Excluding parens, slashes and backticks ends that pairing while
+// accepting every real import form. `\w` is ASCII-only here, so a binding list
+// with a non-ASCII identifier would not match — none exists in the shipped set
+// and the convention is ASCII; if that changes, widen the CLASS (`u` flag with
+// `[\p{L}\p{N}_$*,{}\s]`), never the span back to `[^'"]*?`. A comment inside a
+// binding list (`import { a /* keep */ } from "yaml"`) is out of the class for
+// the same reason and equally absent here — same fix if it ever appears. The
+// `^`-anchor with `m` also means only the FIRST import on a physical line is
+// seen, so a compact `import{a}from"x";import{b}from"y";` under-reports; the
+// shipped tree has no such line outside the vendored bundle (itself skipped).
+const STATIC_SPECIFIER_RE = /^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)["']([^"']+)["']/gm;
+
+test("shipped files never statically import an optional peer dependency", async () => {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const pkg = await readRootPackage();
+  const optionalPeers = optionalPeersOf(pkg);
+  assert.ok(optionalPeers.length > 0, "expected at least one optional peer to guard");
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+
+  const offenders = [];
+  for (const dir of shippedDirs) {
+    const dirUrl = new URL(`${dir}/`, repoRootUrl);
+    try {
+      await stat(dirUrl);
     } catch (err) {
-      if (err.code !== "ENOENT") throw err; // no src/ dir in this package is fine
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    for await (const fileUrl of walk(dirUrl)) {
+      const filePath = fileURLToPath(fileUrl);
+      if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
+      if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
+
+      // `^[ \t]*` cannot skip U+FEFF, so a BOM-saved file whose FIRST line is an
+      // import would be scanned as if that import were absent.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
+      for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
+        const specifier = match[1];
+        const pkgName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+        if (optionalPeers.includes(pkgName)) {
+          offenders.push(`${path.relative(repoRootPath, filePath).split(path.sep).join("/")} -> ${specifier}`);
+        }
+      }
     }
   }
 
+  assert.deepEqual(offenders.sort(), []);
+});
+
+// The third resolution failure mode, sibling to the two above: a shipped file
+// bare-imports a package the ROOT manifest never declares. It resolves in this
+// repo only because npm hoists `@dev-loops/core`'s own dependencies into the
+// install root — an implicit layout guarantee that does not hold under pnpm's
+// strict layout, Yarn PnP, `--install-strategy=nested`, or any version conflict
+// that forces nesting. Declared-or-builtin is the invariant. It shares the
+// static-import matcher with the peer guard above, so the two cannot DRIFT into
+// disagreeing about what an import is — not that neither misses anything: a
+// shared matcher misses a form for both, and the accepted residuals are named
+// at the regex. The shipped set is the same, minus vendored paths.
+const VENDORED_PATH_RE = /(^|\/)vendor(\/|$)/;
+
+function packageNameOf(specifier) {
+  return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+}
+
+/**
+ * Pure detector: every static BARE specifier in the shipped tree that names
+ * neither a declared dependency/peerDependency nor a Node builtin. Pure and
+ * exported for the same reason `findEscapingImports` is — an assert-empty test
+ * over the real tree cannot tell "nothing undeclared" from "the walk found
+ * nothing", so the positive control below drives it against a synthetic tree.
+ *
+ * Returns sorted `<file> -> <specifier>` strings, plus the count of declared
+ * bare imports it did resolve, so callers can assert the scan was not inert.
+ */
+export async function findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared }) {
+  const repoRootPath = fileURLToPath(repoRootUrl);
+  const declaredSet = declared instanceof Set ? declared : new Set(declared);
+  const offenders = [];
+  let declaredSeen = 0;
+
+  for (const dir of shippedDirs) {
+    const dirUrl = new URL(`${dir}/`, repoRootUrl);
+    try {
+      await stat(dirUrl);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    for await (const fileUrl of walk(dirUrl)) {
+      const filePath = fileURLToPath(fileUrl);
+      if (!/\.(c|m)?(js|ts)x?$/.test(filePath)) continue;
+      if (filePath.includes(`${path.sep}node_modules${path.sep}`)) continue;
+      const relative = path.relative(repoRootPath, filePath).split(path.sep).join("/");
+      // Vendored bundles ship their dependencies inlined; their import-looking
+      // text is bundled source, not this package's resolution surface.
+      if (VENDORED_PATH_RE.test(relative)) continue;
+
+      // BOM-stripped for the same reason as the peer guard above.
+      const contents = (await readFile(fileUrl, "utf8")).replace(/^\uFEFF/, "");
+      for (const match of contents.matchAll(STATIC_SPECIFIER_RE)) {
+        const specifier = match[1];
+        // Relative and absolute specifiers are the other two guards' business;
+        // `node:`-prefixed and bare builtins resolve without a manifest entry.
+        if (/^[.\/]/.test(specifier)) continue;
+        if (specifier.startsWith("node:")) continue;
+        const pkgName = packageNameOf(specifier);
+        if (isBuiltin(pkgName)) continue;
+        if (declaredSet.has(pkgName)) {
+          declaredSeen += 1;
+          continue;
+        }
+        offenders.push(`${relative} -> ${specifier}`);
+      }
+    }
+  }
+
+  return { offenders: offenders.sort(), declaredSeen };
+}
+
+test("shipped files never statically import a package the root manifest does not declare", async () => {
+  const repoRootUrl = new URL("../../", import.meta.url);
+  const pkg = await readRootPackage();
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ]);
+  assert.ok(declared.size > 0, "expected the root manifest to declare at least one dependency");
+  const shippedDirs = await resolveShippedDirs(pkg.files, repoRootUrl);
+
+  const { offenders, declaredSeen } = await findUndeclaredBareImports({ repoRootUrl, shippedDirs, declared });
+
   assert.deepEqual(offenders, []);
+  // An empty offender list cannot distinguish "nothing undeclared" from "the
+  // scan stopped seeing imports" — the hazard this file documents for its
+  // sibling scanner, and a live one since the matcher was narrowed.
+  assert.ok(declaredSeen > 0, "scan resolved no declared bare import at all — the matcher or the walk is broken, not the tree");
+});
+
+test("findUndeclaredBareImports flags an undeclared bare import and passes the declared ones", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "undeclared-bare-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped", "vendor"), { recursive: true });
+    await writeFile(
+      path.join(fixture, "shipped", "entry.mjs"),
+      [
+        'import { parse } from "yaml";',                    // legal: declared
+        'import { z } from "zod";',                         // legal: declared
+        'import { readFile } from "node:fs/promises";',     // legal: node: builtin
+        'import path from "path";',                         // legal: bare builtin
+        'import { x } from "./local.mjs";',                 // legal: relative, other guard
+        'import { rogue } from "not-declared";',            // OFFENDER
+        'import {\n  a,\n  b,\n} from "@scope/also-undeclared";', // OFFENDER, multi-line
+      ].join("\n"),
+    );
+    // A vendored bundle's inlined imports must not count against the manifest.
+    await writeFile(path.join(fixture, "shipped", "vendor", "bundle.min.js"), 'import{a}from"bundled-dep";');
+    // A BOM-saved file whose FIRST line is the import: without the strip above,
+    // `^[ \t]*` cannot skip U+FEFF and this offender scans as if absent.
+    await writeFile(path.join(fixture, "shipped", "bom.mjs"), '\uFEFFimport { q } from "bom-undeclared";\n');
+
+    const { offenders, declaredSeen } = await findUndeclaredBareImports({
+      repoRootUrl,
+      shippedDirs: ["shipped"],
+      declared: new Set(["yaml", "zod"]),
+    });
+
+    assert.deepEqual(offenders, [
+      "shipped/bom.mjs -> bom-undeclared",
+      "shipped/entry.mjs -> @scope/also-undeclared",
+      "shipped/entry.mjs -> not-declared",
+    ]);
+    assert.equal(declaredSeen, 2);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// The guard above derives its names from the manifest, so it would go quiet if
+// the declarations vanished. Pin the declarations themselves too — otherwise the
+// only check that these are OPTIONAL peers (and not runtime dependencies) is the
+// packed-install smoke, which self-skips on registry trouble.
+test("the optional peers are declared as optional peerDependencies, not runtime dependencies", async () => {
+  const pkg = await readRootPackage();
+  const peers = optionalPeersOf(pkg);
+  // The browser runners this repo's stages load dynamically must stay in the set.
+  for (const required of ["@playwright/test", "@axe-core/playwright"]) {
+    assert.ok(peers.includes(required), `${required} must be declared an optional peer`);
+  }
+  for (const peer of peers) {
+    assert.ok(pkg.peerDependencies?.[peer], `${peer} must be declared in peerDependencies`);
+    assert.equal(pkg.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be marked optional`);
+    assert.ok(!pkg.dependencies?.[peer], `${peer} must not be a runtime dependency`);
+  }
+});
+
+test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
+  const specifiers = (source) => [...source.matchAll(STATIC_SPECIFIER_RE)].map((m) => m[1]);
+
+  // Static forms — each one breaks a consumer module graph at load time.
+  assert.deepEqual(specifiers('import { webkit } from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import def from "@playwright/test";'), ["@playwright/test"]);
+  // The re-export shim form: this repo's own harness is written this way.
+  assert.deepEqual(specifiers('export { webkit } from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('export * from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('import {\n  webkit,\n} from "@playwright/test";'), ["@playwright/test"]);
+  // The minified form, which a shipped vendor bundle can legitimately contain.
+  assert.deepEqual(specifiers('import{webkit}from"@playwright/test";'), ["@playwright/test"]);
+
+  // Dynamic forms — the sanctioned way to load an optional peer.
+  assert.deepEqual(specifiers('const { webkit } = await import("@playwright/test");'), []);
+  assert.deepEqual(specifiers('  importPlaywright = () => import("@playwright/test")'), []);
+  // A string that merely looks like one must not match.
+  assert.deepEqual(specifiers('export default "@playwright/test";'), []);
+
+  // Multi-line binding lists, including the re-export twin — the dominant
+  // multi-name style in this tree, and the shape a future dependency arrives
+  // in. A matcher that only saw single lines would miss both silently.
+  assert.deepEqual(
+    specifiers('import {\n  webkit,\n  chromium,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(
+    specifiers('export {\n  webkit,\n} from "@playwright/test";'),
+    ["@playwright/test"],
+  );
+  assert.deepEqual(specifiers('import * as pw from "@playwright/test";'), ["@playwright/test"]);
+  assert.deepEqual(specifiers('export * as pw from "@playwright/test";'), ["@playwright/test"]);
+
+  // Prose between an `export` keyword and a quoted string must NOT pair across
+  // newlines: this exact shape (a thrown template literal containing the word
+  // `from`) reported `${spec}` as a specifier while the span was permissive.
+  assert.deepEqual(
+    specifiers('export function extractMajorMinor(spec) {\n  throw new Error(`cannot parse a version from "${spec}"`);\n}'),
+    [],
+  );
+});
+
+// The assert-empty test above cannot distinguish "nothing escapes" from "the
+// detector stopped detecting" — a scan that silently degrades passes green
+// forever. This pins the detector's positive behavior against a synthetic tree
+// so the guard is self-validating rather than vacuous.
+test("findEscapingImports flags an import leaving the shipped set and passes the legal ones", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-imports-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped", "nested"), { recursive: true });
+    await mkdir(path.join(fixture, "unshipped"), { recursive: true });
+    await writeFile(path.join(fixture, "unshipped", "helper.mjs"), "export const x = 1;\n");
+    await writeFile(path.join(fixture, "unshipped", "other.mjs"), "export const o = 3;\n");
+    await writeFile(
+      path.join(fixture, "shipped", "legal.mjs"),
+      // A SECOND file that escapes, so the expected array is not a run of
+      // identical strings — that is what actually pins the documented sort
+      // against readdir order. It also covers the side-effect import form.
+      'import "../unshipped/other.mjs";\nexport const y = 2;\n',
+    );
+    await writeFile(
+      path.join(fixture, "shipped", "nested", "entry.mjs"),
+      [
+        'import { y } from "../legal.mjs";',               // legal: stays inside shipped/
+        'import path from "node:path";',                    // legal: builtin, not relative
+        'import { x } from "../../unshipped/helper.mjs";',  // offender: static form
+        'const lazy = await import("../../unshipped/deep.mjs");', // offender: dynamic form
+      ].join("\n"),
+    );
+
+    const offenders = await findEscapingImports({ repoRootUrl, shippedDirs: ["shipped"], bareEscapeDirNames: [] });
+
+    // Sorted, and each entry distinct — a regex regression that matched one form
+    // twice and the other zero times could not produce this array.
+    assert.deepEqual(offenders, [
+      "shipped/legal.mjs -> ../unshipped/other.mjs",
+      "shipped/nested/entry.mjs -> ../../unshipped/deep.mjs",
+      "shipped/nested/entry.mjs -> ../../unshipped/helper.mjs",
+    ]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// Pins the sibling defect class (issue #1458): a BARE specifier into a
+// top-level repo dir name resolves through node_modules, not the file system,
+// so RELATIVE_SPECIFIER_RE alone cannot see it. Same self-validation goal as
+// the fixture above — proves the detector actually fires rather than passing
+// vacuously.
+test("findEscapingImports requires bareEscapeDirNames — dropping it at a call site fails loudly, not vacuous-green", async () => {
+  await assert.rejects(
+    () => findEscapingImports({ repoRootUrl: pathToFileURL(`${tmpdir()}/`), shippedDirs: ["shipped"] }),
+    TypeError,
+  );
+});
+
+test("findEscapingImports flags a bare specifier into a named top-level dir", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-bare-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped"), { recursive: true });
+    await writeFile(
+      path.join(fixture, "shipped", "entry.mjs"),
+      [
+        'import { main } from "scripts/projects/move-queue-item.mjs";', // offender: bare, static form
+        'const lazy = await import("scripts/other.mjs");',              // offender: bare, dynamic form
+        'import { y } from "./legal.mjs";',                             // legal: relative, stays inside shipped/
+        'import scoped from "@dev-loops/core/loop/queue-board-sync";',  // legal: real npm package, not a bare local dir
+      ].join("\n"),
+    );
+
+    const offenders = await findEscapingImports({
+      repoRootUrl,
+      shippedDirs: ["shipped"],
+      bareEscapeDirNames: ["scripts", "test"],
+    });
+
+    assert.deepEqual(offenders, [
+      "shipped/entry.mjs -> scripts/other.mjs",
+      "shipped/entry.mjs -> scripts/projects/move-queue-item.mjs",
+    ]);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// A shipped dir named without npm's optional trailing slash must still be
+// scanned — the suffix heuristic this replaced would have silently skipped it.
+test("resolveShippedDirs classifies a files entry by what it is on disk, not by a trailing slash", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "shipped-dirs-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "withslash"), { recursive: true });
+    await mkdir(path.join(fixture, "noslash"), { recursive: true });
+    await writeFile(path.join(fixture, "README.md"), "# not a dir\n");
+
+    assert.deepEqual(
+      // "gone" (no slash, not on disk) reaches the ENOENT branch; "./withslash/"
+      // pins the ./-prefix normalization.
+      await resolveShippedDirs(["withslash/", "noslash", "README.md", "absent/", "gone", "./withslash/"], repoRootUrl),
+      // "./withslash/" normalizes onto "withslash" and is deduped, so the dir is
+      // walked once rather than double-reporting every offender inside it.
+      ["withslash", "noslash", "absent"],
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+// A trailing slash claims "this is a directory"; when the entry is actually a
+// file on disk, that claim is wrong and must fail loudly here rather than
+// surfacing later as a raw ENOTDIR from the dir-exists probe.
+test("resolveShippedDirs refuses a trailing-slash files entry that is a file on disk", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "shipped-dirs-file-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await writeFile(path.join(fixture, "README.md"), "# not a dir\n");
+
+    await assert.rejects(
+      () => resolveShippedDirs(["README.md/"], repoRootUrl),
+      /has a trailing slash but is a file on disk/,
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("findEscapingImports refuses to swallow a mid-walk ENOENT rather than truncating the scan", async () => {
+  // The anti-fail-open property the dir-exists probe was scoped for: past that
+  // probe, an ENOENT means a dangling symlink or a concurrent delete. Swallowing
+  // it would skip the rest of the dir and still report success.
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-dangling-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "shipped"), { recursive: true });
+    // Sorts before any real file, so the walk reaches it first.
+    await symlink(path.join(fixture, "nonexistent-target.mjs"), path.join(fixture, "shipped", "aaa-dangling.mjs"));
+    await writeFile(path.join(fixture, "shipped", "zzz.mjs"), "export const z = 1;\n");
+
+    await assert.rejects(
+      () => findEscapingImports({ repoRootUrl, shippedDirs: ["shipped"], bareEscapeDirNames: [] }),
+      (err) => {
+        assert.equal(err.code, "ENOENT");
+        return true;
+      },
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("resolveShippedDirs refuses a glob files entry rather than silently scanning nothing", async () => {
+  // A dropped glob would shrink the shipped set toward empty and the whole
+  // contract would pass vacuously — the failure mode this guard exists to avoid.
+  await assert.rejects(
+    () => resolveShippedDirs(["scripts/**/*.mjs"], new URL("../../", import.meta.url)),
+    /glob syntax/,
+  );
+});
+
+test("findEscapingImports skips a shipped dir that is absent without aborting the scan", async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "escaping-absent-"));
+  try {
+    const repoRootUrl = pathToFileURL(`${fixture}/`);
+    await mkdir(path.join(fixture, "present"), { recursive: true });
+    await mkdir(path.join(fixture, "outside"), { recursive: true });
+    await writeFile(path.join(fixture, "outside", "helper.mjs"), "export const x = 1;\n");
+    await writeFile(path.join(fixture, "present", "entry.mjs"), 'import { x } from "../outside/helper.mjs";\n');
+
+    // "missing" does not exist: it must be skipped, and "present" must still be
+    // scanned — an absent dir cannot be allowed to truncate the run.
+    assert.deepEqual(
+      await findEscapingImports({ repoRootUrl, shippedDirs: ["missing", "present"], bareEscapeDirNames: [] }),
+      ["present/entry.mjs -> ../outside/helper.mjs"],
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });

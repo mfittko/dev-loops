@@ -168,8 +168,10 @@ references it under `artifacts.snapshot`.
 [axe-core](https://github.com/dequelabs/axe-core) results as produced by
 `@axe-core/playwright` running against the live page. Its body is the raw axe
 results JSON (an object with `violations`/`passes`/`incomplete`/`inapplicable`),
-or JSON `null` when axe could not run — the page context is unavailable, or the
-runner is absent in the current browser build. Like `snapshot.json`, it is
+or JSON `null` when axe could not run — the page context is unavailable, the
+runner is absent in the current browser build, or the optional
+`@axe-core/playwright` peer dependency is not installed (the common case in a
+consumer install that has not opted into it). Like `snapshot.json`, it is
 best-effort in content but always emitted for every named state (never skipped)
 at the deterministic path above, and `state.json` references it under
 `artifacts.axe`.

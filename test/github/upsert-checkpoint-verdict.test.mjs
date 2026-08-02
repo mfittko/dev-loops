@@ -7,6 +7,7 @@ import test, { after, before } from "node:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
@@ -202,6 +203,49 @@ function buildGateComment({
     updated_at: updatedAt,
   };
 }
+
+// #1472: buildCoordinationEvaluatorInput is the exact function
+// upsertCheckpointVerdict calls to assemble evaluatePrGateCoordination's
+// input — not a re-implementation. Mutation check: replacing
+// `coordinationContext.snapshot?.unresolvedThreadCount ?? null` with a
+// hardcoded `null` in that function fails this assertion, unlike a test that
+// reproduces the object literal independently.
+test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordinationContext.snapshot (#1472)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "round_cap_reached", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "blocked" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 2, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+  };
+  const input = buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(input.unresolvedThreadCount, 0);
+
+  const nonZeroContext = { ...coordinationContext, snapshot: { ...coordinationContext.snapshot, unresolvedThreadCount: 4 } };
+  const nonZeroInput = buildCoordinationEvaluatorInput({
+    coordinationContext: nonZeroContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(nonZeroInput.unresolvedThreadCount, 4);
+});
 
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
@@ -668,7 +712,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1021,7 +1065,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Findings summary:** no issues found",
-          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
+          "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
         ],
         // The evidence note must render on its own labeled line — never spliced
         // with `;` into the findings summary (pre-fix render).
@@ -1057,7 +1101,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1146,7 +1190,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1230,7 +1274,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
     assert.equal(result.ghCallCount(), 8);
@@ -1472,7 +1516,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1565,7 +1609,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678000000000000000000000000000000000\` (comment 202). The old comment is stale for the current head.",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1657,7 +1701,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["must-fix"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1889,8 +1933,10 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
-    assert.match(payload.error, /must-fix/);
-    assert.match(payload.error, /worth-fixing-now/);
+    // draft_gate blocks on must-fix only (worth-fixing-now is recorded but
+    // non-blocking here); assert the exact bracketed list so this fails if
+    // worth-fixing-now ever becomes blocking again for draft_gate.
+    assert.match(payload.error, /blocking severities \[must-fix\]\./);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1918,9 +1964,11 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-summary", "no issues found",
+      "--findings-summary", "0 must-fix; 1 worth-fixing-now recorded (non-blocking), 1 defer",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      // draft_gate blocks on must-fix only: a non-zero worth-fixing-now count
+      // (like the non-zero defer count) must not block a clean verdict.
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":1}',
     ], { env });
 
     assert.equal(result.code, 0);
@@ -1934,6 +1982,263 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
 });
 
 
+
+// The clean-verdict guard trusts --findings-severity-counts alone, so a
+// hand-typed all-zero counts object — the exact placeholder the docs warn
+// against — must not unblock a clean verdict when --findings-json's own
+// per-angle findings carry a blocking severity. Cross-checked directly
+// against the parsed findings, independent of what --findings-severity-counts
+// claims.
+test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries must-fix findings even when --findings-severity-counts is all-zero", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-mismatch-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Cannot set verdict "clean"/);
+    assert.match(payload.error, /findings-json.*own per-angle findings show unresolved findings/);
+    assert.match(payload.error, /must-fix/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is genuinely all-clean, matching an all-zero --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-match-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "clean", findings: [] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The clean-verdict cross-check's actual boundary is the blockCleanOnFindingSeverities
+// filter, not "any findings at all" — a clean verdict whose --findings-json carries
+// only NON-blocking (defer) findings is a sanctioned combination and must still be
+// allowed. This pins the mid-range case between "must-fix present (reject)" and
+// "zero findings (allow)" above.
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries only non-blocking (defer) findings", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-defer-only-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "defer", summary: "nice-to-have cleanup" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The cross-check's "unresolved" boundary is disposition, not bare severity:
+// the sub-loop contract's clean criterion is "no findings with a blocking
+// severity REMAIN", and "operator_acknowledged"/"disputed" are the sanctioned
+// vocabulary (write-gate-findings-log.mjs's VALID_DISPOSITIONS) for a
+// blocking-severity finding the fix cycle/operator has already closed out
+// without changing its severity. A clean verdict whose only blocking-severity
+// --findings-json entry carries that disposition must still be postable.
+test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-severity --findings-json finding is operator_acknowledged", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-ack-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "known limitation", disposition: "operator_acknowledged" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The resolved-disposition set is closed: "deferred" (the value
+// consolidateFanin derives for a finding outside ITS OWN blocking-severity
+// set, independent of the posting gate's blockCleanOnFindingSeverities) is
+// NOT a resolution, and neither is an unrecognized/typo'd string. Either
+// must still count as an unresolved blocking finding, or a --gate-less
+// fan-in run (or a hand-typed --findings-json) could silently defeat the
+// cross-check the same way an all-zero --findings-severity-counts did.
+test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-severity --findings-json finding carries disposition deferred", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-deferred-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "off-by-one", disposition: "deferred" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /own per-angle findings show unresolved findings/);
+    assert.match(payload.error, /must-fix/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-severity --findings-json finding carries an unrecognized disposition", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-unknown-disp-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "off-by-one", disposition: "wontfix" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /own per-angle findings show unresolved findings/);
+    assert.match(payload.error, /must-fix/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
@@ -1960,8 +2265,12 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /--findings-severity-counts is required/);
-    assert.match(payload.error, /must-fix/);
-    assert.match(payload.error, /worth-fixing-now/);
+    // The error text embeds a static example payload alongside the
+    // config-derived "(blocking: [...])" tail; assert the tail, which is
+    // the part that actually reflects draft_gate's configured blocking set
+    // (must-fix only — worth-fixing-now would match the example text
+    // regardless of what is configured).
+    assert.match(payload.error, /\(blocking: \[must-fix\]\)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1984,7 +2293,9 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--verdict", "clean",
       "--findings-summary", "all clear",
       "--next-action", "mark ready",
-      "--findings-severity-counts", '{"must-fix":0,"defer":0}',
+      // draft_gate blocks on must-fix only, so omitting must-fix (not
+      // worth-fixing-now) is what exercises "missing a blocking key" here.
+      "--findings-severity-counts", '{"worth-fixing-now":0,"defer":0}',
     ], { env });
 
     assert.equal(result.code, 1);
@@ -1992,7 +2303,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /must include explicit counts for all configured blocking severities/);
-    assert.match(payload.error, /worth-fixing-now/);
+    assert.match(payload.error, /must-fix/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2307,6 +2618,130 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
     const ghLog = await readFile(ghLogPath, "utf8");
     const conversions = (ghLog.match(/convertPullRequestToDraft/g) || []).length;
     assert.equal(conversions, 1, "expected exactly one convertPullRequestToDraft (no recursion loop)");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", async () => {
+  // REGRESSION for #1455: this must run as a REAL CLI subprocess (real spawn,
+  // real `import.meta.url` top-level `await main()`), NOT the in-process
+  // makeGhMock harness the local `runNode` helper in this file uses for most
+  // tests — the bug only manifests when upsert-checkpoint-verdict.mjs is itself
+  // the ESM entry point.
+  //
+  // Root cause: postDraftGateViaDraftTransition dynamically imported
+  // "./reconcile-draft-gate.mjs", which statically imports upsertCheckpointVerdict
+  // BACK from this very file — a circular module reference. When this file is the
+  // CLI entry point (still suspended on its own top-level `await main()`), that
+  // dynamic import of a module which circularly re-imports the still-evaluating
+  // entry module deadlocks Node's ESM linker: the import() promise never settles,
+  // main() never returns, and the process exits 13 with "Detected unsettled
+  // top-level await" — WITHOUT posting the gate verdict comment.
+  //
+  // Repro shape (exact): a ready (non-draft) PR with NO prior draft_gate marker,
+  // clean pre_approval_gate evidence on the current head (drives coordination to
+  // RECONCILE_DRAFT_GATE), `--gate draft_gate`, `--execution-mode
+  // inline_single_agent`, current head SHA, and a real (non-empty) run id (the
+  // production default this file's tests otherwise set to "" — see the `runNode`
+  // helper above — which happens to also skip the unrelated verifyComment path).
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-1455-unsettled-await-"));
+
+  try {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const cleanPreApprovalComment = {
+      id: 501,
+      body: [
+        "### Gate review: `pre_approval_gate`",
+        "",
+        `**Reviewed head SHA:** \`${headSha}\``,
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent",
+        "",
+        "**Findings summary:** no issues found",
+        "",
+        "**Next action:** await final human approval",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-501",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const copilotReviewOnHead = {
+      id: 1,
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      submittedAt: "2026-05-30T16:00:00Z",
+      commit: { oid: headSha },
+    };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      body: DEFAULT_TEST_PR_BODY,
+      title: "Test PR",
+      closingIssuesReferences: [],
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: [copilotReviewOnHead],
+    }) + "\n";
+
+    const { env, ghLogPath } = await writeGhStubHelper(tempDir, [
+      // --- coordination pass 1 (isDraft: false -> reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft (the self-heal transition) ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (isDraft: true -> posts normally) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // --- post the draft_gate verdict + post-creation verify + restore ready ---
+      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-900"}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/900"], stdout: '{"id":900}\n' },
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
+    ], { matchMode: "claims", logCalls: true });
+    // A real (non-empty) run id — the production default — activates the
+    // post-creation verifyComment call above; it is orthogonal to the deadlock
+    // but matches the reported repro shape exactly.
+    env.DEVLOOPS_RUN_ID = "test-run-1455-real";
+
+    const result = await runNodeHelper(scriptPath, [
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent",
+      "--inline-reason", "single-agent inline review (test)",
+    ], { env, cwd: tempDir });
+
+    // Pre-fix this exits 13 with "Detected unsettled top-level await" on stderr
+    // and empty stdout (no comment posted). Fixed: exits 0 with the created
+    // comment in the JSON envelope.
+    assert.equal(result.code, 0, `expected exit 0, got ${result.code}. stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /unsettled top-level await/i);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "created");
+    assert.equal(payload.gate, "draft_gate");
+    assert.equal(payload.draftTransition, true);
+    assert.equal(payload.commentId, 900);
+
+    const ghLog = await readFile(ghLogPath, "utf8");
+    assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
+    assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2664,10 +3099,12 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   });
 
   // Structured block is multi-line with one bullet per angle and nested findings.
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _accepted-for-fix_\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] missing null guard\n/);
-  assert.match(body, /\n- `acceptance-criteria` → clean/);
+  // severity/verdict/disposition render inside backtick code spans (enum
+  // labels, never prose — see sanitizeStructuredCodeSpan).
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing null guard\n/);
+  assert.match(body, /\n- `acceptance-criteria` → `clean`/);
   // Newlines are preserved (not collapsed to a run-on line).
   assert.ok(body.split("\n").length > 8, "structured body should be multi-line");
   // The free-text summary is NOT rendered; the digest line is used instead.
@@ -2814,7 +3251,7 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
     ],
   });
   // Angle backtick stripped (no premature code-span close).
-  assert.match(body, /\n- `weirdangle` → findings_present\n/);
+  assert.match(body, /\n- `weirdangle` → `findings_present`\n/);
   // Embedded newline collapsed; HTML-comment delimiters neutralized.
   assert.match(body, /line one line two &lt;!-- dev-loops:gate-findings gate=draft_gate --&gt;/);
   assert.doesNotMatch(body, /<!-- dev-loops:gate-findings/);
@@ -2824,6 +3261,197 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
   assert.equal(parsed.headSha, "deadbeef");
   assert.equal(parsed.executionMode, "fanout_fanin");
   assert.equal(parsed.contractComplete, true);
+});
+
+// Regression (renderer-security, PR#1513 gate review): severity/verdict/
+// disposition are enum-like fields, but this file previously rendered them
+// bare (only summary/file went through a code span). A `--findings-json`
+// producer other than consolidate-fanin can supply an arbitrary string there,
+// so a crafted severity like `must-fix](https://evil.example)` used to close
+// the literal `[...]` early and open a clickable markdown link in a posted
+// gate comment. severity/verdict/disposition now render inside a backtick
+// code span (like angle/file already did), which markdown parses before
+// link/image syntax, so the value can never break out of its literal
+// position. summary also neutralizes the `![` image-embed form (a
+// read-receipt/IP-leak vector via an auto-loaded remote image).
+test("renderGateReviewCommentBody neutralizes markdown link/image injection via severity/verdict/disposition/summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present](https://evil.example)",
+        findings: [
+          {
+            severity: "must-fix](https://evil.example)",
+            summary: "see ![leak](https://evil.example/track.png) for details",
+            disposition: "accepted-for-fix](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // A crafted severity/verdict/disposition never closes its own `[...]`/`_..._`
+  // wrapper early: the whole value, including its embedded `](url)`, is
+  // wrapped in ITS OWN backtick code span — CommonMark parses a code span
+  // before link syntax, so this renders as inert literal text, never a link.
+  assert.match(body, /\[`must-fix\]\(https:\/\/evil\.example\)`\]/);
+  assert.match(body, /→ `findings_present\]\(https:\/\/evil\.example\)`\n/);
+  assert.match(body, /_`accepted-for-fix\]\(https:\/\/evil\.example\)`_/);
+  // The image-embed form in summary is neutralized (no bare `![`).
+  assert.doesNotMatch(body, /!\[leak\]/);
+  assert.match(body, /!&#91;leak\]/);
+});
+
+// Regression (renderer-security, PR#1513 gate review round 3): a lone backtick
+// in `summary` used to shift CommonMark's left-to-right backtick pairing so a
+// LATER field on the same line — here `file` — never got its own code span,
+// letting its crafted `](url)` combine with `summary`'s `[` into a live
+// markdown link. sanitizeStructuredInline now strips backticks from EVERY
+// field it sanitizes (summary included), so no field can unbalance another
+// field's code span on the same rendered line.
+test("renderGateReviewCommentBody strips a backtick from summary so it cannot shift pairing and break a later field's code-span defense (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "guard [missing for ` value",
+            file: "a.mjs](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // The stray backtick is gone (whitespace it left behind is re-collapsed) —
+  // nothing left in summary to shift the backtick pairing. (summary's `[` is
+  // separately escaped by the plain-link neutralization, which is expected —
+  // the point pinned here is that the FILE field's own code span still forms
+  // intact below, not that summary's bracket is left untouched.)
+  assert.match(body, /guard &#91;missing for value/);
+  assert.doesNotMatch(body, /guard \[missing for `/);
+  // file's own code span still forms intact around the WHOLE crafted value,
+  // including its embedded `](url)`, which stays inert literal code text —
+  // never a live link — because no earlier stray backtick stole its opening
+  // delimiter.
+  assert.match(body, /\(`a\.mjs\]\(https:\/\/evil\.example\)`\)/);
+});
+
+// Regression (renderer-security, PR#1513 gate review round 4): summary is
+// free text (not wrapped in a code span), so a crafted plain markdown link
+// `[text](url)` or raw HTML in a finding's summary used to render as a live
+// clickable link / live HTML tag in the posted gate comment. sanitizeStructuredInline
+// now escapes a plain link's opening `[` (breaking it before it can pair with
+// its `](url)`) and escapes any raw `<` so an HTML tag cannot pass through to
+// the rendered markdown.
+test("renderGateReviewCommentBody neutralizes a plain markdown link and raw HTML in summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "[Approve this PR](https://evil.example) <script>alert(1)</script>",
+          },
+        ],
+      },
+    ],
+  });
+  // No live markdown link: the opening `[` is neutralized to an HTML entity
+  // so it can never pair with the trailing `](url)` to form a link.
+  assert.doesNotMatch(body, /\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  assert.match(body, /&#91;Approve this PR\]\(https:\/\/evil\.example\)/);
+  // No raw HTML tag reaches the rendered body.
+  assert.doesNotMatch(body, /<script>/);
+  assert.match(body, /&lt;script>alert\(1\)&lt;\/script>/);
+});
+
+// Regression (renderer-security, PR#1513 gate review round 5): a backslash
+// escape (`\[`) introduces a new character whose own escaping must then be
+// correct. It wasn't: a summary carrying a literal backslash immediately
+// before the bracket (`\[text](url)`) absorbed the inserted escape, turning
+// it into `\\[text](url)` — CommonMark parses `\\` as an escaped, literal
+// backslash, leaving the `[` unescaped and free to pair with `](url)` into a
+// live link. sanitizeStructuredInline now neutralizes `[` with the HTML
+// entity `&#91;` instead of a backslash: an entity has no escape character
+// for a value's own content (or a later replacement) to absorb, so a
+// preceding literal backslash cannot re-open the link.
+test("renderGateReviewCommentBody neutralizes a backslash-absorbed markdown link in summary (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "\\[Approve this PR](https://evil.example)",
+          },
+        ],
+      },
+    ],
+  });
+  // No live markdown link, in EITHER of the backslash's two possible
+  // meanings: escaped-literal-backslash-then-live-bracket, or an unescaped
+  // bracket outright.
+  assert.doesNotMatch(body, /\\?\[Approve this PR\]\(https:\/\/evil\.example\)/);
+  assert.match(body, /&#91;Approve this PR\]\(https:\/\/evil\.example\)/);
+});
+
+// A summary carrying a legitimate backslash (e.g. a Windows path or a regex)
+// with no adjacent bracket must still render as plain, readable prose — the
+// entity neutralization above targets `[` specifically, not backslashes in
+// general.
+test("renderGateReviewCommentBody leaves a summary's ordinary backslash and bracket-free text untouched (renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          {
+            severity: "must-fix",
+            summary: "missing null check in C:\\repo\\src\\app.mjs, see regex a\\d+b",
+          },
+        ],
+      },
+    ],
+  });
+  assert.match(body, /missing null check in C:\\repo\\src\\app\.mjs, see regex a\\d\+b/);
 });
 
 test("renderGateReviewCommentBody renders NESTED per-angle findings input correctly (#898)", async () => {
@@ -2844,13 +3472,102 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
       { angle: "tests", verdict: "clean", findings: [] },
     ],
   });
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] bad bound \(`x\.mjs:3`\)\n/);
-  assert.match(body, /\n- `tests` → clean/);
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] bad bound \(`x\.mjs:3`\)\n/);
+  assert.match(body, /\n- `tests` → `clean`/);
   assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 1 finding \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
   assert.ok(parsed);
   assert.equal(parsed.contractComplete, true);
+});
+
+// A marker-collapsed fan-in round replaces an angle's real findings with ONE
+// synthetic marker finding (consolidate-fanin.mjs), so counting
+// `angles[].findings.length` alone would report e.g. "1 finding" for a round
+// that actually carries hundreds — wrong by an order of magnitude, and this
+// digest line is machine-parsed evidence. When the caller also supplies
+// `findingsSeverityCounts` (a fan-in's own true, unbudgeted `severityCounts`),
+// the digest must sum THAT instead of the rendered marker count.
+test("renderGateReviewCommentBody's Findings summary counts the true totals from findingsSeverityCounts, not the marker-collapsed findingsJson", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        // A single marker finding standing in for many real findings.
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+      },
+      { angle: "tests", verdict: "clean", findings: [] },
+    ],
+    findingsSeverityCounts: { "must-fix": 5, "worth-fixing-now": 10, defer: 5 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 20 findings \(see per-angle breakdown below\)\./);
+});
+
+// findingsSeverityCounts is a CORRECTION for a marker-collapsed undercount, not
+// a replacement: a marker collapse can only ever make findingsJson's own count
+// LOWER than the truth, never higher, so the supplied counts must only be
+// allowed to RAISE the digest, never lower it. An all-zero or partial counts
+// object (e.g. the mandatory gate-comment template's own documented example,
+// or a caller that forgot the `defer` key) must not silently replace a real
+// per-angle count with "no findings" while the rendered per-angle breakdown
+// still lists real findings.
+test("renderGateReviewCommentBody's Findings summary keeps the real count when findingsSeverityCounts is all-zero (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "naming nit" }] },
+    ],
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, defer: 0 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 2 findings \(see per-angle breakdown below\)\./);
+});
+
+test("renderGateReviewCommentBody's Findings summary keeps the real count when findingsSeverityCounts omits a severity that has real findings (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "a" }, { severity: "defer", summary: "b" }] },
+    ],
+    // Documented two-key example from --help; carries no "defer" key at all.
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 2 findings \(see per-angle breakdown below\)\./);
+});
+
+test("renderGateReviewCommentBody's Findings summary ignores unrecognized severity keys in findingsSeverityCounts (#1513)", async () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
+    ],
+    // A typo'd key ("mustfix") and a non-severity key ("total") must not
+    // inflate the posted total beyond the true, known-severity sum (1).
+    findingsSeverityCounts: { "must-fix": 1, mustfix: 1, total: 2 },
+  });
+  assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 1 finding \(see per-angle breakdown below\)\./);
 });
 
 test("renderGateReviewCommentBody groups FLAT per-finding input by angle without dropping findings (#898)", async () => {
@@ -2874,13 +3591,13 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
     ],
   });
   // Findings are NOT dropped: grouped per angle.
-  assert.match(body, /\n- `correctness` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] off-by-one \(`src\/loop\.mjs`\) — _accepted-for-fix_\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] missing guard\n/);
-  assert.match(body, /\n- `style` → findings_present\n/);
-  assert.match(body, /\n {2}- \[defer\] naming nit\n/);
-  assert.match(body, /\n- `general` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] no-angle finding\n/);
+  assert.match(body, /\n- `correctness` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing guard\n/);
+  assert.match(body, /\n- `style` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`defer`\] naming nit\n/);
+  assert.match(body, /\n- `general` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] no-angle finding\n/);
   // 3 angles (correctness, style, general), 4 findings total — none dropped.
   assert.match(body, /\*\*Findings summary:\*\* 3 angles reviewed; 4 findings \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
@@ -3010,9 +3727,9 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
     ],
   });
   // Both angle-less entries render under `general` — findings are NOT dropped.
-  assert.match(body, /\n- `general` → findings_present\n/);
-  assert.match(body, /\n {2}- \[must-fix\] angle-less nested finding\n/);
-  assert.match(body, /\n {2}- \[worth-fixing-now\] blank-angle nested finding\n/);
+  assert.match(body, /\n- `general` → `findings_present`\n/);
+  assert.match(body, /\n {2}- \[`must-fix`\] angle-less nested finding\n/);
+  assert.match(body, /\n {2}- \[`worth-fixing-now`\] blank-angle nested finding\n/);
   // The structured digest is used; the free-text fallback is NOT rendered.
   assert.match(body, /per-angle breakdown below/);
   assert.doesNotMatch(body, /must NOT be rendered/);
@@ -3215,9 +3932,9 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
         assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
         assertArgContains: [
           "**Execution mode:** fanout_fanin",
-          "- `correctness` → findings_present",
-          "  - [must-fix] broken edge case (`a.mjs:7`)",
-          "- `coverage` → clean",
+          "- `correctness` → `findings_present`",
+          "  - [`must-fix`] broken edge case (`a.mjs:7`)",
+          "- `coverage` → `clean`",
           "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
@@ -3244,7 +3961,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
   // `**Findings summary:**` line — exactly like the free-text path. The same PR
   // state as the free-text round-cap test drives coordination to emit the note.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-note-"));
-  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green or credibly green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
+  const roundExhaustionNote = "Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.";
   try {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
@@ -3317,7 +4034,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         assertArgContains: [
           "body=### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
-          "- `dry` → findings_present",
+          "- `dry` → `findings_present`",
           // The structured single-line digest stays plain; the gateEvidenceNote
           // renders on its own labeled line, not spliced into the digest.
           "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
@@ -3368,13 +4085,84 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
     assert.match(body, /\n\*\*Gate evidence note:\*\* Copilot review rounds exhausted/);
     assert.doesNotMatch(body, /\*\*Findings summary:\*\*[^\n]*; Copilot review rounds exhausted/);
     // The structured per-angle bullet is unchanged by carrying the note.
-    assert.match(body, /\n- `correctness` → findings_present\n/);
+    assert.match(body, /\n- `correctness` → `findings_present`\n/);
     const parsed = parseGateReviewCommentMarkerBody(body);
     assert.ok(parsed, "structured body with gateEvidenceNote must parse via the marker parser");
     assert.equal(parsed.contractComplete, true);
     assert.equal(parsed.gate, "pre_approval_gate");
     assert.equal(parsed.verdict, "findings_present");
     assert.equal(parsed.findingsSummary, expectedSummaryLine);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// upsertCheckpointVerdict computes effectiveFindingsSummary (the noop
+// short-circuit's comparison value) via a SEPARATE buildStructuredFindingsDigest
+// call from the one renderGateReviewCommentBody uses to render the posted
+// "**Findings summary:**" line. If those two call sites ever drift apart (e.g.
+// the second argument at the effectiveFindingsSummary call site is dropped),
+// the posted body's digest still shows the raised true total while the noop
+// comparison keeps the marker-collapsed undercount, so `existing.findingsSummary`
+// (parsed back from the posted body) never equals `effectiveFindingsSummary`
+// and every re-invocation on the same head re-edits the gate comment forever.
+// Driving upsertCheckpointVerdict end-to-end with a marker-collapsed round
+// whose --findings-severity-counts raises the total, then presenting an
+// "existing comment" whose body is exactly what a first invocation would have
+// posted, pins both call sites to the same digest.
+test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted digest for a marker-collapsed round with --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-digest-noop-"));
+  try {
+    const structuredFindings = [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+      },
+      { angle: "coverage", verdict: "clean", findings: [] },
+      // draft_gate's configured mandatory angle: must be present for a
+      // fanout_fanin verdict's angle-coverage check to pass.
+      { angle: "pr-description", verdict: "clean", findings: [] },
+    ];
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify(structuredFindings), "utf8");
+    const findingsSeverityCounts = { "must-fix": 5, "worth-fixing-now": 10, defer: 5 };
+
+    // The exact body a first invocation would post — the same
+    // renderGateReviewCommentBody call upsertCheckpointVerdict drives
+    // internally, with the same digest inputs.
+    const desiredBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findingsSummary: "ignored in structured mode",
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      structuredFindings,
+      findingsSeverityCounts,
+    });
+
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      issueComments: [[{
+        id: 101,
+        body: desiredBody,
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+        updated_at: "2026-05-31T20:00:00Z",
+      }]],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify(findingsSeverityCounts),
+      "--next-action", "fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.action, "noop", `expected noop (digest call sites coupled), got: ${JSON.stringify(payload)}`);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3420,6 +4208,41 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     assert.equal(fanout.code, 0, fanout.stderr);
     assert.equal(fanout.stderr, "");
     assert.equal(JSON.parse(fanout.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The documented tier-4 (withheld) posting path: a fanout_fanin round consolidate-fanin
+// could not render even at minimum shape has neither --out nor --findings-json available
+// (see the sub-loop contract's "Execution mode and fan-out evidence enforcement"), so the
+// caller posts with --findings-summary only — no --findings-json, and therefore no
+// --findings-severity-counts either. This test's verdict is "findings_present", so it
+// does not exercise --findings-severity-counts' actual requirement (scoped to
+// `verdict === "clean" && blockCleanOnFindingSeverities.length > 0`, independent of
+// structuredFindings/executionMode) — a clean tier-4 round would still need it. This
+// must succeed, or the sole escape hatch for a withheld round closes.
+test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via --findings-summary alone, with neither --findings-json nor --findings-severity-counts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-findings-summary-"));
+  try {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgContains: ["**Execution mode:** fanout_fanin"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present",
+      "--findings-summary", "round withheld: too wide to render even at minimum shape — see the disposition ledger",
+      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.executionMode, "fanout_fanin");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

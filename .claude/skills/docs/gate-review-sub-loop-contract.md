@@ -147,6 +147,97 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   `context-build/validation-and-risks.md`) and synthesize the outputs into the review
   handoff artifacts
 
+### Phase 1.5 — Cache primer (MANDATORY)
+
+<!-- rule: GATE-EXEC-PRIME -->
+`GATE-EXEC-PRIME`: **Every** gate fan-out MUST prime the shared prefix. After Phase 1
+renders the byte-identical `<gate>-<headSha>.briefing-prefix.txt` and BEFORE the reviewers
+read it, establish the shared-prefix cache **once** so the fan-out **cache-READS** the
+invariant prefix instead of each reviewer racing to write it (1-write-N-reads) — the
+cold-cache race the build-once bundle otherwise leaves on the table. This is not optional
+and not a config knob: build context → primer reads → fan-out reads the SAME context bundle
+plus its angle-specific briefing.
+
+**Default execution — one-reviewer-as-primer (zero extra cost):** dispatch ONE real
+reviewer first, then release the rest once its prefix write has landed — on its first
+streamed token if the harness streams, else on its completion (see the barrier fallback in
+step 3). No extra spawn, no extra tokens — the first reviewer runs anyway; the others simply
+start after its prefix write has landed. This is why priming is mandatory rather than opt-in:
+in its default form it costs at most a small serialization latency, and it removes an N×
+cache-write on every fan-out.
+
+**Alternative — dedicated angle-less primer:** spawn a single scoped `review` agent seeded
+with the briefing prefix **verbatim and ONLY** (no angle suffix), which runs the mandatory
+`verify-fresh-review-context.mjs` check, confirms context, and returns **without reviewing**
+(no findings artifact). Cleaner to reason about; costs one extra angle-less spawn. Use it
+where an explicit primer is preferred; otherwise the one-reviewer form is the default.
+
+**The `<gate>-prime` scope and "no findings artifact" details below apply ONLY to the
+dedicated angle-less primer variant.** In the default one-reviewer-as-primer path there is
+no separate priming run: the lead reviewer is a normal reviewer that produces normal
+findings under its own angle scope, and there is no `<gate>-prime` sentinel to account for.
+
+**The primer MUST be the `review`-agent request envelope, not a bespoke `context-reader`.**
+Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key is the whole
+**request prefix through the breakpoint** — model, tools + tool ordering, system/project/
+agent instructions, message/content-block boundaries, thinking/tool-choice settings, the
+materialized context bytes, and the breakpoint position + TTL. A primer spawned as a
+different agent (different system prompt, tool set, or model) writes a DIFFERENT cache that
+the `review` reviewers never read. So the primer is literally a fan-out reviewer minus the
+angle suffix — same agent, same envelope — or it is useless. Because it is angle-less it is
+NOT a review round and **produces no findings artifact, so fan-in ignores it.** If it runs
+the invariant block's `verify-fresh-review-context.mjs` check, it uses the reserved
+`<gate>-prime` scope and records the SAME prefix hash as the reviewers — so it passes
+`verify-briefing-prefixes.mjs` **by construction** (a same-hash sentinel is never a
+mismatch), never a spurious failure. (`verify-briefing-prefixes.mjs` does not today special-
+case `<gate>-prime`; because the primer's hash matches the reviewers', no exclusion is
+required for correctness. Teaching that verifier to treat `-prime` as a non-angle in its
+per-gate accounting is an optional follow-up, not a precondition.)
+
+**Ordered execution:**
+
+1. **Compile the immutable prefix** — Phase 1's `briefing-prefix.txt` (already
+   byte-identical + hash-recorded).
+2. **Prime the shared prefix** over that exact serialized prefix — by default dispatch the
+   lead reviewer first (one-reviewer-as-primer); or, in the dedicated-primer variant, send
+   ONE angle-less primer. Either way the same byte-identical prefix is written once.
+3. **Barrier: await the shared-prefix write landing** before releasing ANY reviewer — the
+   write must precede the parallel reads. The write has landed once the primer has produced
+   ANY model output for that request, so the barrier keys on the earliest such signal the
+   harness exposes:
+   - **If the harness exposes streaming** (a token/first-chunk callback): release the rest on
+     the primer's first streamed token.
+   - **If it only exposes completion** (the common case — an agent/subagent call that returns
+     a finished result): **await the primer's completion.** This is the mandatory fallback and
+     the safe default; never release reviewers off an unobservable "start."
+
+   The two forms of the primer differ only in WHICH signal they key on, never in the
+   write-before-reads ordering. The completion fallback fully serializes the lead reviewer
+   ahead of the rest — a small, bounded latency cost, and the reason the near-free
+   one-reviewer form is still the default rather than a mandatory streaming dependency.
+4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
+   reviewer READS the cache the primer wrote instead of racing to write its own. A
+   differing model or prefix defeats reuse and is the same failure the byte-identity rule
+   already guards against.
+
+Rationale (why the primer, not just the shared prefix): a parallel fan-out with no primer
+launches every reviewer before any has written the cache — a **cold-cache race** where all
+N pay a cache write and none reads. The barrier collapses that to 1 write + N reads.
+
+**No verification pass — dev-loops runs only on agent harnesses (pi, Claude Code).** There
+is no raw-API path here: the orchestrator spawns primer and reviewers via the harness's
+agent/subagent mechanism and never sees a request's `usage`, cannot set a
+`prompt_cache_key`, and cannot place an explicit cache breakpoint — the harness owns
+caching. So the primer cannot be verified from inside and there is nothing to pin; it
+relies entirely on the barrier + byte-identical prefix + same model producing a
+**content-hash cache reuse** across spawns (Anthropic caching matches on the content-prefix
+hash, org+model scoped — not conversation-scoped, no explicit key required). Priming is
+mandatory rather than a knob precisely because its default (one-reviewer) form is essentially
+free: worst case is a small serialization latency (if a harness turns out not to reuse the
+prefix across spawns), best case turns N cache-writes into 1 write + N reads on every
+fan-out. The unmeasurability from inside the harness is a reason to prefer the zero-extra-cost
+one-reviewer form, not a reason to make the win opt-in.
+
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../../agents/review.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
@@ -159,7 +250,7 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
   fails closed if the seeded artifact isn't present at the reviewer's cwd).
 - produces a focused findings artifact with verdict (clean/findings_present) and file references
-- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via `consolidateFanin` (Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
+- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
 
 #### Briefing composition: invariant prefix first
 
@@ -187,7 +278,10 @@ unframed. Over the cap the prefix falls back to pointer mode: it references
 `scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
 diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
 disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
-itself. This is purely a
+itself — self-rendered modes only. A third, CLI-only mode, `prefixMode: "file"`
+(an orchestrator-authored prefix recorded via `--prefix-file`, below), discloses the mode
+in the artifact only: the recorded bytes are the orchestrator's own composed prefix
+verbatim, so the prefix text itself carries no `prefixMode` line. This is purely a
 size/performance choice and a zero-semantic change to the byte-identity requirement above:
 whichever mode ran, every reviewer of the same round still receives byte-identical prefix
 bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs`
@@ -195,7 +289,11 @@ hash and compare those bytes exactly as before, oblivious to which mode produced
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. Before Phase 3 consolidation, the fan-in MUST run
+reviewer's per-scope sentinel. An orchestrator that briefs reviewers with its OWN
+composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
+record file then carries those exact bytes (`prefixMode: "file"`) instead of the
+tool's self-rendered prefix, so the fan-in verification below agrees with the actual
+briefing without any hand-edited record files. Before Phase 3 consolidation, the fan-in MUST run
 `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`, which fails closed (exit 1)
 when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
 sentinel for the round records no prefix hash at all — a missing hash means the
@@ -288,12 +386,116 @@ Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sh
 missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
 than proceed to consolidation.
 
-Merge the parallel reviewer findings into one consolidated fix plan using the
-pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` (not manual
-concatenation). It collates the per-angle artifacts, gates `clean` on
-`blockCleanOnFindingSeverities`, returns `blocked` when any per-angle artifact is
-malformed/missing, and `toFindingsLogShape` maps the result into the
-`write-gate-findings-log.mjs` `--findings` shape:
+Merge the parallel reviewer findings into one consolidated fix plan with the
+sanctioned fan-in CLI:
+
+```
+dev-loops gate consolidate-fanin --findings-dir <dir> \
+  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path>
+```
+
+(`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
+`consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
+concatenation and never an inline interpreter over the artifacts. `--gate`
+applies that gate's configured `blockCleanOnFindingSeverities` to the overall
+verdict; omitting it falls back to the shipped `["must-fix"]` default. One
+invocation reads the per-angle artifacts directory and emits `findingsJson`
+(written to `--out <path>`) — the nested per-angle shape
+`upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
+included — plus the flat ledger shape (written to `--ledger-out <path>`) —
+the exact `--findings-file` input `write-gate-findings-log.mjs` and
+`post-gate-findings.mjs` accept, so neither tool needs an improvised
+`--jq`/`node -e` extraction step to materialize it — the severity counts, and
+the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
+asked (`--pr-checklist-matrix clean`). FAILS CLOSED (exit 1, naming the
+offending angles) when any per-angle artifact is malformed or itself blocked
+— a blocked fan-in never yields a publishable findings shape; fix or re-run
+the offending reviewer first. (An angle whose artifact was never written is
+invisible to the CLI — mandatory-angle coverage is enforced downstream by
+`upsert-checkpoint-verdict.mjs`.) `--out`/`--ledger-out` are also rejected at
+parse time (exit 1) when they resolve to the same path as each other, or when
+either resolves to a direct top-level sibling of the artifacts inside
+`--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact
+discovery is top-level-only).
+
+The render budget applies ONLY to the visible-comment shape (`--out`) — never
+to the ledger (`--ledger-out`, always written in FULL, never budgeted). Fit is
+measured by actually rendering a candidate `--out` shape through
+`upsert-checkpoint-verdict.mjs`'s own render path and catching its
+length-exceeded throw, not an approximated size, so a shape this CLI accepts
+never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
+large to render even at minimum summary length exits 0 with
+`commentBudgetExceeded: true` and degrades `--out` through four tiers, PROVIDED
+`--ledger-out` was also given; without `--ledger-out` the same over-budget
+round instead FAILS CLOSED (exit 1) at the point it would degrade, since a
+degraded round's only durable, unbudgeted record is the ledger and nothing
+would land on disk (the findings would exist only on that process's stdout,
+which the sanctioned ledger/post path cannot consume). Which
+tier an angle lands on is NOT decided by whether that angle's own marker fits
+in isolation: angles are upgraded one at a time, in order of each angle's
+most blocking severity (ties by artifact index), and an upgrade is kept only
+while the WHOLE round still renders — so a defer-only angle can stay bare
+purely because a higher-severity angle consumed the budget first, even
+though its own verbose sentence would fit alone:
+
+1. **real (unmarked)** — an angle whose own real findings, tried at their
+   ORIGINAL pre-shrink length first and falling back to the
+   whole-round-shrunk length, still let the whole round render keeps them
+   as-is, since a marker is a compression and must never replace real
+   content with something bigger.
+2. **verbose** — failing that, that angle's findings are replaced with ONE
+   synthetic marker finding naming its omitted count and severity breakdown.
+3. **bare** — that angle's marker shortens to a bare omitted-count line when
+   neither its real findings nor the verbose sentence fit.
+4. **withheld** — reached only when even the CHEAPEST per-angle shape (the
+   bare line, or an angle's own real findings when those render shorter)
+   across the WHOLE round still does not fit: `findingsJson` in the result is
+   emitted empty and `--out`, if given, is REMOVED from disk (deleted, not
+   merely skipped — a stale prior-round `--out` is never left for a caller to
+   read as this round's findings).
+
+Tiers 1-3 keep the REAL angle set and each angle's REAL verdict intact (never
+collapsed into one foreign section, which would fail
+`upsert-checkpoint-verdict.mjs`'s mandatory-angle/pool validation). Only in
+tier 4 is `--out` never written (or removed if it already existed); whoever
+posts the verdict via the
+[Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract)
+MUST check for `--out`'s existence before passing `--findings-json <path>` —
+passing a path that was never written fails closed with ENOENT; fall back to
+that command's `--findings-summary` instead, naming the round size and
+pointing at the ledger (`--ledger-out`), which is always complete regardless
+of tier. Dropping `--findings-json` does NOT also drop
+`--findings-severity-counts` — that flag's requirement is scoped to
+`verdict === "clean"` under a gate with `blockCleanOnFindingSeverities`
+configured, independent of execution mode, so a clean tier-4 round must still
+pass it. A `--findings-summary` fanout_fanin verdict bypasses
+`upsert-checkpoint-verdict.mjs`'s mandatory-angle/foreign-angle check entirely
+(that check only runs when `--findings-json` was supplied), so a tier-4 round
+MUST still write its findings-log ledger via `write-gate-findings-log.mjs
+--provenance` covering the gate's mandatory angles. This is a POLICY
+obligation on the agent, not a machine-enforced one by default:
+`write-gate-findings-log.mjs` only runs its provenance/mandatory-angle check
+when `--provenance` is actually supplied at write time,
+`gates.requireFanoutProvenance` (which would make that flag required) defaults
+to `false`. That opt-in is NOT the only check, though: for any `fanout_fanin`
+verdict where the gate configures mandatory angles,
+`detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage from the
+ledger's recorded provenance BY DEFAULT — a ledger with absent or invalid
+provenance fails closed there regardless of `requireFanoutProvenance`. Only
+the CI gate-evidence verifier bypasses this, by calling
+`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`; the
+sanctioned pre-merge invocation runs without that flag, so the check is live
+on the merge path by default. Pass `--provenance` on the tier-4 ledger write
+regardless, since it is the only record of mandatory-angle coverage this round
+can have, and a missing one fails the merge-evidence check closed. `commentBudgetExceeded: true` is set on every degraded round
+(tiers 1-4 alike), so it does NOT distinguish tier 4 from tiers 1-3 — `--out`'s
+existence is the only correct discriminator. On a marker-collapsed round, the
+posted `**Findings summary:**` digest counts the real totals (not the marker
+lines) when the caller also passes `--findings-severity-counts` with this
+consolidation's own `severityCounts` (always the true, unbudgeted totals);
+the marker text and the ledger always carry the true numbers regardless.
+
+Consolidation:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `defer`
@@ -359,6 +561,14 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 - always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
 
 **Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
+
+**A dev-loop config-source delta re-runs EVERY angle.** `.devloops` (and its
+`.devloops.yaml/.yml/.json` and `.pi/dev-loop/settings.*`/`defaults.*` siblings)
+defines the gate's angle pool, mandatory floor, and reviewer personas/prompts —
+a clean verdict produced under the OLD config has no valid provenance across a
+change to it, regardless of the angle's declared surface. `classifyFile`
+correctly reports these files as `config`; the carry-forward seam overrides
+that via `isDevLoopConfigSourcePath` and forces a full re-run (fail-closed).
 
 **Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the delta `git diff A..B` contains ANY rename/copy row, the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
 
@@ -441,8 +651,16 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
 ```
+
+`--findings-file` reads the same JSON array from a file (identical validation) —
+use it for any non-trivial ledger so the array never rides a shell string;
+`post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
+`--ledger-out <path>` writes exactly this shape — pass that path straight to
+`--findings-file` on both tools, no hand extraction. A finding with severity
+`defer` and no `disposition` gets `deferred` derived automatically by both
+tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, and
@@ -451,7 +669,7 @@ resolved-in SHA (for findings resolved in a later pass).
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the inline_single_agent fallback only. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception described above — the tier-4 (withheld) `consolidate-fanin` round, where `--out` was never written and `--findings-json` would fail closed with ENOENT. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 
