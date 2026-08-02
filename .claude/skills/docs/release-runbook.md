@@ -10,7 +10,16 @@ manual step.** Everything after the tag is hands-off.
    into the generated `npx dev-loops@<version>` pins and the plugin manifest;
    a stale manifest fails `verify` at publish), and add the matching
    `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
-   heading stays above the latest version).
+   heading stays above the latest version). Committing and pushing this release
+   commit lands directly on `main`, which the default-branch guard hooks (see
+   [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
+   by default — a sanctioned release commits and pushes with
+   `DEVLOOPS_ALLOW_MAIN=1`:
+
+   ```bash
+   DEVLOOPS_ALLOW_MAIN=1 git commit -m "chore(release): v<version>"
+   DEVLOOPS_ALLOW_MAIN=1 git push origin main
+   ```
 2. Tag the release commit and push the tag:
 
    ```bash
@@ -48,10 +57,13 @@ the workflow does it (and is idempotent if you already created one).
   correct commit.
 - Missing CHANGELOG section: the extraction step exits non-zero and no Release is
   created. The workflow checks out the tagged commit, so editing `CHANGELOG.md`
-  alone is not enough — commit the `## <version>` section, then move the tag to
-  the new commit and re-push:
+  alone is not enough — commit the `## <version>` section (a main-landing
+  commit/push needs the guard override), then move the tag to the new commit
+  and re-push:
 
   ```bash
+  DEVLOOPS_ALLOW_MAIN=1 git commit -am "docs: add v<version> CHANGELOG section"
+  DEVLOOPS_ALLOW_MAIN=1 git push origin main
   git tag -f v<version>
   git push --force origin v<version>
   ```

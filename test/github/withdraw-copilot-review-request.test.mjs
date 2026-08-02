@@ -1,9 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/github/withdraw-copilot-review-request.mjs";
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
+import { readSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 
 function collectingStream() {
   const chunks = [];
@@ -17,10 +22,13 @@ function collectingStream() {
   return stream;
 }
 
-// gh stub driven by argv shape: the requested-reviewers probe, the PR view, and
-// the DELETE. Records every call so a test can assert the DELETE did or did not
-// fire — the difference between withdrawing and merely reporting.
-function ghStub({ copilotRequested, reviews, threads, removeFails = false, removeIsNoop = false } = {}) {
+// gh stub driven by argv shape: the requested-reviewers probe, the PR view, the
+// compare (head-advanced classification), and the DELETE. Records every call so
+// a test can assert the DELETE did or did not fire — the difference between
+// withdrawing and merely reporting. Defaults every review's commit to the
+// default `headRefOid` ("currentsha"), i.e. the same-head case, unless a test
+// overrides either.
+function ghStub({ copilotRequested, reviews, threads, headRefOid = "currentsha", compare, removeFails = false, removeIsNoop = false } = {}) {
   const calls = [];
   // Payload shapes are the REAL ones gh emits: `gh pr view --json` has no
   // reviewThreads field (threads come from the GraphQL connection), so a stub
@@ -54,16 +62,23 @@ function ghStub({ copilotRequested, reviews, threads, removeFails = false, remov
           stderr: "",
         };
       }
+      if (argv.some((a) => typeof a === "string" && a.includes("/compare/"))) {
+        if (!compare) return { code: 1, stdout: "", stderr: "compare not stubbed" };
+        return { code: 0, stdout: JSON.stringify(compare), stderr: "" };
+      }
       return {
         code: 0,
-        stdout: JSON.stringify({ reviews: reviews ?? [] }),
+        stdout: JSON.stringify({ headRefOid, reviews: reviews ?? [] }),
         stderr: "",
       };
     },
   };
 }
 
-const SUBMITTED_COPILOT_REVIEW = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED" }];
+const SUBMITTED_COPILOT_REVIEW = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "currentsha" } }];
+// Head-advanced fixture: Copilot's only submitted review is on an OLDER head
+// ("oldsha"), not the current one — the sibling shape #1441 covers.
+const SUBMITTED_COPILOT_REVIEW_OLD_HEAD = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "oldsha" } }];
 
 describe("withdraw-copilot-review-request", () => {
   describe("argument parsing", () => {
@@ -143,7 +158,7 @@ describe("withdraw-copilot-review-request", () => {
       for (const state of ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]) {
         const gh = ghStub({
           copilotRequested: true,
-          reviews: [{ author: { login: "Copilot" }, state }],
+          reviews: [{ author: { login: "Copilot" }, state, commit: { oid: "currentsha" } }],
           threads: [],
         });
         const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild });
@@ -197,6 +212,101 @@ describe("withdraw-copilot-review-request", () => {
         () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild }),
         /still pending after/,
       );
+    });
+  });
+
+  // The sibling shape #1441 covers: the loop converged, its threads were
+  // reply-resolved on a NEW head, so Copilot's submitted review is no longer on
+  // the current head. Withdrawing alone would just make the loop re-request and
+  // strand again — eligible only when the delta since that review is provably
+  // docs-only, and on success it writes the suppression marker
+  // request-copilot-review.mjs reads to avoid re-requesting on this exact head.
+  describe("the head-advanced case (#1441)", () => {
+    async function withTempCheckpointDir(fn) {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "withdraw-suppression-"));
+      try {
+        await fn(dir);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("withdraws and records a suppression marker when the delta since Copilot's last review is provably docs-only", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const gh = ghStub({
+          copilotRequested: true,
+          headRefOid: "newsha",
+          reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+          threads: [],
+          compare: { status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] },
+        });
+        const result = await main(
+          { repo: "o/n", pr: 10, reason: "Copilot declined a converged reword on the new head" },
+          { env: {}, runChild: gh.runChild, checkpointDir },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.withdrawn, true);
+        assert.equal(result.status, "withdrawn");
+        assert.equal(result.headAdvanced, true);
+        assert.match(result.reason, /pure doc\/prose bump/);
+        assert.equal(gh.requested, false);
+
+        const marker = await readSuppressionMarker({ repo: "o/n", pr: 10 }, { checkpointDir });
+        assert.ok(marker, "expected a suppression marker to be written");
+        assert.equal(marker.headSha, "newsha");
+        assert.equal(marker.lastReviewedHeadSha, "oldsha");
+        assert.equal(marker.operatorReason, "Copilot declined a converged reword on the new head");
+      });
+    });
+
+    it("refuses when the delta touches Copilot's review surface (a code file) — never widens what counts as docs-only", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const gh = ghStub({
+          copilotRequested: true,
+          headRefOid: "newsha",
+          reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+          threads: [],
+          compare: { status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] },
+        });
+        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, checkpointDir });
+        assert.equal(result.ok, false);
+        assert.equal(result.status, "refused");
+        assert.match(result.reason, /not provably a pure doc\/prose bump/);
+        assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
+        assert.equal(await readSuppressionMarker({ repo: "o/n", pr: 10 }, { checkpointDir }), null);
+      });
+    });
+
+    it("refuses when commit SHA data is unavailable rather than guessing", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const gh = ghStub({
+          copilotRequested: true,
+          headRefOid: "newsha",
+          reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED" }],
+          threads: [],
+        });
+        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, checkpointDir });
+        assert.equal(result.status, "refused");
+        assert.match(result.reason, /commit SHA data is unavailable/);
+        assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
+      });
+    });
+
+    it("--dry-run reports headAdvanced without removing the reviewer or writing the marker", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const gh = ghStub({
+          copilotRequested: true,
+          headRefOid: "newsha",
+          reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+          threads: [],
+          compare: { status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] },
+        });
+        const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild, checkpointDir });
+        assert.equal(result.status, "dry-run");
+        assert.equal(result.headAdvanced, true);
+        assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "dry-run must not remove the reviewer");
+        assert.equal(await readSuppressionMarker({ repo: "o/n", pr: 10 }, { checkpointDir }), null);
+      });
     });
   });
 
@@ -288,7 +398,7 @@ describe("withdraw-copilot-review-request", () => {
       ciStatus: "success",
     });
 
-    const gateAllowsPreApproval = (snap) => {
+    const gateAllowsPreApproval = (snap, { postConvergenceReviewSuppressed = false } = {}) => {
       const interpretation = interpretLoopState(snap, { maxCopilotRounds: 5 });
       const result = evaluatePrGateCoordination({
         pr: 17,
@@ -296,6 +406,7 @@ describe("withdraw-copilot-review-request", () => {
         prDraft: false,
         lifecycleState: interpretation.state,
         sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
+        postConvergenceReviewSuppressed,
         ciStatus: snap.ciStatus,
         copilotReviewRequestStatus: snap.copilotReviewRequestStatus,
         unresolvedThreadCount: snap.unresolvedThreadCount,
@@ -316,11 +427,136 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(gateAllowsPreApproval(after), true, "withdrawal should let same-head clean convergence open it");
     });
 
-    it("with the head ADVANCED past that review, withdrawing does not open the gate — the documented limit", () => {
+    it("with the head ADVANCED past that review, a plain withdrawal alone does not open the gate", () => {
       const before = snapshot({ copilotReviewRequestStatus: "requested", copilotReviewOnCurrentHead: false });
       const after = snapshot({ copilotReviewRequestStatus: "none", copilotReviewOnCurrentHead: false });
       assert.equal(gateAllowsPreApproval(before), false);
-      assert.equal(gateAllowsPreApproval(after), false, "a head past its review must stay blocked, withdrawal or not");
+      assert.equal(gateAllowsPreApproval(after), false, "a head past its review stays blocked without the explicit suppression signal");
+    });
+
+    it("with the head ADVANCED past that review AND an operator-authorized suppression, the gate now accepts it (#1441)", () => {
+      const after = snapshot({ copilotReviewRequestStatus: "none", copilotReviewOnCurrentHead: false });
+      assert.equal(
+        gateAllowsPreApproval(after, { postConvergenceReviewSuppressed: true }),
+        true,
+        "the gate coordinator must accept the head-advanced case once the caller has verified the explicit withdrawal",
+      );
+    });
+  });
+
+  // Definition of done (#1441): reproduce the deadlock end-to-end — a converged
+  // loop, a trivial reword pushed to a new head, and a force-rerequest that
+  // stranded the pre_approval_gate verdict — and prove the extended withdrawal
+  // resolves it via the REAL withdraw tool, the REAL marker it writes, and the
+  // REAL gate coordinator, not hand-asserted booleans.
+  describe("the deadlock this issue closes end-to-end", () => {
+    it("a stranded head-advanced request blocks the gate; the extended withdrawal resolves it", async () => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "withdraw-e2e-"));
+      try {
+        // Step 1: reproduce the deadlock. The loop converged at "oldsha", its
+        // threads were reply-resolved on a NEW head ("newsha"), and a forced
+        // re-request left Copilot's review request stranded there — Copilot
+        // will not re-engage a change it effectively already approved.
+        const stranded = {
+          prExists: true,
+          prNumber: 17,
+          prDraft: false,
+          copilotReviewRequestStatus: "requested",
+          copilotReviewPresent: true,
+          copilotReviewOnCurrentHead: false,
+          unresolvedThreadCount: 0,
+          actionableThreadCount: 0,
+          copilotReviewRoundCount: 1,
+          ciStatus: "success",
+        };
+        const blockedInterpretation = interpretLoopState(stranded, { maxCopilotRounds: 5 });
+        const blockedResult = evaluatePrGateCoordination({
+          pr: 17,
+          currentHeadSha: "newsha",
+          prDraft: false,
+          lifecycleState: blockedInterpretation.state,
+          sameHeadCleanConverged: blockedInterpretation.sameHeadCleanConverged,
+          ciStatus: stranded.ciStatus,
+          copilotReviewRequestStatus: stranded.copilotReviewRequestStatus,
+          unresolvedThreadCount: stranded.unresolvedThreadCount,
+          copilotReviewRoundCount: stranded.copilotReviewRoundCount,
+          maxCopilotRounds: 5,
+          draftGate: { visible: true, headSha: "newsha", verdict: "clean" },
+          draftGateMarker: { visible: true, headSha: "newsha", verdict: "clean", contractComplete: true },
+          preApprovalGate: { visible: false },
+          preApprovalGateMarker: { visible: false },
+        });
+        assert.ok(
+          blockedResult.forbiddenActions.includes("run_pre_approval_gate"),
+          "the pre_approval_gate verdict must be blocked while the stranded request is pending",
+        );
+
+        // Step 2: run the REAL withdraw tool against the head-advanced, provably
+        // docs-only scenario (the reply-resolve commit was a trivial reword).
+        const gh = ghStub({
+          copilotRequested: true,
+          headRefOid: "newsha",
+          reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+          threads: [],
+          compare: { status: "ahead", files: [{ filename: "docs/adr-0041.md", status: "modified" }] },
+        });
+        const withdrawal = await main(
+          { repo: "o/n", pr: 17, reason: "Copilot declined the converged reword" },
+          { env: {}, runChild: gh.runChild, checkpointDir: dir },
+        );
+        assert.equal(withdrawal.status, "withdrawn");
+        assert.equal(withdrawal.headAdvanced, true);
+
+        // Step 3: the REAL marker the withdrawal wrote is what a caller reads to
+        // compute postConvergenceReviewSuppressed — not a hand-asserted boolean.
+        const marker = await readSuppressionMarker({ repo: "o/n", pr: 17 }, { checkpointDir: dir });
+        assert.ok(marker);
+        assert.equal(marker.headSha, "newsha");
+
+        // Step 4: run the REAL producer, resolvePostConvergenceReviewSuppressed —
+        // marker/head match, live compare re-verification (a stubbed
+        // repos/o/n/compare/oldsha...newsha reply), and the
+        // copilotReviewRequestStatus === "none" && unresolvedThreadCount === 0
+        // precondition — end to end, then feed its return into the gate
+        // coordinator. No hand-computed boolean.
+        const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
+          {
+            repo: "o/n",
+            pr: 17,
+            currentHeadSha: "newsha",
+            snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 },
+            prData: { headRefOid: "newsha", reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD },
+          },
+          { env: {}, runChild: gh.runChild, checkpointDir: dir },
+        );
+        assert.equal(postConvergenceReviewSuppressed, true);
+
+        const settled = { ...stranded, copilotReviewRequestStatus: "none" };
+        const settledInterpretation = interpretLoopState(settled, { maxCopilotRounds: 5 });
+        const settledResult = evaluatePrGateCoordination({
+          pr: 17,
+          currentHeadSha: marker.headSha,
+          prDraft: false,
+          lifecycleState: settledInterpretation.state,
+          sameHeadCleanConverged: settledInterpretation.sameHeadCleanConverged,
+          postConvergenceReviewSuppressed,
+          ciStatus: settled.ciStatus,
+          copilotReviewRequestStatus: settled.copilotReviewRequestStatus,
+          unresolvedThreadCount: settled.unresolvedThreadCount,
+          copilotReviewRoundCount: settled.copilotReviewRoundCount,
+          maxCopilotRounds: 5,
+          draftGate: { visible: true, headSha: "newsha", verdict: "clean" },
+          draftGateMarker: { visible: true, headSha: "newsha", verdict: "clean", contractComplete: true },
+          preApprovalGate: { visible: false },
+          preApprovalGateMarker: { visible: false },
+        });
+        assert.ok(
+          !settledResult.forbiddenActions.includes("run_pre_approval_gate"),
+          "the extended withdrawal must resolve the deadlock: pre_approval_gate is now legal",
+        );
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
   });
 });

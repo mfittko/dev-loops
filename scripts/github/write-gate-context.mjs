@@ -35,11 +35,16 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { viewPr } from "./view-pr.mjs";
+import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES } from "./_gate-names.mjs";
+import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 /**
@@ -121,7 +126,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -134,11 +139,11 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference.
   --validation-posture <text>    Short description of the validation posture
-  --pr-body <text>               PR description text, inlined into the rendered briefing prefix
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label; omitted entirely when absent
-  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Omit for the default self-rendered prefix (prefixMode inline|pointer).
+  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue.
+  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -292,7 +297,13 @@ export function parseWriteGateContextCliArgs(argv) {
       return { help: true };
     }
     if (token.name === "repo") {
-      options.repo = requireTokenValue(token, parseError).trim();
+      const repo = requireTokenValue(token, parseError).trim();
+      try {
+        parseRepoSlug(repo);
+      } catch (error) {
+        throw parseError(error instanceof Error ? error.message : String(error));
+      }
+      options.repo = repo;
       continue;
     }
     if (token.name === "pr") {
@@ -504,6 +515,42 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
 
 /**
+ * Rendered when no PR body text reaches the prefix. The CLI resolves the live
+ * body itself (resolvePrSpecContext) and fails closed when it cannot, so from
+ * the CLI path this wording is reached only for a PR whose description is
+ * genuinely empty on GitHub — it is a truthful statement, not the old
+ * "(no PR body provided)" which described the CALLER's arguments and read as a
+ * claim about the PR. Programmatic callers that pass no `prBody` still land
+ * here; that is their explicit choice of a thin briefing.
+ */
+export const PR_BODY_ABSENT_SENTINEL = "(this PR has an empty description on GitHub)";
+
+/**
+ * Rendered in place of an individual linked issue's body when that issue was
+ * resolved (it has a closing reference) but its body is genuinely empty on
+ * GitHub. Mirrors PR_BODY_ABSENT_SENTINEL: a resolved-but-empty body must read
+ * as a truthful, distinguishable statement rather than silently collapsing the
+ * `## Linked issue` section (which would then read identically to "the PR
+ * closes no issue" — the exact indistinguishability #1511 targets).
+ */
+export const ISSUE_BODY_ABSENT_SENTINEL = "(this issue has an empty body on GitHub)";
+
+/**
+ * Pick a fenced-code-block delimiter that cannot be prematurely closed by the
+ * content it will wrap: CommonMark closes a fence at the first line that is a
+ * run of backticks at least as long as the opening run, so a delimiter longer
+ * than every backtick run already inside `text` always stays open until the
+ * delimiter we emit ourselves. Minimum length 3 (the shortest valid fence).
+ * @param {string} text
+ * @returns {string}
+ */
+function pickFence(text) {
+  const runs = String(text).match(/`+/g);
+  const longest = runs ? Math.max(...runs.map((run) => run.length)) : 0;
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), PR body, linked-issue body (when present), the full diff at the
@@ -512,6 +559,21 @@ export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
  * deterministic: identical input always renders identical bytes, so two builds
  * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
  * requirement).
+ *
+ * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
+ * author or linked-issue author controlled) and are each wrapped in their own
+ * fenced code block, sized per pickFence(). A fenced block renders as inert
+ * literal text, so a hostile body cannot forge a `##` heading (e.g. a second
+ * "## Diff at reviewed head" or "## Changed files" section ahead of the real
+ * one) or emit either ABSENT_SENTINEL string as if it were the renderer's own
+ * statement, and an unbalanced fence inside the body text cannot leak out to
+ * swallow a later section. This holds for the multi-issue case too: each
+ * issue's `### <label>` heading is emitted by THIS function as a plain line
+ * OUTSIDE any fence, immediately followed by that issue's OWN fenced block —
+ * never inside another issue's fence — so a hostile issue body cannot forge a
+ * `### <label>` heading for a DIFFERENT linked issue (issueSections is
+ * structured data, not a pre-joined string carrying the delimiter inside the
+ * untrusted region).
  *
  * @param {object} input
  * @param {string} input.repo
@@ -522,8 +584,9 @@ export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
  * @param {string} input.contextPath — the sibling JSON artifact path
  * @param {string} input.briefingPrefixPath — this rendered file's own path
  * @param {string|null} [input.prBody]
- * @param {string|null} [input.issueRef] — label for the linked-issue section (e.g. "#877")
- * @param {string|null} [input.issueBody] — omit the whole section when null/empty
+ * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. "#877" or "#1496, #1511")
+ * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
+ * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
@@ -533,7 +596,7 @@ export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
  */
 export function renderBriefingPrefix({
   repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
-  prBody = null, issueRef = null, issueBody = null,
+  prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -557,13 +620,48 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push("## PR body");
   lines.push("");
-  lines.push(typeof prBody === "string" && prBody.trim().length > 0 ? prBody.trim() : "(no PR body provided)");
+  const trimmedPrBody = typeof prBody === "string" ? prBody.trim() : "";
+  if (trimmedPrBody.length > 0) {
+    const prBodyFence = pickFence(trimmedPrBody);
+    lines.push(prBodyFence);
+    lines.push(trimmedPrBody);
+    lines.push(prBodyFence);
+  } else {
+    lines.push(PR_BODY_ABSENT_SENTINEL);
+  }
   lines.push("");
-  const hasIssueBody = typeof issueBody === "string" && issueBody.trim().length > 0;
-  if (hasIssueBody) {
+  const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
+  const hasIssueBody = !hasIssueSections && typeof issueBody === "string" && issueBody.trim().length > 0;
+  if (hasIssueSections) {
+    // Structured per-issue data, not a pre-joined string: each `### <label>`
+    // heading below is emitted by THIS renderer as a plain line outside any
+    // fence, and each issue's body gets its OWN pickFence-sized block — so a
+    // hostile body in issue A's fence cannot forge issue B's `### <label>`
+    // heading (the delimiter never lives inside the untrusted region it
+    // wraps).
     lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
     lines.push("");
-    lines.push(issueBody.trim());
+    for (const section of issueSections) {
+      const label = section?.label;
+      const text = typeof section?.body === "string" && section.body.trim().length > 0
+        ? section.body.trim()
+        : ISSUE_BODY_ABSENT_SENTINEL;
+      const fence = pickFence(text);
+      lines.push(`### ${label}`);
+      lines.push("");
+      lines.push(fence);
+      lines.push(text);
+      lines.push(fence);
+      lines.push("");
+    }
+  } else if (hasIssueBody) {
+    const trimmedIssueBody = issueBody.trim();
+    const issueBodyFence = pickFence(trimmedIssueBody);
+    lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
+    lines.push("");
+    lines.push(issueBodyFence);
+    lines.push(trimmedIssueBody);
+    lines.push(issueBodyFence);
     lines.push("");
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
@@ -571,9 +669,10 @@ export function renderBriefingPrefix({
   if (!hasDiffText) {
     lines.push("(no diff text captured for this bundle)");
   } else if (prefixMode === "inline") {
-    lines.push("```diff");
+    const diffFence = pickFence(diffOutput);
+    lines.push(`${diffFence}diff`);
     lines.push(diffOutput.endsWith("\n") ? diffOutput.slice(0, -1) : diffOutput);
-    lines.push("```");
+    lines.push(diffFence);
   } else {
     lines.push(
       `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
@@ -683,6 +782,19 @@ export function buildGateContextArtifact(options) {
       validationPosture: options.validationPosture ?? null,
     },
   };
+  // How scope.acceptanceCriteria came to be — "provided" (caller flag,
+  // regardless of whether an issue body was also fetched); "linked-issue"
+  // (resolved from the PR's closing reference(s), and at least one resolved
+  // issue has an Acceptance-criteria/DoD section or linked refinement doc, per
+  // detectIssueRefinementArtifact); "linked-issue-unrefined" (resolved, but
+  // every linked issue is prose-only — a distinguishable "linked, no
+  // refinement artifact" marker, AC4 of #1496); or "none" (the PR closes no
+  // issue). Only the CLI path sets it, so a null acceptanceCriteria WITH this
+  // field means "genuinely absent" and one WITHOUT it means "never resolved"
+  // (#1496).
+  if (typeof options.acceptanceCriteriaSource === "string") {
+    artifact.scope.acceptanceCriteriaSource = options.acceptanceCriteriaSource;
+  }
   // ADD (#1140): an explicit posture marker distinguishing a full build-once
   // bundle from a thin briefing. Only set by the CLI (`--base` present → "base";
   // absent → "none"); programmatic `buildGateContext`/`writeGateContext` callers
@@ -865,10 +977,11 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * recorded on the JSON artifact so both files stay in sync.
  *
  * @param {object} options — parsed CLI options shape, optionally carrying
- *   `diffOutput`, `prBody`, `issueBody` (all null-safe; a caller with none of
- *   these still gets a valid — if thin — prefix), and `prefixFile` (a path to
- *   an ALREADY-rendered prefix whose exact bytes are recorded verbatim instead
- *   of self-rendering — see the CLI's `--prefix-file` doc above).
+ *   `diffOutput`, `prBody`, `issueBody`/`issueSections` (all null-safe; a
+ *   caller with none of these still gets a valid — if thin — prefix), and
+ *   `prefixFile` (a path to an ALREADY-rendered prefix whose exact bytes are
+ *   recorded verbatim instead of self-rendering — see the CLI's
+ *   `--prefix-file` doc above).
  * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file" }>}
  */
@@ -920,6 +1033,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       prBody: options.prBody ?? null,
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
+      issueSections: options.issueSections ?? null,
       diffOutput: options.diffOutput ?? null,
       diffPath: options.diffPath ?? null,
       changedFiles: options.changedFiles ?? [],
@@ -1112,13 +1226,167 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
 }
 
 /**
+ * Resolve the spec-of-record text the briefing prefix states as fact — the PR
+ * description, every issue the PR closes, and each issue's body — from
+ * GitHub, so a caller that simply omits the flags can never seed every
+ * fan-out reviewer with the claim that the PR has no description and no
+ * acceptance criteria (#1496/#1511). Explicit flags win: only fields still
+ * unset are fetched, and a caller that passes all three never touches the
+ * network.
+ *
+ * `acceptanceCriteria` is resolved from the PR's closing reference(s) ONLY
+ * when the caller did not supply `--acceptance-criteria` itself: auto-fetching
+ * an issue body and attaching it under a caller-provided (and possibly
+ * unrelated, e.g. a doc path) pointer would attribute the wrong document as
+ * its source, which is the same false-spec class this resolver exists to
+ * remove. When the caller DID supply the AC pointer, `acceptanceCriteriaSource`
+ * is always "provided", regardless of whether the PR happens to close an
+ * issue or whether `--issue-body` was also given.
+ *
+ * Every closing issue is resolved (via the same detector the enqueue gate
+ * uses, `resolveLinkedIssuesFromPr`: deduped, ordered, n>0 guarded, falls back
+ * to `Closes/Fixes/Resolves #N` body keywords), not just the first — an
+ * umbrella PR closing several issues previously briefed reviewers with only
+ * one issue's ACs and no signal that others were dropped. Each resolved
+ * issue's body is fetched from ITS OWN repository (cross-repo closing
+ * references are real) and classified via `detectIssueRefinementArtifact`
+ * (the same detector the enqueue gate uses) so `acceptanceCriteriaSource`
+ * distinguishes "linked issue carries a real refinement artifact" from
+ * "linked issue is prose-only" (AC4 of #1496) — the latter stamped
+ * `"linked-issue-unrefined"`.
+ *
+ * Fails closed with a named error when the PR read fails. An unresolvable body
+ * must not degrade into an assertion of absence — the whole defect being fixed
+ * is that "the caller passed nothing" was rendered as "the PR has nothing".
+ *
+ * @param {object} options — parsed CLI options shape (mutated in place)
+ * @param {{ run?: Function, env?: object, ghCommand?: string }} [deps]
+ * @returns {Promise<object>} the same options object
+ */
+export async function resolvePrSpecContext(options, { run = runChild, env = process.env, ghCommand = "gh" } = {}) {
+  // `== null` on purpose: an omitted field (undefined) means the caller
+  // supplied nothing just as much as an explicit null does. Treating undefined
+  // as "provided" would skip resolution and stamp the artifact `provided`
+  // anyway — the false-spec claim this whole path exists to prevent.
+  const needsBody = options.prBody == null;
+  const acProvided = options.acceptanceCriteria != null;
+  const needsIssue = !acProvided;
+  if (!needsBody && !needsIssue) {
+    options.acceptanceCriteriaSource = "provided";
+    return options;
+  }
+
+  let pr;
+  try {
+    ({ pr } = await viewPr(
+      { repo: options.repo, pr: options.pr, fields: "body,closingIssuesReferences" },
+      { env, ghCommand, run },
+    ));
+  } catch (error) {
+    const missing = needsBody && needsIssue
+      ? "the PR has no description and no acceptance criteria"
+      : needsBody
+        ? "the PR has no description"
+        : "the PR has no acceptance criteria";
+    throw new Error(
+      `gate-context spec resolution failed: could not read PR #${options.pr} in ${options.repo} (${error?.message ?? error}). Refusing to write a bundle whose briefing prefix would state ${missing}. Pass --pr-body (and --issue-body/--acceptance-criteria) explicitly to build without GitHub access.`,
+    );
+  }
+  // An empty string here is a RESOLVED fact (the PR genuinely has no
+  // description) and renders as PR_BODY_ABSENT_SENTINEL. That is distinct from
+  // the throw above, which is the unresolvable case.
+  if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
+
+  if (!needsIssue) {
+    options.acceptanceCriteriaSource = "provided";
+    return options;
+  }
+
+  const closingNumbers = resolveLinkedIssuesFromPr(pr);
+  if (closingNumbers.length === 0) {
+    // Genuinely no closing reference (and no body-keyword fallback match) —
+    // recorded as such, so a consumer can tell "this PR closes no issue" from
+    // "nobody fetched the issue".
+    options.acceptanceCriteriaSource = "none";
+    return options;
+  }
+
+  // Identity is (repository, number), never the number alone: a PR closing
+  // owner/repo#5 and owner/other#5 references two different issues, and keying
+  // by number would silently drop one from the spec-of-record. GraphQL's
+  // closingIssuesReferences carries the repository, so it is the source of
+  // truth whenever present; the bare numbers from resolveLinkedIssuesFromPr are
+  // the body-keyword fallback and can only mean this PR's own repo.
+  const graphqlRefs = (Array.isArray(pr.closingIssuesReferences) ? pr.closingIssuesReferences : [])
+    .filter((entry) => Number.isInteger(entry?.number));
+  const seen = new Set();
+  const targets = [];
+  for (const entry of graphqlRefs.length > 0 ? graphqlRefs : closingNumbers.map((number) => ({ number }))) {
+    const repo = entry.repository?.owner?.login && entry.repository?.name
+      ? `${entry.repository.owner.login}/${entry.repository.name}`
+      : options.repo;
+    const key = `${repo.toLowerCase()}#${entry.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Same-repo refs render bare (`#42`). The comparison is case-insensitive
+    // because `--repo Owner/Repo` and the API's `owner/repo` name one repo.
+    const sameRepo = repo.toLowerCase() === options.repo.toLowerCase();
+    targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
+  }
+  options.acceptanceCriteria = targets.map((t) => t.label).join(", ");
+
+  if (options.issueBody == null) {
+    const bodies = [];
+    // "unrefined" means the pointer leads nowhere: EVERY linked issue is
+    // prose-only. One refined issue among several still gives a reviewer real
+    // criteria to read, so a mixed set is "linked-issue".
+    let anyRefined = false;
+    for (const { repo, number, label } of targets) {
+      let issue;
+      try {
+        ({ issue } = await viewIssue({ repo, issue: number, fields: "body" }, { env, ghCommand, run }));
+      } catch (error) {
+        throw new Error(
+          `gate-context spec resolution failed: PR #${options.pr} closes issue ${label} but its body could not be read (${error?.message ?? error}). Refusing to write a bundle whose briefing prefix would omit the acceptance criteria it claims to carry. Pass --issue-body/--acceptance-criteria explicitly to build without GitHub access.`,
+        );
+      }
+      const body = typeof issue.body === "string" ? issue.body : "";
+      if (detectIssueRefinementArtifact({ body, issueNumber: number }).hasACs) anyRefined = true;
+      bodies.push({ label, body });
+    }
+    // A single linked issue renders exactly as before (no redundant `### #N`
+    // sub-heading duplicating the `## Linked issue #N` heading above it,
+    // via options.issueBody). A multi-issue PR instead hands the renderer
+    // structured per-issue data (options.issueSections) rather than a
+    // pre-joined string: renderBriefingPrefix — not this resolver — owns
+    // emitting each `### <label>` heading OUTSIDE any fence, so one issue's
+    // hostile body can never forge another issue's label (renderer-security).
+    if (bodies.length === 1) {
+      options.issueBody = bodies[0].body.trim().length > 0 ? bodies[0].body.trim() : ISSUE_BODY_ABSENT_SENTINEL;
+    } else {
+      options.issueSections = bodies;
+    }
+    options.acceptanceCriteriaSource = anyRefined ? "linked-issue" : "linked-issue-unrefined";
+  } else {
+    // Caller supplied the issue body text directly (without also supplying
+    // --acceptance-criteria) — classify it as given rather than making a
+    // network call whose result would be discarded.
+    options.acceptanceCriteriaSource = detectIssueRefinementArtifact({ body: options.issueBody }).hasACs
+      ? "linked-issue"
+      : "linked-issue-unrefined";
+  }
+  return options;
+}
+
+/**
  * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
  * drive the `--base` diff-capture path against a throwaway git repo fixture
- * without spawning a subprocess.
+ * without spawning a subprocess. `run` is the injectable child-process runner
+ * the GitHub spec-resolution reads go through.
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function }} [runtime]
  */
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), run = runChild } = {}) {
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
@@ -1132,6 +1400,17 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
+    // BEFORE any diff work: a bundle that cannot state the spec truthfully must
+    // not be written at all, and failing here costs nothing (#1496/#1511).
+    // Skipped under --prefix-file: the recorded prefix bytes are the supplied
+    // file's EXACT bytes (writeGateContext never renders prBody/issueBody into
+    // them in that mode), so a GitHub read here would be spent resolving text
+    // that can never reach the record — an orchestrator that already rendered
+    // its own prefix must not gain a new hard GitHub dependency for that.
+    if (!options.prefixFile) {
+      await resolvePrSpecContext(options, { run });
+    }
     // AC3 (#1140): the CLI only produces the full build-once bundle
     // (scope.diffPath + scope.changedFiles + adjacentCode) when it has a
     // resolvable diff source. --base is OPTIONAL rather than required — making

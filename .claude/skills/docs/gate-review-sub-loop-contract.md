@@ -141,6 +141,39 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     `diffSource` distinguishes a base-derived bundle (`"base"`) from a thin briefing
     (`"none"`), while `diffPath` independently signals whether the persisted full diff is
     available.
+  - **`scope.acceptanceCriteriaSource` posture (CLI-only spec resolution, #1496/#1511).**
+    `write-gate-context.mjs` resolves the PR body, the PR's closing issue reference(s), and
+    each closed issue's body from GitHub itself when the caller omits `--pr-body`/
+    `--issue-body`/`--acceptance-criteria` — a caller that simply forgets a flag can no longer
+    seed every fan-out reviewer with the false claim that a PR has no description or no
+    acceptance criteria. An unresolvable read (PR or a linked issue) FAILS CLOSED: a named
+    error, no artifact written — the bundle must never assert absence when resolution merely
+    failed. Supplying `--acceptance-criteria` suppresses the automatic issue-body fetch
+    entirely (it overrides the pointer the fetch would otherwise resolve), so a caller who
+    passes only `--acceptance-criteria` gets no linked-issue body and no `## Linked issue`
+    section; pass `--issue-body` too if the prefix should still carry issue text.
+    `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
+    be: `"provided"` (caller flag, regardless of whether an issue body was independently
+    supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
+    resolved issue carries a real Acceptance-criteria/DoD section or linked refinement doc),
+    `"linked-issue-unrefined"` (resolved, but every linked issue is prose-only — distinguishes
+    "linked, no refinement artifact" from "not fetched"), or `"none"` (the PR closes no
+    issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
+    omit it entirely, so a null `acceptanceCriteria` WITHOUT this field means "never
+    resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
+    PR closing several issues resolves ALL of them (not just the first), concatenated under
+    one `## Linked issue <ref1>, <ref2>` section with a `### <ref>` sub-heading per issue; a
+    cross-repo closing reference registered by GitHub (`closingIssuesReferences`, which
+    carries the repository alongside the number) resolves against ITS OWN repository, not the
+    PR's — the `Closes #N` body-keyword fallback used when GitHub reports no closing
+    references is same-repo only and cannot capture an `owner/repo` prefix. `--prefix-file`
+    (an orchestrator recording its own
+    already-rendered prefix) skips this resolution entirely — those fields could never reach
+    the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
+    prefix, a same-head rebuild after a live description edit yields different prefix bytes,
+    which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
+    the context while reviewers for that head are still running. This does not affect the
+    frozen artifact of an already-completed gate pass.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -270,11 +303,23 @@ construction and the shared-prefix prompt-cache opportunity is destroyed byte on
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
 PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary. The diff SHOULD be inlined up to a size cap
+changed-files/adjacent-code summary. The PR body and each linked-issue body are
+author-controlled GitHub text (PR author or linked-issue author), so each is carried in
+its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
+text, so a hostile body cannot forge a `##`/`###` section heading (e.g. a fake linked-issue
+label, or a second `## Diff at reviewed head`/`## Changed files` section ahead of the real
+one) or emit `PR_BODY_ABSENT_SENTINEL`/`ISSUE_BODY_ABSENT_SENTINEL` as if it were the
+renderer's own statement. A multi-issue PR's per-issue bodies are passed through as
+structured data (label + body pairs), never pre-joined into one string, so the renderer
+itself — not any one issue's body — owns emitting each `### <label>` heading, outside every
+fence. Every fence delimiter (`pickFence`) is sized one backtick longer than the longest
+backtick run already inside the text it wraps, so the wrapped content can never close the
+fence early and leak into a later section. The diff SHOULD be inlined up to a size cap
 (`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
-markdown block — the fence and surrounding framing are part of the rendered prefix bytes,
-so "inline" means the diff content travels in the prefix, not that its raw bytes appear
-unframed. Over the cap the prefix falls back to pointer mode: it references
+markdown block sized by the same `pickFence` rule — the fence and surrounding framing are
+part of the rendered prefix bytes, so "inline" means the diff content travels in the
+prefix, not that its raw bytes appear unframed. Over the cap the prefix falls back to
+pointer mode: it references
 `scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
 diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
 disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text

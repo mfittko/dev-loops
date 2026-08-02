@@ -15,8 +15,10 @@
  * - Does NOT run npm install (out of scope).
  *
  * Prints a JSON result to stdout:
- *   { ok, path, created|reused, base?, provision: { actions, summary } }
- * (`provision` is the full provisionWorktree() result, not just its summary.)
+ *   { ok, path, created|reused, base?, provision: { actions, summary }, guard }
+ * (`provision` is the full provisionWorktree() result, not just its summary.
+ * `guard` is the default-branch guard's install result — best-effort: a
+ * failure there never fails the worktree, see installGuard below.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
@@ -25,8 +27,9 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
-import { resolveBaseBranch } from "@dev-loops/core/config";
+import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
+import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { canonicalize } from "./_worktree-path.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -52,7 +55,14 @@ Output (stdout, JSON):
     "base": <ref>,   // present on create: the ref the worktree was created off —
                      // the origin/-prefixed resolved base (default or --base) for
                      // a NEW branch, or the existing local branch when re-attached
-    "provision": { "actions": [...], "summary": {...} } }
+    "provision": { "actions": [...], "summary": {...} },
+    "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
+               "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
+               "reason"? }                              // default-branch guard
+               // install result (best-effort; see installDefaultBranchGuard) —
+               // always present, on both the create and reuse paths. Guards the
+               // repo's own default AND, when it differs, an explicit --base.
+  }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -136,6 +146,25 @@ function remoteFromBase(base) {
   return slash > 0 ? base.slice(0, slash) : "origin";
 }
 
+/**
+ * Configured remote names (`git remote`), so a slashed `--base` is only ever
+ * split into remote/branch when its first segment genuinely names one. A bare
+ * `--base release/1.0` (the shape `workflow.baseBranch` documents, "main" or
+ * "spike/foo") has no remote named "release" — treating it as one anyway
+ * resolves nothing and, before this fix, fed the same wrong remote into the
+ * repo's-own-default lookup below.
+ */
+function listRemotes(gitCommand, cwd) {
+  try {
+    return runGit(gitCommand, ["remote"], cwd)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function runGit(gitCommand, args, cwd) {
   return execFileSync(gitCommand, args, {
     cwd,
@@ -172,6 +201,170 @@ function parseWorktreeList(porcelain) {
   return entries;
 }
 
+// Installed at the primary checkout, never in the worktree we just created: the
+// guard exists to catch a commit that happens in the WRONG tree. Best-effort by
+// design — a repo whose hooks directory is unwritable (or managed by another
+// tool) must still get its worktree.
+/** Branch name from a base ref like "origin/develop" → "develop". */
+function branchFromBase(base) {
+  const slash = base.indexOf("/");
+  return slash > 0 ? base.slice(slash + 1) : base;
+}
+
+// Only the REMOTE-tracking ref counts. A local branch of the same name proves
+// nothing about the remote's default: a `master` repo carrying a stale local
+// `main` would otherwise bake in `main`, leaving the real default unguarded
+// while reporting success. Requiring `<remote>/<name>` makes that case fall to
+// inert, and a repo with no remote is inert too — correctly, since there is no
+// remote default to land on. `--verify` with the full path is what keeps a tag
+// named `main` from matching.
+function remoteDefaultRefExists(gitCommand, remote, branch, cwd) {
+  if (typeof branch !== "string" || branch.trim().length === 0) return false;
+  try {
+    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch.trim()}`], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Git's OWN advertised default for `remote` — `<remote>/HEAD`, set by every
+// real `git clone` (and, empirically, by a plain `git fetch` against a remote
+// that itself has one). Deliberately does NOT fall back to guessing
+// main-before-master the way resolveBaseBranch's auto-detect does: that guess
+// is what let a stale remote `main` out-rank a repo whose real default is
+// `master` while still reporting `guard.ok: true` — going inert (the caller
+// baking in nothing from this source) is the safe failure here, not a guess.
+function remoteAdvertisedDefaultBranch(gitCommand, remote, cwd) {
+  try {
+    const ref = runGit(gitCommand, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], cwd).trim();
+    const prefix = `${remote}/`;
+    return ref.startsWith(prefix) ? ref.slice(prefix.length) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The pre-commit/pre-push hooks live in the ONE common hook directory shared
+ * by the primary checkout and every linked worktree — so unlike everything
+ * else ensureWorktree does, this is not per-invocation state. Baking in only
+ * the per-call `effectiveBase` (an explicit --base, or the resolver's
+ * auto-detected guess) would let one `--base origin/develop` call for a
+ * stacked worktree REWRITE an already-installed `default="main"` guard to
+ * `default="develop"`, after which a commit on the repo's real default
+ * silently succeeds while `guard.ok` still reads true.
+ *
+ * So this always guards the repo's OWN default — resolved fresh from git's
+ * advertised `<remote>/HEAD` on every call, never from a guess — and
+ * ADDITIONALLY guards an EXPLICIT `--base` (an operator's flag, or the
+ * .devloops workflow.baseBranch the resolver injects as one) when it differs.
+ * An auto-detected base that was never given explicitly is never trusted for
+ * this: trusting it here would bake in the exact same wrong guess it can
+ * itself be. The repo default and the explicit base are returned as two
+ * SEPARATE fields (not merged into one list) because installDefaultBranchGuard
+ * tracks them under different persistence rules: the repo default is unioned
+ * across installs (never lost to a transient resolution failure), the
+ * explicit base is replaced wholesale by this call's value (so a later call
+ * with a different, or no, explicit base can actually drop it — the base's
+ * own worktree must be able to commit again once nothing needs it guarded).
+ */
+function guardedBranches(gitCommand, root, explicitBase) {
+  // "origin" unconditionally: the repo's own default must not move just
+  // because this particular call's --base happens to name a different
+  // remote (or, worse, a bare slashed branch that only LOOKS like one).
+  const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, "origin", root);
+  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, "origin", repoDefaultCandidate, root)
+    ? repoDefaultCandidate
+    : null;
+
+  let explicitCandidate = null;
+  if (explicitBase) {
+    // Reduce refs/heads/<b>, refs/remotes/origin/<b>, and origin/<b> to the
+    // bare name FIRST, via the same helper resolveBaseBranch already trusts —
+    // a hand-rolled remote/branch split here used to leave refs/heads/develop
+    // and refs/remotes/origin/develop unrecognized (dropping the operator's
+    // explicit base unguarded) while origin/HEAD resolved to a phantom "HEAD"
+    // branch (a guard for a branch nobody has).
+    const bareBase = normalizeToBareBranch(explicitBase);
+    // Only split off a remote when the first segment is an actually
+    // configured one; a bare slashed branch (or a --base on a remote this
+    // checkout has never heard of) is instead checked whole against origin.
+    const remotes = listRemotes(gitCommand, root);
+    const maybeRemote = remoteFromBase(bareBase);
+    const isRealRemote = remotes.includes(maybeRemote);
+    const remote = isRealRemote ? maybeRemote : "origin";
+    const branch = isRealRemote ? branchFromBase(bareBase) : bareBase;
+    explicitCandidate = branch !== "HEAD" && remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
+  }
+
+  return { repoDefault, explicitBase: explicitCandidate };
+}
+
+function installGuard(gitCommand, root, explicitBase) {
+  try {
+    // The COMMON git dir, not the per-worktree one: `--absolute-git-dir` in a
+    // linked worktree resolves to `.git/worktrees/<name>`, a hooks directory git
+    // never executes for anything — installing there reports guard.ok: true for
+    // a hook that can never fire. `--git-common-dir` is identical for the main
+    // checkout and every linked worktree, which is what the hook install must
+    // target since hooks are resolved from the common directory.
+    // --path-format=absolute needs git >= 2.31; fall back to resolving the
+    // (possibly relative) --git-common-dir against the invocation root so an
+    // older git still targets the right directory instead of failing the guard.
+    let gitDir;
+    try {
+      gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
+    } catch {
+      gitDir = path.resolve(root, runGit(gitCommand, ["rev-parse", "--git-common-dir"], root).trim());
+    }
+    const { repoDefault, explicitBase: explicitBranch } = guardedBranches(gitCommand, root, explicitBase);
+    let hooksPathOverride = null;
+    try {
+      // Exit 0 means SET (even to ""), exit 1 means unset — `.trim() || null`
+      // collapsed both to the same null, so `core.hooksPath=""` (git runs NO
+      // hooks at all in that case) read as "unset" and installed hooks git
+      // would never execute while reporting guard.ok: true.
+      hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim();
+    } catch {
+      hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
+    }
+    const result = installDefaultBranchGuard({
+      gitDir,
+      defaultBranches: repoDefault,
+      explicitBaseBranches: explicitBranch,
+      hooksPathOverride,
+    });
+    if (!result.ok) {
+      // A structured refusal (core.hooksPath set, unsafe branch name, bad
+      // gitDir) is otherwise silent: emitResult strips `guard` entirely under
+      // --jq/--silent, the documented invocation style, so this stderr line is
+      // the only signal an operator gets that nothing was installed.
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
+    } else if (result.reason) {
+      // ok:true degraded states that carry a reason (a dropped unsafe explicit
+      // base, an inert or all-foreign install) surface the same way. A
+      // PARTIALLY foreign install carries no reason and stays visible only in
+      // guard.skipped.
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard degraded: ${result.reason}\n`);
+    }
+    return result;
+  } catch (err) {
+    const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
+    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
+    // Same shape as installDefaultBranchGuard's own refuse(): one skipped
+    // entry per guarded hook, not an empty list that reads as "nothing is
+    // unguarded" when in fact neither hook could be installed.
+    return {
+      ok: false,
+      installed: [],
+      refreshed: [],
+      skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: detail })),
+      reason: detail,
+    };
+  }
+}
+
 export async function ensureWorktree(
   { repoRoot, issue, pr, branch, base },
   { gitCommand = "git", provision = provisionWorktree } = {},
@@ -201,7 +394,7 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent.
     const summary = await provision({ worktreePath: target, repoRoot: root });
-    return { ok: true, path: target, created: false, reused: true, provision: summary };
+    return { ok: true, path: target, created: false, reused: true, provision: summary, guard: installGuard(gitCommand, root, base) };
   }
 
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
@@ -228,7 +421,7 @@ export async function ensureWorktree(
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary };
+  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root, base) };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {

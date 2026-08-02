@@ -7,8 +7,6 @@
 // `pre_approval_gate` cannot post. At the cap it is not — the interpreter
 // already emits `round_cap_clean_fallback` and the gate is allowed with the
 // request still pending, so withdrawing there changes nothing about the gate.
-// (The sibling case — a head that has ADVANCED past the last review — is not
-// solved here and is tracked separately in #1441; see the caveat below.)
 //
 // Withdrawing the request removes a signal that will never arrive and lets the
 // loop re-evaluate on the evidence it already has. The path that then opens the
@@ -23,14 +21,32 @@
 // CI the loop already routes to `round_cap_clean_fallback` with the request
 // still pending, so the gate is not blocked; the guards would still pass and a
 // real withdrawal would occur, but it buys nothing. With non-green CI
-// the gate stays blocked either way. And if the head has since advanced past
-// the submitted review, withdrawing below the cap just makes the loop re-request
-// — the same strand again. The case it fixes is the forced re-request on a head
-// that already carries a clean submitted review.
+// the gate stays blocked either way. The case it fixes is the forced re-request
+// on a head that already carries a clean submitted review.
 //
 // It is deliberately NOT automatic. "Copilot will not re-engage this" is a
 // human judgement about a model's behavior, so it stays an explicit, audited
 // operator action rather than an inference the loop makes about its own gate.
+//
+// HEAD-ADVANCED CASE (#1441): a sibling shape of the same deadlock — the loop
+// converged, the round's threads were reply-resolved on a NEW head, so
+// `copilotReviewOnCurrentHead` is false. Below the round cap, withdrawing here
+// alone would just make the loop re-request Copilot on that new head and strand
+// again the same way, since Copilot still will not re-engage a change it
+// already effectively approved. This is eligible ONLY when the delta since
+// Copilot's last SUBMITTED review is provably a pure doc/prose bump (the same
+// fail-closed classifier request-copilot-review.mjs already trusts for its own
+// round-cap suppression, reused here via classifyDeltaSinceLastReview — see
+// resolveConvergenceCarryForward in @dev-loops/core/loop/gate-carry-forward).
+// Any code/test/config/CI or unclassifiable delta, a non-linear advance, or an
+// unavailable compare REFUSES exactly like the round-cap check does — this tool
+// never widens what counts as "provably docs-only". On success it also writes
+// an operator-authorized suppression marker (scripts/loop/_post-convergence-
+// review-suppression.mjs), scoped to this EXACT head, so request-copilot-
+// review.mjs recognizes the same head as already-settled instead of
+// re-requesting — reusing the existing `suppressed_post_convergence_docs_only`
+// status rather than inventing a parallel mechanism. Any further push
+// invalidates the marker (new head no longer matches).
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 // SUBMITTED_REVIEW_STATES is shared with the loop-state reader on purpose:
@@ -42,6 +58,8 @@ import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "./request-copilot-review.mjs";
+import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
 
 const USAGE = `Usage: node scripts/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> [--reason <text>]
 
@@ -54,10 +72,21 @@ Withdraws only when ALL of these hold (each is what makes the withdrawal safe;
 the last two REFUSE with exit 1, while no pending request is an exit-0 no-op):
   - a Copilot review request is actually pending
   - Copilot has already SUBMITTED a review on this PR (a real prior review to
-    fall back on — never used to skip a first review). Note the gate itself
-    additionally requires that review to be on the CURRENT head, so withdrawing
-    on a head that has advanced past it will not open the gate.
+    fall back on — never used to skip a first review)
   - no unresolved review threads remain
+
+If that submitted review is on the CURRENT head, withdrawing is all that is
+needed — same-head clean convergence opens the gate.
+
+If the head has since ADVANCED past that review (#1441), withdrawing ALSO
+requires the delta since Copilot's last submitted review to be provably a pure
+doc/prose bump (the same fail-closed classifier request-copilot-review.mjs
+already trusts at the round cap). A code/test/config/CI or unclassifiable
+delta, a non-linear advance, or an unavailable compare REFUSES — withdrawing
+there would just make the loop re-request Copilot and strand again. On success
+this also writes an operator-authorized suppression marker scoped to that exact
+head, so request-copilot-review.mjs recognizes it as already-settled instead of
+re-requesting; any further push invalidates the marker.
 
 Options:
   --repo <owner/name>     Required.
@@ -68,7 +97,11 @@ Options:
 
 Output (stdout, JSON):
   { ok, withdrawn, status: "withdrawn"|"refused"|"not-requested"|"dry-run", reason,
-    operatorReason? }
+    operatorReason?, headAdvanced?, markerPath? }
+  markerPath is present only on a head-advanced "withdrawn" result: the
+  resolved absolute path of the suppression marker just written, so the
+  operator can confirm it landed where request-copilot-review.mjs and
+  detect-pr-gate-coordination-state.mjs will look for it.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -155,13 +188,24 @@ async function collectState(args, { env, runChild }) {
   const copilotRequested = await fetchCopilotRequested(args, { env, runChild });
 
   const pr = await ghJson(runChild, env, [
-    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "reviews",
+    "pr", "view", String(args.pr), "--repo", args.repo, "--json", "headRefOid,reviews",
   ]);
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
-  const submittedCopilotReview = reviews.some(
+  const submittedCopilotReviews = reviews.filter(
     (review) => isCopilotLogin(review?.author?.login)
       && SUBMITTED_REVIEW_STATES.has(String(review?.state ?? "").toUpperCase()),
   );
+  const submittedCopilotReview = submittedCopilotReviews.length > 0;
+  const currentHeadSha = typeof pr?.headRefOid === "string" && pr.headRefOid.trim().length > 0
+    ? pr.headRefOid.trim()
+    : null;
+  // Tolerate both GraphQL commit.oid and REST commit_id shapes, mirroring
+  // getLastCopilotReviewHeadSha in request-copilot-review.mjs.
+  const hasSubmittedReviewOnCurrentHead = currentHeadSha !== null
+    && submittedCopilotReviews.some((review) => {
+      const sha = review?.commit?.oid ?? review?.commit_id;
+      return typeof sha === "string" && sha.trim() === currentHeadSha;
+    });
 
   // Threads come from GraphQL, not `gh pr view --json`: there is no
   // `reviewThreads` JSON field, and every other thread-reading script here uses
@@ -178,10 +222,17 @@ async function collectState(args, { env, runChild }) {
   ]);
   const unresolvedThreadCount = parseReviewThreads(threadsPayload).summary.unresolvedThreads;
 
-  return { copilotRequested, submittedCopilotReview, unresolvedThreadCount };
+  return {
+    copilotRequested,
+    submittedCopilotReview,
+    unresolvedThreadCount,
+    currentHeadSha,
+    hasSubmittedReviewOnCurrentHead,
+    prData: pr,
+  };
 }
 
-async function main(args, { env = process.env, runChild = defaultRunChild } = {}) {
+async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir } = {}) {
   const state = await collectState(args, { env, runChild });
 
   if (!state.copilotRequested) {
@@ -203,8 +254,51 @@ async function main(args, { env = process.env, runChild = defaultRunChild } = {}
       reason: `${state.unresolvedThreadCount} unresolved review thread(s) remain; resolve them before withdrawing a review request.`,
     };
   }
+
+  // Head-advanced case (#1441): Copilot's submitted review is NOT on the
+  // current head. Withdrawing alone would just let the loop re-request Copilot
+  // on this new head and strand again the same way — eligible only when the
+  // delta since that review is provably a pure doc/prose bump (the review's own
+  // thread resolutions, not new reviewable content). Fails closed exactly like
+  // the round-cap classifier: any code/test/config/CI or unclassifiable file, a
+  // non-linear advance, or an unavailable compare refuses instead of widening
+  // what counts as "provably docs-only".
+  const headAdvanced = !state.hasSubmittedReviewOnCurrentHead;
+  let deltaClassification = null;
+  let lastReviewedHeadSha = null;
+  if (headAdvanced) {
+    lastReviewedHeadSha = getLastCopilotReviewHeadSha(state.prData);
+    if (!state.currentHeadSha || !lastReviewedHeadSha) {
+      return {
+        ok: false,
+        withdrawn: false,
+        status: "refused",
+        reason: "The head has advanced past Copilot's last submitted review, but commit SHA data is unavailable, so the delta since that review could not be evaluated.",
+      };
+    }
+    deltaClassification = await classifyDeltaSinceLastReview(
+      { repo: args.repo, base: lastReviewedHeadSha, head: state.currentHeadSha },
+      { env, runChild },
+    );
+    if (!deltaClassification.carryForward) {
+      return {
+        ok: false,
+        withdrawn: false,
+        status: "refused",
+        reason: `The head has advanced past Copilot's last submitted review, and the delta since then is not provably a pure doc/prose bump (${deltaClassification.reason}); withdrawing here would just make the loop re-request Copilot and strand again.`,
+      };
+    }
+  }
+
   if (args.dryRun) {
-    return { ok: true, withdrawn: false, status: "dry-run", reason: "Guards hold; the request would be withdrawn.", operatorReason: args.reason ?? null };
+    return {
+      ok: true,
+      withdrawn: false,
+      status: "dry-run",
+      reason: "Guards hold; the request would be withdrawn.",
+      operatorReason: args.reason ?? null,
+      ...(headAdvanced ? { headAdvanced: true } : {}),
+    };
   }
 
   // `gh pr edit --remove-reviewer` is the documented inverse of the
@@ -228,6 +322,34 @@ async function main(args, { env = process.env, runChild = defaultRunChild } = {}
   if (await fetchCopilotRequested(args, { env, runChild })) {
     throw new Error("Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.");
   }
+
+  if (headAdvanced) {
+    // Record the operator-authorized suppression marker (see the header
+    // comment): scoped to this exact head, so request-copilot-review.mjs
+    // recognizes it as already-settled instead of re-requesting. Any further
+    // push invalidates it (new head no longer matches).
+    const { filePath: markerPath } = await writeSuppressionMarker(
+      {
+        repo: args.repo,
+        pr: args.pr,
+        headSha: state.currentHeadSha,
+        lastReviewedHeadSha,
+        reason: deltaClassification.reason,
+        operatorReason: args.reason ?? null,
+      },
+      { checkpointDir },
+    );
+    return {
+      ok: true,
+      withdrawn: true,
+      status: "withdrawn",
+      headAdvanced: true,
+      reason: `Stranded Copilot review request withdrawn on a head that has advanced past Copilot's last submitted review; the delta since that review is a provable pure doc/prose bump (${deltaClassification.reason}), so the prior converged Copilot review still stands. A suppression marker was recorded for this exact head so the loop will not re-request and re-strand.`,
+      operatorReason: args.reason ?? null,
+      markerPath,
+    };
+  }
+
   return {
     ok: true,
     withdrawn: true,

@@ -247,6 +247,62 @@ test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordin
   assert.equal(nonZeroInput.unresolvedThreadCount, 4);
 });
 
+// #1441: buildCoordinationEvaluatorInput is the exact function
+// upsertCheckpointVerdict calls to assemble evaluatePrGateCoordination's
+// input for the pre_approval_gate verdict that a stranded head-advanced
+// Copilot review request deadlocks — the component whose refusal IS the
+// reported deadlock. Mirrors the unresolvedThreadCount threading test above.
+test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed from coordinationContext (#1441)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "round_cap_reached", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "blocked" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 2, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+    postConvergenceReviewSuppressed: true,
+  };
+  const input = buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(input.postConvergenceReviewSuppressed, true);
+
+  const unsuppressedContext = { ...coordinationContext, postConvergenceReviewSuppressed: false };
+  const unsuppressedInput = buildCoordinationEvaluatorInput({
+    coordinationContext: unsuppressedContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(unsuppressedInput.postConvergenceReviewSuppressed, false);
+
+  // A missing field (an older/unrelated coordinationContext shape) must coerce
+  // to false rather than leaking `undefined` into the evaluator input.
+  const missingFieldContext = { ...coordinationContext };
+  delete missingFieldContext.postConvergenceReviewSuppressed;
+  const missingFieldInput = buildCoordinationEvaluatorInput({
+    coordinationContext: missingFieldContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(missingFieldInput.postConvergenceReviewSuppressed, false);
+});
+
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([]),
