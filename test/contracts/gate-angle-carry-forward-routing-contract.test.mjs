@@ -73,11 +73,12 @@ const PHASE_1_2_ROUTING = [
   /never treat exit 1 as "nothing to re-run"/,
 ];
 
-// Phase 2 (Fan-out): must dispatch over what Phase 1.2 left to re-run, not
-// blindly over every resolved angle — this is the clause that makes the
-// carry-forward plan operative rather than advisory.
+// Phase 2 (Fan-out): must dispatch by SUBTRACTION — the current head's
+// resolved angle set minus the plan's carried angles, never the plan's
+// mustRerun field — this is the clause that makes the carry-forward plan
+// operative rather than advisory, pinned in its unambiguous form.
 const PHASE_2_ROUTING = [
-  /over the angles Phase 1\.2 left to re-run/,
+  /resolved angle set minus the plan's `carried` angles \(the Phase 1\.2 subtraction — never `mustRerun`\)/,
 ];
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
