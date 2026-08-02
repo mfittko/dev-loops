@@ -53,7 +53,7 @@ fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
 a hard error. It does **not** run `npm install` (see dependencies below).
 
 `guard` is the default-branch guard's install result for the primary checkout
-(`{ ok, installed, refreshed, skipped, defaultBranches?, reason? }`), always
+(`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`), always
 present on both the create and reuse paths — installing it is best-effort and
 never fails the worktree. `guard.ok: false` means the install refused
 entirely (nothing was written) — see [Default-branch guard](#default-branch-guard)

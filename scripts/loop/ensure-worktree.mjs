@@ -57,7 +57,8 @@ Output (stdout, JSON):
                      // a NEW branch, or the existing local branch when re-attached
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
-               "defaultBranches"?: [...], "reason"? }   // default-branch guard
+               "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
+               "reason"? }                              // default-branch guard
                // install result (best-effort; see installDefaultBranchGuard) —
                // always present, on both the create and reuse paths. Guards the
                // repo's own default AND, when it differs, an explicit --base.
@@ -332,6 +333,11 @@ function installGuard(gitCommand, root, explicitBase) {
       // --jq/--silent, the documented invocation style, so this stderr line is
       // the only signal an operator gets that nothing was installed.
       process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
+    } else if (result.reason) {
+      // ok:true degraded states (a dropped unsafe explicit base, an inert or
+      // partially foreign install) carry a reason too; surface it the same way
+      // so the documented --jq/--silent style never hides a coverage gap.
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard degraded: ${result.reason}\n`);
     }
     return result;
   } catch (err) {

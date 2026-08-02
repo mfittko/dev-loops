@@ -38,6 +38,9 @@ function makeRepo({ devloops, branch = "main" } = {}) {
   // A self-referential "origin" so `git fetch origin` succeeds offline.
   git("remote", "add", "origin", root);
   git("fetch", "-q", "origin");
+  // Explicit set-head: on git < 2.49 a plain fetch does not create
+  // refs/remotes/origin/HEAD, and the guard resolves the default from it.
+  git("remote", "set-head", "origin", "--auto");
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 

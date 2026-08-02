@@ -363,8 +363,10 @@ export function installDefaultBranchGuard({
     reason = anyWritten
       ? "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect"
       : "every guarded hook slot is already occupied by a foreign hook; nothing was written, so nothing is enforced";
-  } else if (droppedExplicitBranches.length > 0) {
-    reason = `explicit base ${droppedExplicitBranches.map((branch) => JSON.stringify(branch)).join(", ")} contains characters the generated hook's shell would expand; the default guard was installed without it`;
+  }
+  if (droppedExplicitBranches.length > 0) {
+    const dropNote = `explicit base ${droppedExplicitBranches.map((branch) => JSON.stringify(branch)).join(", ")} contains characters the generated hook's shell would expand; the default guard was installed without it`;
+    reason = reason ? `${reason}; ${dropNote}` : dropNote;
   }
   return {
     ok: true,
