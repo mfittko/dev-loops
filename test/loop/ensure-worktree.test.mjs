@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,8 +15,17 @@ import {
 // subprocesses with no env override, inheriting process.env — so a
 // host-global core.hooksPath/commit.gpgsign=true reaches the SUBJECT, not
 // just this file's assertions, and flips guard installation itself.
+const PRIOR_GIT_CONFIG = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM };
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+// Restore after this file's tests: node:test runs files in their own process,
+// but restoring keeps the mutation contained if that ever changes.
+after(() => {
+  for (const [key, value] of Object.entries(PRIOR_GIT_CONFIG)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 // Scrubbed, not inherited: an ambient DEVLOOPS_ALLOW_MAIN (the guard's own
 // documented release/reconcile override) would make the guard-refusal

@@ -309,7 +309,15 @@ function installGuard(gitCommand, root, explicitBase) {
     // a hook that can never fire. `--git-common-dir` is identical for the main
     // checkout and every linked worktree, which is what the hook install must
     // target since hooks are resolved from the common directory.
-    const gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
+    // --path-format=absolute needs git >= 2.31; fall back to resolving the
+    // (possibly relative) --git-common-dir against the invocation root so an
+    // older git still targets the right directory instead of failing the guard.
+    let gitDir;
+    try {
+      gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
+    } catch {
+      gitDir = path.resolve(root, runGit(gitCommand, ["rev-parse", "--git-common-dir"], root).trim());
+    }
     const { repoDefault, explicitBase: explicitBranch } = guardedBranches(gitCommand, root, explicitBase);
     let hooksPathOverride = null;
     try {
