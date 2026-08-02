@@ -164,12 +164,24 @@ export function parseRunGateValidationCliArgs(argv) {
  * @param {Record<string, string>} scripts
  * @throws {Error} naming every unknown suite
  */
+// A suite name lands verbatim in the per-suite log filename, so beyond being
+// a known script it must also be a safe single path segment: no separators, no
+// leading dot (covers ".."), nothing outside this conservative set. package.json
+// script keys are repo-controlled input, not trusted input.
+const SAFE_SUITE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
 export function validateSuiteNames(suites, scripts) {
   const known = new Set(Object.keys(scripts ?? {}));
   const unknown = suites.filter((name) => !known.has(name));
   if (unknown.length > 0) {
     throw new Error(
       `Unknown validation suite(s) (not a key of this repo's package.json "scripts" map): ${unknown.join(", ")}. Refusing to execute anything.`,
+    );
+  }
+  const unsafe = suites.filter((name) => !SAFE_SUITE_NAME_RE.test(name));
+  if (unsafe.length > 0) {
+    throw new Error(
+      `Suite name(s) not usable as a log-file path segment (allowed: alphanumerics then [A-Za-z0-9._:-]): ${unsafe.join(", ")}. Refusing to execute anything.`,
     );
   }
 }

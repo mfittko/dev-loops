@@ -319,7 +319,42 @@ test("appendGateSurvivors: derives repo/pr/gate/headSha from the ledger, and the
 
 test("appendGateSurvivors: rejects a malformed ledger", async () => {
   await withLedgerFile({ not: "a ledger" }, async (ledgerPath) => {
-    await assert.rejects(() => appendGateSurvivors({ ledgerPath, followUpIssue: 9 }), /is missing a valid "repo"/);
+    await assert.rejects(() => appendGateSurvivors({ ledgerPath, followUpIssue: 9 }), /"repo" must be an owner\/name slug/);
+  });
+});
+
+test("appendGateSurvivors: rejects a ledger whose repo is not an owner/name slug", async () => {
+  for (const repo of ["owneronly", "owner/name/extra", "bad repo/name", "owner/na -->me"]) {
+    await withLedgerFile(makeLedger({ repo }), async (ledgerPath) => {
+      await assert.rejects(
+        () => appendGateSurvivors({ ledgerPath, followUpIssue: 9 }),
+        /"repo" must be an owner\/name slug/,
+        repo,
+      );
+    });
+  }
+});
+
+test("appendGateSurvivors: rejects a short (prefix) headSha — the marker is keyed by the full SHA", async () => {
+  await withLedgerFile(makeLedger({ headSha: "abc1234" }), async (ledgerPath) => {
+    await assert.rejects(
+      () => appendGateSurvivors({ ledgerPath, followUpIssue: 9 }),
+      /"headSha" must be the full 40- or 64-char hex commit SHA/,
+    );
+  });
+});
+
+test("appendGateSurvivors: lowercases a mixed-case full headSha so the marker key has one spelling", async () => {
+  const upper = "ABC1234567890ABCDEF000000000000000000000F".slice(0, 40);
+  await withLedgerFile(makeLedger({ headSha: upper, findings: [{ severity: "must-fix", angle: "scope", summary: "x" }] }), async (ledgerPath) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "append-gate-survivors-gh-"));
+    try {
+      const { env, ghPath } = await writeGhStub(tmpDir, []); // no-survivors path: zero gh calls
+      const result = await appendGateSurvivors({ ledgerPath, followUpIssue: 9 }, { env, ghCommand: ghPath });
+      assert.equal(result.headSha, upper.toLowerCase());
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

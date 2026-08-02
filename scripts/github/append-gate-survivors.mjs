@@ -5,7 +5,9 @@ import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs"
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveGateFollowUpIssue } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { commentIssue } from "./comment-issue.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { mapGateToConfigKey } from "./write-gate-context.mjs";
 
@@ -122,8 +124,15 @@ async function readLedger(ledgerPath) {
     throw parseError(`--ledger "${ledgerPath}" must contain a JSON object`);
   }
   const { repo, pr, gate, headSha, findings } = parsed;
-  if (typeof repo !== "string" || repo.trim().length === 0) {
-    throw parseError(`--ledger "${ledgerPath}" is missing a valid "repo" string`);
+  // The repo slug is embedded verbatim in the idempotency marker's HTML
+  // comment, so it must be a real owner/name — a malformed value could break
+  // out of the marker (defeating idempotency) or inject comment content.
+  let repoSlug;
+  try {
+    const { owner, name } = parseRepoSlug(typeof repo === "string" ? repo.trim() : repo);
+    repoSlug = `${owner}/${name}`;
+  } catch {
+    throw parseError(`--ledger "${ledgerPath}" "repo" must be an owner/name slug`);
   }
   if (!Number.isInteger(pr) || pr <= 0) {
     throw parseError(`--ledger "${ledgerPath}" is missing a valid "pr" number`);
@@ -131,8 +140,12 @@ async function readLedger(ledgerPath) {
   if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
     throw parseError(`--ledger "${ledgerPath}" "gate" must be draft_gate or pre_approval_gate`);
   }
-  if (typeof headSha !== "string" || !/^[0-9a-f]{7,64}$/i.test(headSha.trim())) {
-    throw parseError(`--ledger "${ledgerPath}" is missing a valid "headSha"`);
+  // Full-length only: the marker is keyed by this value, and accepting a
+  // prefix would let the same close be represented two ways (short vs full),
+  // producing distinct markers and a double-filed survivor comment.
+  const fullHeadSha = normalizeFullHeadSha(headSha);
+  if (fullHeadSha === null) {
+    throw parseError(`--ledger "${ledgerPath}" "headSha" must be the full 40- or 64-char hex commit SHA`);
   }
   if (!Array.isArray(findings)) {
     throw parseError(`--ledger "${ledgerPath}" "findings" must be an array`);
@@ -142,7 +155,7 @@ async function readLedger(ledgerPath) {
       throw parseError(`--ledger "${ledgerPath}" findings[${i}] is malformed (expected {severity, angle, summary})`);
     }
   });
-  return { repo: repo.trim(), pr, gate, headSha: headSha.trim(), findings };
+  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, findings };
 }
 
 export function parseAppendGateSurvivorsCliArgs(argv) {

@@ -101,6 +101,20 @@ test("validateSuiteNames throws a named error listing every unknown suite", () =
   );
 });
 
+test("validateSuiteNames rejects suite names that are not safe path segments", () => {
+  for (const name of ["a/b", "..", "a\\b", ".hidden", "a b"]) {
+    assert.throws(
+      () => validateSuiteNames([name], { [name]: "x" }),
+      /not usable as a log-file path segment/,
+      name,
+    );
+  }
+  // The shipped default names stay accepted.
+  assert.doesNotThrow(() => validateSuiteNames(["verify", "assets:check", "schema:check", "test.unit"], {
+    "verify": "x", "assets:check": "x", "schema:check": "x", "test.unit": "x",
+  }));
+});
+
 // ---------------------------------------------------------------------------
 // stripAnsi
 // ---------------------------------------------------------------------------
