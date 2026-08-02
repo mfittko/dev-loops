@@ -174,8 +174,8 @@ test("interactive answers attribute to the resolved operator handle, with human 
   assert.match(skill, /gh api user --jq \.login/, "the SKILL names the read-only self-lookup for the handle");
   assert.match(
     skill,
-    /Fall back to the literal `human` only when the login cannot be resolved/,
-    "the fallback is documented as unresolvable-login-only",
+    /In every other case fall back to the literal `human`/,
+    "the fallback is documented as the only alternative to a validated handle",
   );
   assert.match(
     skill,
@@ -189,4 +189,19 @@ test("interactive answers attribute to the resolved operator handle, with human 
   );
   // --auto evidence tokens unchanged, and not attributed to a human.
   assert.match(skill, /codebase \\\| docs \\\| context \\\| inferred/, "auto evidence tokens remain in the enum");
+  assert.match(skill, /`unresolved`/, "the fifth auto token stays documented");
+  // The superseded literal instruction must be GONE, not merely superseded.
+  assert.doesNotMatch(
+    skill,
+    /Record each answer with its source: `human`/,
+    "the replaced literal-human instruction must not survive alongside the handle rule",
+  );
+  // The preamble fallback is pinned, not just the Source-value fallback.
+  assert.match(
+    skill,
+    /fallback: `source: human answers via operator Q&A`/,
+    "the results-comment preamble fallback is documented",
+  );
+  // The resolved-handle acceptance shape is pinned (exit 0, non-empty, not null, plain handle).
+  assert.match(skill, /\^\[A-Za-z0-9-\]\{1,39\}\$/, "the handle allowlist shape is documented");
 });
