@@ -320,8 +320,8 @@ test("a lone --unresolved or --bodies flag fails closed, and the default shape i
   assert.equal(output.threads.some((thread) => thread.isResolved), true, "default output keeps resolved threads");
 });
 
-test("the live GraphQL query fetches the working-set location fields", () => {
-  for (const field of ["path", "line", "isOutdated"]) {
+test("the live GraphQL query fetches the working-set location fields and the pagination block", () => {
+  for (const field of ["path", "line", "isOutdated", "pageInfo", "hasNextPage", "endCursor", "after: $after"]) {
     assert.equal(REVIEW_THREADS_QUERY.includes(field), true, `query must fetch ${field}`);
   }
 });
@@ -396,4 +396,75 @@ test("live mode paginates past 100 threads and feeds the working-set parser", as
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("the pagination walk fails closed on non-advancing and unbounded cursor sequences", async () => {
+  const { fetchGithubReviewThreadsPayload } = await import(pathToFileURL(scriptPath).href);
+  const page = (cursor) => ({
+    code: 0,
+    stderr: "",
+    stdout: JSON.stringify({
+      data: { repository: { pullRequest: { reviewThreads: {
+        nodes: [], pageInfo: { hasNextPage: true, endCursor: cursor },
+      } } } },
+    }),
+  });
+
+  // Immediate self-repeat trips the cursor guard on the second page.
+  let calls = 0;
+  await assert.rejects(
+    () => fetchGithubReviewThreadsPayload(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => { calls += 1; return page("SAME"); } },
+    ),
+    /pagination did not advance/,
+  );
+  assert.equal(calls, 2);
+
+  // An A/B cycle (or endless fresh cursors) trips the page cap instead of looping.
+  let cycleCalls = 0;
+  await assert.rejects(
+    () => fetchGithubReviewThreadsPayload(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => { cycleCalls += 1; return page(cycleCalls % 2 === 0 ? "A" : "B"); } },
+    ),
+    /exceeded 100 pages/,
+  );
+  assert.equal(cycleCalls, 100);
+
+  // hasNextPage without a cursor fails closed before the repeat check.
+  await assert.rejects(
+    () => fetchGithubReviewThreadsPayload(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => page(null) },
+    ),
+    /endCursor is missing/,
+  );
+});
+
+test("a connection page with non-array nodes fails closed instead of reporting an empty working set", async () => {
+  const snapshot = JSON.stringify({
+    data: { repository: { pullRequest: { reviewThreads: { nodes: null, pageInfo: { hasNextPage: false } } } } },
+  });
+  const result = await runNode(["--unresolved", "--bodies"], { stdin: snapshot });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Could not find review threads in payload/);
+});
+
+test("a LIVE page with non-array nodes fails closed in the pagination walk", async () => {
+  const { fetchGithubReviewThreadsPayload } = await import(pathToFileURL(scriptPath).href);
+  await assert.rejects(
+    () => fetchGithubReviewThreadsPayload(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => ({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: { reviewThreads: { nodes: null, pageInfo: { hasNextPage: false } } } } },
+        }),
+      }) },
+    ),
+    /Could not find review threads in payload/,
+  );
 });

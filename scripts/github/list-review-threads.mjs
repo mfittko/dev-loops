@@ -204,7 +204,15 @@ export async function fetchAllReviewThreads(
   const { owner, name } = parseRepoSlug(repo);
   const threads = [];
   let after = null;
+  let pages = 0;
+  // 10k threads at 100/page; same ceiling as capture-review-threads.mjs, so a
+  // payload cycling cursors or inventing fresh ones forever fails closed.
+  const MAX_PAGES = 100;
   while (true) {
+    if (pages >= MAX_PAGES) {
+      throw new Error(`Invalid review-threads GraphQL payload: pagination exceeded ${MAX_PAGES} pages without completing`);
+    }
+    pages += 1;
     const result = await runChild(ghCommand, buildQueryArgs({ owner, name, pr, after }), env);
     if (result.code !== 0) {
       const detail = result.stderr.trim() || `exit code ${result.code}`;

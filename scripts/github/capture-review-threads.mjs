@@ -148,12 +148,22 @@ export function parseCaptureCliArgs(argv) {
   }
   return options;
 }
+// Bounds the pagination walk (10k threads at 100/page). A payload cycling
+// cursors or inventing fresh ones forever must fail closed, not loop or grow
+// the accumulator without ceiling.
+const MAX_REVIEW_THREAD_PAGES = 100;
+
 function readThreadsConnection(payload) {
   const connection = payload?.data?.repository?.pullRequest?.reviewThreads ?? payload?.data?.node?.reviewThreads;
   if (connection && typeof connection === "object" && !Array.isArray(connection)) {
+    if (!Array.isArray(connection.nodes)) {
+      // nodes: null arrives only alongside a field-level error; fail closed
+      // rather than reporting a false-green empty working set.
+      throw new Error("Could not find review threads in payload");
+    }
     const pageInfo = connection.pageInfo ?? {};
     return {
-      nodes: Array.isArray(connection.nodes) ? connection.nodes : [],
+      nodes: connection.nodes,
       hasNextPage: Boolean(pageInfo.hasNextPage),
       endCursor: typeof pageInfo.endCursor === "string" ? pageInfo.endCursor : null,
     };
@@ -186,7 +196,11 @@ export async function fetchGithubReviewThreadsPayload(
   const nodes = [];
   let after = null;
   let useRestFallback = false;
+  let pages = 0;
   while (true) {
+    if (pages >= MAX_REVIEW_THREAD_PAGES) {
+      throw new Error(`Invalid review-threads GraphQL payload: pagination exceeded ${MAX_REVIEW_THREAD_PAGES} pages without completing`);
+    }
     let payload;
     if (useRestFallback) {
       payload = await restGraphqlJson(REVIEW_THREADS_QUERY, { owner, name, pr, after }, env);
@@ -223,6 +237,7 @@ export async function fetchGithubReviewThreadsPayload(
       payload = parseJsonText(result.stdout);
     }
     const page = readThreadsConnection(payload);
+    pages += 1;
     nodes.push(...page.nodes);
     if (!page.hasNextPage) {
       break;
