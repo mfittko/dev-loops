@@ -187,9 +187,16 @@ test("interactive answers attribute to the resolved operator handle, with human 
     /source: <handle> answers via operator Q&A/,
     "the results-comment preamble uses the resolved handle",
   );
-  // --auto evidence tokens unchanged, and not attributed to a human.
+  // --auto evidence tokens unchanged, and not attributed to a human. Pin the
+  // DEFINITIONAL source-priority list and the unresolved flag rule, not just
+  // enum rows — renaming a token at its definition must fail these.
   assert.match(skill, /codebase \\\| docs \\\| context \\\| inferred/, "auto evidence tokens remain in the enum");
-  assert.match(skill, /`unresolved`/, "the fifth auto token stays documented");
+  assert.match(
+    skill,
+    /1\. \*\*`codebase`\*\*[\s\S]*2\. \*\*`docs`\*\*[\s\S]*3\. \*\*`context`\*\*[\s\S]*4\. \*\*`inferred`\*\*/,
+    "the four auto evidence tokens stay defined in the source-priority list",
+  );
+  assert.match(skill, /Flag a question as \*\*`unresolved`\*\* when:/, "the fifth auto token stays documented at its definition");
   // The superseded literal instruction must be GONE, not merely superseded.
   assert.doesNotMatch(
     skill,
