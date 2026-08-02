@@ -27,7 +27,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
-import { resolveBaseBranch } from "@dev-loops/core/config";
+import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
 import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { canonicalize } from "./_worktree-path.mjs";
@@ -60,7 +60,8 @@ Output (stdout, JSON):
                "defaultBranches"?: [...], "reason"? }   // default-branch guard
                // install result (best-effort; see installDefaultBranchGuard) —
                // always present, on both the create and reuse paths. Guards the
-               // repo's own default AND, when it differs, an explicit --base. }
+               // repo's own default AND, when it differs, an explicit --base.
+  }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -259,10 +260,13 @@ function remoteAdvertisedDefaultBranch(gitCommand, remote, cwd) {
  * .devloops workflow.baseBranch the resolver injects as one) when it differs.
  * An auto-detected base that was never given explicitly is never trusted for
  * this: trusting it here would bake in the exact same wrong guess it can
- * itself be. Because the repo default is re-derived identically every time —
- * ALWAYS from "origin", never from the invocation's --base — a later call
- * with a different (or no) explicit base can never strip its protection —
- * only ever add or drop the SECOND, explicit-base slot.
+ * itself be. The repo default and the explicit base are returned as two
+ * SEPARATE fields (not merged into one list) because installDefaultBranchGuard
+ * tracks them under different persistence rules: the repo default is unioned
+ * across installs (never lost to a transient resolution failure), the
+ * explicit base is replaced wholesale by this call's value (so a later call
+ * with a different, or no, explicit base can actually drop it — the base's
+ * own worktree must be able to commit again once nothing needs it guarded).
  */
 function guardedBranches(gitCommand, root, explicitBase) {
   // "origin" unconditionally: the repo's own default must not move just
@@ -275,18 +279,25 @@ function guardedBranches(gitCommand, root, explicitBase) {
 
   let explicitCandidate = null;
   if (explicitBase) {
+    // Reduce refs/heads/<b>, refs/remotes/origin/<b>, and origin/<b> to the
+    // bare name FIRST, via the same helper resolveBaseBranch already trusts —
+    // a hand-rolled remote/branch split here used to leave refs/heads/develop
+    // and refs/remotes/origin/develop unrecognized (dropping the operator's
+    // explicit base unguarded) while origin/HEAD resolved to a phantom "HEAD"
+    // branch (a guard for a branch nobody has).
+    const bareBase = normalizeToBareBranch(explicitBase);
     // Only split off a remote when the first segment is an actually
     // configured one; a bare slashed branch (or a --base on a remote this
     // checkout has never heard of) is instead checked whole against origin.
     const remotes = listRemotes(gitCommand, root);
-    const maybeRemote = remoteFromBase(explicitBase);
+    const maybeRemote = remoteFromBase(bareBase);
     const isRealRemote = remotes.includes(maybeRemote);
     const remote = isRealRemote ? maybeRemote : "origin";
-    const branch = isRealRemote ? branchFromBase(explicitBase) : explicitBase;
-    explicitCandidate = remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
+    const branch = isRealRemote ? branchFromBase(bareBase) : bareBase;
+    explicitCandidate = branch !== "HEAD" && remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
   }
 
-  return [...new Set([repoDefault, explicitCandidate].filter(Boolean))];
+  return { repoDefault, explicitBase: explicitCandidate };
 }
 
 function installGuard(gitCommand, root, explicitBase) {
@@ -298,7 +309,7 @@ function installGuard(gitCommand, root, explicitBase) {
     // checkout and every linked worktree, which is what the hook install must
     // target since hooks are resolved from the common directory.
     const gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
-    const defaultBranches = guardedBranches(gitCommand, root, explicitBase);
+    const { repoDefault, explicitBase: explicitBranch } = guardedBranches(gitCommand, root, explicitBase);
     let hooksPathOverride = null;
     try {
       // Exit 0 means SET (even to ""), exit 1 means unset — `.trim() || null`
@@ -309,7 +320,20 @@ function installGuard(gitCommand, root, explicitBase) {
     } catch {
       hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
     }
-    return installDefaultBranchGuard({ gitDir, defaultBranches, hooksPathOverride });
+    const result = installDefaultBranchGuard({
+      gitDir,
+      defaultBranches: repoDefault,
+      explicitBaseBranches: explicitBranch,
+      hooksPathOverride,
+    });
+    if (!result.ok) {
+      // A structured refusal (core.hooksPath set, unsafe branch name, bad
+      // gitDir) is otherwise silent: emitResult strips `guard` entirely under
+      // --jq/--silent, the documented invocation style, so this stderr line is
+      // the only signal an operator gets that nothing was installed.
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
+    }
+    return result;
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
     process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);

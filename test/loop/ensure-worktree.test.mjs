@@ -536,6 +536,69 @@ test("ensure: refuses to install when core.hooksPath is set to an empty string",
   }
 });
 
+// Must-fix regression: an explicit --base naming a live working branch used
+// to permanently guard that branch (installDefaultBranchGuard unioned every
+// explicit-base candidate forever), so the linked worktree that OWNS the
+// stacked-off branch could never commit again, and a later base-free call
+// could not drop it either — contradicting AC "Commits and pushes in linked
+// worktrees are unaffected". Reproduced end to end: stack issue-101 off
+// issue-100's branch, prove issue-100's own commits are refused while
+// stacked, then reinstall without --base and prove the slot is dropped.
+test("ensure: stacking --base on a live worktree branch does not permanently guard it — a later base-free call drops the slot", async () => {
+  const repo = makeRepo();
+  try {
+    const owner = await ensureWorktree({ repoRoot: repo.root, issue: 100 });
+    assert.equal(owner.ok, true);
+    repo.git("fetch", "-q", "origin"); // publish the freshly-created issue-100 branch as origin/issue-100
+
+    const stacked = await ensureWorktree({ repoRoot: repo.root, issue: 101, base: "origin/issue-100" });
+    assert.equal(stacked.ok, true);
+    assert.ok(stacked.guard.defaultBranches.includes("issue-100"), "the explicit base is guarded while stacked");
+
+    // The owning worktree's OWN branch is refused while stacked.
+    assert.throws(
+      () => execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work"], { cwd: owner.path, encoding: "utf8" }),
+      (err) => /refusing to commit on the default branch \(issue-100\)/.test(String(err.stderr)),
+      "issue-100's own commit must be refused while its branch is a stacked explicit base",
+    );
+
+    // A later, base-free call must drop the explicit-base slot entirely —
+    // never merely add to the set that a later --base-free reinstall can't
+    // strip.
+    const freed = await ensureWorktree({ repoRoot: repo.root, issue: 102 });
+    assert.equal(freed.ok, true);
+    assert.ok(!freed.guard.defaultBranches.includes("issue-100"), "the stacked explicit base must be dropped once nothing requests it");
+    assert.ok(freed.guard.defaultBranches.includes("main"), "the real default must still be guarded");
+
+    // issue-100's own commits now pass.
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work after drop"], { cwd: owner.path, encoding: "utf8" });
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// Coverage gap the reviewer flagged at the module level: seeding the reported
+// `defaultBranches` before the write loop claimed enforcement even when every
+// guarded slot was occupied by a foreign hook and nothing was written.
+test("ensure: with every guarded hook slot foreign, guard reports nothing enforced (not a false ok:true main)", async () => {
+  const repo = makeRepo();
+  try {
+    mkdirSync(path.join(repo.root, ".git", "hooks"), { recursive: true });
+    for (const hook of ["pre-commit", "pre-merge-commit", "pre-push"]) {
+      writeFileSync(path.join(repo.root, ".git", "hooks", hook), "#!/bin/sh\n# someone else's hook\nexit 0\n", { mode: 0o755 });
+    }
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true);
+    assert.equal(res.guard.ok, true);
+    assert.deepEqual(res.guard.installed, []);
+    assert.deepEqual(res.guard.defaultBranches, [], "nothing was written, so nothing may read as enforced");
+    // And the commit actually passes — the report matches reality.
+    repo.git("commit", "-q", "--allow-empty", "-m", "on main, unguarded by foreign hooks");
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("ensure: refuses to install when core.hooksPath points git elsewhere", async () => {
   const repo = makeRepo();
   try {

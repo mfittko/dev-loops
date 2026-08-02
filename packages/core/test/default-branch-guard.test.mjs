@@ -241,6 +241,82 @@ test("install: a later call resolving fewer branches never narrows an already-in
   }
 });
 
+// Reviewer-reproduced determinism bug: the union used to be computed PER HOOK
+// instead of repo-wide, so a slot that had been foreign at install time and
+// later became free got only THIS call's (possibly empty) resolution, while
+// its siblings still carried an earlier install's baked-in default — reported
+// as ok:true with an empty `skipped` while the freed slot could not fire.
+test("install: a hook slot freed of its foreign occupant inherits the full repo-wide default, not just this call's resolution", async () => {
+  const { dir, gitDir } = await repoFixture();
+  const hooksDir = path.join(gitDir, "hooks");
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    const foreign = "#!/bin/sh\n# someone else's pre-commit hook\nexit 0\n";
+    fs.writeFileSync(path.join(hooksDir, "pre-commit"), foreign, { mode: 0o755 });
+
+    // pre-commit is foreign and skipped; pre-merge-commit/pre-push get "main".
+    const first = installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    assert.deepEqual(first.skipped.map((e) => e.hook), ["pre-commit"]);
+    assert.deepEqual(first.defaultBranches, ["main"]);
+
+    // Operator removes the foreign hook, freeing the slot.
+    fs.rmSync(path.join(hooksDir, "pre-commit"));
+
+    // A later install whose OWN resolution comes back empty (the exact case
+    // the sticky union defends against) must not write the newly-freed slot
+    // inert while its siblings still enforce "main".
+    const second = installDefaultBranchGuard({ gitDir, defaultBranches: null });
+    assert.equal(second.ok, true);
+    assert.deepEqual(second.installed, ["pre-commit"]);
+    assert.deepEqual(second.defaultBranches, ["main"], "the freed slot must inherit the repo-wide sticky default");
+    assert.equal(commitAttempt(dir, "on-main-after-free.txt").blocked, true, "pre-commit must now enforce main too");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Coverage gap the reviewer flagged: with ALL THREE slots foreign, nothing is
+// written, so the result must not claim `main` as guarded.
+test("install: with every guarded slot occupied by a foreign hook, defaultBranches reports nothing enforced", async () => {
+  const { dir, gitDir } = await repoFixture();
+  const hooksDir = path.join(gitDir, "hooks");
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    for (const hook of GUARDED_HOOKS) {
+      fs.writeFileSync(path.join(hooksDir, hook), "#!/bin/sh\n# someone else's hook\nexit 0\n", { mode: 0o755 });
+    }
+    const result = installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.installed, []);
+    assert.deepEqual(result.refreshed, []);
+    assert.deepEqual(result.skipped.map((e) => e.hook).sort(), [...GUARDED_HOOKS].sort());
+    assert.deepEqual(result.defaultBranches, [], "nothing was written, so nothing may be reported as enforced");
+    assert.equal(commitAttempt(dir, "unguarded-all-foreign.txt").blocked, false, "no hook actually enforces main");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Must-fix: an explicit-base slot (installed via explicitBaseBranches, the
+// shape ensure-worktree uses for an operator's --base) must be DROPPABLE by a
+// later call that passes none — unlike the sticky `defaultBranches` slot,
+// which is deliberately never lost to an empty resolution.
+test("install: explicitBaseBranches is REPLACED, not unioned — a later call without one drops it", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", explicitBaseBranches: "issue-100" });
+    git(dir, ["checkout", "--quiet", "-b", "issue-100"]);
+    assert.equal(commitAttempt(dir, "on-issue-100-guarded.txt").blocked, true, "the explicit base is guarded while stacked");
+
+    const second = installDefaultBranchGuard({ gitDir, defaultBranches: "main", explicitBaseBranches: null });
+    assert.equal(second.ok, true);
+    assert.deepEqual(second.defaultBranches, ["main"], "the explicit base must be dropped, the sticky default must survive");
+    assert.equal(commitAttempt(dir, "on-issue-100-freed.txt").blocked, false, "issue-100's own commits must pass once the slot is dropped");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // `git symbolic-ref --short` DISAMBIGUATES to "heads/main" when a tag also
 // named "main" exists — comparing that short form against the bare branch
 // name would then never match, letting the commit land while the install

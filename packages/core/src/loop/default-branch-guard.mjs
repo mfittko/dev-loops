@@ -61,29 +61,36 @@ function normalizeBranchList(branches) {
 }
 
 /**
- * @param {"pre-commit"|"pre-push"} hookName
- * @param {string|string[]|null} defaultBranches resolved at INSTALL time.
+ * @param {(typeof GUARDED_HOOKS)[number]} hookName one of GUARDED_HOOKS —
+ *   "pre-commit", "pre-merge-commit", or "pre-push".
+ * @param {string|string[]|null} defaultBranches the STICKY set, resolved at
+ *   INSTALL time and unioned across installs by installDefaultBranchGuard.
  *   Baking them in beats re-deriving in shell: `origin/HEAD` is often absent,
  *   and a main-or-master guess picks a stale local `main` in a `master` repo,
  *   which would guard the wrong branch and leave the real default open.
+ * @param {string|string[]|null} explicitBranches an operator-scoped set
+ *   (e.g. an explicit `--base`) that REPLACES rather than unions across
+ *   installs — see installDefaultBranchGuard's explicitBaseBranches.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
  *   just its installDefaultBranchGuard caller — is the trust boundary and
  *   must refuse on its own rather than rely on every caller re-checking first.
  */
-export function renderGuardHook(hookName, defaultBranches = null) {
+export function renderGuardHook(hookName, defaultBranches = null, explicitBranches = null) {
   if (!GUARDED_HOOKS.includes(hookName)) {
     throw new Error(`renderGuardHook: unknown hook ${JSON.stringify(hookName)}; expected one of ${GUARDED_HOOKS.join(", ")}`);
   }
   const branches = normalizeBranchList(defaultBranches);
-  const unsafe = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
+  const explicits = normalizeBranchList(explicitBranches);
+  const unsafe = [...branches, ...explicits].find((branch) => !SHELL_SAFE_BRANCH.test(branch));
   if (unsafe) {
     throw new Error(
       `default branch ${JSON.stringify(unsafe)} contains characters the generated hook's shell would expand; refusing to render a hook that could execute it`,
     );
   }
   const defaults = branches.join(" ");
+  const explicitDefaults = explicits.join(" ");
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
 # Refuses a ${hookName} that would land on a guarded default branch. Installed
@@ -93,7 +100,8 @@ if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
 defaults="${defaults}"
-if [ -z "$defaults" ]; then
+explicit_defaults="${explicitDefaults}"
+if [ -z "$defaults" ] && [ -z "$explicit_defaults" ]; then
   # Not resolvable at install time; fail OPEN rather than guess a branch and
   # protect the wrong one. The install reports this so it is not silent.
   exit 0
@@ -109,7 +117,7 @@ fi
 # "heads/main" when a tag also named "main" exists, so comparing the short
 # form against a bare branch name would never match and let the commit land.
 branch=$(git symbolic-ref --quiet HEAD 2>/dev/null) || exit 0
-for default in $defaults; do
+for default in $defaults $explicit_defaults; do
   if [ "$branch" = "refs/heads/$default" ]; then
 ${REFUSAL_BODY("commit on the default branch", "default")}
     exit 1
@@ -128,7 +136,7 @@ blocked=0
 blocked_default=""
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ -n "$remote_ref" ] || continue
-  for default in $defaults; do
+  for default in $defaults $explicit_defaults; do
     if [ "$remote_ref" = "refs/heads/$default" ]; then
       blocked=1
       blocked_default="$default"
@@ -150,17 +158,32 @@ exit 0
 // the one thing installDefaultBranchGuard promises never to do.
 const GUARD_MARKER_LINE = new RegExp(`^# ${GUARD_MARKER}$`, "mu");
 
-/** The `defaults="..."` a previously-installed hook of ours baked in. */
-function extractExistingDefaults(contents) {
-  const match = contents.match(/^defaults="([^"]*)"$/mu);
-  return match ? match[1].split(/\s+/u).filter(Boolean) : [];
+/**
+ * Pull a baked-in branch list back out of a line this guard itself wrote
+ * (`defaults="..."` or `explicit_defaults="..."`), re-validating every entry
+ * against SHELL_SAFE_BRANCH rather than trusting the file. A hand-edited (or
+ * otherwise corrupted) baked value would otherwise make renderGuardHook THROW
+ * on re-install — after earlier hook slots may already have been renamed into
+ * place — which breaks the documented "guard.ok: false means nothing was
+ * written" invariant. Dropping the unsafe entry here keeps the contract:
+ * install refuses on genuinely new bad input, and self-heals a tampered file.
+ */
+function extractBakedBranches(contents, varName) {
+  const match = contents.match(new RegExp(`^${varName}="([^"]*)"$`, "mu"));
+  if (!match) return [];
+  return match[1].split(/\s+/u).filter((branch) => branch.length > 0 && SHELL_SAFE_BRANCH.test(branch));
 }
 
 function readHookState(hookPath) {
-  if (!fs.existsSync(hookPath)) return { ours: true, absent: true, existingBranches: [] };
+  if (!fs.existsSync(hookPath)) return { ours: true, absent: true, existingBranches: [], existingExplicitBranches: [] };
   const contents = fs.readFileSync(hookPath, "utf8");
   const ours = GUARD_MARKER_LINE.test(contents);
-  return { ours, absent: false, existingBranches: ours ? extractExistingDefaults(contents) : [] };
+  return {
+    ours,
+    absent: false,
+    existingBranches: ours ? extractBakedBranches(contents, "defaults") : [],
+    existingExplicitBranches: ours ? extractBakedBranches(contents, "explicit_defaults") : [],
+  };
 }
 
 /**
@@ -171,12 +194,29 @@ function readHookState(hookPath) {
  * found and reported as `skipped`, because silently replacing someone's hook is
  * a worse failure than not installing ours.
  *
- * @param {{ gitDir: string, defaultBranches?: string|string[]|null, hooksPathOverride?: string|null }} target
+ * `defaultBranches` and `explicitBaseBranches` are tracked as two SEPARATE
+ * slots baked into every hook, because they need opposite persistence rules:
+ * - `defaultBranches` (a repo's own default) is UNIONED across installs — a
+ *   later call resolving fewer/none (a transient fetch hiccup) must never
+ *   un-guard a branch an earlier install already protected.
+ * - `explicitBaseBranches` (an operator's `--base`, or a configured
+ *   `workflow.baseBranch`) is REPLACED wholesale by whatever this call
+ *   passes — a later call with a different (or no) explicit base must be
+ *   able to replace or drop it, never stack it forever. Unioning this slot
+ *   too would permanently guard every branch anyone ever stacked a worktree
+ *   off, refusing that branch's OWN commits with no way to undo it.
+ *
+ * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null }} target
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.
  */
-export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hooksPathOverride = null }) {
+export function installDefaultBranchGuard({
+  gitDir,
+  defaultBranches = null,
+  explicitBaseBranches = null,
+  hooksPathOverride = null,
+}) {
   const refuse = (reason, skipReason) => ({
     ok: false,
     installed: [],
@@ -238,7 +278,8 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
   }
 
   const branches = normalizeBranchList(defaultBranches);
-  const unsafeBranch = branches.find((branch) => !SHELL_SAFE_BRANCH.test(branch));
+  const explicitBranches = normalizeBranchList(explicitBaseBranches);
+  const unsafeBranch = [...branches, ...explicitBranches].find((branch) => !SHELL_SAFE_BRANCH.test(branch));
 
   if (unsafeBranch) {
     return refuse(
@@ -250,28 +291,44 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
   const hooksDir = path.join(gitDir, "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
 
+  // Read every guarded slot's on-disk state ONCE, up front — not inside the
+  // write loop — so the union below is computed repo-wide. Computing it
+  // per-hook instead let a slot that just became free (a foreign hook
+  // removed) miss what its siblings already had baked in, e.g. a hook
+  // re-installed after its foreign occupant is gone could get written INERT
+  // while its siblings still enforced the real default.
+  const hookStates = GUARDED_HOOKS.map((hook) => ({ hook, hookPath: path.join(hooksDir, hook), ...readHookState(path.join(hooksDir, hook)) }));
+
+  // Sticky slot: union across whatever this call resolved (`branches`) with
+  // what ANY hook of ours already had baked in — never a straight overwrite.
+  // A caller's resolution can legitimately come back empty or narrower on a
+  // later call (a transient fetch/network hiccup, a remote HEAD that briefly
+  // stopped advertising); rewriting to that smaller set would silently
+  // un-guard a branch an earlier install already protected.
+  const stickyBranches = new Set(branches);
+  for (const state of hookStates) {
+    if (!state.ours) continue;
+    for (const branch of state.existingBranches) stickyBranches.add(branch);
+  }
+  const finalStickyBranches = [...stickyBranches];
+
+  // Explicit-base slot: REPLACED wholesale by whatever this call passed, never
+  // unioned with what a PRIOR call baked in — that is what makes the slot
+  // droppable (a later call with a different, or no, explicit base) instead
+  // of accumulating every branch anyone ever stacked a worktree off.
+  const finalExplicitBranches = explicitBranches;
+
   const installed = [];
   const refreshed = [];
   const skipped = [];
-  // Union across whatever this call resolved (`branches`) with what any
-  // already-installed hook of ours had baked in — never a straight overwrite.
-  // A caller's resolution can legitimately come back empty or narrower on a
-  // later call (a transient fetch/network hiccup, a remote HEAD that briefly
-  // stopped advertising); rewriting to that smaller set would silently un-guard
-  // a branch an earlier install already protected while still reporting
-  // ok: true. Reported here (not just `branches`) so the result reflects what
-  // is actually now enforced.
-  const finalBranches = new Set(branches);
+  let anyWritten = false;
 
-  for (const hook of GUARDED_HOOKS) {
-    const hookPath = path.join(hooksDir, hook);
-    const { ours, absent, existingBranches } = readHookState(hookPath);
+  for (const state of hookStates) {
+    const { hook, hookPath, ours, absent } = state;
     if (!ours) {
       skipped.push({ hook, reason: "a pre-existing hook is present and was left untouched" });
       continue;
     }
-    const hookBranches = [...new Set([...branches, ...existingBranches])];
-    for (const branch of hookBranches) finalBranches.add(branch);
     // Write + chmod a temp file in the SAME directory, then rename into place.
     // A direct writeFileSync is visible to git mid-write: the common hooks dir
     // is shared, so a concurrent ensureWorktree call (or a real commit racing
@@ -280,19 +337,31 @@ export function installDefaultBranchGuard({ gitDir, defaultBranches = null, hook
     // rename is atomic, so any reader sees either the old hook or the new one,
     // never a partial one.
     const tmpPath = path.join(hooksDir, `.${hook}.tmp-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(tmpPath, renderGuardHook(hook, hookBranches), { mode: 0o755 });
+    fs.writeFileSync(tmpPath, renderGuardHook(hook, finalStickyBranches, finalExplicitBranches), { mode: 0o755 });
     fs.chmodSync(tmpPath, 0o755); // mode above is umask-limited; force it
     fs.renameSync(tmpPath, hookPath);
+    anyWritten = true;
     (absent ? installed : refreshed).push(hook);
   }
 
-  const reportedBranches = [...finalBranches];
+  // Report only what a hook actually enforces: a branch reads as guarded when
+  // at least one slot was WRITTEN with it, never merely requested. Seeding
+  // this from `branches` before the loop (the prior bug) claimed enforcement
+  // — ok: true, defaultBranches: ["main"] — even when every slot was foreign
+  // and nothing was written.
+  const reportedBranches = anyWritten ? [...new Set([...finalStickyBranches, ...finalExplicitBranches])] : [];
+  let reason;
+  if (reportedBranches.length === 0) {
+    reason = anyWritten
+      ? "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect"
+      : "every guarded hook slot is already occupied by a foreign hook; nothing was written, so nothing is enforced";
+  }
   return {
     ok: true,
     installed,
     refreshed,
     skipped,
     defaultBranches: reportedBranches,
-    ...(reportedBranches.length === 0 ? { reason: "default branch could not be resolved at install time; the hooks are inert rather than guessing which branch to protect" } : {}),
+    ...(reason ? { reason } : {}),
   };
 }
