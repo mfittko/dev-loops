@@ -860,10 +860,14 @@ export async function consolidateGateFanin(options) {
     // down (or, for a missing carriedFromHead specifically, silently minting
     // an unmarked "clean" row indistinguishable from a fresh review).
     validateCarryForwardPlanEntries(planCarried);
-    const planByKey = new Map();
+    // Keyed on the EXACT trimmed angle name, not base+lowercase: the presence
+    // proof means "the plan carried THIS name". A base-collapsed key let a
+    // carried sibling (coverage vs coverage-delta-at-<sha>) vouch for a name
+    // the plan never carried, minting an unreviewed synthetic clean entry.
+    const planByName = new Map();
     for (const entry of planCarried) {
-      const key = baseAngleName(entry.angle.trim()).toLowerCase();
-      if (!planByKey.has(key)) planByKey.set(key, entry);
+      const name = entry.angle.trim();
+      if (!planByName.has(name)) planByName.set(name, entry);
     }
     // Suppression is checked against REAL artifacts ONLY (a fixed snapshot
     // taken before this loop runs), never against a sibling --carried-angles
@@ -886,7 +890,7 @@ export async function consolidateGateFanin(options) {
           : "it has no declared review surface (an unmapped/unknown angle, fail-closed)";
         throw new Error(`--carried-angles names "${angle}", which can never legitimately carry forward: ${why} — resolve-angle-carry-forward.mjs can never put it in plan.carried, so refusing to mint a fabricated clean entry for it (fail-closed)`);
       }
-      const planEntry = planByKey.get(key);
+      const planEntry = planByName.get(trimmedAngle);
       if (!planEntry) {
         throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
       }

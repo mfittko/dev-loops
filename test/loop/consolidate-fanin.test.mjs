@@ -770,6 +770,29 @@ test("consolidateGateFanin refuses a case-drifted configured mandatory angle fro
   }
 });
 
+// Copilot round (exact-name plan proof): a carried sibling sharing the base
+// key (coverage-delta-at-<sha>) must NOT vouch for a name the plan never
+// carried — the presence proof is exact-name, not base-collapsed.
+test("consolidateGateFanin refuses a carried angle whose only plan sibling shares the base key", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["coverage"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage-delta-at-abc1234"])).carried,
+          }),
+          /coverage.*not present in --carry-forward-plan/s,
+        );
+      },
+    );
+  });
+});
+
 // An unmapped/unknown angle name (angleReviewSurface -> { kind: "unknown" })
 // must also be refused — resolve-angle-carry-forward.mjs's own producer never
 // carries such a name either (fail-closed default), so a plan claiming
