@@ -863,7 +863,7 @@ The handoff envelope built for the fan-out advertises the gate's UNTRIERED run-s
 reduction is applied when the per-round context artifact is built, not reflected back into
 the envelope's own advertised angle set.
 
-
+### Fan-out provenance (closing the self-produced-artifact loophole)
 
 `requireFanoutEvidence` is artifact-based: it only proves a `fanout_fanin` verdict
 carries a findings-log ledger. A single agent could self-produce every per-angle

@@ -22,7 +22,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
+import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const DEFAULT_SUITES = ["verify"];
@@ -293,6 +293,10 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // The artifact stamps --head-sha as the reviewers' only integrity handle, so
+    // the suites must provably run in a tree checked out at that head; a stale
+    // cwd would otherwise validate a different tree under this head's stamp.
+    assertWorktreeAtHead(options.headSha, { repoRoot });
     const scripts = await readPackageScripts(repoRoot);
     validateSuiteNames(options.suites, scripts);
 

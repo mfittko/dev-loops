@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,13 @@ import { runNode } from "../_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 
+function git(repoRoot, args) {
+  return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+}
+
+// The CLI attests the worktree is checked out at the declared --head-sha before
+// running any suite, so the fixture must be a real git repo and every CLI
+// invocation must declare that repo's actual HEAD.
 async function makeFixtureRepo() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-"));
   await writeFile(
@@ -32,7 +40,13 @@ async function makeFixtureRepo() {
     }, null, 2),
     "utf8",
   );
-  return repoRoot;
+  git(repoRoot, ["init", "-q"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "fixture"]);
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  return { repoRoot, headSha };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +115,7 @@ test("stripAnsi removes CSI color/style codes", () => {
 // ---------------------------------------------------------------------------
 
 test("readPackageScripts returns the scripts map", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot } = await makeFixtureRepo();
   try {
     const scripts = await readPackageScripts(repoRoot);
     assert.deepEqual(Object.keys(scripts).sort(), ["failing", "passing", "verify"]);
@@ -115,10 +129,10 @@ test("readPackageScripts returns the scripts map", async () => {
 // ---------------------------------------------------------------------------
 
 test("default suite (no --suite given) runs only 'verify' and writes the artifact at buildValidationResultsPath", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
-      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha,
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
 
@@ -127,7 +141,7 @@ test("default suite (no --suite given) runs only 'verify' and writes the artifac
     assert.equal(artifact.suites[0].name, "verify");
 
     const expectedPath = buildValidationResultsPath({
-      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha,
     });
     const onDisk = JSON.parse(await readFile(path.resolve(repoRoot, expectedPath), "utf8"));
     assert.deepEqual(onDisk, artifact);
@@ -137,10 +151,10 @@ test("default suite (no --suite given) runs only 'verify' and writes the artifac
 });
 
 test("artifact shape: no outputSha256/durationMs anywhere, and the documented key set exactly", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
-      "--repo", "owner/repo", "--pr", "2", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "2", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "passing",
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
@@ -160,10 +174,10 @@ test("artifact shape: no outputSha256/durationMs anywhere, and the documented ke
 });
 
 test("allPassed is false when a suite exits non-zero; exit code is still 0", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
-      "--repo", "owner/repo", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "3", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "passing", "--suite", "failing",
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
@@ -181,20 +195,22 @@ test("allPassed is false when a suite exits non-zero; exit code is still 0", asy
 });
 
 test("unknown --suite exits 1 with a named error and executes NOTHING (no artifact, no log files)", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
-      "--repo", "owner/repo", "--pr", "4", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "4", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "verify", "--suite", "does-not-exist",
     ], { cwd: repoRoot });
     assert.equal(code, 1);
     assert.equal(stdout, "");
-    const err = JSON.parse(stderr.trim());
+    // git subprocess warnings (e.g. deprecated-config notices under CI env) may
+    // precede the CLI's own JSON error line on stderr; the contract is the LAST line.
+    const err = JSON.parse(stderr.trim().split("\n").at(-1));
     assert.equal(err.ok, false);
     assert.match(err.error, /Unknown validation suite\(s\).*does-not-exist/);
 
     const expectedPath = buildValidationResultsPath({
-      repo: "owner/repo", pr: 4, gate: "draft_gate", headSha: "abc1234",
+      repo: "owner/repo", pr: 4, gate: "draft_gate", headSha,
     });
     await assert.rejects(readFile(path.resolve(repoRoot, expectedPath)), /ENOENT/);
 
@@ -202,7 +218,7 @@ test("unknown --suite exits 1 with a named error and executes NOTHING (no artifa
     // validation happens before ANY suite executes.
     const verifyLogPath = path.resolve(
       repoRoot,
-      path.join(path.dirname(expectedPath), "draft_gate-abc1234.validation-verify.log"),
+      path.join(path.dirname(expectedPath), `draft_gate-${headSha}.validation-verify.log`),
     );
     await assert.rejects(readFile(verifyLogPath), /ENOENT/);
   } finally {
@@ -211,10 +227,10 @@ test("unknown --suite exits 1 with a named error and executes NOTHING (no artifa
 });
 
 test("per-suite log file is written at the recorded outputPath with the suite's full output", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
-      "--repo", "owner/repo", "--pr", "5", "--gate", "draft_gate", "--head-sha", "abc1234",
+      "--repo", "owner/repo", "--pr", "5", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "passing",
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
@@ -231,9 +247,9 @@ test("per-suite log file is written at the recorded outputPath with the suite's 
 });
 
 test("--jq/--silent behave per the base guarantee", async () => {
-  const repoRoot = await makeFixtureRepo();
+  const { repoRoot, headSha } = await makeFixtureRepo();
   try {
-    const argv = ["--repo", "owner/repo", "--pr", "6", "--gate", "draft_gate", "--head-sha", "abc1234", "--suite", "passing"];
+    const argv = ["--repo", "owner/repo", "--pr", "6", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "passing"];
 
     const jqResult = await runNode(SCRIPT, [...argv, "--jq", ".allPassed"], { cwd: repoRoot });
     assert.equal(jqResult.code, 0, jqResult.stderr);
@@ -247,6 +263,31 @@ test("--jq/--silent behave per the base guarantee", async () => {
     assert.equal(invalidJq.code, 2);
     assert.equal(invalidJq.stdout, "");
     assert.match(invalidJq.stderr, /--jq/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a --head-sha that does not match the worktree HEAD exits 1 and runs nothing", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    const wrongHead = "0123456789abcdef0123456789abcdef01234567";
+    const { code, stdout, stderr } = await runNode(SCRIPT, [
+      "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", wrongHead,
+      "--suite", "passing",
+    ], { cwd: repoRoot });
+    assert.equal(code, 1);
+    assert.equal(stdout, "");
+    // git subprocess warnings (e.g. deprecated-config notices under CI env) may
+    // precede the CLI's own JSON error line on stderr; the contract is the LAST line.
+    const err = JSON.parse(stderr.trim().split("\n").at(-1));
+    assert.equal(err.ok, false);
+    assert.match(err.error, /HEAD/);
+
+    const expectedPath = buildValidationResultsPath({
+      repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: wrongHead,
+    });
+    await assert.rejects(readFile(path.resolve(repoRoot, expectedPath)), /ENOENT/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
