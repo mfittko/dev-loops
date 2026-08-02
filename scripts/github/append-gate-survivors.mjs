@@ -6,7 +6,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveGateFollowUpIssue } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { commentIssue } from "./comment-issue.mjs";
-import { findMarkedComment, listIssueComments, sanitizeInline } from "./post-gate-findings.mjs";
+import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { mapGateToConfigKey } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: append-gate-survivors.mjs --ledger <path> [--follow-up-issue <number>]
@@ -91,7 +91,10 @@ export function renderSurvivorsCommentBody({ repo, pr, gate, headSha, survivors 
   ];
   for (const finding of sortSurvivors(survivors)) {
     const location = Array.isArray(finding.files) && finding.files.length > 0
-      ? finding.files.map((f) => `\`${sanitizeCell(f)}\``).join(", ")
+      // Rendered INSIDE a backtick code span: sanitizeCodeSpan strips literal
+      // backticks so a file ref cannot close the span and inject raw Markdown
+      // into the rest of the row; the pipe encoding keeps the table intact.
+      ? finding.files.map((f) => `\`${sanitizeCodeSpan(f).replace(/\|/g, "&#124;")}\``).join(", ")
       : "—";
     const disposition = finding.disposition ? sanitizeCell(finding.disposition) : "—";
     lines.push(`| ${sanitizeCell(finding.severity)} | ${sanitizeCell(finding.angle)} | ${sanitizeCell(finding.summary)} | ${location} | ${disposition} |`);

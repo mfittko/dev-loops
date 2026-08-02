@@ -145,7 +145,7 @@ Optional:
   --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue.
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
-  --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so pass this flag explicitly there.
+  --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -1201,9 +1201,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  */
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const configKey = mapGateToConfigKey(input.gate);
+  // input.hasFullLabel is an ATTESTATION about the live PR's gate:full label,
+  // not a preference: only an explicit `false` (caller checked the labels and
+  // the label is absent) enables diff-class tier reduction. An omitted or
+  // truthy value fails closed to the untriered set, so a caller that never
+  // looked at the labels can never grant the reduced tier on a labelled PR.
   const resolverResult = await resolveGateAnglesDynamic(input.config, configKey, {
     diff: input.diff,
-    hasFullLabel: input.hasFullLabel === true,
+    hasFullLabel: input.hasFullLabel !== false,
   });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -1579,8 +1584,9 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // The gate:full label must not depend on the operator remembering
       // --full-label: derive it from the live PR when the flag is absent, and
       // fail CLOSED (treat as labelled → untriered set) when the read fails.
-      // --prefix-file mode never touches GitHub, so there the flag remains the
-      // only source and the USAGE says to pass it explicitly.
+      // --prefix-file mode never touches GitHub, so the label CANNOT be
+      // derived there — an omitted flag in that mode also fails closed to the
+      // untriered set rather than silently tier-reducing a labelled PR.
       if (options.fullLabel !== true && !options.prefixFile) {
         try {
           const { pr } = await viewPr(
@@ -1595,6 +1601,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
             `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
           );
         }
+      } else if (options.fullLabel !== true && options.prefixFile) {
+        options.fullLabel = true;
+        process.stderr.write(
+          `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
+        );
       }
       const configKey = mapGateToConfigKey(options.gate);
       const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });

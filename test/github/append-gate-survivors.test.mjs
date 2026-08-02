@@ -151,6 +151,17 @@ test("renderSurvivorsCommentBody renders Location as backtick-wrapped files, or 
   assert.match(body, /\| no files \| — \| — \|/);
 });
 
+test("renderSurvivorsCommentBody strips backticks from file refs so a path cannot close its code span", () => {
+  const survivors = [
+    { severity: "defer", angle: "a", summary: "s", files: ["x`](http://evil) **bold** `y", "a|b.md"] },
+  ];
+  const body = renderSurvivorsCommentBody({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890", survivors });
+  // No stray backtick from the payload survives: each Location entry is exactly
+  // one `...` span with the injected backticks removed and pipes encoded.
+  assert.match(body, /`x\]\(http:\/\/evil\) \*\*bold\*\* y`, `a&#124;b\.md`/);
+  assert.ok(!body.includes("`x`](http://evil)"), "payload backtick must not close the span");
+});
+
 // ---------------------------------------------------------------------------
 // appendGateSurvivors (findings-log ledger -> gh network) — mocked gh
 // ---------------------------------------------------------------------------

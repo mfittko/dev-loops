@@ -251,7 +251,7 @@ export function sanitizeInline(value) {
 // a backtick inside the span would prematurely close it, breaking out into raw
 // Markdown (injection) for the remainder of the list item. Backticks are never
 // meaningful in an angle label or a file path, so dropping them is safe.
-function sanitizeCodeSpan(value) {
+export function sanitizeCodeSpan(value) {
   return sanitizeInline(String(value).replace(/`/g, ""));
 }
 

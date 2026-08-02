@@ -759,6 +759,41 @@ test("buildGateContext applies a matching diff-class tier (tier angles + tier ra
     assert.equal(resolver.dynamicAnglesActive, true);
     assert.deepEqual([...resolver.recommendedAngles].sort(), ["gate-evidence", "link-check"]);
 
+    // hasFullLabel: false is the caller's ATTESTATION that the live PR carries
+    // no gate:full label — the only value that enables tier reduction.
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF_WITH_TEXT,
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        branch: "issue-1550",
+        touchedFiles: ["docs/foo.md", "README.md"],
+        hasFullLabel: false,
+      },
+      { repoRoot },
+    );
+
+    // Tier-reduced set persisted verbatim, mandatory floor included.
+    assert.deepEqual(result.artifact.resolvedAngles, resolver.recommendedAngles);
+    assert.ok(result.artifact.resolvedAngles.includes("gate-evidence"));
+    // Angles outside the tier are dropped with the tier named in the reason.
+    const dropped = result.artifact.rationale.find((r) => r.angle === "coverage");
+    assert.equal(dropped.action, "dropped");
+    assert.match(dropped.reason, /tier:docs-only/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext fails closed to the untriered set when hasFullLabel is omitted (no attestation)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig({
+      tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }],
+    });
     const result = await buildGateContext(
       {
         config,
@@ -772,14 +807,9 @@ test("buildGateContext applies a matching diff-class tier (tier angles + tier ra
       },
       { repoRoot },
     );
-
-    // Tier-reduced set persisted verbatim, mandatory floor included.
-    assert.deepEqual(result.artifact.resolvedAngles, resolver.recommendedAngles);
-    assert.ok(result.artifact.resolvedAngles.includes("gate-evidence"));
-    // Angles outside the tier are dropped with the tier named in the reason.
-    const dropped = result.artifact.rationale.find((r) => r.angle === "coverage");
-    assert.equal(dropped.action, "dropped");
-    assert.match(dropped.reason, /tier:docs-only/);
+    // A caller that never checked the labels must not get the reduced tier:
+    // "docs" survives untriered dynamic resolution but is not in the tier set.
+    assert.ok(result.artifact.resolvedAngles.includes("docs"));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1177,6 +1207,20 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
   }
 });
 
+// The three-angle tier set on this fixture is DOCS_TIER's link-check plus both
+// mandatory floors (gate-evidence from the fixture .devloops, pr-description
+// from the shipped defaults, merged by name). The untriered assertions below
+// must therefore pin an angle the tier set EXCLUDES — a bare size check would
+// also hold for the tier set itself and pin nothing.
+const TIERED_ANGLE_SET = ["gate-evidence", "link-check", "pr-description"];
+
+function assertUntriered(artifact, message) {
+  assert.notDeepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET, message);
+  // "docs" survives dynamic subtractive resolution for a docs-only diff but is
+  // not in the tier set, so its presence proves the tier was NOT applied.
+  assert.ok(artifact.resolvedAngles.includes("docs"), `${message}: expected a non-tier angle (docs) in ${JSON.stringify(artifact.resolvedAngles)}`);
+}
+
 test("CLI derives gate:full from live PR labels: unlabelled PR applies the tier, labelled PR gets the untriered set", async () => {
   for (const [labels, expectTier] of [[[], true], [[{ name: "gate:full" }], false]]) {
     const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
@@ -1192,11 +1236,9 @@ test("CLI derives gate:full from live PR labels: unlabelled PR applies the tier,
       }, { repoRoot });
 
       if (expectTier) {
-        // Tier angles plus BOTH mandatory floors: gate-evidence from the fixture
-        // .devloops, pr-description from the shipped defaults (merged by name).
-        assert.deepEqual([...artifact.resolvedAngles].sort(), ["gate-evidence", "link-check", "pr-description"]);
+        assert.deepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET);
       } else {
-        assert.ok(artifact.resolvedAngles.length > 2, "gate:full label yields the untriered set");
+        assertUntriered(artifact, "gate:full label yields the untriered set");
       }
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
@@ -1216,7 +1258,7 @@ test("CLI fails closed to the untriered set when the labels read errors", async 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 61, gate: "draft_gate", headSha,
     }, { repoRoot });
-    assert.ok(artifact.resolvedAngles.length > 2, "failed labels read must not grant the reduced tier");
+    assertUntriered(artifact, "failed labels read must not grant the reduced tier");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
