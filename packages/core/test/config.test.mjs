@@ -3965,6 +3965,16 @@ describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
     assert.equal(result.reason, "config_source_delta");
   });
 
+  test("config_source_delta: the shipped defaults file (the layer that ships the angle pool) fails closed too", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { kinds: ["docs", "config"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", {
+      changedFiles: ["packages/core/src/config/extension-defaults.yaml"],
+      filesChanged: 1,
+      linesChanged: 5,
+    });
+    assert.equal(result.reason, "config_source_delta");
+  });
+
   test("unclassifiable_file: an unknown-kind changed file fails closed", () => {
     const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
     const result = resolveGateTier(config, "draft", { changedFiles: ["assets/logo.png"], filesChanged: 1, linesChanged: 5 });

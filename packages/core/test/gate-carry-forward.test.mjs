@@ -109,10 +109,10 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   });
 
   test("isDevLoopConfigSourcePath matches the config-source family and nothing else", () => {
-    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml"]) {
+    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml", "packages/core/src/config/extension-defaults.yaml"]) {
       assert.equal(isDevLoopConfigSourcePath(p), true, p);
     }
-    for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", null]) {
+    for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", "packages/core/src/config/config.mjs", null]) {
       assert.equal(isDevLoopConfigSourcePath(p), false, String(p));
     }
   });
