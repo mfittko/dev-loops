@@ -280,6 +280,26 @@ test("install is idempotent — a re-run refreshes its own hooks rather than dup
   }
 });
 
+test("a foreign hook that merely MENTIONS the marker is still preserved", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    const hooksDir = path.join(gitDir, "hooks");
+    fs.mkdirSync(hooksDir, { recursive: true });
+    // Ownership must key on the marker as its own line, not on the substring:
+    // a wrapper that names the guard in prose is somebody else's file.
+    const wrapper = `#!/bin/sh\n# wrapper that chains to ${GUARD_MARKER} when present\nexit 0\n`;
+    fs.writeFileSync(path.join(hooksDir, "pre-commit"), wrapper, { mode: 0o755 });
+
+    const result = installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    assert.deepEqual(result.skipped.map((entry) => entry.hook), ["pre-commit"]);
+    assert.ok(!result.installed.includes("pre-commit"));
+    assert.ok(!(result.refreshed ?? []).includes("pre-commit"), "a foreign file is never reported as refreshed");
+    assert.equal(fs.readFileSync(path.join(hooksDir, "pre-commit"), "utf8"), wrapper, "left byte-identical");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a pre-existing foreign hook is preserved, never silently clobbered", async () => {
   const { dir, gitDir } = await repoFixture();
   try {

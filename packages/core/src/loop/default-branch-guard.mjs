@@ -143,6 +143,13 @@ exit 0
 `;
 }
 
+// Ownership is decided by the marker on a line of its OWN, exactly as the
+// renderer emits it. A bare substring test would claim any file that merely
+// mentions the sentinel — a user wrapper commented "# chains to
+// dev-loops:default-branch-guard" reads as ours and gets overwritten, which is
+// the one thing installDefaultBranchGuard promises never to do.
+const GUARD_MARKER_LINE = new RegExp(`^# ${GUARD_MARKER}$`, "mu");
+
 /** The `defaults="..."` a previously-installed hook of ours baked in. */
 function extractExistingDefaults(contents) {
   const match = contents.match(/^defaults="([^"]*)"$/mu);
@@ -152,7 +159,7 @@ function extractExistingDefaults(contents) {
 function readHookState(hookPath) {
   if (!fs.existsSync(hookPath)) return { ours: true, absent: true, existingBranches: [] };
   const contents = fs.readFileSync(hookPath, "utf8");
-  const ours = contents.includes(GUARD_MARKER);
+  const ours = GUARD_MARKER_LINE.test(contents);
   return { ours, absent: false, existingBranches: ours ? extractExistingDefaults(contents) : [] };
 }
 
