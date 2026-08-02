@@ -285,7 +285,14 @@ if (apiPath === "repos/owner/repo/issues/55/timeline?per_page=100") { out([]); p
 if (apiPath === "repos/owner/repo/pulls/55/comments?per_page=100") { out([]); process.exit(0); }
 if (apiPath === "repos/owner/repo/pulls/55/commits?per_page=100") { out([]); process.exit(0); }
 if (args[0] === "api" && args[1] === "graphql") {
-  out({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "cursor-1" } } } } } });
+  // Two-page walk: proves the fetcher paginates to completion (the old
+  // single-shot code would have stopped after page 1 and, before the
+  // pagination change, reported review_threads_has_next_page as degraded).
+  if (args.some((a) => a === "after=cursor-1")) {
+    out({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+  } else {
+    out({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "cursor-1" } } } } } });
+  }
   process.exit(0);
 }
 process.stderr.write("unexpected gh args: " + args.join(" ") + "\\n");
@@ -304,7 +311,9 @@ process.exit(1);
     const output = JSON.parse(result.stdout);
     assert.equal(output.loopIterations.available, true);
     assert.equal(output.loopIterations.degraded, true);
-    assert.deepEqual(output.loopIterations.degradedReasons, ["reviews_page_cap", "review_threads_has_next_page"]);
+    // review_threads_has_next_page is gone: the thread fetch paginates the full
+    // connection, so review threads can no longer be a truncated source.
+    assert.deepEqual(output.loopIterations.degradedReasons, ["reviews_page_cap"]);
   });
 });
 

@@ -54,11 +54,12 @@ Supported inputs:
 
 Optional:
 - `--output <path>` writes the same success JSON emitted on stdout
+- `--unresolved --bodies` (only valid together) selects the fix-loop working-set view: only unresolved threads, each as `{ threadId, path, line, isOutdated, bodies: [...] }` with comment bodies joined in thread order; the `comments[]` array is absent in this mode
 
 Contract:
-- live capture loads review threads from all reviewers; no author filter is applied
+- live capture loads review threads from all reviewers; no author filter is applied, and pagination walks past 100 threads
 
-Success output shape:
+Success output shape (default mode):
 - `{ "ok": true, "source": { ... }, "summary": { ... }, "threads": [...], "comments": [...] }`
 - normalized `comments[]` preserve both the GraphQL comment node id (`id`) and the REST-safe numeric review-comment id (`databaseId`) when available
 - normalized `threads[]` include `commentDatabaseIds` and `actionableCommentDatabaseIds` so follow-up helpers can pair `--comment-id` and `--thread-id` from the same fresh snapshot

@@ -177,7 +177,7 @@ Preferred approach:
 - after a successful fix / reply-resolve / re-request cycle, returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion
 - dispatch fix findings to the `fixer` agent; do not run inline fix passes in-watcher
 - do not report completion while unresolved Copilot feedback remains
-- once a watch/probe settles, do not parse its raw output: re-read via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>` and `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` — inline interpreters are barred by `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../docs/copilot-loop-operations.md)
+- once a watch/probe settles, do not parse its raw output: re-read via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`, and read the unresolved working set via `capture-review-threads.mjs --repo <owner/name> --pr <number> --unresolved --bodies` (joined bodies; the canonical re-entry read) or `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` (thread/comment ids for reply-resolve) — inline interpreters are barred by `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../docs/copilot-loop-operations.md)
 
 ### Canonical async dispatch wording
 
@@ -206,6 +206,7 @@ This step covers four responsibilities: the draft gate right before `gh pr ready
 When unresolved feedback exists, use a narrow follow-up loop:
 
 1. inspect unresolved comments/threads and failing checks
+   - the canonical loop re-entry read for the working set (all currently-unresolved thread bodies, e.g. after a fix push, a resolve pass, or a crash) is `scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number> --unresolved --bodies` — it emits only unresolved threads as `{ threadId, path, line, isOutdated, bodies }` with the comment bodies already joined, so no capture-then-parse step (and no inline interpreter) is ever needed to read them
    - enumerate unresolved threads (with the thread/comment ids the reply-resolve helpers below need) via `scripts/github/list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` rather than a hand-written `gh api graphql` query
 2. before the first local file write in each fixer pass on a Copilot-assigned PR, run `node <resolved-skill-scripts>/loop/pre-write-remote-freshness-guard.mjs --branch <headRefName>` as a required fail-closed guard
    - source `<headRefName>` from authoritative PR state (`headRefName`), not from a local branch guess
