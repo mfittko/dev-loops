@@ -579,7 +579,7 @@ See [Stop Conditions](../docs/stop-conditions.md). Local-specific stops: phase c
 ## Commit policy
 
 - Do not commit speculative work or before the relevant validation for that slice passes.
-- Immediately before every `git add && git commit` sequence, assert branch identity with `git branch --show-current` and stop if it does not match the intended local working branch.
+- Immediately before every `git add && git commit` sequence, assert branch identity with `git branch --show-current` and stop if it does not match the intended local working branch. `git branch --show-current` is itself cwd-relative, so it only catches the mismatch if the shell's cwd is right; `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) additionally mandates addressing the tree explicitly (`git -C <absolute-worktree-path> …`) for the mutating commands themselves, which is what catches a silently-reset cwd rather than just a mismatched one.
 - Commit only when the coordination/main agent has decided the slice or phase is ready. **Exception:** in non-interactive subagent sessions, commit authorization is implicit — the subagent was dispatched to implement and must commit before exiting, enforced by [LOCAL-COMMIT-BEFORE-EXIT](#implementation-loop-for-the-phase) (implementation loop step 12; `git status --porcelain` must be empty before the session terminates).
 - If commit/merge authorization has not yet been given, do not call the phase `completed`; call it `awaiting-finalization` instead.
 

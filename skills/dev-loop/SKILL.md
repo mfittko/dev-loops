@@ -53,6 +53,8 @@ Resolve authoritative state via the startup resolver (`node <dev-loops-package-r
 
 **Worktree cwd (mandatory):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
 
+A shell's working directory can reset to the primary checkout **silently** — after a subprocess run, or when a `cd` inside a compound command does not persist into the next one. A relative-path `git add && git commit && git push` that runs after such a reset executes in the primary checkout on the default branch, landing the change straight on the remote and skipping the PR flow. `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) is the owned rule mandating `git -C <absolute-worktree-path> …` and absolute paths for exactly this reason — every mutating flow follows it, not just this skill's own. `ensure-worktree` best-effort installs `pre-commit`/`pre-merge-commit`/`pre-push` guards as defense-in-depth against the same slip — it is not a substitute; see [Default-branch guard](../docs/worktree-guidance.md#default-branch-guard) for the guard's behavior, its no-op paths, and the `DEVLOOPS_ALLOW_MAIN=1` override.
+
 **Worktree fetch (mandatory):** Always run `git fetch origin` before creating or reusing any worktree.
 
 ### Resume from existing loop state
