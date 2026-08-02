@@ -1,16 +1,62 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
   consolidateGateFanin,
+  fitsRenderBudget,
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
-import { normalizeStructuredFindings } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { runNode } from "../_helpers.mjs";
+
+// Drive the REAL renderer upsert-checkpoint-verdict.mjs itself uses — the
+// structured findings sub-block is what enforcePostedCommentLimit bounds at
+// 2000 chars (and throws above), not the whole comment body (which also
+// carries the header/digest/next-action text and is always > 2000 chars for
+// a wide round). "renders" therefore means "does not throw", matching this
+// file's own pre-existing convention (see the "large fan-ins are budgeted…"
+// test below).
+function assertRendersWithoutThrowing(findingsJson) {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    verdict: "findings_present",
+    findingsSummary: "digest",
+    nextAction: "fix",
+    blockCleanOnFindingSeverities: ["must-fix"],
+    structuredFindings: findingsJson,
+  });
+  assert.ok(typeof body === "string" && body.length > 0);
+}
+
+// Shared wide-angle fixture: `angleCount` angles, each carrying
+// `findingsPerAngle` findings whose summary is padded well past the
+// render-budget shrink floor — used by every test below that needs a round
+// large enough to force some degree of budget degradation. The exact
+// generated shape (padding length, filename pattern) is calibrated against
+// the real renderer (see fitsRenderBudget); retune HERE (once) if the
+// marker/renderer text changes, rather than in each call site.
+function wideAngleFiles({ angleCount, findingsPerAngle = 30, severity = "worth-fixing-now" }) {
+  const files = {};
+  for (let i = 0; i < angleCount; i++) {
+    files[`angle${i}.json`] = {
+      angle: `angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: findingsPerAngle }, (_, j) => ({
+        severity,
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  return files;
+}
 
 async function withFindingsDir(files, fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-"));
@@ -47,6 +93,70 @@ test("parseConsolidateFaninCliArgs rejects a whitespace-only --ledger-out value"
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "   "]),
     /non-empty path/,
+  );
+});
+
+// --out and --ledger-out must never resolve to the same path: the withheld
+// tier writes --ledger-out first, then rm()s --out, so an identical path
+// would delete the ledger it just wrote while still returning ok:true — a
+// success envelope over zero durable evidence, the exact class of failure
+// this CLI exists to eliminate. Compared as RESOLVED paths, not raw strings,
+// so "./out.json" vs "out.json" is caught too.
+test("parseConsolidateFaninCliArgs rejects --out and --ledger-out resolving to the same path (#1513)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/same.json", "--ledger-out", "/tmp/same.json"]),
+    /--out and --ledger-out must not resolve to the same path/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --out and --ledger-out that resolve to the same path via different spellings (#1513)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/dir/../same.json", "--ledger-out", "/tmp/same.json"]),
+    /--out and --ledger-out must not resolve to the same path/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs allows distinct --out/--ledger-out paths", () => {
+  assert.doesNotThrow(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/out.json", "--ledger-out", "/tmp/ledger.json"]),
+  );
+});
+
+// --out/--ledger-out must not resolve to a direct TOP-LEVEL sibling of
+// --findings-dir's own artifacts: the withheld tier rm()s --out outright
+// (deleting a real artifact if it were aliased in), and a .json write
+// directly under --findings-dir would be picked up as a per-angle findings
+// artifact by the NEXT consolidation of that same directory.
+test("parseConsolidateFaninCliArgs rejects --out resolving to a direct top-level sibling inside --findings-dir", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x/out.json"]),
+    /--out must not resolve to a direct sibling of the artifacts inside --findings-dir/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --ledger-out resolving to a direct top-level sibling inside --findings-dir", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "/tmp/x/ledger.json"]),
+    /--ledger-out must not resolve to a direct sibling of the artifacts inside --findings-dir/,
+  );
+});
+
+// A same-named SIBLING directory ("/tmp/x-2") must not be mistaken for a
+// path inside "/tmp/x" — the containment check compares the resolved parent
+// directory exactly, not a bare string-prefix match.
+test("parseConsolidateFaninCliArgs allows --out in a sibling directory that merely shares --findings-dir's name as a prefix", () => {
+  assert.doesNotThrow(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x-2/out.json"]),
+  );
+});
+
+// Artifact discovery only reads TOP-LEVEL *.json entries in --findings-dir
+// (never recursive), so a path in a SUBdirectory of --findings-dir can never
+// be re-read as a per-angle artifact and must stay allowed — this is exactly
+// the shape this module's own tests use for --out/--ledger-out.
+test("parseConsolidateFaninCliArgs allows --out/--ledger-out in a subdirectory of --findings-dir", () => {
+  assert.doesNotThrow(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--out", "/tmp/x/out/findings.json", "--ledger-out", "/tmp/x/out/ledger.json"]),
   );
 });
 
@@ -120,6 +230,34 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
   );
 });
 
+// Regression: the under-budget result shape is unchanged by the render-budget
+// split — same keys, same values, and critically NO "commentBudgetExceeded"
+// field at all (not even `false`) for a round that fits. Asserted against the
+// exact literal shape rather than a partial match, so an accidental shape
+// change on the unaffected path fails this test.
+test("consolidateGateFanin under-budget output is byte-identical to the pre-split shape (no commentBudgetExceeded field)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.deepEqual(Object.keys(result), ["ok", "angles", "findingsJson", "findings", "severityCounts", "overallVerdict"]);
+      assert.equal("commentBudgetExceeded" in result, false);
+      assert.deepEqual(result, {
+        ok: true,
+        angles: [{ angle: "scope", verdict: "findings_present", findingCount: 1 }],
+        findingsJson: [{
+          angle: "scope",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
+        }],
+        findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, defer: 0 },
+        overallVerdict: "findings_present",
+      });
+    },
+  );
+});
+
 test("consolidateGateFanin writes --out as the nested findingsJson shape", async () => {
   await withFindingsDir(
     {
@@ -150,6 +288,50 @@ test("consolidateGateFanin writes --ledger-out as the flat findings shape (the -
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
       assert.deepEqual(written, result.findings);
       assert.equal(result.findings.length, 1);
+    },
+  );
+});
+
+// parseConsolidateFaninCliArgs's --out/--ledger-out same-path guard is a
+// STRING comparison over the CLI's own argv, so it protects only callers that
+// go through the parser. consolidateGateFanin is exported and called directly
+// (as this test file does throughout), so the shared function needs its own
+// identity check right before the destructive --out rm/writeFile — otherwise
+// a programmatic caller, or a same-file ALIAS (case-only spelling on a
+// case-insensitive filesystem, or a symlink) that the parser's string compare
+// cannot catch, still writes the ledger and then destroys it.
+test("consolidateGateFanin rejects --out === --ledger-out even when the CLI parser is bypassed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const samePath = path.join(dir, "out", "same.json");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, out: samePath, ledgerOut: samePath }),
+        /resolve to the same file/,
+      );
+      // The ledger must still be intact on disk, not deleted by the rm() the
+      // guard exists to prevent from ever running against it.
+      const written = JSON.parse(await readFile(samePath, "utf8"));
+      assert.equal(written.length, 1);
+    },
+  );
+});
+
+test("consolidateGateFanin rejects a --out that is a symlink alias of --ledger-out (same file, different spelling)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      const outAlias = path.join(dir, "aliases", "out-alias.json");
+      await mkdir(path.dirname(ledgerPath), { recursive: true });
+      await mkdir(path.dirname(outAlias), { recursive: true });
+      await symlink(ledgerPath, outAlias);
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, out: outAlias, ledgerOut: ledgerPath }),
+        /resolve to the same file/,
+      );
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.equal(written.length, 1);
     },
   );
 });
@@ -197,6 +379,34 @@ test("a finding summary/recommendation over 2000 chars is truncated with a plain
       const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
       assert.equal(nested.recommendation.length, 2000);
       assert.ok(nested.recommendation.endsWith(" …"));
+    },
+  );
+});
+
+// Regression (renderer-security, PR#1513 gate review): unlike summary/
+// recommendation, `file` was previously copied through verbatim with no
+// length bound — a path reference never legitimately needs anywhere near
+// MAX_FINDING_TEXT_LENGTH, and fitFindingsToRenderBudget only shrinks
+// summary, so an oversized `file` could not be compressed and would force
+// even a short, real finding into the marker/withheld tiers.
+test("a finding's oversized file reference is truncated with a plain ellipsis suffix, never left unbounded", async () => {
+  const longFile = "f".repeat(400);
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "short", file: longFile }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      const flat = result.findings[0];
+      assert.equal(flat.files[0].length, 300);
+      assert.ok(flat.files[0].endsWith(" …"));
+      const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
+      assert.equal(nested.file.length, 300);
+      assert.ok(nested.file.endsWith(" …"));
     },
   );
 });
@@ -674,6 +884,22 @@ test("--out rejects a whitespace-only value at parse time", () => {
   );
 });
 
+// fitsRenderBudget must classify "over budget" ONLY by the length-exceeded
+// throw (enforcePostedCommentLimit's "... exceeds N chars ..."); a shape
+// error from normalizeStructuredFindings (producer drift: unrecognized
+// items, mixed nested+flat) is a different failure class entirely and must
+// propagate, not be silently reported as an over-budget round — which would
+// otherwise degrade a malformed-input defect to a withheld/marker-collapsed
+// round that still exits 0 (see buildBudgetMarkedFindingsJson's tier-4
+// (withheld) --out deletion).
+test("fitsRenderBudget rethrows a non-length-bound error instead of misreporting it as over budget", () => {
+  const shapeInvalid = [
+    { angle: "correctness", verdict: "findings_present", findings: [] },
+    { severity: "must-fix", summary: "a flat finding mixed into a per-angle array" },
+  ];
+  assert.throws(() => fitsRenderBudget(shapeInvalid), /mixes per-angle entries/);
+});
+
 // The consumer bounds the WHOLE rendered --findings-json block at 2000 chars
 // and fails closed above it — so a large fan-in must be shrunk as a whole,
 // not just per field. Prove acceptance by driving the REAL renderer.
@@ -691,6 +917,19 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
   }
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir });
+    // This is the SHRINK-AND-FIT tier (summaries evenly shrunk, never marked):
+    // the round fits after shrinking, so it must be indistinguishable from an
+    // under-budget round — no "commentBudgetExceeded" flag, and every angle
+    // keeps its real (truncated) summary text rather than an "omitted ... see
+    // ledger" marker. A regression that bypasses the shrink loop and degrades
+    // straight to markers would also render without throwing, so those two
+    // properties (not "does not throw") are what actually pin this tier.
+    assert.equal(result.commentBudgetExceeded, undefined);
+    for (const [i, section] of result.findingsJson.entries()) {
+      const summary = section.findings[0].summary;
+      assert.ok(summary.startsWith(`finding ${i}: `), `angle-${i} must keep its real summary text, got: ${summary}`);
+      assert.ok(!/omitted.*see (the disposition )?ledger/.test(summary), `angle-${i} must not be marker-collapsed, got: ${summary}`);
+    }
     // Must not throw the fail-closed length error:
     const body = renderGateReviewCommentBody({
       gate: "pre_approval_gate",
@@ -705,24 +944,674 @@ test("large fan-ins are budgeted so upsert-verdict's whole-block render bound ac
   });
 });
 
-test("a fan-in too large to render at minimum summary length fails closed", async () => {
-  const files = {};
-  for (let i = 0; i < 8; i++) {
-    files[`angle${i}.json`] = {
-      angle: `angle-${i}`,
+// Regression for a real reported false-negative: many SMALL findings, each
+// carrying "file" + "line" + "disposition", whose per-finding decoration
+// (path length, digits(line), the disposition wrap) an arithmetic size
+// estimate can under-count without reproducing the renderer's exact
+// formatting. Fit is now measured by actually rendering the candidate (see
+// fitsRenderBudget), so this can no longer under-count: whatever
+// "commentBudgetExceeded" says must match what the real renderer accepts.
+// Reverting to an estimate-based check (even a well-tuned one) risks
+// silently reintroducing this exact false negative.
+// Regression for the estimate-vs-render false-negative defect class itself
+// (not just "is the final shape renderable" — a fixture that resolves to the
+// marker tier under BOTH an arithmetic estimate and the real renderer never
+// exercises the discriminating branch). This fixture is a proven false
+// negative under the PRIOR arithmetic estimator (estimateRenderSize, 1800
+// budget from 068bc979): 34 must-fix findings with a trivial 3-char summary
+// ("aaa"), short file ("src/a.mjs") and line (100+j) estimate at 1799 chars
+// (fits comfortably under 1800) but the REAL renderer's structured-findings
+// block is over 2000 chars (per-finding decoration — severity/file/line/
+// disposition prefixes — not summary length, pushes it over) and throws.
+// The prior estimator would therefore have shipped this round's 34 RAW
+// findings unmarked with ok:true and no commentBudgetExceeded — exactly the
+// defect this render-based rewrite exists to eliminate. Reverting
+// fitsRenderBudget to that estimate fails the first assertion below (it
+// would report commentBudgetExceeded as falsy).
+test("a false-negative-under-estimation fixture is correctly flagged over budget by the real renderer", async () => {
+  const FINDINGS_PER_ANGLE = 34;
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: "aaa",
+      file: "src/a.mjs",
+      line: 100 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.commentBudgetExceeded, true);
+    // The marked shape this CLI actually emits must render.
+    assertRendersWithoutThrowing(result.findingsJson);
+    // Prove the RAW (unmarked) shape — what an arithmetic estimate would have
+    // shipped unmarked, since it estimates this fixture as under budget —
+    // really is unrenderable, pinning the false-negative reproduction itself.
+    const rawFindingsJson = [{
+      angle: "angle-a",
       verdict: "findings_present",
-      findings: Array.from({ length: 30 }, (_, j) => ({
-        severity: "worth-fixing-now",
-        summary: `finding ${i}-${j} ${"y".repeat(200)}`,
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "must-fix",
+        summary: "aaa",
+        disposition: "accepted-for-fix",
+        file: "src/a.mjs",
+        line: 100 + j,
+      })),
+    }];
+    assert.throws(
+      () => renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+        verdict: "findings_present",
+        findingsSummary: "digest",
+        nextAction: "fix",
+        blockCleanOnFindingSeverities: ["must-fix"],
+        structuredFindings: rawFindingsJson,
+      }),
+      /exceeds \d+ chars/,
+    );
+  });
+});
+
+// A comfortably under-budget round (well under half the render bound) must
+// stay raw/unmarked (commentBudgetExceeded absent) and render as-is.
+test("a comfortably under-budget round stays raw/unmarked and renders", async () => {
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: 10 }, (_, j) => ({
+      severity: "must-fix",
+      summary: `tiny finding ${j}`,
+      file: `src/module/nested/path/file${j}.mjs`,
+      line: 123 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.commentBudgetExceeded, undefined);
+    assert.equal(result.findingsJson[0].findings.length, 10);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Near-boundary UNDER-budget companion to the false-negative fixture above: 31
+// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line)
+// renders at 1954 chars — just 46 chars of headroom, since one more (32)
+// is exactly what tips it to 2016 and throws (measured against the real
+// renderer; see fitsRenderBudget). A round that really does fit this close to
+// the bound must still stay raw/unmarked (commentBudgetExceeded absent) and
+// render as-is — unconditionally, not only "if the marker path wasn't taken"
+// — so a reversion that starts marking everything, or an over-conservative
+// estimate, fails this half of the pair.
+test("a near-boundary under-budget round (one finding short of the false-negative fixture's throw) stays raw/unmarked and renders", async () => {
+  const FINDINGS_PER_ANGLE = 31;
+  const files = { "angle-a.json": {
+    angle: "angle-a",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: "aaa",
+      file: "src/a.mjs",
+      line: 100 + j,
+    })),
+  } };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir });
+    assert.equal(result.commentBudgetExceeded, undefined);
+    assert.equal(result.findingsJson[0].findings.length, FINDINGS_PER_ANGLE);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Regression for the fan-in disposition ledger vs. gate-comment render budget
+// split: a round too large to render even at minimum summary length must
+// still write a COMPLETE --ledger-out and succeed (ok: true, no throw — the
+// CLI's exit code is derived from result.ok, so this also proves exit 0); each
+// angle's findings in --out are replaced with one budget-marker finding, but
+// the REAL angle set and each angle's REAL verdict survive — a mandatory
+// angle (e.g. draft_gate's "pr-description") must still be present and no
+// foreign angle name is introduced, or upsert-checkpoint-verdict.mjs's
+// fanout_fanin mandatory-angle/pool validation rejects the whole verdict
+// (the exact failure this split exists to remove). One angle carries MIXED
+// severities so the highest-wins marker severity/disposition derivation is
+// actually pinned (a single-severity fixture leaves it unverified). Proven
+// against the REAL normalizeStructuredFindings/checkFanoutAngleCoverage/
+// renderGateReviewCommentBody functions upsert-checkpoint-verdict.mjs itself
+// uses, not a re-implementation. Reverting the fix (throwing, collapsing to
+// one foreign section, or dropping "disposition") fails this test.
+test("a fan-in too large to render at minimum summary length still writes a complete ledger and exits 0, preserving the real angle set/verdicts/renderability", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const angleNames = ["scope", "coverage", "correctness", "ci-guard", "contract-surface", "link-check", "config-drift", "gate-evidence"];
+  const MIXED_ANGLE = "scope"; // 28 worth-fixing-now + 1 must-fix + 1 defer
+  const PINNED_SUMMARY = "unshrunk-marker-59f2 the exact original finding text must survive in the ledger";
+  const files = { "pr-description.json": { angle: "pr-description", verdict: "clean", findings: [] } };
+  for (const [i, angle] of angleNames.entries()) {
+    const findings = Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "worth-fixing-now",
+      summary: j === 0 && angle === MIXED_ANGLE ? PINNED_SUMMARY : `finding ${angle}-${j} ${"y".repeat(200)}`,
+      file: `src/f${angle}.mjs`,
+      line: j + 1,
+    }));
+    if (angle === MIXED_ANGLE) {
+      findings[1] = { ...findings[1], severity: "must-fix" };
+      findings[2] = { ...findings[2], severity: "defer" };
+    }
+    files[`angle${i}.json`] = { angle, verdict: "findings_present", findings };
+  }
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    // No --gate: keep consolidateFanin's own default blockCleanOnFindingSeverities
+    // (["must-fix"]) so the disposition assertions below (worth-fixing-now →
+    // deferred, must-fix → accepted-for-fix) are not entangled with this
+    // worktree's own repo config. Mandatory-angle/pool coverage is proven
+    // separately below via a direct checkFanoutAngleCoverage call.
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+
+    // Succeeds (no throw) with the fail-closed signal replaced by an
+    // explicit flag — this is what makes the CLI exit 0.
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    // The ledger is COMPLETE: every finding from every angle, unaffected by
+    // the comment budget — including the exact, un-shrunk summary TEXT (not
+    // just a count) for a specific finding.
+    const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
+    assert.equal(result.findings.length, totalFindings);
+    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, defer: 1 });
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.deepEqual(writtenLedger, result.findings);
+    assert.equal(writtenLedger.length, totalFindings);
+    const pinnedLedgerEntry = writtenLedger.find((f) => f.summary === PINNED_SUMMARY);
+    assert.ok(pinnedLedgerEntry, "the ledger must carry the exact, un-shrunk original summary text");
+    assert.equal(pinnedLedgerEntry.angle, MIXED_ANGLE);
+
+    // --out keeps the REAL angle set (mandatory "pr-description" included,
+    // no foreign angle) and each angle's REAL verdict — only the findings
+    // are collapsed to one budget-marker finding per angle, which still
+    // carries a severity-derived "disposition" like every other findingsJson
+    // finding.
+    const writtenOut = JSON.parse(await readFile(outPath, "utf8"));
+    assert.deepEqual(writtenOut, result.findingsJson);
+    assert.equal(writtenOut.length, angleNames.length + 1);
+    const byAngle = new Map(writtenOut.map((a) => [a.angle, a]));
+    assert.ok(byAngle.has("pr-description"));
+    assert.deepEqual(byAngle.get("pr-description"), { angle: "pr-description", verdict: "clean", findings: [] });
+    for (const angle of angleNames) {
+      const section = byAngle.get(angle);
+      assert.ok(section, `expected angle "${angle}" to survive budget marking`);
+      assert.equal(section.verdict, "findings_present"); // real verdict, not collapsed
+      assert.equal(section.findings.length, 1);
+      const marker = section.findings[0].summary;
+      assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
+      assert.match(marker, /see the disposition ledger/);
+      if (angle === MIXED_ANGLE) {
+        // Highest-severity-wins: must-fix beats worth-fixing-now/defer, and
+        // the marker's own disposition matches that severity's derivation
+        // (accepted-for-fix — the default blockCleanOnFindingSeverities is
+        // ["must-fix"]).
+        assert.match(marker, /must-fix: 1/);
+        assert.match(marker, /worth-fixing-now: 28/);
+        assert.match(marker, /defer: 1/);
+        assert.equal(section.findings[0].severity, "must-fix");
+        assert.equal(section.findings[0].disposition, "accepted-for-fix");
+      } else {
+        assert.match(marker, /must-fix: 0/);
+        assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
+        assert.match(marker, /defer: 0/);
+        assert.equal(section.findings[0].severity, "worth-fixing-now");
+        assert.equal(section.findings[0].disposition, "deferred");
+      }
+    }
+
+    // result.angles is the compact per-angle envelope surfaced on stdout
+    // (never marker-collapsed) — it must keep reporting each angle's REAL
+    // pre-marking findingCount even though --out/--ledger-out's own
+    // findingsJson has collapsed every angle to one marker finding. A
+    // regression that derived `angles` from the marked findingsJson instead
+    // of the raw pre-marking artifacts would silently report findingCount: 1
+    // for every angle here.
+    const anglesByName = new Map(result.angles.map((a) => [a.angle, a]));
+    assert.deepEqual(anglesByName.get("pr-description"), { angle: "pr-description", verdict: "clean", findingCount: 0 });
+    for (const angle of angleNames) {
+      assert.deepEqual(
+        anglesByName.get(angle),
+        { angle, verdict: "findings_present", findingCount: FINDINGS_PER_ANGLE },
+      );
+    }
+
+    // Run the REAL upsert-checkpoint-verdict.mjs validation/render functions
+    // (not a re-implementation): the marked shape must still normalize,
+    // cover a fanout_fanin gate's mandatory angles/pool with no foreign
+    // angle, AND actually render without the renderer's own 2000-char
+    // structured-block bound rejecting it.
+    const normalized = normalizeStructuredFindings(result.findingsJson);
+    assert.ok(Array.isArray(normalized), "budget-marked findingsJson must still normalize");
+    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
+      mandatoryAngles: ["pr-description"],
+      pool: [...angleNames, "pr-description"],
+    });
+    assert.deepEqual(missingMandatory, []);
+    assert.deepEqual(foreignAngles, []);
+    assertRendersWithoutThrowing(result.findingsJson);
+
+    // The test name and this PR's AC both claim "exits 0" — pin that as an
+    // actual CLI exit code and stdout envelope, not just result.ok inferred
+    // in-process (the in-process consolidateGateFanin() call above never
+    // exercises main()/emitResult()). Reruns the SAME on-disk fixture through
+    // the real CLI entrypoint; --out/--ledger-out land OUTSIDE --findings-dir
+    // (a sibling temp dir), since neither may resolve inside it.
+    const cliOutDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cli-out-"));
+    try {
+      const cliResult = await runNode(
+        path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+        ["--findings-dir", dir, "--out", path.join(cliOutDir, "findings.json"), "--ledger-out", path.join(cliOutDir, "ledger.json")],
+      );
+      assert.equal(cliResult.code, 0, cliResult.stderr);
+      const cliPayload = JSON.parse(cliResult.stdout);
+      assert.equal(cliPayload.ok, true);
+      assert.equal(cliPayload.commentBudgetExceeded, true);
+    } finally {
+      await rm(cliOutDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Real-findings-preferred-over-marker regression: an angle with real findings
+// that ALREADY fit alongside the rest of the (marked) round must keep them
+// as-is, never a marker — a marker is a compression and must never replace
+// real content with something rendered BIGGER. Reproduces the reported case:
+// a single must-fix finding (file+line) renders far smaller than the verbose
+// marker that would otherwise replace it (134 vs 183 chars), while a sibling
+// "style" angle with 300 defer findings is what actually forces the round
+// over budget and must itself still degrade to a marker.
+test("a narrow angle keeps its real finding instead of a longer marker when a wide sibling angle forces the round over budget", async () => {
+  const files = {
+    "correctness.json": {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [{ severity: "must-fix", summary: "null deref at foo.mjs:12 when x is undefined", file: "foo.mjs", line: 12 }],
+    },
+    "style.json": {
+      angle: "style",
+      verdict: "findings_present",
+      findings: Array.from({ length: 300 }, (_, j) => ({
+        severity: "defer",
+        summary: `naming nit ${j} ${"z".repeat(150)}`,
+        file: `src/f${j}.mjs`,
+        line: j + 1,
+      })),
+    },
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true); // the wide "style" angle alone forces this
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    // "correctness" keeps its REAL finding (severity + file + line), not a marker.
+    const correctnessFinding = byAngle.get("correctness").findings[0];
+    assert.equal(correctnessFinding.severity, "must-fix");
+    assert.equal(correctnessFinding.file, "foo.mjs");
+    assert.equal(correctnessFinding.line, 12);
+    // Full, UN-shrunk text — not just a startsWith prefix, which a
+    // whole-round-shrunk-to-the-31-char-floor stub would also satisfy (both
+    // start with the same first 25 chars). The pre-shrink snapshot must be
+    // offered as the tier-1 (real) candidate first, not the already-crushed array
+    // fitFindingsToRenderBudget mutated in place while chasing the whole
+    // round's budget.
+    assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
+    assert.ok(!correctnessFinding.summary.endsWith(" …"), "a narrow angle's real finding must not be shrunk when it already fits the whole round");
+    assert.ok(!/omitted.*see the disposition ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
+
+    // "style" (the actual cause of the overflow) IS collapsed to a marker.
+    const styleFinding = byAngle.get("style").findings[0];
+    assert.match(styleFinding.summary, /^300 finding\(s\) omitted from this comment/);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Seed-comparison regression: buildBudgetMarkedFindingsJson's INITIAL seed
+// (before the upgrade loop even runs) picks whichever of {an angle's own real
+// findings, its bare marker} renders cheaper in isolation — not "bare
+// always wins". A single-finding angle with no file/line and a summary at or
+// under the shrink floor renders its real form (62 chars, measured) SHORTER
+// than its own bare "N omitted — see ledger" marker (83 chars, measured):
+// angleRenderCost(real) <= angleRenderCost(bareMarker) is true, so this angle
+// is seeded with its real findings directly and is then EXCLUDED from
+// upgradeOrder (it never enters the per-severity upgrade walk the sibling
+// "narrow angle" test above exercises) — a distinct code path from that test,
+// which seeds bare first and only reaches real findings via the upgrade loop.
+// Replacing the seed comparison with a plain `bareMarkers[i]` (always bare)
+// passes every OTHER test in this file but flips this angle to a marker and
+// fails here.
+test("a narrow angle whose real findings render cheaper than its own bare marker is seeded real, not marker-collapsed", async () => {
+  const files = {
+    "narrow.json": {
+      angle: "narrow",
+      verdict: "findings_present",
+      findings: [{ severity: "must-fix", summary: "x" }],
+    },
+    "wide.json": {
+      angle: "wide",
+      verdict: "findings_present",
+      findings: Array.from({ length: 300 }, (_, j) => ({
+        severity: "defer",
+        summary: `naming nit ${j} ${"z".repeat(150)}`,
+        file: `src/f${j}.mjs`,
+        line: j + 1,
+      })),
+    },
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true); // the wide angle alone forces this
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const narrowFinding = byAngle.get("narrow").findings[0];
+    assert.equal(narrowFinding.severity, "must-fix");
+    assert.equal(narrowFinding.summary, "x", "the narrow angle's real (un-shrunk, un-marked) summary must survive");
+    assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "the narrow angle must not be marker-collapsed even though it never entered the upgrade loop");
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Middle-candidate regression: the upgrade loop tries an angle's real findings
+// as TWO distinct candidates before falling back to a marker — the pre-shrink
+// ORIGINAL first, then the already whole-round-shrunk form (findingsJson[i],
+// capped at fitFindingsToRenderBudget's 31-char floor) — and only THEN the
+// verbose/bare marker. An angle whose original text is too long to fit
+// alongside the rest of the round, but whose shrunk form does fit, must land
+// on that shrunk form (truncated real text, " …" suffix), never skip straight
+// to an "omitted" marker. Deleting the middle candidate (findingsJson[i]) from
+// the upgrade loop's candidate array, or reordering it after the marker,
+// passes every OTHER test in this file but flips this angle straight to a
+// marker and fails here.
+test("an angle whose original text is too long but whose whole-round-shrunk form fits keeps the truncated real text, not a marker", async () => {
+  const originalSummary = `this narrow angle carries a fairly long original finding summary text that will not fit ${"w".repeat(1900)}`;
+  const files = {
+    "narrow.json": {
+      angle: "narrow",
+      verdict: "findings_present",
+      findings: [{ severity: "worth-fixing-now", summary: originalSummary }],
+    },
+    "wide.json": {
+      angle: "wide",
+      verdict: "findings_present",
+      findings: Array.from({ length: 300 }, (_, j) => ({
+        severity: "defer",
+        summary: `naming nit ${j} ${"z".repeat(150)}`,
+        file: `src/f${j}.mjs`,
+        line: j + 1,
+      })),
+    },
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const narrowFinding = byAngle.get("narrow").findings[0];
+    assert.equal(narrowFinding.severity, "worth-fixing-now");
+    assert.ok(narrowFinding.summary.length < originalSummary.length, "the original, un-shrunk summary must not have survived (too long to fit)");
+    assert.ok(originalSummary.startsWith(narrowFinding.summary.replace(/ …$/, "")), "the emitted summary must be a truncated PREFIX of the original real text");
+    assert.ok(narrowFinding.summary.endsWith(" …"), "a truncated-real candidate ends with the plain ellipsis suffix, distinguishing it from an omitted-count marker");
+    assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "must be the truncated real text, not an omitted-count marker");
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Per-angle degradation regression: the verbose-vs-bare choice is decided
+// PER ANGLE, not once for the whole round — a round with enough angles that
+// NOT ALL of them can afford the verbose breakdown must still give the ones
+// that fit the full sentence, rather than dropping to bare everywhere the
+// instant any single angle can't afford it (that would leave most of the
+// budget unused and the documented breakdown effectively unreachable). Every
+// marker is either the WHOLE verbose sentence or the WHOLE bare one — never a
+// half-truncated fragment of either. These thresholds are measured against
+// the real renderer (see fitsRenderBudget) — retune if the marker/renderer
+// text changes.
+test("a fan-in with enough angles that not all can afford the verbose marker keeps it on the ones that fit and uses bare only where it doesn't", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 14;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(result.findingsJson.length, ANGLE_COUNT); // real angle set preserved
+
+    let verboseCount = 0;
+    let bareCount = 0;
+    for (const section of result.findingsJson) {
+      assert.equal(section.verdict, "findings_present");
+      assert.equal(section.findings.length, 1);
+      const summary = section.findings[0].summary;
+      if (summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`) {
+        bareCount += 1;
+      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("see the disposition ledger")) {
+        verboseCount += 1;
+      } else {
+        assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);
+      }
+      assert.equal(section.findings[0].disposition, "deferred");
+    }
+    // BOTH forms present — proves the choice is per angle, not per round.
+    assert.ok(verboseCount > 0, "expected at least one angle to keep the verbose breakdown");
+    assert.ok(bareCount > 0, "expected at least one angle to degrade to bare");
+
+    // The ledger is still complete regardless of how far any marker degraded.
+    assert.equal(result.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// All-bare tier regression: enough angles that NONE can afford the verbose
+// marker (not even one), so every angle degrades to the bare form — proves
+// tier 3 (bare) still functions on its own, independent of the per-angle mix
+// above.
+test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 20;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(result.findingsJson.length, ANGLE_COUNT); // real angle set preserved
+    for (const section of result.findingsJson) {
+      assert.equal(section.verdict, "findings_present");
+      assert.equal(section.findings.length, 1);
+      // Exactly the bare sentence — never a truncated fragment of the
+      // verbose one (no " …", no cut-off mid-word).
+      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — see ledger`);
+      assert.equal(section.findings[0].disposition, "deferred");
+    }
+    // The ledger is still complete regardless of how far the marker degraded.
+    assert.equal(result.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assertRendersWithoutThrowing(result.findingsJson);
+  });
+});
+
+// Budget-allocation-by-severity regression: when not every angle can afford
+// the verbose marker, the scarce budget must go to the must-fix-carrying
+// angle first, regardless of filename/artifact-index order. All 13 "defer"
+// angles sort alphabetically BEFORE the one must-fix-carrying angle
+// ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
+// reverted behavior) would spend the verbose budget on defer-only angles and
+// leave the must-fix angle bare. Reverting the severity-first ordering back
+// to plain index order fails this test.
+test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const DEFER_ANGLE_COUNT = 13;
+  const files = {};
+  for (let i = 0; i < DEFER_ANGLE_COUNT; i++) {
+    files[`d${String(i).padStart(2, "0")}.json`] = {
+      angle: `defer-angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "defer",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
         file: `src/f${i}.mjs`,
         line: j + 1,
       })),
     };
   }
+  files["z-mustfix.json"] = {
+    angle: "mustfix-angle",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "must-fix",
+      summary: `finding mustfix-${j} ${"z".repeat(150)}`,
+      file: "src/fmustfix.mjs",
+      line: j + 1,
+    })),
+  };
   await withFindingsDir(files, async (dir) => {
-    await assert.rejects(
-      () => consolidateGateFanin({ findingsDir: dir }),
-      /over the gate-comment budget/,
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const mustFixSummary = byAngle.get("mustfix-angle").findings[0].summary;
+    assert.match(
+      mustFixSummary,
+      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
+      "the must-fix-carrying angle must keep the verbose breakdown",
     );
+
+    // Sanity: this fixture really does force at least one angle to bare —
+    // otherwise the test would pass even with the old, unfixed ordering.
+    const bareCount = [...byAngle.values()].filter(
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`,
+    ).length;
+    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
+  });
+});
+
+// Structural-floor regression: a round with far more real angles than the
+// default fan-out cap, wide enough that even ONE bare "N omitted" line per
+// angle cannot fit the render budget — no per-angle shape can, no matter how
+// short the marker text gets. --out must be withheld (never an ok:true shape
+// the real renderer would reject), while the ledger stays complete.
+test("a fan-in with far more angles than even bare markers can fit withholds --out instead of emitting an unrenderable shape", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.deepEqual(result.findingsJson, []);
+
+    // --out is WITHHELD — no file written at all — rather than a shape the
+    // real renderer would reject.
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+
+    // The ledger is still written in full regardless.
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.deepEqual(writtenLedger, result.findings);
+  });
+});
+
+// Regression: before this guard, an over-budget round with no --ledger-out
+// returned ok:true with "findingsJson": [] and no durable record anywhere —
+// the marker text even points at a "disposition ledger" that was never
+// written. Pre-existing behavior (before the render-budget split) failed
+// closed (exit 1) on exactly this input; this must too, naming the round size
+// so the caller knows to re-run with --ledger-out rather than losing the
+// round silently. This pins the fail-closed behavior for any caller that
+// still omits --ledger-out; every sanctioned SKILL.md gate-comment example
+// now includes it.
+test("an over-budget round with no --ledger-out fails closed instead of returning ok:true over zero durable evidence", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, out: outPath }),
+      /over the gate-comment render budget.*--ledger-out was not given/s,
+    );
+    // Nothing durable must be left behind by the rejected attempt.
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Stale-file regression: a withheld round must actively REMOVE a prior
+// round's --out, not just skip writing a new one — otherwise a caller that
+// unconditionally reads --out (rather than checking "commentBudgetExceeded")
+// posts a PRIOR round's findings as though they were current. Reverting the
+// fix (skip-write instead of remove) fails this test.
+test("a withheld round removes a stale --out left on disk from a prior round", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    await mkdir(path.dirname(outPath), { recursive: true });
+    const staleFromPriorRound = [{ angle: "angle-0", verdict: "clean", findings: [] }];
+    await writeFile(outPath, JSON.stringify(staleFromPriorRound), "utf8");
+
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.findingsJson, []); // withheld tier
+
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Ledger-durability regression: --ledger-out must land on disk even when the
+// --out path itself is unwritable, on BOTH the withheld-tier rm() path and
+// the normal mkdir/writeFile path — the ledger is documented as "ALWAYS
+// complete (never budgeted)" and must never be reachable only through the
+// comment-output path. Reverting to writing --out before --ledger-out fails
+// both of these (the throw from --out aborts the function before the ledger
+// write runs).
+test("a withheld-tier round still writes a complete ledger when --out is an existing directory (rm EISDIR)", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 25;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out-is-a-dir"); // a directory, not a file
+    await mkdir(outPath, { recursive: true });
+    const ledgerPath = path.join(dir, "ledger.json");
+
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath }),
+      { code: "ERR_FS_EISDIR" },
+    );
+
+    // The ledger must still be complete on disk despite the --out failure.
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+  });
+});
+
+test("a marker-tier round still writes a complete ledger when --out's parent directory is blocked by a regular file (mkdir EEXIST)", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const ANGLE_COUNT = 14;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
+  await withFindingsDir(files, async (dir) => {
+    const blockingFile = path.join(dir, "blocking-file");
+    await writeFile(blockingFile, "not a directory", "utf8");
+    const outPath = path.join(blockingFile, "findings.json"); // parent is a regular file
+    const ledgerPath = path.join(dir, "ledger.json");
+
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath }),
+      { code: "EEXIST" },
+    );
+
+    // The ledger must still be complete on disk despite the --out failure.
+    const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
