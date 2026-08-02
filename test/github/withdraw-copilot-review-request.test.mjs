@@ -8,6 +8,7 @@ import { main, parseCliArgs, runCli } from "../../scripts/github/withdraw-copilo
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 import { readSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 
 function collectingStream() {
   const chunks = [];
@@ -512,8 +513,24 @@ describe("withdraw-copilot-review-request", () => {
         assert.ok(marker);
         assert.equal(marker.headSha, "newsha");
 
-        // Step 4: the gate coordinator now accepts the settled state and the
-        // pre_approval_gate verdict can post.
+        // Step 4: run the REAL producer, resolvePostConvergenceReviewSuppressed —
+        // marker/head match, live compare re-verification (a stubbed
+        // repos/o/n/compare/oldsha...newsha reply), and the
+        // copilotReviewRequestStatus === "none" && unresolvedThreadCount === 0
+        // precondition — end to end, then feed its return into the gate
+        // coordinator. No hand-computed boolean.
+        const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
+          {
+            repo: "o/n",
+            pr: 17,
+            currentHeadSha: "newsha",
+            snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 },
+            prData: { headRefOid: "newsha", reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD },
+          },
+          { env: {}, runChild: gh.runChild, checkpointDir: dir },
+        );
+        assert.equal(postConvergenceReviewSuppressed, true);
+
         const settled = { ...stranded, copilotReviewRequestStatus: "none" };
         const settledInterpretation = interpretLoopState(settled, { maxCopilotRounds: 5 });
         const settledResult = evaluatePrGateCoordination({
@@ -522,7 +539,7 @@ describe("withdraw-copilot-review-request", () => {
           prDraft: false,
           lifecycleState: settledInterpretation.state,
           sameHeadCleanConverged: settledInterpretation.sameHeadCleanConverged,
-          postConvergenceReviewSuppressed: marker.headSha === "newsha",
+          postConvergenceReviewSuppressed,
           ciStatus: settled.ciStatus,
           copilotReviewRequestStatus: settled.copilotReviewRequestStatus,
           unresolvedThreadCount: settled.unresolvedThreadCount,

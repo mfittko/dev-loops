@@ -21,7 +21,7 @@ import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
-import { classifyDeltaSinceLastReview } from "../github/request-copilot-review.mjs";
+import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
@@ -532,12 +532,20 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // further push changes the current head, the marker no longer matches, and
 // this resolves to false — the normal round-reopening behavior applies exactly
 // as before.
-export async function resolvePostConvergenceReviewSuppressed({ repo, pr, currentHeadSha, snapshot }, runtime = {}) {
+export async function resolvePostConvergenceReviewSuppressed({ repo, pr, currentHeadSha, snapshot, prData }, runtime = {}) {
   if (snapshot.copilotReviewRequestStatus !== "none" || snapshot.unresolvedThreadCount !== 0) {
     return false;
   }
   const marker = await readSuppressionMarker({ repo, pr }, runtime);
   if (!marker || marker.headSha !== currentHeadSha) {
+    return false;
+  }
+  // Re-derive the compare BASE live too, not just the classification below —
+  // defense in depth against a stale or hand-edited marker whose
+  // lastReviewedHeadSha no longer names Copilot's actual last submitted
+  // review. A marker that disagrees with the live value must not suppress.
+  const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
+  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
     return false;
   }
   const reverified = await classifyDeltaSinceLastReview(
@@ -631,7 +639,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     runtime,
   );
   const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
-    { repo: options.repo, pr: options.pr, currentHeadSha, snapshot },
+    { repo: options.repo, pr: options.pr, currentHeadSha, snapshot, prData },
     runtime,
   );
   return {

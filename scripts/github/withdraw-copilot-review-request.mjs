@@ -97,7 +97,11 @@ Options:
 
 Output (stdout, JSON):
   { ok, withdrawn, status: "withdrawn"|"refused"|"not-requested"|"dry-run", reason,
-    operatorReason?, headAdvanced? }
+    operatorReason?, headAdvanced?, markerPath? }
+  markerPath is present only on a head-advanced "withdrawn" result: the
+  resolved absolute path of the suppression marker just written, so the
+  operator can confirm it landed where request-copilot-review.mjs and
+  detect-pr-gate-coordination-state.mjs will look for it.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -324,7 +328,7 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
     // comment): scoped to this exact head, so request-copilot-review.mjs
     // recognizes it as already-settled instead of re-requesting. Any further
     // push invalidates it (new head no longer matches).
-    await writeSuppressionMarker(
+    const { filePath: markerPath } = await writeSuppressionMarker(
       {
         repo: args.repo,
         pr: args.pr,
@@ -342,6 +346,7 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
       headAdvanced: true,
       reason: `Stranded Copilot review request withdrawn on a head that has advanced past Copilot's last submitted review; the delta since that review is a provable pure doc/prose bump (${deltaClassification.reason}), so the prior converged Copilot review still stands. A suppression marker was recorded for this exact head so the loop will not re-request and re-strand.`,
       operatorReason: args.reason ?? null,
+      markerPath,
     };
   }
 

@@ -1932,6 +1932,13 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
 
   const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
 
+  // prData carries Copilot's actual last submitted review (commit "oldsha"),
+  // matching the marker's claimed lastReviewedHeadSha: resolvePostConvergenceReviewSuppressed
+  // re-derives this live rather than trusting the marker's own field.
+  const prDataWithLastReview = (sha) => ({
+    reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: sha } }],
+  });
+
   it("returns true when a marker matches the current head and the delta re-verifies as docs-only", async () => {
     await withTempCheckpointDir(async (checkpointDir) => {
       await writeSuppressionMarker(
@@ -1945,10 +1952,29 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         },
       ]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("oldsha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
       assert.equal(suppressed, true);
+    });
+  });
+
+  it("returns false, without any classification call, when the live last-reviewed head disagrees with the marker's claim", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump (stale claim)" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        // Copilot's live last submitted review is actually on "othersha", not
+        // the marker's claimed "oldsha" — a stale/hand-edited marker must not
+        // shrink the compare window it feeds to the classifier.
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("othersha") },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0, "must not classify a delta from an unverified base");
     });
   });
 

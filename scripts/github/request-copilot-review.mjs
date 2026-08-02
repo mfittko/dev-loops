@@ -600,7 +600,13 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         { repo: options.repo, pr: options.pr },
         { checkpointDir: options.checkpointDir },
       );
-      if (marker && marker.headSha === currentHeadSha) {
+      // Re-derive the compare BASE live too, not just the classification —
+      // defense in depth against a stale or hand-edited marker whose
+      // lastReviewedHeadSha no longer names Copilot's actual last submitted
+      // review. A marker that disagrees with the live value must not suppress.
+      const liveLastReviewedHeadSha = marker ? getLastCopilotReviewHeadSha(before.prData) : null;
+      if (marker && marker.headSha === currentHeadSha
+          && liveLastReviewedHeadSha && liveLastReviewedHeadSha === marker.lastReviewedHeadSha) {
         // Re-verify live rather than trusting the marker's stored reason —
         // defense in depth against a stale or hand-edited file.
         const reverified = await classifyDeltaSinceLastReview(
