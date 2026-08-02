@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -43,8 +43,10 @@ function normalizeVerdict(value) {
   const normalized = String(value).trim().toLowerCase();
   return verdicts.has(normalized) ? normalized : null;
 }
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
-const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
+// Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
+// RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
+// disposition vocabulary instead of hand-copying it out of sync.
+export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
