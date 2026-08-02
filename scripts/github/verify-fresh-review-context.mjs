@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
-       [--prefix-hash <sha256>|--prefix-file <path>] [--pr-body-fix-retry]
+       [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
 
 "Fresh" means the reviewer's context is the neutral gate-context builder
@@ -184,7 +184,7 @@ async function checkSentinelExists(scope, round, cwd = process.cwd()) {
   return { exists: false, path: sentinelPath, legacy: false };
 }
 // Read the recorded `prefixHash` off an existing sentinel file, for the
-// --pr-body-fix-retry comparison. Returns null on any read/parse failure or
+// --same-head-retry comparison. Returns null on any read/parse failure or
 // when the sentinel recorded no (or a malformed) hash — the caller treats
 // null as "never grandfathered in", same posture as verify-briefing-prefixes.mjs.
 async function readSentinelPrefixHash(sentinelPath) {
