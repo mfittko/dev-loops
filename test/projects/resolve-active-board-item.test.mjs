@@ -1,6 +1,6 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { collapseToTarget, main, runCli, attemptClaimAndArbitrate } from "../../scripts/projects/resolve-active-board-item.mjs";
@@ -743,6 +743,55 @@ describe("board resolution from .devloops without --project (#1459)", () => {
       const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
       assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 5 }, source: "in-progress" });
+    });
+  });
+
+  it("a direct-CLI-shaped run without an injected runChild uses the shared default instead of crashing (#1545)", async () => {
+    // Regression: runCli/main declared runChild with no default and the module
+    // never imported one, so a direct CLI run crashed with "runChild is not a
+    // function" as soon as the Next Up pickup path needed a gh read (the
+    // in-progress short-circuit had masked it). Drive runCli with NO runChild
+    // injection and a PATH gh shim emulating an empty In Progress column plus
+    // one unassigned Next Up item, so the run must traverse the ownership path
+    // through the DEFAULT runChild to succeed.
+    await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
+      const binDir = nodePath.join(cwd, "stub-bin");
+      mkdirSync(binDir, { recursive: true });
+      const shim = `#!/usr/bin/env node
+const argv = process.argv.slice(2);
+const q = argv.find((a) => a.startsWith("query=")) ?? "";
+const data = (d) => { process.stdout.write(JSON.stringify({ data: d })); process.exit(0); };
+if (q.includes("projectsV2(first")) data({ user: { projectsV2: { nodes: [{ id: "P_1", number: 7, title: "Board" }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+if (q.includes("user(login")) data({ user: { id: "U_1" } });
+if (q.includes("fields(first")) data({ node: { fields: { nodes: [{ name: "Status", options: [{ id: "O_0", name: "Backlog" }, { id: "O_1", name: "Next Up" }, { id: "O_2", name: "In Progress" }, { id: "O_3", name: "Done" }] }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+if (argv[0] === "api" && argv[1] === "user") { process.stdout.write(JSON.stringify({ login: "shim-viewer" })); process.exit(0); }
+if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "view") { process.stdout.write(JSON.stringify({ assignees: [] })); process.exit(0); }
+if ((argv[0] === "issue" || argv[0] === "pr") && argv[1] === "edit") { process.stdout.write("{}"); process.exit(0); }
+data({ node: { items: { nodes: [{ id: "I_NU_9", fieldValues: { nodes: [{ field: { name: "Status" }, name: "Next Up" }] }, content: { __typename: "Issue", number: 9, title: "Head", url: "https://example.test", id: "C_9" } }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+`;
+      const ghPath = nodePath.join(binDir, "gh");
+      writeFileSync(ghPath, shim);
+      chmodSync(ghPath, 0o755);
+      const prevPath = process.env.PATH;
+      process.env.PATH = `${binDir}:${prevPath}`;
+      try {
+        let out = "";
+        let err = "";
+        const prev = process.exitCode;
+        process.exitCode = undefined;
+        await runCli(["--repo", "o/r"], {
+          stdout: { write: (s2) => { out += s2; } },
+          stderr: { write: (s2) => { err += s2; } },
+          cwd,
+        });
+        const code = process.exitCode;
+        process.exitCode = prev;
+        assert.ok(!String(err).includes("runChild is not a function"), `must not crash on the missing default: ${err}`);
+        assert.equal(code, 0, `expected a resolved head, got exit ${code}: ${err || out}`);
+        assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 9 }, source: "next-up" });
+      } finally {
+        process.env.PATH = prevPath;
+      }
     });
   });
 
