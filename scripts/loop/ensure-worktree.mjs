@@ -342,9 +342,10 @@ function installGuard(gitCommand, root, explicitBase) {
       // the only signal an operator gets that nothing was installed.
       process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
     } else if (result.reason) {
-      // ok:true degraded states (a dropped unsafe explicit base, an inert or
-      // partially foreign install) carry a reason too; surface it the same way
-      // so the documented --jq/--silent style never hides a coverage gap.
+      // ok:true degraded states that carry a reason (a dropped unsafe explicit
+      // base, an inert or all-foreign install) surface the same way. A
+      // PARTIALLY foreign install carries no reason and stays visible only in
+      // guard.skipped.
       process.stderr.write(`[ensure-worktree] WARN default-branch guard degraded: ${result.reason}\n`);
     }
     return result;

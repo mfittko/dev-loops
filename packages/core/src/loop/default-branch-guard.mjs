@@ -34,7 +34,7 @@ const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: refusing to ${wha
  * the double-quoted assignment below. A branch named `main$(id)` would execute
  * on every commit, and `main$HOME` would expand to something that never matches
  * the real branch, leaving the default silently unguarded. Only names matching
- * this are baked in; anything else is refused at the install boundary.
+ * this are baked in. An unsafe DEFAULT branch refuses the install; an unsafe EXPLICIT base is dropped (recorded in droppedExplicitBranches) while the default guard installs.
  */
 const SHELL_SAFE_BRANCH = /^[A-Za-z0-9._/-]+$/;
 
@@ -233,8 +233,8 @@ export function installDefaultBranchGuard({
     const configured = hooksPathOverride.trim();
     return configured.length > 0
       ? refuse(
-          `core.hooksPath is set to "${configured}" — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
-          `core.hooksPath is set to "${configured}", so hooks in $GIT_DIR/hooks would never run`,
+          `core.hooksPath is set to ${JSON.stringify(configured)} — install the guard there, or unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,
+          `core.hooksPath is set to ${JSON.stringify(configured)}, so hooks in $GIT_DIR/hooks would never run`,
         )
       : refuse(
           `core.hooksPath is set to an empty string — git runs no hooks at all; unset it, or use ${GUARD_OVERRIDE_ENV} discipline instead`,

@@ -114,7 +114,7 @@ checkout's shared common hook directory, refusing a commit (plain or via
 guarded branch, or a push to one (including via an explicit refspec such as
 `HEAD:main` from a feature branch). The hooks guard the repo's OWN default
 branch (git's advertised
-`<remote>/HEAD`) — resolved fresh on every install, never from a --base guess
+`origin/HEAD`) — resolved fresh on every install from `origin` specifically, never from a --base guess
 — and, additionally, an EXPLICIT `--base` (an operator's flag, or the
 `.devloops` `workflow.baseBranch` the resolver injects as one) when it
 differs: a worktree stacked on a non-default base never strips protection

@@ -57,10 +57,13 @@ the workflow does it (and is idempotent if you already created one).
   correct commit.
 - Missing CHANGELOG section: the extraction step exits non-zero and no Release is
   created. The workflow checks out the tagged commit, so editing `CHANGELOG.md`
-  alone is not enough — commit the `## <version>` section, then move the tag to
-  the new commit and re-push:
+  alone is not enough — commit the `## <version>` section (a main-landing
+  commit/push needs the guard override), then move the tag to the new commit
+  and re-push:
 
   ```bash
+  DEVLOOPS_ALLOW_MAIN=1 git commit -am "docs: add v<version> CHANGELOG section"
+  DEVLOOPS_ALLOW_MAIN=1 git push origin main
   git tag -f v<version>
   git push --force origin v<version>
   ```
