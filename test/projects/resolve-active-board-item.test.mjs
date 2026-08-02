@@ -757,7 +757,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
       const binDir = nodePath.join(cwd, "stub-bin");
       mkdirSync(binDir, { recursive: true });
-      const shim = `#!/usr/bin/env node
+      const shim = `#!${process.execPath}
 const argv = process.argv.slice(2);
 const q = argv.find((a) => a.startsWith("query=")) ?? "";
 const data = (d) => { process.stdout.write(JSON.stringify({ data: d })); process.exit(0); };
@@ -772,26 +772,28 @@ data({ node: { items: { nodes: [{ id: "I_NU_9", fieldValues: { nodes: [{ field: 
       const ghPath = nodePath.join(binDir, "gh");
       writeFileSync(ghPath, shim);
       chmodSync(ghPath, 0o755);
-      const prevPath = process.env.PATH;
-      process.env.PATH = `${binDir}:${prevPath}`;
+      // Inject only env (never runChild): the default runChild passes env to
+      // spawn, so a PATH scoped to the shim reaches the child without mutating
+      // this process's own environment.
+      const shimEnv = { ...process.env, PATH: `${binDir}${nodePath.delimiter}${process.env.PATH ?? ""}` };
+      let out = "";
+      let err = "";
+      const prev = process.exitCode;
+      process.exitCode = undefined;
       try {
-        let out = "";
-        let err = "";
-        const prev = process.exitCode;
-        process.exitCode = undefined;
         await runCli(["--repo", "o/r"], {
           stdout: { write: (s2) => { out += s2; } },
           stderr: { write: (s2) => { err += s2; } },
+          env: shimEnv,
           cwd,
         });
-        const code = process.exitCode;
-        process.exitCode = prev;
-        assert.ok(!String(err).includes("runChild is not a function"), `must not crash on the missing default: ${err}`);
-        assert.equal(code, 0, `expected a resolved head, got exit ${code}: ${err || out}`);
-        assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 9 }, source: "next-up" });
       } finally {
-        process.env.PATH = prevPath;
+        var code = process.exitCode;
+        process.exitCode = prev;
       }
+      assert.ok(!String(err).includes("runChild is not a function"), `must not crash on the missing default: ${err}`);
+      assert.equal(code, 0, `expected a resolved head, got exit ${code}: ${err || out}`);
+      assert.deepEqual(JSON.parse(out), { ok: true, target: { kind: "issue", number: 9 }, source: "next-up" });
     });
   });
 
