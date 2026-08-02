@@ -93,7 +93,7 @@ The public state contract already exposes five dimensions:
 | `ownership` | Which durable owner or strategy family is responsible? |
 | `nextActor` | Who is expected to make the immediate next move? |
 | `status` | Is the work active, waiting, blocked, approval-ready, merge-ready, or done? |
-| `authorization` | Is the next mutation authorized, awaiting confirmation, or forbidden? |
+| `authorization` | Is the next mutation `authorized`, `needs_confirmation`, or `not_authorized`? |
 
 From those dimensions the system can project:
 
@@ -130,6 +130,7 @@ stateDiagram-v2
   [*] --> IssueIntake
   IssueIntake --> Refinement
   IssueIntake --> Implementation
+  Refinement --> IssueIntake
   Refinement --> Implementation
   Implementation --> DraftGate
   Implementation --> FeedbackResolution

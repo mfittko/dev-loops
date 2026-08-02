@@ -122,7 +122,7 @@ flowchart LR
   <li><strong>ownership</strong> — which durable owner or strategy family is responsible?</li>
   <li><strong>nextActor</strong> — who must act now?</li>
   <li><strong>status</strong> — active, waiting, blocked, approval-ready, merge-ready, done?</li>
-  <li><strong>authorization</strong> — permitted, needs confirmation, or forbidden?</li>
+  <li><strong>authorization</strong> — <code>authorized</code>, <code>needs_confirmation</code>, or <code>not_authorized</code>?</li>
 </ul>
 </div>
 <div class="glass-card">
