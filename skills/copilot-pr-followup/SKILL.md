@@ -282,7 +282,7 @@ Do not treat `fix applied locally` as the end of the loop when the workflow also
 
 Per `COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL` above, run:
 
-For a gate that ran via the fan-out/fan-in sub-loop, pass the structured per-angle review results via `--findings-json` (NOT the wall-of-text `--findings-summary`). That JSON file comes from the sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir> --gate <gate> --out <path>` — which consolidates the per-angle artifacts the fan-out reviewers wrote (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) into exactly the nested shape `--findings-json` accepts; never hand-author or mutate it with an inline interpreter. The helper renders a readable per-angle breakdown and derives the single-line `**Findings summary:**` digest itself:
+For a gate that ran via the fan-out/fan-in sub-loop, pass the structured per-angle review results via `--findings-json` (NOT the wall-of-text `--findings-summary`). That JSON file comes from the sanctioned fan-in CLI — `dev-loops gate consolidate-fanin --findings-dir <dir> --gate <gate> --out <path> --ledger-out <ledger-path>` — which consolidates the per-angle artifacts the fan-out reviewers wrote (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) into exactly the nested shape `--findings-json` accepts; never hand-author or mutate it with an inline interpreter. The helper renders a readable per-angle breakdown and derives the single-line `**Findings summary:**` digest itself:
 
 ```sh
 node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
@@ -292,11 +292,13 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-json <path-to-per-angle-results.json> \
-  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --next-action "<next action>" --findings-severity-counts '<consolidate-fanin severityCounts>' \
   --execution-mode fanout_fanin
 ```
 
-`--findings-json` accepts the per-angle review-results array (`[{ angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}] }]`, the primary shape that feeds `consolidateFanin`); it also accepts the flat per-finding array that `consolidateFanin`/`toFindingsLogShape` produce (`[{ severity, summary, angle?, ... }]`), grouping it by each finding's `.angle`. A non-empty input matching neither shape is rejected rather than silently rendering all-clean. If the structured results are not available, fall back to `--findings-summary "<summary>"` (the inline_single_agent fallback path).
+Substitute `<consolidate-fanin severityCounts>` with the fan-in CLI's own `severityCounts` field (its output's true, unbudgeted totals) — never a literal all-zero placeholder. `buildStructuredFindingsDigest` only lets this value RAISE the posted `**Findings summary:**` total above `--findings-json`'s own count, never lower it, but a placeholder that always sums to 0 defeats the point of passing it at all and, more importantly, must never be typed in by hand for a `findings_present`/`blocked` round.
+
+`--findings-json` accepts the per-angle review-results array (`[{ angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}] }]`, the primary shape that feeds `consolidateFanin`); it also accepts the flat per-finding array that `consolidateFanin`/`toFindingsLogShape` produce (`[{ severity, summary, angle?, ... }]`), grouping it by each finding's `.angle`. A non-empty input matching neither shape is rejected rather than silently rendering all-clean. If the structured results are not available (an inline run), fall back to `--findings-summary "<summary>"`. A `fanout_fanin` `consolidate-fanin` round withheld to tier 4 has neither shape available: `--out` was never written (or was removed), and the `--ledger-out` flat file is unbudgeted and MUST NOT be substituted for it — passing that file to `--findings-json` can itself exceed the render budget. Post that round with `--findings-summary "<summary>"` only (see the sub-loop contract's [Execution mode and fan-out evidence enforcement](../docs/gate-review-sub-loop-contract.md#execution-mode-and-fan-out-evidence-enforcement)).
 
 For a gate that ran inline (single agent, not via the sub-loop):
 
@@ -308,9 +310,11 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --head-sha <current_head_sha> \
   --verdict <clean|findings_present|blocked> \
   --findings-summary "<summary>" \
-  --next-action "<next action>" --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}' \
+  --next-action "<next action>" --findings-severity-counts '<true severity counts tallied for this round>' \
   --execution-mode inline_single_agent --inline-reason "<why>"
 ```
+
+When passing `--findings-severity-counts` for an inline round, substitute the counts you actually tallied, never a copy-pasted all-zero literal — an inline run has no fan-in to source a placeholder from. See `--help` for when it is required.
 
 `--execution-mode <fanout_fanin|inline_single_agent>` records how the gate inspection ran (default `inline_single_agent`). When the gate did not run via the fan-out/fan-in sub-loop ([Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)), you MUST pass `--execution-mode inline_single_agent --inline-reason "<why>"` — silent inline runs are no longer allowed: inline mode requires a non-empty `--inline-reason` and emits a stderr warning. Because inline is the default mode, a bare call with neither flag now fails with an argument error, so always pass `--execution-mode` explicitly (and `--inline-reason` for inline). The recorded `executionMode` is surfaced by `detect-checkpoint-evidence.mjs` and gated by `gates.requireFanoutEvidence`.
 
