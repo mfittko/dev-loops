@@ -605,6 +605,120 @@ test("--pr-body-fix-retry on a first run (no existing sentinel) behaves like a n
     // The flag only changes behavior when a collision actually occurs; a plain
     // first run is unaffected and does not report prBodyFixRetry.
     assert.equal("prBodyFixRetry" in output, false);
+    assert.equal("sameHeadRetry" in output, false, "the retry marker never leaks into a first-run output");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Generalized same-head retry (--same-head-retry): the escape hatch covers ANY
+// same-head re-run with unrebuilt briefing bytes — interrupted reviewer,
+// harness crash, or the original PR-body-fix case. --pr-body-fix-retry stays
+// as a deprecated alias with identical semantics.
+// ---------------------------------------------------------------------------
+
+test("--same-head-retry re-admits an interrupted reviewer when the prefix hash matches", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Real gate reviews run at a head-keyed round; exercise that path, not the
+    // scope-only git-unavailable fallback.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "c".repeat(64);
+
+    // Reviewer runs the sentinel, then dies before writing its findings artifact.
+    const first = runScript(["--scope", "interrupted-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    // The re-dispatched reviewer passes with the retry flag and the same hash.
+    const retry = runScript(
+      ["--scope", "interrupted-angle", "--prefix-hash", hash, "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 0, retry.stderr);
+    const output = JSON.parse(retry.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.sameHeadRetry, true);
+    assert.equal(output.prBodyFixRetry, true, "deprecated mirror field kept while callers migrate");
+    assert.equal(output.prefixHash, hash);
+    assert.match(output.round ?? "", /^[0-9a-f]{40}$/, "the retry happened at the head-keyed round, not the scope-only fallback");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--same-head-retry fails closed on hash mismatch and on a hashless sentinel", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Head-keyed round, same as the happy-path retry test.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "d".repeat(64);
+
+    const first = runScript(["--scope", "mismatch-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    const mismatch = runScript(
+      ["--scope", "mismatch-angle", "--prefix-hash", "e".repeat(64), "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(mismatch.status, 1);
+    assert.match(JSON.parse(mismatch.stdout.trim()).reason, /DIFFERENT prefix hash/);
+
+    // Hashless sentinel: create without a prefix hash, then retry with one.
+    const hashless = runScript(["--scope", "hashless-angle"], { cwd: tmpDir });
+    assert.equal(hashless.status, 0, hashless.stderr);
+    const retry = runScript(
+      ["--scope", "hashless-angle", "--prefix-hash", hash, "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 1);
+    assert.match(JSON.parse(retry.stdout.trim()).reason, /recorded no prefix hash/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--same-head-retry without a prefix hash is a usage error, and the alias emits the new field", async () => {
+  const bare = runScript(["--scope", "findings-present", "--same-head-retry"]);
+  assert.equal(bare.status, 2);
+  assert.match(bare.stderr, /--same-head-retry \(alias --pr-body-fix-retry\) requires/);
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Head-keyed round, same as the other retry tests.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "f".repeat(64);
+    const first = runScript(["--scope", "alias-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    const viaAlias = runScript(
+      ["--scope", "alias-angle", "--prefix-hash", hash, "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(viaAlias.status, 0, viaAlias.stderr);
+    const output = JSON.parse(viaAlias.stdout.trim());
+    assert.equal(output.sameHeadRetry, true, "the alias resolves to the same generalized retry");
+    assert.equal(output.prBodyFixRetry, true);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
