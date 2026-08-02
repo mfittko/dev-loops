@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
-import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveGateFollowUpIssue } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -101,7 +101,11 @@ export function renderSurvivorsCommentBody({ repo, pr, gate, headSha, survivors 
     const disposition = finding.disposition ? sanitizeCell(finding.disposition) : "—";
     lines.push(`| ${sanitizeCell(finding.severity)} | ${sanitizeCell(finding.angle)} | ${sanitizeCell(finding.summary)} | ${location} | ${disposition} |`);
   }
-  return lines.join("\n");
+  // Finding summaries are free-form reviewer text and this comment is posted
+  // on every gate close, so neutralize Copilot summon tokens like every other
+  // finished-comment-body builder does; a filed survivor must never summon a
+  // review onto the follow-up issue.
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
 // Read + validate the findings-log ledger written by write-gate-findings-log.mjs.

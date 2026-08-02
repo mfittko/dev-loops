@@ -151,6 +151,15 @@ test("renderSurvivorsCommentBody renders Location as backtick-wrapped files, or 
   assert.match(body, /\| no files \| — \| — \|/);
 });
 
+test("renderSurvivorsCommentBody neutralizes Copilot summon tokens so a filed survivor cannot summon a review", async () => {
+  const { containsBareCopilotSummon } = await import("../../scripts/_core-helpers.mjs");
+  const survivors = [
+    { severity: "defer", angle: "dry", summary: "ask @copilot to re-review this and honor the /copilot rule" },
+  ];
+  const body = renderSurvivorsCommentBody({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", survivors });
+  assert.equal(containsBareCopilotSummon(body), false, "rendered survivors body must not arm the anti-summon guard");
+});
+
 test("renderSurvivorsCommentBody strips backticks from file refs so a path cannot close its code span", () => {
   const survivors = [
     { severity: "defer", angle: "a", summary: "s", files: ["x`](http://evil) **bold** `y", "a|b.md"] },
