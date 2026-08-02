@@ -412,7 +412,88 @@ offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
 the offending reviewer first. (An angle whose artifact was never written is
 invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.)
+`upsert-checkpoint-verdict.mjs`.) `--out`/`--ledger-out` are also rejected at
+parse time (exit 1) when they resolve to the same path as each other, or when
+either resolves to a direct top-level sibling of the artifacts inside
+`--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact
+discovery is top-level-only).
+
+The render budget applies ONLY to the visible-comment shape (`--out`) — never
+to the ledger (`--ledger-out`, always written in FULL, never budgeted). Fit is
+measured by actually rendering a candidate `--out` shape through
+`upsert-checkpoint-verdict.mjs`'s own render path and catching its
+length-exceeded throw, not an approximated size, so a shape this CLI accepts
+never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
+large to render even at minimum summary length exits 0 with
+`commentBudgetExceeded: true` and degrades `--out` through four tiers, PROVIDED
+`--ledger-out` was also given; without `--ledger-out` the same over-budget
+round instead FAILS CLOSED (exit 1) at the point it would degrade, since a
+degraded round's only durable, unbudgeted record is the ledger and nothing
+would land on disk (the findings would exist only on that process's stdout,
+which the sanctioned ledger/post path cannot consume). Which
+tier an angle lands on is NOT decided by whether that angle's own marker fits
+in isolation: angles are upgraded one at a time, in order of each angle's
+most blocking severity (ties by artifact index), and an upgrade is kept only
+while the WHOLE round still renders — so a defer-only angle can stay bare
+purely because a higher-severity angle consumed the budget first, even
+though its own verbose sentence would fit alone:
+
+1. **real (unmarked)** — an angle whose own real findings, tried at their
+   ORIGINAL pre-shrink length first and falling back to the
+   whole-round-shrunk length, still let the whole round render keeps them
+   as-is, since a marker is a compression and must never replace real
+   content with something bigger.
+2. **verbose** — failing that, that angle's findings are replaced with ONE
+   synthetic marker finding naming its omitted count and severity breakdown.
+3. **bare** — that angle's marker shortens to a bare omitted-count line when
+   neither its real findings nor the verbose sentence fit.
+4. **withheld** — reached only when even the CHEAPEST per-angle shape (the
+   bare line, or an angle's own real findings when those render shorter)
+   across the WHOLE round still does not fit: `findingsJson` in the result is
+   emitted empty and `--out`, if given, is REMOVED from disk (deleted, not
+   merely skipped — a stale prior-round `--out` is never left for a caller to
+   read as this round's findings).
+
+Tiers 1-3 keep the REAL angle set and each angle's REAL verdict intact (never
+collapsed into one foreign section, which would fail
+`upsert-checkpoint-verdict.mjs`'s mandatory-angle/pool validation). Only in
+tier 4 is `--out` never written (or removed if it already existed); whoever
+posts the verdict via the
+[Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract)
+MUST check for `--out`'s existence before passing `--findings-json <path>` —
+passing a path that was never written fails closed with ENOENT; fall back to
+that command's `--findings-summary` instead, naming the round size and
+pointing at the ledger (`--ledger-out`), which is always complete regardless
+of tier. Dropping `--findings-json` does NOT also drop
+`--findings-severity-counts` — that flag's requirement is scoped to
+`verdict === "clean"` under a gate with `blockCleanOnFindingSeverities`
+configured, independent of execution mode, so a clean tier-4 round must still
+pass it. A `--findings-summary` fanout_fanin verdict bypasses
+`upsert-checkpoint-verdict.mjs`'s mandatory-angle/foreign-angle check entirely
+(that check only runs when `--findings-json` was supplied), so a tier-4 round
+MUST still write its findings-log ledger via `write-gate-findings-log.mjs
+--provenance` covering the gate's mandatory angles. This is a POLICY
+obligation on the agent, not a machine-enforced one by default:
+`write-gate-findings-log.mjs` only runs its provenance/mandatory-angle check
+when `--provenance` is actually supplied at write time,
+`gates.requireFanoutProvenance` (which would make that flag required) defaults
+to `false`. That opt-in is NOT the only check, though: for any `fanout_fanin`
+verdict where the gate configures mandatory angles,
+`detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage from the
+ledger's recorded provenance BY DEFAULT — a ledger with absent or invalid
+provenance fails closed there regardless of `requireFanoutProvenance`. Only
+the CI gate-evidence verifier bypasses this, by calling
+`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`; the
+sanctioned pre-merge invocation runs without that flag, so the check is live
+on the merge path by default. Pass `--provenance` on the tier-4 ledger write
+regardless, since it is the only record of mandatory-angle coverage this round
+can have, and a missing one fails the merge-evidence check closed. `commentBudgetExceeded: true` is set on every degraded round
+(tiers 1-4 alike), so it does NOT distinguish tier 4 from tiers 1-3 — `--out`'s
+existence is the only correct discriminator. On a marker-collapsed round, the
+posted `**Findings summary:**` digest counts the real totals (not the marker
+lines) when the caller also passes `--findings-severity-counts` with this
+consolidation's own `severityCounts` (always the true, unbudgeted totals);
+the marker text and the ledger always carry the true numbers regardless.
 
 Consolidation:
 
@@ -588,7 +669,7 @@ resolved-in SHA (for findings resolved in a later pass).
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the inline_single_agent fallback only. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception described above — the tier-4 (withheld) `consolidate-fanin` round, where `--out` was never written and `--findings-json` would fail closed with ENOENT. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 

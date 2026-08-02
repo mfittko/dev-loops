@@ -2588,12 +2588,13 @@ describe("role resolution", () => {
 // consumer .devloops must now explicitly disable a shipped angle it doesn't
 // want (enabled: false), or the angle silently merges back in by name. Pins
 // this repo's own shipped .devloops + extension-defaults.yaml against the
-// exact angle sets / mandatory sets / blockCleanOnFindingSeverities the
-// pre-redesign flat-key config resolved, so a future edit can't silently
-// regrow (or shrink) the effective gate-review surface.
+// exact angle sets / mandatory sets the pre-redesign flat-key config
+// resolved (blockCleanOnFindingSeverities is pinned to the current shipped
+// baseline instead — see CURRENT_BLOCK_CLEAN below), so a future edit can't
+// silently regrow (or shrink) the effective gate-review surface.
 // ============================================================================
 
-describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 (D3 regression guard)", () => {
+describe("shipped .devloops + extension-defaults.yaml resolve byte-identically to pre-#1404 for angle/mandatory sets; blockCleanOnFindingSeverities tracks the current shipped baseline for draft/preApproval and stays pinned to pre-#1404 for spike (D3 regression guard)", () => {
   const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
   // The exact sets origin/main (pre-#1404, flat mandatoryAngles/excludeAngles
@@ -2622,16 +2623,23 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
     spike: [],
   };
-  const PRE_1404_BLOCK_CLEAN = {
-    draft: ["must-fix", "worth-fixing-now"],
-    preApproval: ["must-fix", "worth-fixing-now"],
+  // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
+  // both were deliberately narrowed to must-fix only (see the .devloops
+  // gates.draft and gates.preApproval comments / issue #1527) because
+  // worth-fixing-now churns every gate round on a non-trivial change and
+  // never converges. spike is still pinned to its pre-#1404 value — draft's
+  // and preApproval's entries here track the current shipped baseline
+  // rather than the pre-#1404 one.
+  const CURRENT_BLOCK_CLEAN = {
+    draft: ["must-fix"],
+    preApproval: ["must-fix"],
     spike: ["must-fix"],
   };
 
   const sortedSet = (arr) => [...new Set(arr)].sort();
 
   for (const gate of /** @type {const} */ (["draft", "preApproval", "spike"])) {
-    test(`${gate} gate: resolved angle set, mandatory set, and blockCleanOnFindingSeverities match pre-#1404`, async () => {
+    test(`${gate} gate: resolved angle set and mandatory set match pre-#1404; blockCleanOnFindingSeverities matches the current shipped baseline for draft/preApproval and the pre-#1404 baseline for spike (see CURRENT_BLOCK_CLEAN comment above)`, async () => {
       const { loadDevLoopConfig, resolveGateAngles, resolveGateConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);
@@ -2639,7 +2647,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       const gateConfig = resolveGateConfig(config, gate);
       assert.deepEqual(sortedSet(angles), sortedSet(PRE_1404_ANGLE_SETS[gate]), `${gate} angle set`);
       assert.deepEqual(sortedSet(gateConfig.mandatoryAngles), sortedSet(PRE_1404_MANDATORY_SETS[gate]), `${gate} mandatory set`);
-      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(PRE_1404_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
+      assert.deepEqual(sortedSet(gateConfig.blockCleanOnFindingSeverities), sortedSet(CURRENT_BLOCK_CLEAN[gate]), `${gate} blockCleanOnFindingSeverities`);
     });
   }
 
@@ -3198,6 +3206,34 @@ test("resolveGateDispatchMode: under threshold + only non-blocking finding → i
   });
   assert.equal(result.mode, "inline");
   assert.equal(result.reason, "under_threshold");
+});
+
+test("resolveGateDispatchMode: draft gate under threshold + worth-fixing-now-only inline finding → stays inline (must-fix-only blocking set)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["worth-fixing-now"],
+  });
+  assert.equal(result.mode, "inline");
+  assert.equal(result.reason, "under_threshold");
+});
+
+test("resolveGateDispatchMode: draft gate under threshold + must-fix inline finding → escalated", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["must-fix"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
 });
 
 test("GATE_FULL_LABEL is gate:full", () => {
