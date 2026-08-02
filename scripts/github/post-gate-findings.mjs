@@ -238,7 +238,7 @@ export function buildFindingsMarker({ gate }) {
 // marker (breaking idempotent comment matching) or otherwise smuggle an HTML
 // comment into the rendered body. We escape the opening/closing angle brackets so
 // the delimiter renders as visible literal text and cannot form a real comment.
-function sanitizeInline(value) {
+export function sanitizeInline(value) {
   return String(value)
     .replace(/\s+/g, " ")
     .replace(/<!--/g, "&lt;!--")
@@ -328,7 +328,7 @@ async function runGhJson(args, { env, ghCommand }) {
   return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
 }
 
-async function listIssueComments({ repo, pr }, { env, ghCommand }) {
+export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
   const payload = await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`],
     { env, ghCommand },
@@ -340,7 +340,7 @@ async function listIssueComments({ repo, pr }, { env, ghCommand }) {
   return Array.isArray(payload) ? payload : [];
 }
 
-function findMarkedComment(comments, marker) {
+export function findMarkedComment(comments, marker) {
   for (const comment of comments) {
     if (comment && typeof comment.body === "string" && comment.body.includes(marker)) {
       return comment;

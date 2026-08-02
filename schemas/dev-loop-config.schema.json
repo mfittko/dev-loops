@@ -257,6 +257,69 @@
                   "defer"
                 ]
               }
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
@@ -360,6 +423,69 @@
                   "defer"
                 ]
               }
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
@@ -463,6 +589,69 @@
                   "defer"
                 ]
               }
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
@@ -497,6 +686,11 @@
         "rejectForeignAngles": {
           "type": "boolean",
           "description": "Reject fan-out provenance naming angles outside the gate's configured pool (default true)."
+        },
+        "followUpIssue": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Tracker issue number that consolidated gate-survivor findings are filed against."
         }
       },
       "additionalProperties": false,

@@ -25,6 +25,8 @@ import {
   resolveGateAngleContract,
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
+  resolveGateTier,
+  resolveGateFollowUpIssue,
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
@@ -2168,6 +2170,7 @@ describe("role resolution", () => {
         dynamicAngles: false,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
+        tiers: [],
       });
     });
 
@@ -2187,6 +2190,7 @@ describe("role resolution", () => {
         dynamicAngles: false,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
+        tiers: [],
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);
     });
@@ -3817,6 +3821,278 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(resolveGateConfig(config, "draft").additiveAngles, false);
   });
 
+  // ── Diff-class angle tiers (issue #1550): resolveGateTier consult at the top
+  // of resolveGateAnglesDynamic ──────────────────────────────────────────────
+
+  // Docs-only diff fixture: two markdown files, one changed line each (2 added
+  // + 2 deleted = 4 lines total via analyzeT1's real hunk-level count — NOT
+  // the fake-zero lineStats analyzeDiff's inferred-category path reports for
+  // an unambiguous diff).
+  const docsOnlyDiff = {
+    nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md",
+    diffOutput: [
+      "diff --git a/docs/guide.md b/docs/guide.md",
+      "@@ -1,1 +1,1 @@",
+      "-old guide line",
+      "+new guide line",
+      "diff --git a/README.md b/README.md",
+      "@@ -1,1 +1,1 @@",
+      "-old readme line",
+      "+new readme line",
+    ].join("\n"),
+  };
+
+  function draftConfigWithTiers(tiers) {
+    return {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["docs", "link-check", "correctness", { name: "pr-description", mandatory: true }],
+          ...(tiers ? { tiers } : {}),
+        },
+      },
+    };
+  }
+
+  test("tiers: a docs-only diff matching a configured tier returns the tier's angle set with a tier:<name> rationale", async () => {
+    const config = draftConfigWithTiers([
+      { name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["docs", "link-check"] },
+    ]);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check"]);
+    assert.deepEqual(result.skippedAngles, ["correctness"]);
+    assert.deepEqual(result.reasons, { correctness: "tier:docs-only" });
+    assert.equal(result.fallbackToAll, false);
+    assert.deepEqual(result.addedAngles, []);
+    assert.deepEqual(result.addedReasons, {});
+  });
+
+  test("tiers: the same diff WITHOUT a configured tier resolves byte-identically to today's static-angle behavior (regression)", async () => {
+    const config = draftConfigWithTiers(null);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff });
+    assert.deepEqual(result, {
+      recommendedAngles: ["pr-description", "docs", "link-check", "correctness"],
+      skippedAngles: [],
+      reasons: {},
+      fallbackToAll: false,
+      dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
+    });
+  });
+
+  test("tiers: hasFullLabel true skips tier resolution even when a tier would otherwise match", async () => {
+    const config = draftConfigWithTiers([
+      { name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["docs", "link-check"] },
+    ]);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff, hasFullLabel: true });
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check", "correctness"]);
+  });
+
+});
+
+describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
+  function draftConfigWithTiers(tiers) {
+    return {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["docs", "link-check", "correctness", "gate-evidence", { name: "pr-description", mandatory: true }],
+          tiers,
+        },
+      },
+    };
+  }
+
+  test("gate:full label bypasses tier resolution → gate_full_label", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md"],
+      filesChanged: 1,
+      linesChanged: 10,
+      hasFullLabel: true,
+    });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "gate_full_label" });
+  });
+
+  test("no tiers configured → no_tiers_configured", () => {
+    const config = { version: 1, gates: { draft: { angles: ["docs"] } } };
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "no_tiers_configured" });
+  });
+
+  test("an explicitly-empty tiers array also resolves to no_tiers_configured", () => {
+    const config = draftConfigWithTiers([]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "no_tiers_configured");
+  });
+
+  test("scope_unavailable: changedFiles omitted", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: changedFiles is an empty array", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: [], filesChanged: 0, linesChanged: 0 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: changedFiles is not an array", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: "docs/guide.md", filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: filesChanged is non-finite", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: Infinity, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: linesChanged is non-finite", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: NaN });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("config_source_delta: a changed .devloops path fails closed even when a tier would otherwise match", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { kinds: ["docs", "config"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: [".devloops"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "config_source_delta");
+  });
+
+  test("unclassifiable_file: an unknown-kind changed file fails closed", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["assets/logo.png"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "unclassifiable_file");
+  });
+
+  test("kinds-only match: every changed file's classifyFile kind must be in the tier's kinds set", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs", "link-check"] }]);
+    const matched = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md", "README.md"],
+      filesChanged: 2,
+      linesChanged: 5000,
+    });
+    assert.equal(matched.tier, "docs-only");
+    assert.equal(matched.reason, "tier_match");
+    assert.deepEqual(matched.angles, ["pr-description", "docs", "link-check"]);
+
+    const mixed = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md", "src/main.mjs"],
+      filesChanged: 2,
+      linesChanged: 5,
+    });
+    assert.equal(mixed.reason, "no_tier_match");
+  });
+
+  test("maxLines-only match: line-count bound applies regardless of kind or file count", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { maxLines: 50 }, angles: ["correctness"] }]);
+    const atBound = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 50 });
+    assert.equal(atBound.reason, "tier_match");
+    const overBound = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 51 });
+    assert.equal(overBound.reason, "no_tier_match");
+  });
+
+  test("combined kinds + maxFiles + maxLines match requires every configured condition", () => {
+    const config = draftConfigWithTiers([
+      { name: "small-non-code", match: { kinds: ["docs", "test"], maxFiles: 3, maxLines: 50 }, angles: ["correctness"] },
+    ]);
+    const underBound = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/a.md", "test/b.test.mjs"],
+      filesChanged: 2,
+      linesChanged: 40,
+    });
+    assert.equal(underBound.reason, "tier_match");
+    const overLines = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/a.md", "test/b.test.mjs"],
+      filesChanged: 2,
+      linesChanged: 60,
+    });
+    assert.equal(overLines.reason, "no_tier_match");
+  });
+
+  test("first-match-wins: an earlier tier shadows a later one that would also match", () => {
+    const config = draftConfigWithTiers([
+      { name: "broad", match: { kinds: ["docs"] }, angles: ["docs"] },
+      { name: "narrow", match: { kinds: ["docs"], maxLines: 10 }, angles: ["link-check"] },
+    ]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.tier, "broad");
+  });
+
+  test("mandatory angles are always unioned into the matched tier's angle set", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["gate-evidence"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.ok(result.angles.includes("pr-description"));
+    assert.ok(result.angles.includes("gate-evidence"));
+  });
+
+  test("angle_outside_pool: a tier angle absent from the gate's angle pool voids the whole match (no partial intersection)", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs", "typo-angle"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "angle_outside_pool" });
+  });
+
+  test("no_tier_match: no configured tier's conditions hold for this diff", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "no_tier_match" });
+  });
+
+  test("spike gate: a tier configured on gates.spike is accepted", () => {
+    const config = {
+      version: 1,
+      gates: {
+        spike: { angles: ["docs"], tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }] },
+      },
+    };
+    const result = resolveGateTier(config, "spike", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.tier, "docs-only");
+    assert.equal(result.reason, "tier_match");
+  });
+
+  test("zod: an empty match ({}) is rejected at config-parse time", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
+    });
+    assert.equal(result.success, false);
+  });
+
+  test("zod: FileConfigSchema also rejects an empty match", () => {
+    const result = FileConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
+    });
+    assert.equal(result.success, false);
+  });
+});
+
+describe("resolveGateFollowUpIssue (issue #1550)", () => {
+  test("returns the configured issue number", () => {
+    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: 1544 } }), 1544);
+  });
+
+  test("returns null when absent", () => {
+    assert.equal(resolveGateFollowUpIssue({ version: 1 }), null);
+  });
+
+  test("returns null for 0", () => {
+    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: 0 } }), null);
+  });
+
+  test("returns null for a negative number", () => {
+    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: -5 } }), null);
+  });
+
+  test("returns null for a string value", () => {
+    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: "1544" } }), null);
+  });
 });
 
 describe("gates.requireFanoutEvidence", () => {

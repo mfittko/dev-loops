@@ -4,6 +4,8 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { classifyFile } from "../analysis/diff-analyzer.mjs";
+import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
 
 // ============================================================================
 // Sub-schemas
@@ -147,6 +149,38 @@ const GateAngleEntry = z.preprocess(
   }),
 );
 
+// Diff-class kinds a tier's `match` can name — exactly classifyFile()'s
+// output range (../analysis/diff-analyzer.mjs), so a tier config can never
+// name a kind the classifier could not produce.
+const GateTierMatchKind = z.enum(["code", "docs", "config", "test", "ci", "unknown"]);
+
+// A tier's match conditions: EVERY changed file's kind must be in `kinds`
+// (when set) AND the change must stay within `maxFiles`/`maxLines` (when
+// set). At least one condition is required — a bare `{}` would match every
+// diff unconditionally, which is never the intent of an explicit tier entry.
+const GateTierMatch = z
+  .strictObject({
+    kinds: z.array(GateTierMatchKind).min(1).describe("Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set.").optional(),
+    maxFiles: z.number().int().min(1).describe("Match only when the change touches at most this many files.").optional(),
+    maxLines: z.number().int().min(1).describe("Match only when the change stays within this many changed lines.").optional(),
+  })
+  .superRefine((match, ctx) => {
+    if (match.kinds === undefined && match.maxFiles === undefined && match.maxLines === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "match must set at least one of kinds, maxFiles, maxLines",
+      });
+    }
+  });
+
+// One diff-class angle tier: a fixed angle set applied instead of dynamic
+// subtractive/additive reduction when `match` holds. See resolveGateTier.
+const GateTier = z.strictObject({
+  name: z.string().trim().min(1).describe("Tier name; surfaces as the tier:<name> resolution reason."),
+  match: GateTierMatch.describe("Diff-class conditions that select this tier."),
+  angles: z.array(z.string().trim().min(1)).min(1).describe("Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."),
+});
+
 const GateDynamicConfig = z.strictObject({
   subtractive: z.boolean().default(false).describe("Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles)."),
   // Additive counterpart to the subtractive path (#1048): when true, the
@@ -174,6 +208,10 @@ const GateConfig = z.strictObject({
     .min(1)
     .default(["must-fix"])
     .describe("Finding severities that block a clean gate verdict."),
+  // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
+  // Absent/empty = tiers never apply, so a gate that never sets this key keeps
+  // today's dynamic-subtractive/additive/full-pool resolution unchanged.
+  tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
 });
 
 const GatesConfig = z.strictObject({
@@ -232,6 +270,10 @@ const GatesConfig = z.strictObject({
   // (reject); set false to warn instead of fail. See resolveRejectForeignAngles
   // / skills/docs/gate-review-sub-loop-contract.md.
   rejectForeignAngles: z.boolean().default(true),
+  // Tracker issue that consolidated gate-survivor findings (non-blocking
+  // findings a clean verdict does not re-run for) are filed against. No
+  // default — absent means survivor filing has nowhere to file to.
+  followUpIssue: z.number().int().min(1).describe("Tracker issue number that consolidated gate-survivor findings are filed against.").optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -593,6 +635,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
+  followUpIssue: z.number().int().min(1).describe("Tracker issue number that consolidated gate-survivor findings are filed against.").optional(),
 });
 
 // ============================================================================
@@ -1625,7 +1668,7 @@ export function resolveRefinement(config) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, tiers: Array<{name: string, match: object, angles: string[]}> }}
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
@@ -1645,6 +1688,7 @@ export function resolveGateConfig(config, gate) {
     blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
       ? [...gateConfig.blockCleanOnFindingSeverities]
       : ["must-fix"],
+    tiers: gateConfig?.tiers ?? [],
   };
 }
 
@@ -1923,6 +1967,84 @@ export function resolveGateAngleContract(config, gate) {
 }
 
 /**
+ * Resolve the tracker issue number that consolidated gate-survivor findings
+ * (non-blocking findings a clean verdict does not re-run for) are filed
+ * against. Absent/malformed values resolve to `null` (fail closed: nothing
+ * to file against).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {number|null}
+ */
+export function resolveGateFollowUpIssue(config) {
+  const value = config?.gates?.followUpIssue;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/**
+ * Resolve the diff-class angle tier for a gate from its configured, ordered
+ * `gates.<gate>.tiers` list (first-match-wins). Pure and synchronous — the
+ * single source of truth for tier selection, consulted at the top of
+ * `resolveGateAnglesDynamic` before any dynamic subtractive/additive
+ * reduction runs.
+ *
+ * FAIL CLOSED at every uncertain step: the `gate:full` label, no tiers
+ * configured, an unavailable/malformed scope, a changed dev-loop
+ * config-source file (`isDevLoopConfigSourcePath`), or an unclassifiable
+ * changed file (`classifyFile` returns "unknown") all resolve to `tier: null`
+ * rather than a guess. A matched tier's angle set is additionally validated
+ * against the gate's angle pool (`resolveGateAngleContract`) — ANY tier angle
+ * outside a non-null pool voids the whole match (no partial intersection): a
+ * typo'd tier angle is caught here, not by silently dropping reviewers at
+ * gate time.
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate
+ * @param {object} facts
+ * @param {string[]} [facts.changedFiles] — repo-relative changed file paths for this diff
+ * @param {number} [facts.filesChanged] — count of changed files
+ * @param {number} [facts.linesChanged] — count of changed lines (added + deleted)
+ * @param {boolean} [facts.hasFullLabel] — `gate:full` label present on the PR
+ * @returns {{ tier: string|null, angles: string[]|null, reason: string }}
+ */
+export function resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel = false } = {}) {
+  if (hasFullLabel) {
+    return { tier: null, angles: null, reason: "gate_full_label" };
+  }
+  const tiers = resolveGateConfig(config, gate).tiers;
+  if (tiers.length === 0) {
+    return { tier: null, angles: null, reason: "no_tiers_configured" };
+  }
+  if (
+    !Array.isArray(changedFiles) || changedFiles.length === 0 ||
+    !Number.isFinite(filesChanged) || !Number.isFinite(linesChanged)
+  ) {
+    return { tier: null, angles: null, reason: "scope_unavailable" };
+  }
+  if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
+    return { tier: null, angles: null, reason: "config_source_delta" };
+  }
+  const kinds = changedFiles.map((f) => classifyFile(f));
+  if (kinds.some((k) => k === "unknown")) {
+    return { tier: null, angles: null, reason: "unclassifiable_file" };
+  }
+  const matched = tiers.find((t) => {
+    const match = t.match ?? {};
+    if (Array.isArray(match.kinds) && !kinds.every((k) => match.kinds.includes(k))) return false;
+    if (typeof match.maxFiles === "number" && filesChanged > match.maxFiles) return false;
+    if (typeof match.maxLines === "number" && linesChanged > match.maxLines) return false;
+    return true;
+  });
+  if (!matched) {
+    return { tier: null, angles: null, reason: "no_tier_match" };
+  }
+  const { mandatoryAngles, pool } = resolveGateAngleContract(config, gate);
+  if (pool !== null && matched.angles.some((a) => !pool.includes(a))) {
+    return { tier: null, angles: null, reason: "angle_outside_pool" };
+  }
+  return { tier: matched.name, angles: [...new Set([...mandatoryAngles, ...matched.angles])], reason: "tier_match" };
+}
+
+/**
  * Resolve gate angles dynamically when `dynamicAngles` is enabled in config.
  *
  * Uses diff analysis helpers (from ../analysis/*) to filter the
@@ -1937,13 +2059,55 @@ export function resolveGateAngleContract(config, gate) {
  * by change-category heuristics but absent from the gate's configured pool
  * may also be added; `excludeAngles` remains a hard ceiling on additions.
  *
+ * Diff-class angle tiers (`gates.<gate>.tiers`, see `resolveGateTier`) are
+ * consulted FIRST, ahead of any subtractive/additive reduction below: when the
+ * diff's changed-file scope matches a configured tier, that tier's angle set
+ * (unioned with mandatory angles) is returned directly and the
+ * subtractive/additive machinery below is skipped entirely. No tier match
+ * (including "no tiers configured") falls through to the existing behavior
+ * unchanged.
+ *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} [options]
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
+ * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export async function resolveGateAnglesDynamic(config, gate, { diff } = {}) {
+export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false } = {}) {
+  // Tier scope facts: changedFiles/filesChanged from T0 (file-level), linesChanged
+  // from T1 (hunk-level) reused for its real added+deleted line count rather than
+  // T0's/analyzeDiff's own inferred-category path, which reports a fake 0 line
+  // count for an unambiguous (e.g. docs-only) diff — see analyzeT1/analyzeDiff.
+  let changedFiles;
+  let filesChanged;
+  let linesChanged;
+  if (diff) {
+    const { analyzeT0, analyzeT1 } = await import("../analysis/diff-analyzer.mjs");
+    const t0 = analyzeT0(diff.nameStatusOutput);
+    changedFiles = t0.files;
+    filesChanged = changedFiles.length;
+    if (diff.diffOutput) {
+      const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
+      linesChanged = lineStats.added + lineStats.deleted;
+    }
+  }
+  const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });
+  if (tierResult.tier) {
+    const configuredAngles = resolveGateAngles(config, gate) ?? [];
+    const tierAngleSet = new Set(tierResult.angles);
+    const skippedAngles = configuredAngles.filter((a) => !tierAngleSet.has(a));
+    return {
+      recommendedAngles: tierResult.angles,
+      skippedAngles,
+      reasons: Object.fromEntries(skippedAngles.map((a) => [a, `tier:${tierResult.tier}`])),
+      fallbackToAll: false,
+      dynamicAnglesActive: true,
+      addedAngles: [],
+      addedReasons: {},
+    };
+  }
+
   const gateConfig = resolveGateConfig(config, gate);
   const staticAngles = resolveGateAngles(config, gate);
   if (staticAngles === null) {
