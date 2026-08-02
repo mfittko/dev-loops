@@ -523,7 +523,11 @@ test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", ()
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '["docs"]']),
-    /--carry-forward-plan must be a JSON object with a "carried" array/,
+    /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '"not-an-object-or-array"']),
+    /--carry-forward-plan must be a JSON object with a "carried" array, or a bare JSON array/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"notCarried":[]}']),
@@ -533,6 +537,27 @@ test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", ()
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"carried":[{"angle":"docs"}]}']),
     /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
   );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"carried":[{"angle":"docs","carriedFromHead":"not-a-sha"}]}']),
+    /carried\[0\]\.carriedFromHead must be a 7-64 char hex SHA/,
+  );
+});
+
+// contract-surface (worth-fixing-now): the shipped Phase 3 procedure, this
+// CLI's own --help, and its former error text all documented --carry-forward-plan
+// as accepting "resolve-angle-carry-forward.mjs's own result, or at least its
+// `carried` array" — but the parser rejected a bare array outright. Accept it
+// (normalized to `{ carried: <array> }`) so that documented shorthand is true,
+// rather than rewriting four doc/error-text sites to instead demand the
+// wrapper object.
+test("parseConsolidateFaninCliArgs accepts a bare JSON array as --carry-forward-plan", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--gate", "draft_gate",
+    "--carried-angles", '["docs"]',
+    "--carry-forward-plan", '[{"angle":"docs","carriedFromHead":"AAA1234"}]',
+  ]);
+  assert.deepEqual(result.carryForwardPlan, [{ angle: "docs", carriedFromHead: "aaa1234" }]);
 });
 
 test("parseConsolidateFaninCliArgs rejects --carried-angles / --carry-forward-plan / --gate given without each other", () => {
@@ -661,6 +686,82 @@ test("consolidateGateFanin refuses a --carried-angles entry that is the gate's c
   });
 });
 
+// must-fix (gate-evidence/correctness, round 2): the ALWAYS_INCLUDE surface
+// (gate-evidence, renderer-security, pr-description) is refused UNCONDITIONALLY
+// — angleReviewSurface returns { kind: "always" } for these regardless of the
+// gate's CONFIGURED mandatoryAngles set, so checking only mandatoryAngles (as a
+// prior version did) let a plan naming gate-evidence/renderer-security mint a
+// clean entry at draft_gate, where neither is configured mandatory.
+test("consolidateGateFanin refuses gate-evidence and renderer-security for draft_gate even though neither is a configured mandatory angle there", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    for (const angle of ["gate-evidence", "renderer-security"]) {
+      await withFindingsDir(
+        { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+        async (dir) => {
+          await assert.rejects(
+            () => consolidateGateFanin({
+              findingsDir: dir,
+              gate: "draft_gate",
+              repoRoot,
+              carriedAngles: [angle],
+              carryForwardPlan: JSON.parse(carryForwardPlanJson([angle])).carried,
+            }),
+            new RegExp(`${angle}.*never legitimately carry forward|can never legitimately carry forward.*${angle}`, "s"),
+          );
+        },
+      );
+    }
+  });
+});
+
+// Same predicate, at pre_approval_gate: pr-description is not in THIS repo's
+// configured preApproval mandatoryAngles (acceptance-criteria/yagni/
+// contradiction-lens/pr-checklist-matrix are), but it is still hardcoded
+// ALWAYS_INCLUDE and must still be refused.
+test("consolidateGateFanin refuses pr-description for pre_approval_gate even though it is not that gate's configured mandatory angle", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "pre_approval_gate",
+            repoRoot,
+            carriedAngles: ["pr-description"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["pr-description"])).carried,
+          }),
+          /pr-description.*never legitimately carry forward|can never legitimately carry forward.*pr-description/s,
+        );
+      },
+    );
+  });
+});
+
+// An unmapped/unknown angle name (angleReviewSurface -> { kind: "unknown" })
+// must also be refused — resolve-angle-carry-forward.mjs's own producer never
+// carries such a name either (fail-closed default), so a plan claiming
+// otherwise can only be fabricated.
+test("consolidateGateFanin refuses an unmapped/unknown --carried-angles entry", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["totally-bogus-unmapped-angle"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["totally-bogus-unmapped-angle"])).carried,
+          }),
+          /totally-bogus-unmapped-angle.*no declared review surface|no declared review surface.*totally-bogus-unmapped-angle/s,
+        );
+      },
+    );
+  });
+});
+
 // must-fix (gate-evidence, consolidate-fanin.mjs:641): a carried name absent
 // from the proven carry-forward plan is refused — the plan is the evidence
 // that an angle was actually resolved as carried, not just typed in.
@@ -720,6 +821,83 @@ test("consolidateGateFanin consolidates an all-carried round even with an empty 
     } finally {
       await rm(emptyDir, { recursive: true, force: true });
     }
+  });
+});
+
+// determinism (worth-fixing-now): two DISTINCT carried names sharing a
+// base+lowercase key (a base angle and its `-delta-at-<sha>` re-review
+// sibling — both legal, independently carry-forward-eligible rows per
+// resolve-angle-carry-forward.mjs's own bucketed attribution) must BOTH
+// upsert, regardless of --carried-angles array order. A prior version's
+// upsert-suppression set was mutated inside the loop and collapsed the
+// second-listed name into a no-op.
+test("consolidateGateFanin upserts both carried entries when two distinct names share a base+lowercase key, in either array order", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    for (const angles of [["coverage", "coverage-delta-at-abc1234"], ["coverage-delta-at-abc1234", "coverage"]]) {
+      await withFindingsDir(
+        { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+        async (dir) => {
+          const result = await consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: angles,
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(angles)).carried,
+          });
+          assert.deepEqual(
+            result.angles.map((a) => a.angle).sort(),
+            ["coverage", "coverage-delta-at-abc1234", "docs"].sort(),
+            `order ${JSON.stringify(angles)} must not drop either carried sibling`,
+          );
+        },
+      );
+    }
+  });
+});
+
+// coverage (worth-fixing-now): the entry-shape check must be enforced INSIDE
+// consolidateGateFanin too, not only on the parse path — a programmatic caller
+// bypasses parseConsolidateFaninCliArgs (and its validateCarryForwardPlanShape
+// call) entirely. Three previously-untested shapes: missing carriedFromHead
+// (the SILENT defect — minted an unmarked clean row indistinguishable from a
+// fresh review instead of failing closed), missing angle, and a null entry.
+test("consolidateGateFanin fails closed on a malformed programmatic --carry-forward-plan entry (parser bypassed)", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [{ angle: "correctness" }], // missing carriedFromHead
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [{ carriedFromHead: "a".repeat(40) }], // missing angle
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [null],
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+      },
+    );
   });
 });
 
@@ -925,6 +1103,35 @@ test("consolidateGateFanin fails closed on an unknown severity", async () => {
       await assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /unknown severity "urgent"/);
     },
   );
+});
+
+// must-fix (input-validation): a raw per-angle findings artifact that
+// self-declares "carriedFromHead" must NOT flow that claim through — a fresh
+// reviewer artifact is the least-trusted input in the flow (subagent-written,
+// glob-discovered from --findings-dir) and, before this guard, this bypassed
+// BOTH proof checks (--carried-angles's mandatory/ALWAYS_INCLUDE + plan checks)
+// entirely: exit 0, angle marked carried, with NO --carried-angles given at
+// all. Reproduces the reviewer's exact repro (a mandatory-angle artifact
+// self-declaring carriedFromHead, no carry flags whatsoever).
+test("consolidateGateFanin refuses a raw artifact that self-declares carriedFromHead, even with no --carried-angles at all", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "acceptance-criteria.json": {
+          angle: "acceptance-criteria",
+          verdict: "clean",
+          findings: [],
+          carriedFromHead: "abc1234",
+        },
+      },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, gate: "pre_approval_gate", repoRoot }),
+          /must not declare "carriedFromHead"/,
+        );
+      },
+    );
+  });
 });
 
 // End-to-end acceptance: the emitted findingsJson must survive the REAL

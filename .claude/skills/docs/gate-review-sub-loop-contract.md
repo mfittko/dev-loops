@@ -391,7 +391,8 @@ sanctioned fan-in CLI:
 
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> \
-  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path>
+  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
+  [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
@@ -410,9 +411,28 @@ the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). FAILS CLOSED (exit 1, naming the
 offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
-the offending reviewer first. (An angle whose artifact was never written is
-invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.) `--out`/`--ledger-out` are also rejected at
+the offending reviewer first.
+
+`--carried-angles <json>` (a JSON array of angle-name strings — Phase 1.2's
+`plan.carried[].angle` values) upserts `{ angle, verdict: "clean", findings:
+[], carriedFromHead: <A> }` for every named angle with no Phase 2 artifact, so
+a carried angle stays visible to `findingsJson`/the mandatory-angle coverage
+check/the posted verdict comment instead of reading as a truncated fan-out (an
+angle whose artifact was never written and is NOT named here is still
+invisible to the CLI). `--carried-angles` is PAIR-REQUIRED with both `--gate`
+and `--carry-forward-plan <json>` (Phase 1.2's own plan result, or just its
+`carried` array) — the plan is the proof, checked against the SAME
+`angleReviewSurface` predicate `resolve-angle-carry-forward.mjs`'s own producer
+uses, so the two can never drift. Given without its pair, or given a name that
+predicate refuses (a configured mandatory angle, a hardcoded `ALWAYS_INCLUDE`
+angle — `gate-evidence`/`renderer-security`/`pr-description` — or an
+unmapped/unknown angle) or absent from the plan's own `carried` list, the CLI
+FAILS CLOSED (exit 1) rather than mint a fabricated clean entry. The emitted
+`carriedFromHead` field marks ONLY an entry this flag upserted — every
+freshly reviewed angle's entry omits it — so `--out`'s own shape, not just the
+ledger's `provenance.perAngle`, distinguishes carried from fresh.
+
+`--out`/`--ledger-out` are also rejected at
 parse time (exit 1) when they resolve to the same path as each other, or when
 either resolves to a direct top-level sibling of the artifacts inside
 `--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact

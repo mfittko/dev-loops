@@ -55,6 +55,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
+import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
@@ -114,17 +115,23 @@ Optional:
                                  case-insensitively, same rule resolve-angle-carry-forward.mjs uses — always
                                  wins; this never overrides one). Same upsert semantics as
                                  --pr-checklist-matrix, generalized, plus the two guards below. FAILS CLOSED
-                                 (exit 1) on any named angle that (a) is one of --gate's configured
-                                 MANDATORY angles — resolve-angle-carry-forward.mjs guarantees a mandatory
-                                 angle is never in plan.carried, so this can only be a fabricated or stale
-                                 list — or (b) is absent from --carry-forward-plan's own "carried" list —
-                                 refusing to manufacture GitHub-visible "reviewed at this head" evidence for
-                                 an angle nothing actually proved was carried.
-  --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result (or any object with its
-                                 "carried" field: [{ angle, carriedFromHead, reason?, reviewer?,
-                                 dispatchId?, model? }]) — the proof --carried-angles is checked against.
-                                 Required together with --carried-angles (given without it, or vice versa,
-                                 fails closed at parse time).
+                                 (exit 1) on any named angle whose angleReviewSurface(...).kind !== "kinds"
+                                 (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
+                                 resolve-angle-carry-forward.mjs's own producer uses for plan.carried
+                                 membership, fed --gate's configured mandatoryAngles as alwaysRerun: this
+                                 refuses a configured MANDATORY angle, a hardcoded ALWAYS_INCLUDE angle
+                                 (gate-evidence/renderer-security/pr-description, unconditionally, regardless
+                                 of config), and an unmapped/unknown angle in one seam — or is absent from
+                                 --carry-forward-plan's own "carried" list — refusing to manufacture
+                                 GitHub-visible "reviewed at this head" evidence for an angle nothing
+                                 actually proved was carried.
+  --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
+                                 "carried" field, or a bare JSON array of carried entries:
+                                 [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model? }] — the
+                                 proof --carried-angles is checked against. Each entry's carriedFromHead must
+                                 be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound;
+                                 normalized trim+lowercase). Required together with --carried-angles (given
+                                 without it, or vice versa, fails closed at parse time).
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
@@ -165,13 +172,16 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
-     violation, duplicate angle name across artifacts, blocked fan-in (a malformed or
-     blocked per-angle artifact), (with --gate) an unloadable/invalid worktree config,
-     a --carried-angles entry that is a configured mandatory angle or is absent from
+  1  Argument error, missing/empty --findings-dir, unparseable artifact, a per-angle
+     artifact that self-declares "carriedFromHead", schema violation, duplicate angle
+     name across artifacts, blocked fan-in (a malformed or blocked per-angle artifact),
+     (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
+     angleReviewSurface(...).kind !== "kinds" (a configured mandatory angle, a hardcoded
+     ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
      --carry-forward-plan's "carried" list, --carried-angles given without
-     --carry-forward-plan/--gate (or vice versa), or a round still over the render
-     budget at minimum summary length with --ledger-out not given
+     --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
+     malformed "carriedFromHead" (not a 7-64 char hex SHA), or a round still over the
+     render budget at minimum summary length with --ledger-out not given
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -396,31 +406,62 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   return { commentFindingsJson: marked, withheldOut: false };
 }
 
+// Bound to write-gate-findings-log.mjs's OWN carriedFromHead validation
+// (--provenance.perAngle[].carriedFromHead) so the two provenance surfaces
+// agree on what a head SHA is (worth-fixing-now: a prior version accepted any
+// non-empty string here and stamped it verbatim into "angles"/"findingsJson").
+const CARRIED_FROM_HEAD_RE = /^[0-9a-f]{7,64}$/i;
+
+// Validate + normalize (in place) a "carried" entries array's per-entry shape:
+// a non-empty "angle" and a "carriedFromHead" that is a 7-64 char hex SHA.
+// Shared by BOTH the parse-time path (validateCarryForwardPlanShape, below) and
+// consolidateGateFanin's own re-check of options.carryForwardPlan (coverage:
+// a programmatic caller that bypasses the parser was previously re-checked
+// only for PRESENCE of a carryForwardPlan array, never entry SHAPE, so e.g.
+// `[{ angle: "x" }]` — missing carriedFromHead entirely — minted an unmarked
+// clean row indistinguishable from a fresh review instead of failing closed).
+function validateCarryForwardPlanEntries(carried) {
+  carried.forEach((entry, i) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+        || typeof entry.angle !== "string" || entry.angle.trim().length === 0
+        || typeof entry.carriedFromHead !== "string") {
+      throw new Error(`--carry-forward-plan carried[${i}] must be an object with non-empty string "angle" and "carriedFromHead" fields (resolve-angle-carry-forward.mjs's plan.carried shape)`);
+    }
+    const normalized = entry.carriedFromHead.trim().toLowerCase();
+    if (!CARRIED_FROM_HEAD_RE.test(normalized)) {
+      throw new Error(`--carry-forward-plan carried[${i}].carriedFromHead must be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound), got ${JSON.stringify(entry.carriedFromHead)}`);
+    }
+    entry.carriedFromHead = normalized;
+  });
+  return carried;
+}
+
 // Validate --carry-forward-plan's shape at parse time: an object carrying a
 // "carried" array (resolve-angle-carry-forward.mjs's own result object
-// satisfies this directly — its top-level "carried" field — so the sanctioned
-// invocation can pass that CLI's stdout straight through). Every entry must
-// carry a non-empty "angle" and "carriedFromHead" (the two fields
+// satisfies this directly — its top-level "carried" field), OR a bare JSON
+// array of carried entries (contract-surface: the shipped Phase 3 procedure,
+// this CLI's own --help, and its error text all documented that shorthand as
+// accepted while the code rejected it outright — normalizing the bare-array
+// case here makes the documented shorthand true, which is less churn than
+// rewriting four doc/error-text sites to instead demand the full wrapper) —
+// so the sanctioned invocation can pass that CLI's stdout, or just its
+// "carried" field, straight through. Every entry must carry a non-empty
+// "angle" and a "carriedFromHead" that is a 7-64 char hex SHA (the two fields
 // --carried-angles's validation and the carriedFromHead stamping below both
 // need) — malformed/missing evidence fails closed HERE rather than silently
-// treating an unmatched name as "not carried" later.
+// treating an unmatched name as "not carried" later, or a garbage provenance
+// marker reaching --out.
 // Returns the validated "carried" array (not the whole plan object) — the
 // only part consolidateGateFanin actually consumes.
 function validateCarryForwardPlanShape(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error('--carry-forward-plan must be a JSON object with a "carried" array (resolve-angle-carry-forward.mjs\'s own result, or at least its "carried" field)');
+  const plan = Array.isArray(raw) ? { carried: raw } : raw;
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    throw new Error('--carry-forward-plan must be a JSON object with a "carried" array, or a bare JSON array of carried entries (resolve-angle-carry-forward.mjs\'s own result, or just its "carried" field)');
   }
-  if (!Array.isArray(raw.carried)) {
+  if (!Array.isArray(plan.carried)) {
     throw new Error('--carry-forward-plan must have a "carried" array (resolve-angle-carry-forward.mjs\'s plan.carried)');
   }
-  raw.carried.forEach((entry, i) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)
-        || typeof entry.angle !== "string" || entry.angle.trim().length === 0
-        || typeof entry.carriedFromHead !== "string" || entry.carriedFromHead.trim().length === 0) {
-      throw new Error(`--carry-forward-plan carried[${i}] must be an object with non-empty string "angle" and "carriedFromHead" fields (resolve-angle-carry-forward.mjs's plan.carried shape)`);
-    }
-  });
-  return raw.carried;
+  return validateCarryForwardPlanEntries(plan.carried);
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -592,6 +633,21 @@ export function parseConsolidateFaninCliArgs(argv) {
 // marks blocked then FAILS CLOSED below (exit 1) rather than emitting any
 // findings shape, so this stays a thin floor rather than a second copy of
 // consolidateFanin()'s validation.
+//
+// must-fix (input-validation): "carriedFromHead" is a PRODUCER field this CLI
+// stamps itself, inside the --carried-angles block below, on a synthetic entry
+// IT constructs — never a field a per-angle findings artifact is entitled to
+// self-declare. Without this check, --findings-dir/<any *.json> is the least
+// trusted input in the whole flow (subagent-written, glob-discovered) and a
+// file that simply includes "carriedFromHead" would flow it straight through
+// to "angles"/"findingsJson" at exit 0 even with NO --carried-angles at all —
+// bypassing both the mandatory/ALWAYS_INCLUDE and carry-forward-plan proof
+// guards entirely, and exempting that angle from gate-fanin's
+// one-scoped-reviewer-per-fresh-angle coverage check downstream. Refuse it
+// loudly rather than silently stripping it: a fresh reviewer artifact
+// self-declaring carried provenance is itself evidence something is wrong
+// (a copy-pasted fixture, a compromised/confused reviewer), not a value to
+// quietly discard.
 function validateArtifactShape(raw, sourceLabel) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`${sourceLabel}: artifact must be a JSON object`);
@@ -601,6 +657,9 @@ function validateArtifactShape(raw, sourceLabel) {
   }
   if (typeof raw.verdict !== "string" || raw.verdict.trim().length === 0) {
     throw new Error(`${sourceLabel}: missing "verdict"`);
+  }
+  if (raw.carriedFromHead !== undefined) {
+    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles/--carry-forward-plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
   }
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
@@ -727,7 +786,7 @@ export async function consolidateGateFanin(options) {
   // Loaded HERE (before the --carried-angles block below) because that block
   // also needs this same config's mandatory-angle contract.
   let blockCleanOnFindingSeverities;
-  let mandatoryAngleKeys; // Set of baseAngleName(...).toLowerCase() — only set when --gate is given
+  let mandatoryAngles; // raw configured mandatory-angle names (resolveGateAngleContract) — only set when --gate is given; fed to angleReviewSurface's alwaysRerun below
   if (options.gate !== undefined) {
     const repoRoot = options.repoRoot ?? process.cwd();
     // A nonexistent/non-directory root would make loadDevLoopConfig silently
@@ -749,9 +808,7 @@ export async function consolidateGateFanin(options) {
     }
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     blockCleanOnFindingSeverities = resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
-    mandatoryAngleKeys = new Set(
-      resolveGateAngleContract(config, gateKey).mandatoryAngles.map((a) => baseAngleName(a).toLowerCase()),
-    );
+    mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles;
   }
 
   // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert
@@ -765,45 +822,74 @@ export async function consolidateGateFanin(options) {
   // artifact named `<angle>-delta-at-...` or spelled with different case
   // still suppresses the synthetic upsert rather than duplicating the angle.
   //
-  // must-fix (gate-evidence): --carried-angles is NOT trusted bare. Every name
-  // is checked against TWO independent sources of truth before it is allowed
-  // to mint a clean entry — parseConsolidateFaninCliArgs already requires both
-  // to be present alongside --carried-angles, and a programmatic caller that
-  // bypasses the parser is re-checked here so this function stays fail-closed
-  // on its own:
-  //   1. --gate's configured MANDATORY angles (mandatoryAngleKeys, above) —
-  //      resolve-angle-carry-forward.mjs forces every mandatory angle into
-  //      alwaysRerun, so plan.carried can never legitimately contain one; a
-  //      mandatory name here can only be a fabricated or stale list.
+  // must-fix (gate-evidence/correctness): --carried-angles is NOT trusted bare.
+  // Every name is checked against TWO independent sources of truth before it is
+  // allowed to mint a clean entry — parseConsolidateFaninCliArgs already
+  // requires both to be present alongside --carried-angles, and a programmatic
+  // caller that bypasses the parser is re-checked here so this function stays
+  // fail-closed on its own:
+  //   1. angleReviewSurface(...).kind !== "kinds" — the SAME predicate
+  //      resolve-angle-carry-forward.mjs's own producer (buildCarryForwardPlan
+  //      -> resolveCarryForwardAngles) uses to decide plan.carried membership,
+  //      fed --gate's configured mandatoryAngles as alwaysRerun. This refuses a
+  //      configured mandatory angle ("kind: always" via alwaysRerun), a
+  //      hardcoded ALWAYS_INCLUDE angle — gate-evidence/renderer-security/
+  //      pr-description — ("kind: always" unconditionally, independent of any
+  //      config), AND an unmapped/unknown angle ("kind: unknown") in one seam,
+  //      so this check and the producer's own rule can never drift apart
+  //      (checking only the configured mandatory set, as a prior version did,
+  //      missed the hardcoded ALWAYS_INCLUDE angles entirely).
   //   2. --carry-forward-plan's own "carried" list — the proof that this
   //      angle really was resolved as carried, not just typed in.
   if (options.carriedAngles !== undefined) {
-    if (!mandatoryAngleKeys) {
+    if (!mandatoryAngles) {
       throw new Error("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried (fail-closed)");
     }
     const planCarried = Array.isArray(options.carryForwardPlan) ? options.carryForwardPlan : null;
     if (!planCarried) {
       throw new Error("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
     }
+    // coverage: re-validate entry SHAPE here too, not just presence of the
+    // array — a programmatic caller of consolidateGateFanin bypasses
+    // parseConsolidateFaninCliArgs (and its validateCarryForwardPlanShape call)
+    // entirely, so a malformed plan entry must still fail closed with this
+    // module's own message rather than an incidental TypeError three lines
+    // down (or, for a missing carriedFromHead specifically, silently minting
+    // an unmarked "clean" row indistinguishable from a fresh review).
+    validateCarryForwardPlanEntries(planCarried);
     const planByKey = new Map();
     for (const entry of planCarried) {
       const key = baseAngleName(entry.angle.trim()).toLowerCase();
       if (!planByKey.has(key)) planByKey.set(key, entry);
     }
-    const presentAngleKeys = new Set(rawArtifacts.map((a) => baseAngleName(a.angle.trim()).toLowerCase()));
+    // Suppression is checked against REAL artifacts ONLY (a fixed snapshot
+    // taken before this loop runs), never against a sibling --carried-angles
+    // entry: two distinct carried names sharing a base+lowercase key (e.g.
+    // "coverage" and its legitimate "coverage-delta-at-<sha>" sibling) are both
+    // independently carry-forward-eligible rows and must both upsert,
+    // regardless of --carried-angles array order. Mutating this set inside the
+    // loop (as a prior version did) silently dropped whichever one sorted
+    // second. Carried-vs-carried dedup instead uses the EXACT (trimmed) angle
+    // name, so only a literal repeated name in --carried-angles collapses.
+    const realAngleKeys = new Set(rawArtifacts.map((a) => baseAngleName(a.angle.trim()).toLowerCase()));
+    const seenCarriedNames = new Set();
     for (const angle of options.carriedAngles) {
-      const key = baseAngleName(angle).toLowerCase();
-      if (mandatoryAngleKeys.has(key)) {
-        throw new Error(`--carried-angles names "${angle}", which is one of --gate ${options.gate}'s configured MANDATORY angles — a mandatory angle can never legitimately carry forward (resolve-angle-carry-forward.mjs always forces it to re-run); refusing to mint a fabricated clean entry for it (fail-closed)`);
+      const trimmedAngle = angle.trim();
+      const key = baseAngleName(trimmedAngle).toLowerCase();
+      const surface = angleReviewSurface(key, { alwaysRerun: mandatoryAngles });
+      if (surface.kind !== "kinds") {
+        const why = surface.kind === "always"
+          ? `it always re-runs (one of --gate ${options.gate}'s configured MANDATORY angles, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle)`
+          : "it has no declared review surface (an unmapped/unknown angle, fail-closed)";
+        throw new Error(`--carried-angles names "${angle}", which can never legitimately carry forward: ${why} — resolve-angle-carry-forward.mjs can never put it in plan.carried, so refusing to mint a fabricated clean entry for it (fail-closed)`);
       }
       const planEntry = planByKey.get(key);
       if (!planEntry) {
         throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
       }
-      if (!presentAngleKeys.has(key)) {
-        rawArtifacts.push({ angle, verdict: "clean", findings: [], carriedFromHead: planEntry.carriedFromHead });
-        presentAngleKeys.add(key);
-      }
+      if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) continue;
+      seenCarriedNames.add(trimmedAngle);
+      rawArtifacts.push({ angle: trimmedAngle, verdict: "clean", findings: [], carriedFromHead: planEntry.carriedFromHead });
     }
   }
 
