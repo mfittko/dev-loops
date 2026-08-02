@@ -808,7 +808,10 @@ export async function consolidateGateFanin(options) {
     }
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     blockCleanOnFindingSeverities = resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
-    mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles;
+    // Lowercased to match the base+lowercase key compared against alwaysRerun
+    // below — a mandatory angle configured with case drift (e.g. "Correctness")
+    // must be refused exactly like its lowercase form.
+    mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles.map((name) => String(name).trim().toLowerCase());
   }
 
   // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert

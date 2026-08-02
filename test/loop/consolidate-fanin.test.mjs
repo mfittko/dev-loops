@@ -738,6 +738,38 @@ test("consolidateGateFanin refuses pr-description for pre_approval_gate even tho
   });
 });
 
+// must-fix (gate-evidence, round 3): a MANDATORY angle configured with case
+// drift (e.g. "Correctness") must be refused exactly like its lowercase form —
+// the compared key is base+lowercase, so the configured mandatory set is
+// lowercased before feeding angleReviewSurface's alwaysRerun.
+test("consolidateGateFanin refuses a case-drifted configured mandatory angle from a carry plan", async () => {
+  const dir0 = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cfgroot-"));
+  try {
+    await writeFile(
+      path.join(dir0, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    angles:\n      - name: Correctness\n        mandatory: true\n",
+      "utf8",
+    );
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot: dir0,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness"])).carried,
+          }),
+          /correctness.*never legitimately carry forward|can never legitimately carry forward.*correctness/si,
+        );
+      },
+    );
+  } finally {
+    await rm(dir0, { recursive: true, force: true });
+  }
+});
+
 // An unmapped/unknown angle name (angleReviewSurface -> { kind: "unknown" })
 // must also be refused — resolve-angle-carry-forward.mjs's own producer never
 // carries such a name either (fail-closed default), so a plan claiming
