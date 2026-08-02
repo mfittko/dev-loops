@@ -30,6 +30,11 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(angleReviewSurface("scope", { alwaysRerun: ["scope"] }).kind, "always");
   });
 
+  test("alwaysRerun matches case-insensitively — a case-drifted configured mandatory angle is still always", () => {
+    assert.equal(angleReviewSurface("correctness", { alwaysRerun: ["Correctness"] }).kind, "always");
+    assert.equal(angleReviewSurface("Correctness".toLowerCase(), { alwaysRerun: [" CORRECTNESS "] }).kind, "always");
+  });
+
   test("unmapped / empty angle -> unknown (fail-closed)", () => {
     assert.equal(angleReviewSurface("no-such-angle").kind, "unknown");
     assert.equal(angleReviewSurface("").kind, "unknown");

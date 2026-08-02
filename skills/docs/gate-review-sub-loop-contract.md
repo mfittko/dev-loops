@@ -436,7 +436,8 @@ sanctioned fan-in CLI:
 
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> \
-  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path>
+  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
+  [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
@@ -455,9 +456,28 @@ the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). FAILS CLOSED (exit 1, naming the
 offending angles) when any per-angle artifact is malformed or itself blocked
 — a blocked fan-in never yields a publishable findings shape; fix or re-run
-the offending reviewer first. (An angle whose artifact was never written is
-invisible to the CLI — mandatory-angle coverage is enforced downstream by
-`upsert-checkpoint-verdict.mjs`.) `--out`/`--ledger-out` are also rejected at
+the offending reviewer first.
+
+`--carried-angles <json>` (a JSON array of angle-name strings — Phase 1.2's
+`plan.carried[].angle` values) upserts `{ angle, verdict: "clean", findings:
+[], carriedFromHead: <A> }` for every named angle with no Phase 2 artifact, so
+a carried angle stays visible to `findingsJson`/the mandatory-angle coverage
+check/the posted verdict comment instead of reading as a truncated fan-out (an
+angle whose artifact was never written and is NOT named here is still
+invisible to the CLI). `--carried-angles` is PAIR-REQUIRED with both `--gate`
+and `--carry-forward-plan <json>` (Phase 1.2's own plan result, or just its
+`carried` array) — the plan is the proof, checked against the SAME
+`angleReviewSurface` predicate `resolve-angle-carry-forward.mjs`'s own producer
+uses, so the two can never drift. Given without its pair, or given a name that
+predicate refuses (a configured mandatory angle, a hardcoded `ALWAYS_INCLUDE`
+angle — `gate-evidence`/`renderer-security`/`pr-description` — or an
+unmapped/unknown angle) or absent from the plan's own `carried` list, the CLI
+FAILS CLOSED (exit 1) rather than mint a fabricated clean entry. The emitted
+`carriedFromHead` field marks ONLY an entry this flag upserted — every
+freshly reviewed angle's entry omits it — so `--out`'s own shape, not just the
+ledger's `provenance.perAngle`, distinguishes carried from fresh.
+
+`--out`/`--ledger-out` are also rejected at
 parse time (exit 1) when they resolve to the same path as each other, or when
 either resolves to a direct top-level sibling of the artifacts inside
 `--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact
@@ -605,7 +625,7 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 - `config-drift` → `config`/`ci`; `ci-guard` → `ci`.
 - always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
 
-**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); or any changed file's kind is in the angle's surface.
+**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); the angle is named by any finding in the prior log however non-blocking (a `defer` still means that angle is not provably clean); or any changed file's kind is in the angle's surface. The CLI additionally refuses to emit a plan at all — the whole run, not one angle — when: the prior log records one angle twice in `provenance.perAngle` (reviewer attribution would be ambiguous); the log's own recorded `headSha` disagrees with `--prev-head` (the log path and the diffed head would no longer agree, so a carried entry would stamp a head that was never diffed); the log's `findings` field is present but not an array (a malformed/truncated log cannot prove no angle has an open finding); a finding in that field has no angle (it cannot be attributed to a carried angle); or a finding's angle matches no `provenance.perAngle` entry (its attribution cannot be verified, base-name/case-insensitively). The delta and the worktree-head guard both run with `GIT_DIR`/`GIT_WORK_TREE` scrubbed from the git child-process environment, so an inherited repo pointer can never steer either to a different repository than the worktree at `cwd`.
 
 **A dev-loop config-source delta re-runs EVERY angle.** `.devloops` (and its
 `.devloops.yaml/.yml/.json` and `.pi/dev-loop/settings.*`/`defaults.*` siblings)

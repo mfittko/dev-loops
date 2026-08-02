@@ -1658,6 +1658,41 @@ test("captureDiffFromBase: --name-status failure fails closed (throws)", async (
   }
 });
 
+test("captureDiffFromBase is pinned to repoRoot, not an inherited GIT_DIR/GIT_WORK_TREE pointing at a different repo", async () => {
+  // Without the env scrub, an exported GIT_DIR/GIT_WORK_TREE overrides `cwd`
+  // outright: the range's `base` SHA (from repoRoot) is unknown to the
+  // redirected repo's object database, so the (fail-closed) --name-status
+  // capture throws instead of resolving repoRoot's actual diff.
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  const otherRepo = await mkdtemp(path.join(os.tmpdir(), "gate-context-other-"));
+  git(otherRepo, ["init", "-q"]);
+  git(otherRepo, ["config", "user.email", "other@example.com"]);
+  git(otherRepo, ["config", "user.name", "Other"]);
+  await writeFile(path.join(otherRepo, "unrelated.txt"), "unrelated\n", "utf8");
+  git(otherRepo, ["add", "-A"]);
+  git(otherRepo, ["commit", "-q", "-m", "unrelated"]);
+
+  const baseline = captureDiffFromBase(baseSha, { repoRoot });
+
+  const savedGitDir = process.env.GIT_DIR;
+  const savedWorkTree = process.env.GIT_WORK_TREE;
+  process.env.GIT_DIR = path.join(otherRepo, ".git");
+  process.env.GIT_WORK_TREE = otherRepo;
+  try {
+    const redirected = captureDiffFromBase(baseSha, { repoRoot });
+    assert.deepEqual(
+      redirected.nameStatusOutput,
+      baseline.nameStatusOutput,
+      "an inherited GIT_DIR must not change which repo the diff resolves against",
+    );
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+    if (savedWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedWorkTree;
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(otherRepo, { recursive: true, force: true });
+  }
+});
+
 // A base commit + a HEAD commit that renames src/original.mjs -> src/renamed.mjs
 // with two small edits ("CHANGE_A"/"CHANGE_B") separated by a 4-line unchanged
 // gap. The gap size (4) sits between the merge thresholds of context=1

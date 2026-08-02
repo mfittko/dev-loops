@@ -509,7 +509,7 @@ After the phase plan passes review:
 <!-- pi-only -->
    - resolve each reviewer's model via `resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" })` — `kind: "angle"` forces the review (high) tier for the gate activity even when the angle name collides with a routine role (the `docs` angle resolves high, not the `docs` writer role's low tier) — and pass it at dispatch **only when non-null**
 <!-- /pi-only -->
-   - run the mandatory chain defined in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md). Retry rule: in subsequent cycles, only re-run reviewers that produced findings in the previous pass. Do not fork the parent session for parallel reviewers; write a compact handoff artifact under `tmp/` and point the reviewer at it.
+   - run the mandatory chain defined in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md). Retry rule: in subsequent cycles, the carry-forward step (`GATE-EXEC-ANGLE-CARRY-FORWARD`) decides what re-runs — never a bare "only the angles that had findings", which would let a previously-clean angle skip without proof its surface is untouched. Do not fork the parent session for parallel reviewers; write a compact handoff artifact under `tmp/` and point the reviewer at it.
    - when reviewer subagents stumble on raw source-tree reads (for example unresolved build artifacts or import assumptions), generate a deterministic diff/review artifact under `tmp/` and have reviewers inspect that artifact instead of the raw file set
    - synthesize actionable findings
    - apply accepted fixes on the same branch

@@ -60,6 +60,21 @@ export function mapGateToConfigKey(gate) {
 }
 
 /**
+ * The env every `git` child process spawned by this module (and by
+ * resolve-angle-carry-forward.mjs, which shares assertWorktreeAtHead) must run
+ * with: process.env minus GIT_DIR/GIT_WORK_TREE. An exported GIT_DIR overrides
+ * repo discovery outright — `git -C <cwd> rev-parse HEAD` with GIT_DIR set
+ * elsewhere resolves the OTHER repo's HEAD regardless of cwd. Every caller here
+ * means "the worktree at `cwd`"; route every git spawn through this one helper
+ * so the worktree guard and the diff/delta it gates can never disagree about
+ * which repo they mean.
+ * @returns {NodeJS.ProcessEnv}
+ */
+export function gitEnvWithoutDirOverrides() {
+  return { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+}
+
+/**
  * Map a resolveGateAnglesDynamic result into the persisted artifact fields.
  * Does NOT re-derive angles — it only reshapes the resolver's output.
  *
@@ -929,6 +944,10 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer,
+    // See gitEnvWithoutDirOverrides: without this, an inherited GIT_DIR/GIT_WORK_TREE
+    // would resolve this diff against a DIFFERENT repo than the worktree-HEAD guard
+    // (assertWorktreeAtHead, above) just validated.
+    env: gitEnvWithoutDirOverrides(),
   });
   // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
   let nameStatusOutput;
@@ -1184,6 +1203,10 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
     actualHead = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf8",
+      // See gitEnvWithoutDirOverrides: an inherited GIT_DIR/GIT_WORK_TREE would
+      // resolve a DIFFERENT repo than `repoRoot`, so this guard and the diff it
+      // gates could pass/fail against two different repos. Scrub both here too.
+      env: gitEnvWithoutDirOverrides(),
     }).trim().toLowerCase();
   } catch (err) {
     throw new Error(
