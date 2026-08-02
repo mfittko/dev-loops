@@ -21,6 +21,8 @@ import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
+import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
+import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -520,6 +522,38 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
   }
   return parseGitStatusConflictFiles(result.stdout);
 }
+// Operator-authorized post-convergence suppression (#1441): a prior EXPLICIT
+// run of withdraw-copilot-review-request.mjs recorded a marker, scoped to an
+// exact head, after withdrawing a stranded request on a head that has advanced
+// past Copilot's last submitted review with a provable pure doc/prose delta
+// since then. Never derived from live snapshot facts alone — the marker only
+// exists because a human ran that withdrawal — and re-verified live here
+// (rather than trusting the marker's stored reason) as defense in depth. Any
+// further push changes the current head, the marker no longer matches, and
+// this resolves to false — the normal round-reopening behavior applies exactly
+// as before.
+export async function resolvePostConvergenceReviewSuppressed({ repo, pr, currentHeadSha, snapshot, prData }, runtime = {}) {
+  if (snapshot.copilotReviewRequestStatus !== "none" || snapshot.unresolvedThreadCount !== 0) {
+    return false;
+  }
+  const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, runtime);
+  if (!marker || marker.headSha !== currentHeadSha) {
+    return false;
+  }
+  // Re-derive the compare BASE live too, not just the classification below —
+  // defense in depth against a stale or hand-edited marker whose
+  // lastReviewedHeadSha no longer names Copilot's actual last submitted
+  // review. A marker that disagrees with the live value must not suppress.
+  const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
+  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
+    return false;
+  }
+  const reverified = await classifyDeltaSinceLastReview(
+    { repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+    runtime,
+  );
+  return reverified.carryForward === true;
+}
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
@@ -604,6 +638,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged },
     runtime,
   );
+  const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
+    { repo: options.repo, pr: options.pr, currentHeadSha, snapshot, prData },
+    runtime,
+  );
   return {
     repo: options.repo,
     pr: options.pr,
@@ -618,6 +656,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     disposition,
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
+    postConvergenceReviewSuppressed,
   };
 }
 
@@ -683,6 +722,9 @@ export function buildGateCoordinationEvaluatorInput({
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    // Operator-authorized post-convergence suppression (#1441): see
+    // resolvePostConvergenceReviewSuppressed above for how this is verified.
+    postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
     // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.

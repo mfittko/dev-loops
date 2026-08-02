@@ -3,9 +3,10 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import test, { describe, it } from "node:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
+import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
@@ -1395,4 +1396,109 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
     ]);
 
   assert.equal(result.status, "requested");
+});
+
+// Operator-authorized post-convergence suppression marker (#1441): withdraw-
+// copilot-review-request.mjs writes this marker, scoped to an exact head, only
+// after an explicit operator withdrawal on a head-advanced, provably docs-only
+// delta. request-copilot-review.mjs must honor it BELOW the round cap too —
+// unlike the AC2 carry-forward check above, which only applies at the cap —
+// so a below-cap re-request cannot immediately re-strand the same head.
+describe("operator-authorized post-convergence suppression marker (#1441)", () => {
+  async function withTempCheckpointDir(fn) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "request-suppression-"));
+    try {
+      await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("returns suppressed_post_convergence_docs_only BELOW the round cap when the marker matches the current head", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump", operatorReason: "Copilot declined a converged reword" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+        },
+        {
+          assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/adr-0041.md", status: "modified" }] }) + "\n",
+        },
+      ], { repeatLastOnOverflow: true });
+      const result = await performCopilotReviewRequest(
+        { repo: "owner/repo", pr: 17, checkpointDir },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+      );
+      assert.equal(result.status, "suppressed_post_convergence_docs_only");
+      assert.equal(calls.some((c) => c.args.includes("--add-reviewer")), false, "no fresh request should be placed");
+    });
+  });
+
+  it("ignores a marker for a DIFFERENT head — falls through to a normal request", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "stalesha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+        },
+        { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+        },
+      ], { repeatLastOnOverflow: true });
+      const result = await performCopilotReviewRequest(
+        { repo: "owner/repo", pr: 17, checkpointDir },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+      );
+      assert.equal(result.status, "requested");
+      assert.ok(calls.some((c) => c.args.includes("--add-reviewer")), "a real request must still be placed");
+    });
+  });
+
+  it("re-verifies live rather than trusting the marker's stored reason — a delta that now touches Copilot's surface still re-requests", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump (stale claim)" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+        },
+        {
+          // Live re-verification finds a code file in the delta — the marker's
+          // stored claim is stale/wrong and must not be trusted blindly.
+          assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+        },
+        { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+        },
+      ], { repeatLastOnOverflow: true });
+      const result = await performCopilotReviewRequest(
+        { repo: "owner/repo", pr: 17, checkpointDir },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+      );
+      assert.equal(result.status, "requested");
+      assert.ok(calls.some((c) => c.args.includes("--add-reviewer")), "a real request must still be placed");
+    });
+  });
 });

@@ -685,6 +685,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
+  // Operator-authorized post-convergence suppression (#1441): set only when the
+  // caller has verified an explicit prior withdrawal (withdraw-copilot-review-
+  // request.mjs) recorded a suppression marker for this EXACT head, proving the
+  // delta since Copilot's last submitted review is a pure doc/prose bump. Never
+  // derived here from other snapshot facts — this evaluator trusts the caller's
+  // verification rather than re-deriving it, so it cannot become an automatic
+  // loosening of the round-below-cap precondition.
+  const postConvergenceReviewSuppressed = input.postConvergenceReviewSuppressed === true;
   // maxCopilotRounds: 0 disables the external Copilot review gate entirely
   // (for repos without Copilot / local-harness-only review). It reuses the
   // existing internal_only routing — skip the Copilot cycle, go straight to
@@ -1305,7 +1313,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi })
       : null;
 
-    if (!sameHeadCleanConverged && (!roundCapReached || roundCapNewCycleRequired)) {
+    if (!sameHeadCleanConverged && !postConvergenceReviewSuppressed && (!roundCapReached || roundCapNewCycleRequired)) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1413,9 +1421,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
       nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
       reason: roundCapReached
         ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary.`
-        : (ciStatus === "crediblyGreen"
-          ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
-          : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary."),
+        : (postConvergenceReviewSuppressed && !sameHeadCleanConverged
+          ? "An operator explicitly withdrew a stranded Copilot review request for this exact head, whose delta since Copilot's last submitted review is a provable pure doc/prose bump; the prior converged Copilot review still stands, so `pre_approval_gate` is now the next legal boundary."
+          : (ciStatus === "crediblyGreen"
+            ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
+            : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary.")),
       mergeStateStatus,
       conflictFiles,
       gateEvidenceNote: roundCapReached ? roundExhaustionGateEvidenceNote : null,
