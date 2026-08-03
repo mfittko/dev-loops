@@ -26,7 +26,6 @@ import {
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
   resolveGateTier,
-  resolveGateFollowUpIssue,
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
@@ -4080,28 +4079,6 @@ describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
       gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
     });
     assert.equal(result.success, false);
-  });
-});
-
-describe("resolveGateFollowUpIssue (issue #1550)", () => {
-  test("returns the configured issue number", () => {
-    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: 1544 } }), 1544);
-  });
-
-  test("returns null when absent", () => {
-    assert.equal(resolveGateFollowUpIssue({ version: 1 }), null);
-  });
-
-  test("returns null for 0", () => {
-    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: 0 } }), null);
-  });
-
-  test("returns null for a negative number", () => {
-    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: -5 } }), null);
-  });
-
-  test("returns null for a string value", () => {
-    assert.equal(resolveGateFollowUpIssue({ version: 1, gates: { followUpIssue: "1544" } }), null);
   });
 });
 

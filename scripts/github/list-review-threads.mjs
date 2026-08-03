@@ -43,7 +43,11 @@ export const LIST_REVIEW_THREADS_QUERY = [
 
 // Bounded excerpt so a listing over many threads stays scannable; full body
 // text is available from capture-review-threads.mjs when actually needed.
-const BODY_EXCERPT_MAX_CHARS = 200;
+// Exported so callers that must distinguish a genuinely-truncated listing
+// excerpt from a short, complete body that merely happens to end with the
+// same ellipsis glyph (close-gate-findings.mjs's full-body join guard) can
+// probe on length, not just on the trailing glyph.
+export const BODY_EXCERPT_MAX_CHARS = 200;
 
 const USAGE = `Usage: list-review-threads.mjs --repo <owner/name> --pr <number> [--unresolved-only] [--author <login>]
 List review threads on a pull request with the thread id + first-comment

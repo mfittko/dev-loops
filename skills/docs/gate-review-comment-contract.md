@@ -86,8 +86,9 @@ Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER
 The visible PR comment is a summary for auditability; the disposition ledger is the
 complete durable record.
 
-Filing the ledger's non-blocking findings on the configured follow-up issue is owned by
-`GATE-EXEC-SURVIVOR-FILING` ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#survivor-filing)).
+Disposing of the ledger's non-blocking findings as PR review threads is owned by
+`GATE-EXEC-FINDING-THREADS` and `GATE-EXEC-THREAD-DISPOSITION`
+([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 
 ## Readable deterministic format
 

@@ -8,11 +8,26 @@ import { writeGhStub } from "../_helpers.mjs";
 
 import {
   buildFindingsMarker,
+  findMarkedComment,
   parseFindings,
   parsePostGateFindingsCliArgs,
   postGateFindings,
   renderFindingsCommentBody,
 } from "../../scripts/github/post-gate-findings.mjs";
+
+// postGateFindings resolves the authenticated `gh` viewer's login (the
+// author-scoping trust boundary for findMarkedComment) as its first gh call
+// whenever gates.postFindingsComments does not short-circuit it. Every
+// existing-comment fixture below defaults its author to this login so prior
+// idempotent-match coverage keeps passing unchanged.
+const AUTHENTICATED_LOGIN = "gate-bot";
+
+function userEntry({ login = AUTHENTICATED_LOGIN } = {}) {
+  return {
+    assertArgs: ["api", "user"],
+    stdout: `${JSON.stringify({ login })}\n`,
+  };
+}
 
 const FINDINGS_JSON = JSON.stringify([
   { severity: "must-fix", angle: "scope", summary: "Scope too broad", disposition: "accepted-for-fix", files: ["src/a.mjs:12"] },
@@ -176,6 +191,7 @@ test("postGateFindings accepts findings from --findings-file", async () => {
     const findingsFile = path.join(tmpDir, "findings.json");
     await writeFile(findingsFile, FINDINGS_JSON, "utf8");
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: "[[]]\n",
@@ -232,6 +248,31 @@ test("buildFindingsMarker is keyed by gate only (head-SHA independent)", () => {
     buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234" }),
     buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234567890abcdef" }),
   );
+});
+
+test("findMarkedComment (contradiction-lens): a marker merely QUOTED mid-line (not at line start) is never matched", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  const quoting = { id: 1, body: `See the prior comment: ${marker} for context.`, user: { login: "gate-bot" } };
+  const blockquoted = { id: 2, body: `> ${marker}\nAgreed.`, user: { login: "gate-bot" } };
+  const genuine = { id: 3, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
+  assert.equal(findMarkedComment([quoting, blockquoted], marker, { author: "gate-bot" }), null);
+  assert.equal(findMarkedComment([quoting, genuine], marker, { author: "gate-bot" }), genuine);
+});
+
+test("findMarkedComment (marker provenance): a required expected author excludes a FOREIGN comment forging the exact marker shape", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  const foreign = { id: 1, body: `${marker}\nforged by someone else`, user: { login: "someone-else" } };
+  const genuine = { id: 2, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
+  // Only the matching login's comment is honored.
+  assert.equal(findMarkedComment([foreign], marker, { author: "gate-bot" }), null);
+  assert.equal(findMarkedComment([foreign, genuine], marker, { author: "gate-bot" }), genuine);
+});
+
+test("findMarkedComment fails closed when author is omitted (never falls back to matching every author)", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  const genuine = { id: 1, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
+  assert.throws(() => findMarkedComment([genuine], marker, {}), /requires a non-empty author/);
+  assert.throws(() => findMarkedComment([genuine], marker), /requires a non-empty author/);
 });
 
 test("renderFindingsCommentBody groups by severity and renders file refs", () => {
@@ -363,6 +404,48 @@ test("renderFindingsCommentBody neutralizes an embedded gate-findings marker in 
   assert.ok(!rest.includes("<!--"), "no raw HTML-comment opener in the rendered body beyond the marker");
 });
 
+test("renderFindingsCommentBody neutralizes raw HTML tags and markdown link/image syntax in a summary (parity with upsert-checkpoint-verdict.mjs)", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "renderer-security",
+      summary: "Raw <script>alert(1)</script>, a [link](http://evil.example) and an ![image](http://evil.example/x.png)",
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(!body.includes("<script>"), "a raw HTML tag must never survive unescaped");
+  assert.ok(body.includes("&lt;script>alert(1)&lt;/script>"));
+  assert.ok(!body.includes("[link](http://evil.example)"), "a live markdown link must never survive unescaped");
+  assert.ok(body.includes("&#91;link](http://evil.example)"));
+  assert.ok(!body.includes("![image](http://evil.example/x.png)"), "a live markdown image embed must never survive unescaped");
+  assert.ok(body.includes("!&#91;image](http://evil.example/x.png)"));
+});
+
+// Composition regression (renderer-security): sanitizeCodeSpan must NOT layer
+// entity encoding on top of a value that is about to be wrapped in its own
+// backtick code span — a code span is already inert (CommonMark parses it
+// before link/image/HTML syntax), so encoding `[` there would render the
+// entity's own literal text (`app/&#91;id]/page.tsx`) instead of the legible
+// bracketed path. The same value rendered as bare prose (summary, no code
+// span) still needs the full neutralization since it is NOT inert there.
+test("sanitizeCodeSpan leaves a bracketed path verbatim inside its code span; sanitizeInline still neutralizes the same value in prose", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "renderer-security",
+      summary: "Route param mismatch in app/[id]/page.tsx",
+      files: ["app/[id]/page.tsx"],
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // The file ref, rendered inside its own code span, survives verbatim.
+  const filesLine = body.split("\n").find(line => line.trim().startsWith("- files:"));
+  assert.ok(filesLine, "expected a files line for the finding");
+  assert.equal(filesLine.trim(), "- files: `app/[id]/page.tsx`");
+  // The same value in the bare-prose summary field is neutralized.
+  assert.ok(body.includes("Route param mismatch in app/&#91;id]/page.tsx"), "the same value in bare prose must still be neutralized");
+});
+
 // ---------------------------------------------------------------------------
 // Idempotent create / update via stubbed gh
 // ---------------------------------------------------------------------------
@@ -376,6 +459,7 @@ test("postGateFindings creates a comment when none exists", async () => {
   const repoRoot = await emptyRepoRoot();
   try {
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: "[[]]\n",
@@ -406,8 +490,9 @@ test("postGateFindings updates the existing marked comment (idempotent, no dupli
   try {
     // Existing comment carries the marker but stale body → triggers PATCH, not a new create.
     const marker = buildFindingsMarker({ gate: "draft_gate" });
-    const existingComment = { id: 55, html_url: "https://github.com/owner/repo/pull/42#issuecomment-55", body: `${marker}\nstale body` };
+    const existingComment = { id: 55, html_url: "https://github.com/owner/repo/pull/42#issuecomment-55", body: `${marker}\nstale body`, user: { login: AUTHENTICATED_LOGIN } };
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: JSON.stringify([[existingComment]]) + "\n",
@@ -435,8 +520,9 @@ test("postGateFindings no-ops when the existing comment body already matches", a
   try {
     const findings = parseFindings(FINDINGS_JSON);
     const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-    const existingComment = { id: 77, html_url: "https://github.com/owner/repo/pull/42#issuecomment-77", body };
+    const existingComment = { id: 77, html_url: "https://github.com/owner/repo/pull/42#issuecomment-77", body, user: { login: AUTHENTICATED_LOGIN } };
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: JSON.stringify([[existingComment]]) + "\n",
@@ -464,8 +550,9 @@ test("postGateFindings updates the same per-gate comment when re-run with a diff
     // marker and PATCH in place rather than creating a second comment.
     const findings = parseFindings(FINDINGS_JSON);
     const existingBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-    const existingComment = { id: 88, html_url: "https://github.com/owner/repo/pull/42#issuecomment-88", body: existingBody };
+    const existingComment = { id: 88, html_url: "https://github.com/owner/repo/pull/42#issuecomment-88", body: existingBody, user: { login: AUTHENTICATED_LOGIN } };
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: JSON.stringify([[existingComment]]) + "\n",
@@ -532,6 +619,7 @@ test("postGateFindings falls back to default-on (posts) when the config fails to
       "utf8",
     );
     const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: "[[]]\n",

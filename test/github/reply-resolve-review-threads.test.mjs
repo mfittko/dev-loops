@@ -37,6 +37,7 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       pr: 17,
       author: "all",
       message: undefined,
+      messageMap: undefined,
       resolve: false,
     },
   );
@@ -49,8 +50,29 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       pr: 17,
       author: "reviewer-x",
       message: "Fixed in abc1234",
+      messageMap: undefined,
       resolve: true,
     },
+  );
+
+  assert.deepEqual(
+    parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message-map", "tmp/map.json"]),
+    {
+      help: false,
+      repo: "owner/repo",
+      pr: 17,
+      author: "all",
+      message: undefined,
+      messageMap: "tmp/map.json",
+      resolve: false,
+    },
+  );
+});
+
+test("parseReplyResolveThreadsCliArgs rejects --message and --message-map together", () => {
+  assert.throws(
+    () => parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message", "x", "--message-map", "tmp/map.json"]),
+    /--message and --message-map are mutually exclusive/,
   );
 });
 
@@ -873,6 +895,136 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
     const parsed = JSON.parse(result.stderr);
     assert.equal(parsed.ok, false);
     assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads --message-map fails closed before any mutation when a matched thread has no map entry and no --message fallback", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-coverage-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, { THREAD_1: "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract." });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /--message-map is missing an entry for 1 matched thread\(s\)/);
+    assert.match(parsed.error, /THREAD_2/);
+    assert.equal(parsed.partialProgress, undefined);
+
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(ghLog.length, 1, "only the capture call should have run; no reply/resolve mutation before coverage validation");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads posts a distinct mapped reply body per thread via --message-map", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-distinct-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        assertStdinIncludes: ['"body":"Fixed the null check in file-a.mjs in 93cd7f8."'],
+        stdout: '{"id":2001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2001"}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
+        assertStdinIncludes: ['"body":"Fixed the off-by-one in file-b.mjs in 93cd7f8."'],
+        stdout: '{"id":2002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2002"}\n',
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, {
+      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
+    });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 2);
+    assert.equal(parsed.repliedThreadCount, 2);
+    assert.deepEqual(parsed.results.map((r) => r.threadId).sort(), ["THREAD_1", "THREAD_2"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads sanitizes Copilot summon tokens in --message-map bodies exactly like --message", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-sanitize-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_401", databaseId: 401, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/401/replies"],
+        assertStdinIncludes: ['"body":"Addressed `@copilot`\'s note in 93cd7f8."'],
+        stdout: '{"id":2301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2301"}\n',
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, { THREAD_1: "Addressed @copilot's note in 93cd7f8." });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

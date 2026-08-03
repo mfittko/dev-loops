@@ -27,7 +27,7 @@ export function validateResolutionMessage(body) {
     hasDismissalReason,
   };
 }
-function runChildWithInput(command, args, env, stdinText) {
+export function runChildWithInput(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env,

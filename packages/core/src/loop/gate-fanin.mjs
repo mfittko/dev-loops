@@ -417,10 +417,10 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
 /**
  * Map consolidated findings into the `--findings` JSON shape consumed by
  * scripts/github/write-gate-findings-log.mjs (severity, angle, summary,
- * disposition, optional files). Pure.
+ * disposition, optional files, optional line). Pure.
  *
- * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string, recommendation?: string}>} findings
- * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[], recommendation?: string}>}
+ * @param {Array<{severity: string, angle: string, summary: string, file?: string, disposition?: string, recommendation?: string, line?: number}>} findings
+ * @returns {Array<{severity: string, angle: string, summary: string, disposition?: string, files?: string[], recommendation?: string, line?: number}>}
  */
 export function toFindingsLogShape(findings) {
   const list = Array.isArray(findings) ? findings : [];
@@ -441,6 +441,9 @@ export function toFindingsLogShape(findings) {
     } else if (Array.isArray(f.files)) {
       const files = f.files.filter((x) => typeof x === "string" && x.trim().length > 0).map((x) => x.trim());
       if (files.length > 0) entry.files = files;
+    }
+    if (Number.isInteger(f.line) && f.line > 0) {
+      entry.line = f.line;
     }
     return entry;
   });

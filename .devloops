@@ -8,6 +8,9 @@ refinement:
   maxCopilotRounds: 2
 
 gates:
+  # The finding-threads review is the single findings surface; the consolidated
+  # findings comment would duplicate it (owned by GATE-EXEC-POST-BEFORE-FIX).
+  postFindingsComments: false
   # Fail-closed enforcement that gate verdicts were produced by the
   # fan-out/fan-in review sub-loop (executionMode fanout_fanin + a findings-log
   # ledger), not an inline single-agent run. This repo runs enforcement on its
@@ -17,11 +20,6 @@ gates:
   # angle — no two freshly-reviewed angles may share a reviewer. See
   # skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
-  # Consolidated issue that receives the ledger comment for every non-blocking
-  # ("survivor") finding a gate close does not fix in-gate. Mandatory: a gate
-  # close with survivors and no configured issue fails closed
-  # (GATE-EXEC-SURVIVOR-FILING).
-  followUpIssue: 1544
   draft:
     dynamic:
       subtractive: true
@@ -60,24 +58,33 @@ gates:
     # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
     #
     # worth-fixing-now findings still go through the normal fan-in flow
-    # (ledger + findings comment) as long as that flow is followed; this key
+    # (ledger + finding-threads review) as long as that flow is followed; this key
     # does not itself force a count or a ledger entry for worth-fixing-now
     # (upsert-checkpoint-verdict only requires explicit counts for the
-    # severities listed here). They just stop blocking the draft-to-ready
-    # transition.
-    # preApproval blocks on both, but it re-reviews through its own, mostly
-    # disjoint angle pool (draft and preApproval share only contradiction-lens)
-    # and does not carry a specific unblocked draft-gate finding forward — the
-    # ledger records it "deferred" and nothing re-raises it. A worth-fixing-now
-    # finding from a draft-only angle is not "caught later"; it is recorded and
-    # left. This also affects light-mode dispatch: resolveGateDispatchMode
+    # severities listed here). They no longer count toward the ledger's clean
+    # verdict. A LOCATABLE one (in-diff file:line) stays open as an unresolved
+    # PR review thread, fixed in-gate through round 3 of this gate's chain;
+    # from round 4 on it is instead replied to, resolved, and stamped
+    # deferred. A NON-LOCATABLE one is body-filed instead: stamped deferred
+    # immediately and tracked only through the disposition ledger and its
+    # fingerprint, with no review-thread force-fix guarantee
+    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval's
+    # own blockCleanOnFindingSeverities below is must-fix only too, same as
+    # here — a worth-fixing-now finding never blocks either gate's clean
+    # verdict on its own; an in-window (round <= 3) locatable one still forces
+    # a fix round through the unresolved-feedback routing described above,
+    # regardless of severity's effect on the verdict. preApproval re-reviews
+    # through its own, mostly disjoint angle pool (draft and preApproval share only
+    # contradiction-lens) and does not re-raise a draft-gate finding as a
+    # fresh finding of its own: fingerprint suppression across gates keeps a
+    # deferred draft-gate thread from being re-raised by preApproval's own
+    # fan-out. This also affects light-mode dispatch: resolveGateDispatchMode
     # escalates inline to full fan-out only on a blocking-severity inline
     # finding, so a light-dispatched draft PR whose inline pass surfaces only
-    # worth-fixing-now now stays inline instead of escalating.
+    # worth-fixing-now stays inline instead of escalating.
     #
-    # Non-blocking findings are not lost by this setting: every finding outside
-    # this set is filed as a survivor on the configured follow-up issue at gate
-    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
+    # A deferred finding is rolled into the single summary comment posted
+    # when pre-approval finally closes clean (GATE-EXEC-DEFERRED-SUMMARY).
     blockCleanOnFindingSeverities:
       - must-fix
   preApproval:
@@ -117,14 +124,10 @@ gates:
     # beside it, each pass creating fresh surface for the next.
     #
     # Unlike the draft gate, this IS a relaxation below the shipped default's
-    # intent: pre-approval is the last bar before merge, and a worth-fixing-now
-    # finding unblocked here is not caught anywhere later. Surviving findings
-    # are filed as follow-up issues and named in the verdict, which is the only
-    # thing that keeps this from being lossy.
-    #
-    # Non-blocking findings are not lost by this setting: every finding outside
-    # this set is filed as a survivor on the configured follow-up issue at gate
-    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
+    # intent: pre-approval is the last bar before merge. See the draft-gate
+    # entry above for how a LOCATABLE vs NON-LOCATABLE finding is disposed
+    # (owned by GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRED-SUMMARY,
+    # GATE-EXEC-FINDING-THREADS) — it applies here unchanged.
     blockCleanOnFindingSeverities:
       - must-fix
 

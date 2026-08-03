@@ -287,16 +287,18 @@ Required:
 
 Optional:
 - `--author <login>` (default `all`)
-- exactly one message source: `--message <text>` or stdin
+- `--message <text>` or stdin: the single shared reply body for every matched thread. Mutually exclusive with `--message-map`
+- `--message-map <path>`: a JSON file mapping threadId to that thread's distinct reply body, so each thread's resolving reply names the change that fixed it. Every matched thread must have an entry, or the run fails closed listing the unmapped thread ids before any mutation; stdin is never read in this mode. Mutually exclusive with `--message`
 - `--resolve`
 
 Contract:
 - captures one authoritative review-thread snapshot via `capture-review-threads.mjs`
 - filters to unresolved threads containing at least one comment by the selected author
 - chooses the newest matching author-authored comment in each matched thread as the REST reply target
+- with `--message-map`, validates full coverage of every matched thread before sending any reply/resolve mutation, and fails closed listing the unmapped thread ids otherwise
 - processes matched threads sequentially in deterministic snapshot order
 - reuses the shared single-thread reply/resolve primitives instead of duplicating GitHub mutation logic
-- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any targeted thread remains unresolved
+- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any newly-targeted thread remains unresolved
 - zero-match runs are deterministic no-ops with success JSON
 
 Success output shape:

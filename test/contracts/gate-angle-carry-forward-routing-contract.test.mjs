@@ -217,3 +217,34 @@ test("the sub-loop contract's carry-forward rule states carry-forward as the def
     );
   }
 });
+
+test("copilot-pr-followup SKILL's Phase 2 step injects the known-findings block after the angle prompt, never into the byte-identical prefix", async () => {
+  // AC4's briefing half: the known-findings block is appended AFTER the
+  // angle-specific prompt, not folded into GATE-EXEC-BRIEFING-PREFIX's
+  // byte-identical prefix — folding it in would recompute the prefix hash on
+  // every gate close and break the sanctioned same-head-retry sentinel.
+  for (const file of [SKILL, GENERATED_SKILL]) {
+    const content = await readRepo(file);
+    assertMatchesAll(
+      content,
+      [
+        /known-findings block, appended AFTER this\s*\n\s*angle-specific prompt/,
+        /never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`/,
+        /GATE-EXEC-FINDING-THREADS/,
+      ],
+      `${file} Phase 2 known-findings injection`,
+    );
+  }
+});
+
+test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolved-thread counter", async () => {
+  // Anti-double-enforcement pin: gate-authored finding threads must route
+  // through the SAME unresolvedThreadCount check as every other review
+  // thread, never a second, gate-scoped counter alongside it.
+  const content = await readRepo("scripts/github/detect-checkpoint-evidence.mjs");
+  assert.doesNotMatch(
+    content,
+    /gate[A-Za-z]*Thread[A-Za-z]*Count/,
+    "detect-checkpoint-evidence.mjs must reconcile gate-authored threads through the single unresolvedThreadCount check, not a second gate-specific counter",
+  );
+});

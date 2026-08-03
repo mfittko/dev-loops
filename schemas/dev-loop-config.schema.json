@@ -686,11 +686,6 @@
         "rejectForeignAngles": {
           "type": "boolean",
           "description": "Reject fan-out provenance naming angles outside the gate's configured pool (default true)."
-        },
-        "followUpIssue": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Tracker issue number that consolidated gate-survivor findings are filed against."
         }
       },
       "additionalProperties": false,

@@ -453,6 +453,69 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
   }, /resolvedIn must be a non-empty string/);
 });
 
+test("writeGateFindingsLog includes an optional positive-integer line when present", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 99,
+      gate: "pre_approval_gate",
+      headSha: "eeeeeeeeeeeeeeeeee0000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "must-fix", angle: "scope", summary: "Off by one", line: 42 },
+      ]),
+      tmpRoot: tmpDir,
+    });
+
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-eeeeeeeeeeeeeeeeee0000000000000000000000.json");
+    const raw = await readFile(fullPath, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.findings[0].line, 42);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a non-integer line", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", line: 1.5 }]),
+    });
+  }, /line must be a positive integer/);
+});
+
+test("writeGateFindingsLog rejects a zero line", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", line: 0 }]),
+    });
+  }, /line must be a positive integer/);
+});
+
+test("writeGateFindingsLog rejects a negative line", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "must-fix", angle: "scope", summary: "x", line: -1 }]),
+    });
+  }, /line must be a positive integer/);
+});
+
 // --- --findings-file (mutually exclusive with --findings, identical validation) ---
 
 test("writeGateFindingsLog accepts findings from --findings-file", async () => {

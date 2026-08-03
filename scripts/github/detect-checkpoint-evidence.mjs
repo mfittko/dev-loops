@@ -9,6 +9,14 @@ import {
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
+// Machine-authored gate artifacts (close-gate-findings.mjs's posted findings
+// review, the deferred-summary comment) are excluded from evidence at the
+// true merge point — inside summarizeGateReviewComments/
+// summarizeGateReviewCommentMarkers in packages/core/src/github/
+// copilot-helpers.mjs, re-exported here — so every caller of those two
+// summarizers (this file, pre-pr-ready-gate.mjs, ready-for-review.mjs,
+// request-copilot-review.mjs) is covered by construction rather than needing
+// its own per-caller filter.
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -708,6 +716,8 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     // Graceful fallback: PR reviews fetch failure is non-fatal.
     // We continue with issue comments only.
   }
+  // Machine-artifact bodies are filtered inside the two summarizers below, not
+  // here — see the import comment above.
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });

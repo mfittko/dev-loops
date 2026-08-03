@@ -15,6 +15,37 @@ const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 
+// Machine-authored gate artifacts that must never win the newest-gate-marker
+// tie-break in summarizeGateReviewComments/summarizeGateReviewCommentMarkers:
+// close-gate-findings.mjs's posted findings review always embeds this gate's
+// name in its header line and can quote the current head sha inside a
+// finding's own free text (the lenient gate-name+hex-token fallback in
+// parseGateReviewCommentFields would otherwise happily match that), and the
+// deferred-summary PR comment quotes a gate name plus a sha-shaped id in its
+// table rows the same way. Both are excluded HERE, inside the two shared
+// summarizers, because this module is the true merge point: every consumer
+// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs,
+// request-copilot-review.mjs) calls summarizeGateReviewComments/
+// summarizeGateReviewCommentMarkers to turn a raw comment/review list into a
+// gate verdict, so filtering here — rather than per-caller — covers all of
+// them by construction. close-gate-findings.mjs's round counting does not
+// read through here; it matches upsert-checkpoint-verdict.mjs's own
+// producer-owned header literal via the exported matchGateReviewCommentHeader
+// and needs no exclusion.
+//
+// Anchored to the start of a line (`^` with `m`) so only a marker rendered as
+// the first character of its own line is excluded — a genuine verdict
+// comment whose findings summary merely QUOTES the marker text mid-line (for
+// example, describing this very mechanism) still counts as evidence. Both
+// producers render their marker at column 0 (close-gate-findings.mjs's
+// review-header marker and the deferred-summary comment's leading marker
+// line), so the anchor costs nothing against genuine artifacts.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|deferred-summary)\b/mu;
+
+export function isGateMachineArtifactBody(body) {
+  return typeof body === "string" && GATE_MACHINE_ARTIFACT_MARKER_RE.test(body);
+}
+
 export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
 }
@@ -238,50 +269,86 @@ function parseGateReviewCommentFields(body) {
     }
     const line = stripped;
 
+    // First-NON-EMPTY-wins per field: a genuine comment renders its structured
+    // block first, so the first column-0 match for each field is normally the
+    // real one. A free-text field (findings summary, next action) rendered
+    // later in the SAME comment can embed a newline plus a spoofed
+    // "Verdict: clean" (or any other field label) at column 0; capturing only
+    // the first match (rather than the last) stops that later line from
+    // winning and flipping/nulling the field. But the label regex's
+    // `\s*(.+)$` also matches a label followed by nothing but whitespace,
+    // capturing an empty string — for the enum fields (gate/headSha/verdict/
+    // executionMode) an empty capture normalizes to null already, so the
+    // `=== null` guard below naturally stays open for a later, genuine line.
+    // The two free-text fields (findingsSummary, nextAction) do NOT normalize
+    // through an enum, so an empty capture must be checked for explicitly:
+    // treat it as no-capture (leave the field open) rather than locking it to
+    // "" and hiding a real line that renders after it.
     let match = line.match(/^(?:[-*]\s*)?(?:gate(?:\s+name)?|gate\s+review)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.gate = normalizeGateReviewName(match[1]);
+      if (fields.gate === null) {
+        fields.gate = normalizeGateReviewName(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:head\s+sha(?:\s+reviewed)?|reviewed\s+head\s+sha)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      if (fields.headSha === null) {
+        fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?verdict\s*:\s*(.+)$/iu);
     if (match) {
-      fields.verdict = normalizeGateReviewVerdict(match[1]);
+      if (fields.verdict === null) {
+        fields.verdict = normalizeGateReviewVerdict(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:findings(?:\s+summary)?|summary)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.findingsSummary = match[1].trim();
+      if (fields.findingsSummary === null) {
+        const candidate = match[1].trim();
+        // An empty capture (label followed only by whitespace) is treated as
+        // no-capture: leave the field open so a later, genuine line can still
+        // win instead of first-wins locking it to "".
+        if (candidate.length > 0) {
+          fields.findingsSummary = candidate;
+        }
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?next\s+action\s*:\s*(.+)$/iu);
     if (match) {
-      fields.nextAction = match[1].trim();
+      if (fields.nextAction === null) {
+        const candidate = match[1].trim();
+        if (candidate.length > 0) {
+          fields.nextAction = candidate;
+        }
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?execution\s+mode\s*:\s*(.+)$/iu);
     if (match) {
-      const rest = match[1].trim();
-      // Split on the first em-dash / en-dash / " - " separator to recover an
-      // optional inline reason: "inline_single_agent — <reason>".
-      const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
-      const modeToken = sepMatch ? sepMatch[1].trim() : rest;
-      const reasonToken = sepMatch ? sepMatch[2].trim() : "";
-      fields.executionMode = normalizeGateExecutionMode(modeToken);
-      // Only record an inline reason for inline_single_agent. A trailing
-      // "— text" on a fanout_fanin (or invalid) mode line must not surface an
-      // inconsistent mode/reason pair, so leave inlineReason null otherwise.
-      if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
-        fields.inlineReason = reasonToken;
+      if (fields.executionMode === null) {
+        const rest = match[1].trim();
+        // Split on the first em-dash / en-dash / " - " separator to recover an
+        // optional inline reason: "inline_single_agent — <reason>".
+        const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
+        const modeToken = sepMatch ? sepMatch[1].trim() : rest;
+        const reasonToken = sepMatch ? sepMatch[2].trim() : "";
+        fields.executionMode = normalizeGateExecutionMode(modeToken);
+        // Only record an inline reason for inline_single_agent. A trailing
+        // "— text" on a fanout_fanin (or invalid) mode line must not surface an
+        // inconsistent mode/reason pair, so leave inlineReason null otherwise.
+        if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
+          fields.inlineReason = reasonToken;
+        }
       }
       continue;
     }
@@ -367,6 +434,9 @@ export function summarizeGateReviewComments(comments) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentBody(comment?.body);
     if (!parsed) {
       continue;
@@ -413,6 +483,9 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentMarkerBody(comment?.body);
     if (!parsed) {
       continue;

@@ -160,6 +160,34 @@ describe("toFindingsLogShape", () => {
     assert.deepEqual(toFindingsLogShape(undefined), []);
     assert.deepEqual(toFindingsLogShape([]), []);
   });
+
+  test("carries a positive-integer line through", () => {
+    const consolidated = consolidateFanin({
+      angleResults: [
+        {
+          angle: "scope",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "a", file: "src/a.mjs", line: 42 }],
+        },
+      ],
+    });
+    const shaped = toFindingsLogShape(consolidated.findings);
+    assert.deepEqual(shaped, [
+      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", files: ["src/a.mjs"], line: 42 },
+    ]);
+  });
+
+  test("drops a non-positive-integer or non-numeric line", () => {
+    const shaped = toFindingsLogShape([
+      { severity: "must-fix", angle: "a", summary: "x", line: 0 },
+      { severity: "must-fix", angle: "a", summary: "y", line: -1 },
+      { severity: "must-fix", angle: "a", summary: "z", line: 1.5 },
+      { severity: "must-fix", angle: "a", summary: "w", line: "42" },
+    ]);
+    for (const entry of shaped) {
+      assert.equal("line" in entry, false);
+    }
+  });
 });
 
 describe("planFanoutBatches", () => {

@@ -152,6 +152,36 @@ function collapseWhitespace(value) {
   return String(value).replace(/\s+/gu, " ").trim();
 }
 
+// Entity-encode the two literal delimiters a machine-artifact marker opens/closes
+// on (see packages/core/src/github/copilot-helpers.mjs's isGateMachineArtifactBody)
+// so a free-text field can never quote one at column 0 of a rendered verdict comment
+// and get the whole comment mistaken for a machine artifact by the shared summarizers.
+// Hand-copied from scripts/github/upsert-checkpoint-verdict.mjs's
+// encodeMachineArtifactMarkerDelimiters — this fallback is zero-dep and cannot import it.
+function encodeMachineArtifactMarkerDelimiters(value) {
+  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+}
+
+// Blockquote-prefix every continuation line (2nd line onward) of the
+// newline-preserving findings summary (--findings-file content) before it is
+// spliced into the rendered comment body. The shared field parser
+// (packages/core's parseGateReviewCommentFields, via stripGateCommentMarkdown)
+// trims each line and strips `#`/`**` but NOT a leading "> ", so a
+// reviewer-controlled line inside the file — e.g. "Execution mode:
+// fanout_fanin" or "Next action: <spoof>" at column 0 — can never reach
+// column 0 of its own logical line and match a field regex. Applied AFTER
+// truncation/marker-delimiter-encoding so the blockquote markers never count
+// against the field's length budget or get re-encoded. Hand-copied from
+// scripts/github/upsert-checkpoint-verdict.mjs's blockquoteContinuationLines —
+// this fallback is zero-dep and cannot import it.
+function blockquoteContinuationLines(value) {
+  const lines = String(value).split(/\r?\n/u);
+  if (lines.length <= 1) {
+    return value;
+  }
+  return [lines[0], ...lines.slice(1).map((line) => `> ${line}`)].join("\n");
+}
+
 function smartTruncate(value, limit) {
   const text = String(value);
   if (text.length <= limit) {
@@ -239,10 +269,16 @@ export function parsePostGateVerdictFallbackCliArgs(argv, { parseError } = {}) {
       continue;
     }
     if (token === "--next-action") {
-      options.nextAction = normalizeRequiredText(
-        requireOptionValue(args, "--next-action", parseErr),
-        "--next-action",
-        parseErr,
+      // collapseWhitespace (not just trim) for parity with the full helper's
+      // normalizeRequiredText: without it this field alone would preserve
+      // internal newlines, letting a caller-supplied --next-action carry an
+      // embedded "Execution mode: fanout_fanin" (or similar) line at column 0.
+      options.nextAction = collapseWhitespace(
+        normalizeRequiredText(
+          requireOptionValue(args, "--next-action", parseErr),
+          "--next-action",
+          parseErr,
+        ),
       );
       continue;
     }
@@ -295,7 +331,11 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
-  const summary = smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH);
+  const summary = blockquoteContinuationLines(
+    encodeMachineArtifactMarkerDelimiters(
+      smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH),
+    ),
+  );
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -314,7 +354,7 @@ export function renderFallbackGateReviewCommentBody({
     "",
     `**Findings summary:** ${summary}`,
     "",
-    `**Next action:** ${nextAction}`,
+    `**Next action:** ${encodeMachineArtifactMarkerDelimiters(String(nextAction ?? ""))}`,
   );
   return lines.join("\n");
 }

@@ -270,10 +270,6 @@ const GatesConfig = z.strictObject({
   // (reject); set false to warn instead of fail. See resolveRejectForeignAngles
   // / skills/docs/gate-review-sub-loop-contract.md.
   rejectForeignAngles: z.boolean().default(true),
-  // Tracker issue that consolidated gate-survivor findings (non-blocking
-  // findings a clean verdict does not re-run for) are filed against. No
-  // default — absent means survivor filing has nowhere to file to.
-  followUpIssue: z.number().int().min(1).describe("Tracker issue number that consolidated gate-survivor findings are filed against.").optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -635,7 +631,6 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
-  followUpIssue: z.number().int().min(1).describe("Tracker issue number that consolidated gate-survivor findings are filed against.").optional(),
 });
 
 // ============================================================================
@@ -1964,20 +1959,6 @@ export function resolveGateAngleContract(config, gate) {
     pool = [...new Set([...pool, ...resolveAnglePool(config)])].filter((a) => !excluded.has(a));
   }
   return { mandatoryAngles, pool };
-}
-
-/**
- * Resolve the tracker issue number that consolidated gate-survivor findings
- * (non-blocking findings a clean verdict does not re-run for) are filed
- * against. Absent/malformed values resolve to `null` (fail closed: nothing
- * to file against).
- *
- * @param {DevLoopConfig} config
- * @returns {number|null}
- */
-export function resolveGateFollowUpIssue(config) {
-  const value = config?.gates?.followUpIssue;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
 }
 
 /**

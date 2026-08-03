@@ -17,7 +17,7 @@ Required:
   --gate <draft_gate|pre_approval_gate>
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
   --verdict <clean|findings_present|blocked>
-  --findings <json>              JSON array of finding objects with severity, disposition, angle, and summary
+  --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
@@ -91,6 +91,12 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
+    }
+    if ("line" in f) {
+      if (!Number.isInteger(f.line) || f.line < 1) {
+        throw parseError(`${flagLabel}[${i}].line must be a positive integer`);
+      }
+      entry.line = f.line;
     }
     if ("resolvedIn" in f) {
       if (typeof f.resolvedIn !== "string" || f.resolvedIn.trim().length === 0) {
