@@ -614,7 +614,9 @@ is governed by `gates.postFindingsComments` (resolved via
 `resolveGatePostFindingsComments(config)`, default true / opt-out): when it is `false`
 the helper no-ops with a `skipped` result and the post step is skipped. The disposition
 ledger is written regardless — the opt-out only suppresses the PR comment, never the
-durable ledger.
+durable ledger. When the comment is opted out, the `GATE-EXEC-FINDING-THREADS` review
+(threads plus body-filed findings) is the auditable pre-fix trail; posting the same
+findings on a second surface duplicates them for every reader.
 
 `GATE-EXEC-FINDING-THREADS`'s per-finding review threads occupy the slot right after the
 verdict comment and before the fix cycle begins — the same post-verdict, pre-fix position
@@ -852,7 +854,9 @@ worth-fixing-now thread forces a fix round even after the current round's severi
 otherwise clean — this is the existing unresolved-feedback routing, not a new enforcement path.
 A finding the fixer rejects under its triage authority is not left dangling: it is closed with
 an explicit dispute reply and resolved, and its fingerprint keeps it suppressed, so no
-gate-authored thread can deadlock the chain.
+gate-authored thread can deadlock the chain. Every closing reply here, single-thread or batched,
+follows `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`'s per-thread distinctness requirement: it names
+the specific change that fixed that thread rather than a body copied across threads.
 
 <!-- rule: GATE-EXEC-DEFERRED-SUMMARY -->
 `GATE-EXEC-DEFERRED-SUMMARY`: When a `pre_approval_gate` round's ledger verdict is `clean` and

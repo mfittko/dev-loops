@@ -287,20 +287,24 @@ Required:
 
 Optional:
 - `--author <login>` (default `all`)
-- exactly one message source: `--message <text>` or stdin
+- `--message <text>` or stdin; with `--message-map`, this is only the fallback body for unmapped threads
+- `--message-map <path>`: a JSON file mapping threadId to that thread's distinct reply body, so each thread's resolving reply names the change that fixed it
+- `--include-resolved`: also target already-resolved threads that have a `--message-map` entry (reply posted, resolve skipped) — requires `--message-map`
 - `--resolve`
 
 Contract:
 - captures one authoritative review-thread snapshot via `capture-review-threads.mjs`
-- filters to unresolved threads containing at least one comment by the selected author
+- filters to unresolved threads containing at least one comment by the selected author (plus already-resolved mapped threads under `--include-resolved`)
 - chooses the newest matching author-authored comment in each matched thread as the REST reply target
+- with `--message-map`, validates full coverage of every matched thread (mapped entry or `--message` fallback) before sending any reply/resolve mutation, and fails closed listing the unmapped thread ids otherwise
 - processes matched threads sequentially in deterministic snapshot order
 - reuses the shared single-thread reply/resolve primitives instead of duplicating GitHub mutation logic
-- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any targeted thread remains unresolved
+- an already-resolved thread (only reachable via `--include-resolved`) gets the reply without a resolve mutation
+- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any newly-targeted thread remains unresolved
 - zero-match runs are deterministic no-ops with success JSON
 
 Success output shape:
-- `{ "ok": true, "repo": "owner/name", "pr": 17, "author": "all", "resolve": true|false, "matchedThreadCount": 2, "repliedThreadCount": 2, "resolvedThreadCount": 2, "skippedThreadCount": 1, "results": [{ "threadId": "...", "commentId": 123, "replyId": 456, "replyUrl": "...", "resolved": true }] }`
+- `{ "ok": true, "repo": "owner/name", "pr": 17, "author": "all", "resolve": true|false, "matchedThreadCount": 2, "repliedThreadCount": 2, "resolvedThreadCount": 2, "skippedThreadCount": 1, "results": [{ "threadId": "...", "commentId": 123, "replyId": 456, "replyUrl": "...", "resolved": true, "alreadyResolved": true }] }` (`alreadyResolved` is present only for an `--include-resolved` target)
 
 Failure behavior:
 - malformed arguments, empty/conflicting message input, malformed thread snapshots, unexpected `gh` failures, reply failures, resolve failures, and failed post-resolve verification emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
