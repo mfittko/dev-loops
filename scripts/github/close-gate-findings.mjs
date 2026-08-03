@@ -1,0 +1,826 @@
+#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { parseArgs } from "node:util";
+import { requireTokenValue } from "../_cli-primitives.mjs";
+import { formatCliError, isDirectCliRun, parseGateReviewCommentMarkerBody, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { commentIssue } from "./comment-issue.mjs";
+import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { captureParsedReviewThreads, replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
+
+const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
+Post a closed gate round's findings (write-gate-findings-log.mjs ledger) as ONE PR
+review of type COMMENT: a locatable (files[0]+line, in-diff) finding becomes an
+inline comment; everything else goes in the review body. Candidates already
+covered by an existing review thread or review body (fingerprint match, resolved
+threads included) are dropped before posting. Then a disposition pass reconciles
+every unresolved gate-authored thread against the current round: must-fix always
+stays open; worth-fixing-now stays open through round 3 of this gate's chain and
+is replied-to + resolved ("deferred at gate close") from round 4; defer-severity
+is replied-to + resolved immediately. Finally, on a pre_approval_gate round whose
+ledger verdict is clean and that closes with zero unresolved gate-authored
+threads, a single combined PR comment summarizing every deferred finding is
+created (or updated in place on a later run).
+
+Round number = the MAXIMUM of three worktree-independent-first sources:
+  (A) count of this gate's own verdict comments on the PR (repos/.../issues/.../comments,
+      one new comment per newly-gated head — the same history detect-checkpoint-evidence
+      reads), current round's own verdict comment already posted by the time this runs;
+  (B) the highest round= recorded on this gate's own posted review headers/finding
+      markers (co-located with a review whose body also carries this gate's own
+      "gate-findings-review <gate>" marker, so it can never mix rounds across gates);
+  (C) count of local <gate>-*.json findings-log files under --tmp-root/gate-findings/....
+(A) is primary and survives a fresh worktree/clone; (B) and (C) are cross-checks that
+can only push the round number UP, never down, guarding against an undercount.
+
+Required:
+  --ledger <path>              Path to a write-gate-findings-log.mjs JSON ledger:
+                                { repo, pr, gate, headSha, verdict, findings[] }
+                                repo/pr/gate/headSha/verdict are derived from the ledger itself.
+Optional:
+  --tmp-root <path>            Root tmp directory for the local findings-log fallback
+                                count (default: tmp/)
+
+Output (stdout, JSON):
+  { "ok": true, "gate": "...", "headSha": "...", "round": N,
+    "posted": <inline comment count>, "bodyFiled": <non-locatable finding count>,
+    "suppressed": <dedupe-dropped count>, "deferredResolved": <disposition reply+resolve count>,
+    "summary": "created"|"updated"|"not_triggered" }
+
+${JQ_OUTPUT_USAGE}
+Exit codes:
+  0  Success
+  1  Argument error or gh failure
+  2  Invalid --jq filter`.trim();
+
+function parseError(message) {
+  return Object.assign(new Error(message), { usage: USAGE });
+}
+
+const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
+const VALID_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
+const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+// Findings at round <= this stay in the standard fix loop; from the next round
+// on, an open worth-fixing-now finding is deferred instead of re-fixed in-gate.
+const WORTH_FIXING_NOW_FIX_WINDOW = 3;
+const DEFERRED_SUMMARY_MARKER = "<!-- dev-loops:deferred-summary -->";
+
+// ---------------------------------------------------------------------------
+// Markers
+// ---------------------------------------------------------------------------
+
+// Slug a marker field value down to a safe, single-token spelling. Severity and
+// angle are controlled vocabulary in practice, but the marker format itself
+// must never break (a stray space would split it into unparseable garbage and
+// could, worst case, let free text masquerade as marker fields), so this is
+// belt-and-suspenders normalization, not display formatting.
+function slugForMarker(value) {
+  const slug = String(value).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug.length > 0 ? slug : "unknown";
+}
+
+// Per-finding suppression + disposition marker. Deliberately carries no `gate`
+// field: the fingerprint dedupe is intentionally cross-gate (a draft-gate
+// deferral suppresses re-raising the same finding at pre-approval too).
+export function buildFindingMarker({ fp, severity, angle, round }) {
+  return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round} -->`;
+}
+
+const FINDING_MARKER_RE = /<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+disposition=(deferred))?\s*-->/;
+const FINDING_MARKER_RE_GLOBAL = new RegExp(FINDING_MARKER_RE.source, "g");
+const FINDING_MARKER_FP_ONLY_RE = /<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/g;
+
+export function parseFindingMarker(text) {
+  const match = typeof text === "string" ? text.match(FINDING_MARKER_RE) : null;
+  if (!match) return null;
+  return { fp: match[1], severity: match[2], angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
+}
+
+// Round is embedded here (an addition beyond the finding marker's own round=,
+// which cannot be reliably attributed back to one gate without a second
+// network round-trip) so the round cross-check can be computed from review
+// bodies alone, correctly scoped to THIS gate.
+function buildReviewHeaderMarker({ gate, headSha, round }) {
+  return `<!-- dev-loops:gate-findings-review ${gate} ${headSha} round=${round} -->`;
+}
+
+const REVIEW_HEADER_RE = /<!--\s*dev-loops:gate-findings-review\s+(draft_gate|pre_approval_gate)\s+([0-9a-f]{7,64})\s+round=(\d+)\s*-->/;
+
+// ---------------------------------------------------------------------------
+// Fingerprint
+// ---------------------------------------------------------------------------
+
+// 16-hex sha256 over path + normalized summary. Line is deliberately excluded
+// (it drifts across heads); angle/severity are excluded (a cross-gate or
+// cross-severity re-raise of the same underlying finding must still dedupe).
+export function fingerprintFinding(finding) {
+  const filePath = Array.isArray(finding.files) && finding.files.length > 0 ? finding.files[0] : "";
+  const normalizedSummary = String(finding.summary).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return createHash("sha256").update(`${filePath}|${normalizedSummary}`).digest("hex").slice(0, 16);
+}
+
+function collectFingerprints(text, set) {
+  if (typeof text !== "string") return;
+  for (const match of text.matchAll(FINDING_MARKER_FP_ONLY_RE)) {
+    set.add(match[1]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering (prose lines, findings)
+// ---------------------------------------------------------------------------
+
+// One deterministic, round-trip-parseable line rendering a finding's
+// severity/angle/summary. Shared by inline comments (unblockquoted — inline
+// review comments are never scanned by the evidence checker) and non-locatable
+// review-body blocks (blockquoted by the caller).
+function renderFindingLine({ severity, angle, summary }) {
+  return `**${severity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
+}
+
+const FINDING_LINE_RE = /^\*\*(.+?)\*\*\s*\(`([^`]*)`\):\s*(.*)$/;
+
+function parseFindingLine(rawLine) {
+  if (typeof rawLine !== "string") return null;
+  const line = rawLine.replace(/^>\s?/, "").trim();
+  const match = line.match(FINDING_LINE_RE);
+  if (!match) return null;
+  return { severity: match[1], angle: match[2], summary: match[3] };
+}
+
+function renderRecommendationLine(recommendation) {
+  return `Recommendation: ${sanitizeInline(recommendation)}`;
+}
+
+function hasRecommendation(finding) {
+  return typeof finding.recommendation === "string" && finding.recommendation.trim().length > 0;
+}
+
+export function renderInlineCommentBody(finding, { round }) {
+  const fp = fingerprintFinding(finding);
+  const lines = [
+    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round }),
+    renderFindingLine(finding),
+  ];
+  if (hasRecommendation(finding)) {
+    lines.push(renderRecommendationLine(finding.recommendation));
+  }
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
+}
+
+// Every content line after the marker is blockquoted: this is load-bearing.
+// The evidence checker's marker parser strips markdown headers/bold but NOT a
+// leading "> ", so no rendered finding line can ever match its line-start
+// gate:/head sha:/verdict:/summary: field regex, however a finding's own free
+// text is worded.
+function renderNonLocatableBlock(finding, { round }) {
+  const fp = fingerprintFinding(finding);
+  const lines = [
+    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round }),
+    `> ${renderFindingLine(finding)}`,
+  ];
+  if (hasRecommendation(finding)) {
+    lines.push(`> ${renderRecommendationLine(finding.recommendation)}`);
+  }
+  if (Array.isArray(finding.files) && finding.files.length > 0) {
+    const refs = finding.files.map((f) => `\`${sanitizeCodeSpan(f)}\``).join(", ");
+    lines.push(`> Location: ${refs}`);
+  }
+  return lines.join("\n");
+}
+
+// Always non-empty (the header line is unconditional): GitHub's Create-a-review
+// endpoint 422s a COMMENT-event review with an empty body, so a round where
+// every finding is locatable must still render a real body.
+export function renderReviewBody({ gate, headSha, round, nonLocatable }) {
+  const shortSha = headSha.slice(0, 7);
+  const lines = [
+    `Gate findings — ${gate} round ${round} @ ${shortSha}`,
+    buildReviewHeaderMarker({ gate, headSha, round }),
+  ];
+  if (nonLocatable.length === 0) {
+    lines.push("", "No out-of-diff findings this round.");
+  } else {
+    for (const finding of nonLocatable) {
+      lines.push("", renderNonLocatableBlock(finding, { round }));
+    }
+  }
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Table-cell sanitization (ported from the deleted append-gate-survivors.mjs)
+// ---------------------------------------------------------------------------
+
+// Entity-encode a table cell: sanitizeCodeSpan neutralizes embedded
+// HTML-comment delimiters/backticks; `|` is additionally entity-encoded
+// (never backslash-escaped — a backslash-escape is itself a bypass vector for
+// the next consumer) so a finding field can never break out of its table cell.
+function sanitizeCell(value) {
+  return sanitizeCodeSpan(value).replace(/\|/g, "&#124;");
+}
+
+const SUMMARY_SEVERITY_ORDER = ["worth-fixing-now", "defer"];
+
+function sortSummaryRows(rows) {
+  return [...rows].sort((a, b) => {
+    const rankA = SUMMARY_SEVERITY_ORDER.indexOf(a.severity);
+    const rankB = SUMMARY_SEVERITY_ORDER.indexOf(b.severity);
+    if (rankA !== rankB) return rankA - rankB;
+    if (a.angle !== b.angle) return a.angle < b.angle ? -1 : 1;
+    if (a.summary !== b.summary) return a.summary < b.summary ? -1 : 1;
+    return 0;
+  });
+}
+
+export function renderDeferredSummaryBody({ pr, rows }) {
+  const lines = [
+    DEFERRED_SUMMARY_MARKER,
+    `### Deferred gate findings — PR #${pr}`,
+    "",
+    "| Severity | Angle | Summary | Location | Round | Thread |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
+  if (rows.length === 0) {
+    lines.push("| — | — | No deferred findings. | — | — | — |");
+  } else {
+    for (const row of sortSummaryRows(rows)) {
+      const threadCell = row.threadLink ? `[${sanitizeCell(row.threadLink)}](${row.threadLink})` : "—";
+      lines.push(
+        `| ${sanitizeCell(row.severity)} | ${sanitizeCell(row.angle)} | ${sanitizeCell(row.summary)} | `
+        + `${row.location === "—" ? "—" : `\`${sanitizeCell(row.location)}\``} | ${row.round} | ${threadCell} |`,
+      );
+    }
+  }
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Ledger read + validate (mirrors the deleted append-gate-survivors.mjs)
+// ---------------------------------------------------------------------------
+
+async function readLedger(ledgerPath) {
+  let raw;
+  try {
+    raw = await readFile(ledgerPath, "utf8");
+  } catch (err) {
+    throw parseError(`Cannot read --ledger "${ledgerPath}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw parseError(`--ledger "${ledgerPath}" must contain valid JSON`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw parseError(`--ledger "${ledgerPath}" must contain a JSON object`);
+  }
+  const { repo, pr, gate, headSha, verdict, findings } = parsed;
+  let repoSlug;
+  try {
+    const { owner, name } = parseRepoSlug(typeof repo === "string" ? repo.trim() : repo);
+    repoSlug = `${owner}/${name}`;
+  } catch {
+    throw parseError(`--ledger "${ledgerPath}" "repo" must be an owner/name slug`);
+  }
+  if (!Number.isInteger(pr) || pr <= 0) {
+    throw parseError(`--ledger "${ledgerPath}" is missing a valid "pr" number`);
+  }
+  if (!VALID_GATES.has(gate)) {
+    throw parseError(`--ledger "${ledgerPath}" "gate" must be draft_gate or pre_approval_gate`);
+  }
+  const fullHeadSha = normalizeFullHeadSha(headSha);
+  if (fullHeadSha === null) {
+    throw parseError(`--ledger "${ledgerPath}" "headSha" must be the full 40- or 64-char hex commit SHA`);
+  }
+  if (!VALID_VERDICTS.has(verdict)) {
+    throw parseError(`--ledger "${ledgerPath}" "verdict" must be clean, findings_present, or blocked`);
+  }
+  if (!Array.isArray(findings)) {
+    throw parseError(`--ledger "${ledgerPath}" "findings" must be an array`);
+  }
+  findings.forEach((f, i) => {
+    if (!f || typeof f !== "object" || !VALID_SEVERITIES.has(f.severity) || typeof f.angle !== "string" || typeof f.summary !== "string") {
+      throw parseError(`--ledger "${ledgerPath}" findings[${i}] is malformed (expected {severity, angle, summary})`);
+    }
+    if ("line" in f && f.line !== undefined && (!Number.isInteger(f.line) || f.line < 1)) {
+      throw parseError(`--ledger "${ledgerPath}" findings[${i}].line must be a positive integer`);
+    }
+    if ("files" in f && f.files !== undefined && !Array.isArray(f.files)) {
+      throw parseError(`--ledger "${ledgerPath}" findings[${i}].files must be an array`);
+    }
+  });
+  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings };
+}
+
+// ---------------------------------------------------------------------------
+// gh plumbing
+// ---------------------------------------------------------------------------
+
+function runChildWithInput(command, args, env, stdinText) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    if (stdinText === undefined) {
+      child.stdin.end();
+    } else {
+      child.stdin.end(stdinText);
+    }
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function runChildPlain(command, args, env) {
+  return runChildWithInput(command, args, env, undefined);
+}
+
+async function runGhJson(args, { env, ghCommand }) {
+  const result = await runChildPlain(ghCommand, args, env);
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
+}
+
+function flattenPaginatedSlurp(payload) {
+  if (Array.isArray(payload) && payload.every((p) => Array.isArray(p))) {
+    return payload.flat();
+  }
+  return Array.isArray(payload) ? payload : [];
+}
+
+async function listPrReviews({ repo, pr }, { env, ghCommand }) {
+  const payload = await runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`],
+    { env, ghCommand },
+  );
+  return flattenPaginatedSlurp(payload)
+    .filter((r) => r && typeof r.body === "string" && r.body.trim().length > 0)
+    .map((r) => ({ id: Number.isInteger(r.id) ? r.id : null, body: r.body }));
+}
+
+async function fetchPrFiles({ repo, pr }, { env, ghCommand }) {
+  const payload = await runGhJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/files?per_page=100`],
+    { env, ghCommand },
+  );
+  return flattenPaginatedSlurp(payload);
+}
+
+async function postReview({ repo, pr, headSha, body, comments }, { env, ghCommand }) {
+  const payload = { commit_id: headSha, event: "COMMENT", body, comments };
+  const result = await runChildWithInput(
+    ghCommand,
+    ["api", "-X", "POST", `repos/${repo}/pulls/${pr}/reviews`, "--input", "-"],
+    env,
+    `${JSON.stringify(payload)}\n`,
+  );
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+  return parseJsonText(result.stdout, { label: "gh api pulls reviews (POST)" });
+}
+
+async function updateIssueComment({ repo, commentId, body }, { env, ghCommand }) {
+  const result = await runChildPlain(
+    ghCommand,
+    ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
+    env,
+  );
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+  return parseJsonText(result.stdout, { label: "gh api issues comments (PATCH)" });
+}
+
+// ---------------------------------------------------------------------------
+// Round determination
+// ---------------------------------------------------------------------------
+
+function countVerdictComments(comments, gate) {
+  let count = 0;
+  for (const comment of comments) {
+    const parsed = parseGateReviewCommentMarkerBody(comment?.body);
+    if (parsed && parsed.gate === gate) count += 1;
+  }
+  return count;
+}
+
+// Scoped strictly to review bodies that carry THIS gate's own header marker —
+// never mixes draft_gate/pre_approval_gate round numbers together.
+function crossCheckRoundFromReviewBodies(bodies, gate) {
+  let max = 0;
+  for (const body of bodies) {
+    if (typeof body !== "string") continue;
+    const header = body.match(REVIEW_HEADER_RE);
+    if (!header || header[1] !== gate) continue;
+    max = Math.max(max, Number(header[3]));
+    for (const match of body.matchAll(FINDING_MARKER_RE_GLOBAL)) {
+      max = Math.max(max, Number(match[4]));
+    }
+  }
+  return max;
+}
+
+async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
+  const samplePath = buildLogPath({ repo, pr, gate, headSha, tmpRoot });
+  const dir = path.resolve(repoRoot, path.dirname(samplePath));
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return 0;
+  }
+  const prefix = `${gate}-`;
+  return entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).length;
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-diff detection (pulls/{n}/files patch walk)
+// ---------------------------------------------------------------------------
+
+const HUNK_HEADER_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+// Build the set of "<path>:<line>" pairs GitHub will accept an inline (side
+// RIGHT) review comment on: every context or added line inside a diff hunk. A
+// removed-only ('-') line only exists on the old (LEFT) side and never
+// advances the new-file line counter.
+export function buildCommentableLineSet(files) {
+  const set = new Set();
+  for (const file of files) {
+    const filename = typeof file?.filename === "string" ? file.filename : null;
+    const patch = typeof file?.patch === "string" ? file.patch : null;
+    if (!filename || !patch) continue;
+    let newLine = null;
+    for (const rawLine of patch.split("\n")) {
+      const hunk = rawLine.match(HUNK_HEADER_RE);
+      if (hunk) {
+        newLine = Number(hunk[1]);
+        continue;
+      }
+      if (newLine === null) continue;
+      if (rawLine.startsWith("+") || rawLine.startsWith(" ")) {
+        set.add(`${filename}:${newLine}`);
+        newLine += 1;
+      }
+      // '-' (old-file-only) and '\' (no-newline marker) do not advance the
+      // new-file line counter.
+    }
+  }
+  return set;
+}
+
+export function isLocatableFinding(finding, commentableSet) {
+  if (!Array.isArray(finding.files) || finding.files.length === 0) return false;
+  if (!Number.isInteger(finding.line) || finding.line < 1) return false;
+  return commentableSet.has(`${finding.files[0]}:${finding.line}`);
+}
+
+// ---------------------------------------------------------------------------
+// Disposition pass
+// ---------------------------------------------------------------------------
+
+function dispositionMessage(round) {
+  return `Deferred at gate close (round ${round}); filed in the deferred summary.`;
+}
+
+// Every currently-unresolved gate-authored (marker-bearing) thread, whether
+// newly posted this round or carried open from an earlier one, is reconciled
+// against the CURRENT round — not the round recorded on its own marker. A
+// worth-fixing-now finding first raised at round 1 and still open when the
+// chain reaches round 4 is deferred then, exactly like one raised fresh at
+// round 4.
+function selectDispositionTargets(threads, round) {
+  const targets = [];
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue; // not a gate-authored thread
+    if (marker.severity === "must-fix") continue;
+    if (marker.severity === "worth-fixing-now" && round <= WORTH_FIXING_NOW_FIX_WINDOW) continue;
+    targets.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity });
+  }
+  return targets;
+}
+
+// Stamp `disposition=deferred` onto the thread's line-1 marker before the
+// resolve, so a deferred thread is distinguishable from a worth-fixing-now
+// thread the fix loop resolved with a fixing commit: the deferred summary
+// filters on this field and would otherwise list fixed findings as deferred.
+async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand }) {
+  const current = await runChildPlain(
+    ghCommand,
+    ["api", `repos/${repo}/pulls/comments/${commentId}`],
+    env,
+  );
+  if (current.code !== 0) {
+    const detail = current.stderr.trim() || `exit code ${current.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+  const payload = parseJsonText(current.stdout, { label: "gh api pulls comments (GET)" });
+  const body = typeof payload?.body === "string" ? payload.body : "";
+  if (!FINDING_MARKER_RE.test(body) || /disposition=deferred/.test(body)) return;
+  const stamped = body.replace(FINDING_MARKER_RE, (marker) => marker.replace(/\s*-->$/, " disposition=deferred -->"));
+  const patched = await runChildPlain(
+    ghCommand,
+    ["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "-f", `body=${stamped}`],
+    env,
+  );
+  if (patched.code !== 0) {
+    const detail = patched.stderr.trim() || `exit code ${patched.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+}
+
+async function runDispositionPass({ repo, pr, round, threads }, { env, ghCommand }) {
+  const targets = selectDispositionTargets(threads, round);
+  if (targets.length === 0) {
+    return { resolvedThreadIds: new Set(), deferredResolved: 0 };
+  }
+  const snapshot = await captureParsedReviewThreads({ repo, pr }, { env, ghCommand });
+  const message = dispositionMessage(round);
+  const resolvedThreadIds = new Set();
+  for (const target of targets) {
+    await stampDeferredDisposition({ repo, commentId: target.commentId }, { env, ghCommand });
+    await replyAndMaybeResolve(
+      { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
+      { env, ghCommand },
+    );
+    resolvedThreadIds.add(target.threadId);
+  }
+  return { resolvedThreadIds, deferredResolved: resolvedThreadIds.size };
+}
+
+// ---------------------------------------------------------------------------
+// Deferred-summary rebuild (rebuilt entirely from markers, no local state)
+// ---------------------------------------------------------------------------
+
+function extractFindingLineFromExcerpt(body) {
+  const lines = typeof body === "string" ? body.split(/\r?\n/) : [];
+  return lines.length > 1 ? lines[1] : null;
+}
+
+function buildThreadSummaryRows(threads, resolvedThreadIds) {
+  const rows = [];
+  for (const thread of threads) {
+    const isResolved = thread.isResolved || resolvedThreadIds.has(thread.threadId);
+    if (!isResolved) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker || !SUMMARY_SEVERITY_ORDER.includes(marker.severity)) continue;
+    // Deferred threads only: a thread deferred THIS run is known locally; one
+    // deferred in an earlier run carries the stamped marker field. A resolved
+    // worth-fixing-now thread with neither was FIXED by the fix loop and must
+    // not be listed as deferred.
+    const wasDeferred = resolvedThreadIds.has(thread.threadId) || marker.disposition === "deferred";
+    if (!wasDeferred) continue;
+    const parsedLine = parseFindingLine(extractFindingLineFromExcerpt(thread.body));
+    rows.push({
+      severity: marker.severity,
+      angle: marker.angle,
+      round: marker.round,
+      summary: parsedLine?.summary ?? "(see thread)",
+      location: thread.path ? `${thread.path}${Number.isInteger(thread.line) ? `:${thread.line}` : ""}` : "—",
+      threadLink: thread.commentId ? `#discussion_r${thread.commentId}` : null,
+    });
+  }
+  return rows;
+}
+
+// Every finding filed in a review body (non-locatable — no code location, so
+// it can never become a resolvable thread) is, by construction, permanently
+// deferred: it stays suppressed by fingerprint but nothing ever resolves it.
+function splitFindingBlocks(bodyText) {
+  const lines = typeof bodyText === "string" ? bodyText.split(/\r?\n/) : [];
+  const blocks = [];
+  let current = null;
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const marker = trimmed.startsWith("<!--") ? parseFindingMarker(trimmed) : null;
+    if (marker) {
+      current = { marker, lines: [] };
+      blocks.push(current);
+      continue;
+    }
+    if (current && trimmed.length > 0) {
+      current.lines.push(trimmed);
+    }
+  }
+  return blocks;
+}
+
+function buildBodyFiledSummaryRows(reviews) {
+  const rows = [];
+  for (const review of reviews) {
+    for (const block of splitFindingBlocks(review.body)) {
+      if (!SUMMARY_SEVERITY_ORDER.includes(block.marker.severity)) continue;
+      const parsedLine = parseFindingLine(block.lines[0] ?? "");
+      rows.push({
+        severity: block.marker.severity,
+        angle: block.marker.angle,
+        round: block.marker.round,
+        summary: parsedLine?.summary ?? "(see PR review body)",
+        location: "—",
+        threadLink: Number.isInteger(review.id) ? `#pullrequestreview-${review.id}` : null,
+      });
+    }
+  }
+  return rows;
+}
+
+async function upsertDeferredSummary({ repo, pr, rows }, { env, ghCommand }) {
+  const body = renderDeferredSummaryBody({ pr, rows });
+  const comments = await listIssueComments({ repo, pr }, { env, ghCommand });
+  const existing = findMarkedComment(comments, DEFERRED_SUMMARY_MARKER);
+  if (existing) {
+    await updateIssueComment({ repo, commentId: existing.id, body }, { env, ghCommand });
+    return "updated";
+  }
+  await commentIssue({ repo, issue: pr, body }, { env, ghCommand });
+  return "created";
+}
+
+// ---------------------------------------------------------------------------
+// CLI args
+// ---------------------------------------------------------------------------
+
+export function parseCloseGateFindingsCliArgs(argv) {
+  const options = { help: false, ledgerPath: undefined, tmpRoot: "tmp" };
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      ledger: { type: "string" },
+      "tmp-root": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "ledger") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--ledger requires a non-empty path");
+      }
+      options.ledgerPath = p;
+      continue;
+    }
+    if (token.name === "tmp-root") {
+      const t = requireTokenValue(token, parseError).trim();
+      if (t.length === 0) {
+        throw parseError("--tmp-root requires a non-empty path");
+      }
+      options.tmpRoot = t;
+      continue;
+    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
+    throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  if (options.ledgerPath === undefined) {
+    throw parseError("Missing required argument: --ledger <path>");
+  }
+  return options;
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+
+export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
+  const { repo, pr, gate, headSha, verdict, findings } = await readLedger(options.ledgerPath);
+  const tmpRoot = options.tmpRoot || "tmp";
+  const gh = { env, ghCommand };
+
+  // 1. Review bodies (suppression + gate-scoped round cross-check).
+  const reviews = await listPrReviews({ repo, pr }, gh);
+  // 2. All review threads, resolved included (suppression).
+  const threadsPrePost = await fetchAllReviewThreads({ repo, pr }, gh);
+  const suppressed = new Set();
+  for (const review of reviews) collectFingerprints(review.body, suppressed);
+  for (const thread of threadsPrePost) collectFingerprints(thread.body, suppressed);
+
+  // 3. Round.
+  const verdictComments = await listIssueComments({ repo, pr }, gh);
+  const primaryRound = countVerdictComments(verdictComments, gate);
+  const crossCheckRound = crossCheckRoundFromReviewBodies(reviews.map((r) => r.body), gate);
+  const fallbackRound = await countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  const round = Math.max(primaryRound, crossCheckRound, fallbackRound, 1);
+
+  // 4. Dedupe against the suppression set.
+  const candidates = findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
+  const suppressedCount = findings.length - candidates.length;
+
+  // 5. Partition locatable vs non-locatable.
+  let locatable = [];
+  let nonLocatable = [];
+  if (candidates.length > 0) {
+    const files = await fetchPrFiles({ repo, pr }, gh);
+    const commentableSet = buildCommentableLineSet(files);
+    for (const finding of candidates) {
+      (isLocatableFinding(finding, commentableSet) ? locatable : nonLocatable).push(finding);
+    }
+  }
+
+  // 6. Post the review (skipped entirely when there is nothing new to say).
+  if (locatable.length > 0 || nonLocatable.length > 0) {
+    const reviewBody = renderReviewBody({ gate, headSha, round, nonLocatable });
+    const comments = locatable.map((finding) => ({
+      path: finding.files[0],
+      line: finding.line,
+      side: "RIGHT",
+      body: renderInlineCommentBody(finding, { round }),
+    }));
+    const response = await postReview({ repo, pr, headSha, body: reviewBody, comments }, gh);
+    reviews.push({ id: Number.isInteger(response?.id) ? response.id : null, body: reviewBody });
+  }
+
+  // 7. Fresh thread snapshot for the disposition pass (always re-fetched: a
+  // body-only post changes nothing thread-side, but a carried-open thread from
+  // an earlier round must be reconciled against THIS round regardless).
+  const threadsForDisposition = await fetchAllReviewThreads({ repo, pr }, gh);
+  const { resolvedThreadIds, deferredResolved } = await runDispositionPass(
+    { repo, pr, round, threads: threadsForDisposition },
+    gh,
+  );
+
+  // 8. Deferred-summary trigger — evaluated unconditionally, including a
+  // zero-findings round (that is exactly the round most likely to trigger it).
+  const unresolvedGateThreadCount = threadsForDisposition.filter((thread) => {
+    if (thread.isResolved || resolvedThreadIds.has(thread.threadId)) return false;
+    return parseFindingMarker(thread.body) !== null;
+  }).length;
+  const triggered = gate === "pre_approval_gate" && verdict === "clean" && unresolvedGateThreadCount === 0;
+  let summaryAction = "not_triggered";
+  if (triggered) {
+    const rows = [
+      ...buildThreadSummaryRows(threadsForDisposition, resolvedThreadIds),
+      ...buildBodyFiledSummaryRows(reviews),
+    ];
+    summaryAction = await upsertDeferredSummary({ repo, pr, rows }, gh);
+  }
+
+  return {
+    ok: true,
+    repo,
+    pr,
+    gate,
+    headSha,
+    round,
+    posted: locatable.length,
+    bodyFiled: nonLocatable.length,
+    suppressed: suppressedCount,
+    deferredResolved,
+    summary: summaryAction,
+  };
+}
+
+async function main() {
+  let options;
+  try {
+    options = parseCloseGateFindingsCliArgs(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`${formatCliError(error)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (options.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return;
+  }
+  try {
+    const result = await closeGateFindings(options);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    process.exitCode = 1;
+  }
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  await main();
+}

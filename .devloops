@@ -21,7 +21,6 @@ gates:
   # ("survivor") finding a gate close does not fix in-gate. Mandatory: a gate
   # close with survivors and no configured issue fails closed
   # (GATE-EXEC-SURVIVOR-FILING).
-  followUpIssue: 1544
   draft:
     dynamic:
       subtractive: true
