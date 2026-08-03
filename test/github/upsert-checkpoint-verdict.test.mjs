@@ -4668,7 +4668,10 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
         stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
       },
     ];
-    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    // No repeatLastOnOverflow: `entries` already covers every call the happy
+    // path makes, so ANY extra gh call (a second review post above all) exits
+    // 97 and fails the run rather than being answered with the same payload.
+    const { runChild, calls } = makeGhMock(entries);
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -4688,8 +4691,9 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     assert.equal(result.bodyFiled, 1);
     assert.equal(result.suppressed, 0);
 
-    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
-    postedPayload = JSON.parse(postCall.stdinText);
+    const postCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.equal(postCalls.length, 1);
+    postedPayload = JSON.parse(postCalls[0].stdinText);
     assert.equal(postedPayload.event, "COMMENT");
     assert.equal(postedPayload.commit_id, SINGLE_SURFACE_HEAD);
 
@@ -4858,6 +4862,78 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
     assert.equal(result.surface, "review");
     assert.equal(result.commentId, 706);
     assert.ok(!calls.some((c) => c.args.includes("POST") || c.args.includes("PUT")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The digest collapses findings to severity counts, so a rerun whose ledger
+// swapped one finding for another at the same severity keeps every compared
+// verdict field byte-identical. The finding surface itself has to break the
+// noop, or the new finding would silently never be posted.
+test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAPPED finding at unchanged verdict fields is NOT a noop", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-swap-"));
+  try {
+    const postedFinding = { severity: "worth-fixing-now", angle: "coverage", summary: "the retry path has no test" };
+    const swappedFinding = { severity: "worth-fixing-now", angle: "coverage", summary: "the timeout path has no test" };
+    // The already-posted round: its body carries postedFinding's fingerprint,
+    // and gate-bot authored it, so a rerun suppresses that finding.
+    const existingReview = {
+      id: 707,
+      user: { login: "gate-bot" },
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-707",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "findings_present",
+        findingsSummary: "1 finding",
+        nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+        round: 1,
+        nonLocatableFindings: [postedFinding],
+      }),
+    };
+    // Identical across BOTH calls: only the ledger's finding differs.
+    const verdictOptions = {
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "1 finding",
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+      findingsLedger: path.join(tempDir, "ledger.json"),
+    };
+    const ghOptions = { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot: tempDir };
+
+    // Control: the SAME ledger the posted review already carries still noops.
+    await writeSingleSurfaceLedger(tempDir, [postedFinding]);
+    const control = makeGhMock(singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }));
+    const controlResult = await upsertCheckpointVerdict(verdictOptions, { ...ghOptions, runChild: control.runChild });
+    assert.equal(controlResult.action, "noop");
+    assert.equal(controlResult.suppressed, 1);
+    assert.equal(controlResult.bodyFiled, 0);
+
+    // The swap: same verdict/summary/nextAction/mode, a different finding.
+    await writeSingleSurfaceLedger(tempDir, [swappedFinding]);
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/707", "--input", "-"],
+        assertStdinIncludes: [swappedFinding.summary],
+        stdout: '{"id":707,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-707"}\n',
+      },
+    ]);
+    const result = await upsertCheckpointVerdict(verdictOptions, { ...ghOptions, runChild });
+
+    assert.equal(result.action, "updated");
+    assert.equal(result.bodyFiled, 1);
+    assert.equal(result.suppressed, 0);
+    assert.equal(calls.filter((c) => c.args.includes("PUT")).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

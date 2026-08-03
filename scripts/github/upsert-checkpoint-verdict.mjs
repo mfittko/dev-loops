@@ -1669,6 +1669,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const existingInlineReason = (existing?.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent"
     ? (existing?.inlineReason ?? null)
     : null;
+  // The finding surface is part of what a same-head rerun would post, and the
+  // structured digest collapses findings to severity counts — so a ledger whose
+  // findings changed at unchanged counts renders an identical digest. Compare
+  // the surface itself: every candidate the fingerprint pass did NOT suppress is
+  // still unposted, so a round carrying one is never a noop, whatever the fields
+  // say. A rerun of the same ledger suppresses all of its findings against the
+  // posted review/threads and reaches zero here.
+  const unpostedFindings = findingSurface
+    ? findingSurface.locatable.length + findingSurface.nonLocatable.length
+    : 0;
   if (
     existing
     && existing.contractComplete
@@ -1677,6 +1687,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && existing.nextAction === options.nextAction
     && (existing.executionMode ?? DEFAULT_EXECUTION_MODE) === desiredExecutionMode
     && existingInlineReason === desiredInlineReason
+    && unpostedFindings === 0
   ) {
     return {
       ok: true,
