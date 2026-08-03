@@ -17,10 +17,10 @@ gates:
   # angle — no two freshly-reviewed angles may share a reviewer. See
   # skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
-  # Consolidated issue that receives the ledger comment for every non-blocking
-  # ("survivor") finding a gate close does not fix in-gate. Mandatory: a gate
-  # close with survivors and no configured issue fails closed
-  # (GATE-EXEC-SURVIVOR-FILING).
+  # A non-blocking finding a gate close does not fix in-gate becomes a PR
+  # review thread: fixed in-gate through round 3 of the gate's chain, then
+  # deferred with a reply + resolve from round 4 (GATE-EXEC-FINDING-THREADS,
+  # GATE-EXEC-THREAD-DISPOSITION).
   draft:
     dynamic:
       subtractive: true
@@ -67,16 +67,21 @@ gates:
     # preApproval blocks on both, but it re-reviews through its own, mostly
     # disjoint angle pool (draft and preApproval share only contradiction-lens)
     # and does not carry a specific unblocked draft-gate finding forward — the
-    # ledger records it "deferred" and nothing re-raises it. A worth-fixing-now
-    # finding from a draft-only angle is not "caught later"; it is recorded and
-    # left. This also affects light-mode dispatch: resolveGateDispatchMode
-    # escalates inline to full fan-out only on a blocking-severity inline
-    # finding, so a light-dispatched draft PR whose inline pass surfaces only
-    # worth-fixing-now now stays inline instead of escalating.
+    # ledger records it "deferred" and nothing re-raises it (fingerprint
+    # suppression carries across gates). A worth-fixing-now finding from a
+    # draft-only angle is not "caught later" by preApproval's own fan-out; it
+    # stays disposed on its own PR review thread. This also affects light-mode
+    # dispatch: resolveGateDispatchMode escalates inline to full fan-out only
+    # on a blocking-severity inline finding, so a light-dispatched draft PR
+    # whose inline pass surfaces only worth-fixing-now now stays inline
+    # instead of escalating.
     #
-    # Non-blocking findings are not lost by this setting: every finding outside
-    # this set is filed as a survivor on the configured follow-up issue at gate
-    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
+    # Non-blocking findings are not lost by this setting: each becomes an
+    # inline (or body-filed) PR review thread at gate close, fixed in-gate
+    # through round 3 of this gate's chain and deferred with a reply + resolve
+    # from round 4 (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION);
+    # a deferred finding is rolled into the single summary comment posted when
+    # pre-approval finally closes clean (GATE-EXEC-DEFERRED-SUMMARY).
     blockCleanOnFindingSeverities:
       - must-fix
   preApproval:
@@ -116,14 +121,18 @@ gates:
     # beside it, each pass creating fresh surface for the next.
     #
     # Unlike the draft gate, this IS a relaxation below the shipped default's
-    # intent: pre-approval is the last bar before merge, and a worth-fixing-now
-    # finding unblocked here is not caught anywhere later. Surviving findings
-    # are filed as follow-up issues and named in the verdict, which is the only
-    # thing that keeps this from being lossy.
+    # intent: pre-approval is the last bar before merge. A worth-fixing-now
+    # finding unblocked here still gets a fix round through round 3 of this
+    # gate's chain (its PR review thread stays open and routes through the
+    # standard fix loop); from round 4 it is deferred — the thread is replied
+    # to and resolved, and it is rolled into the single deferred-findings
+    # summary comment posted when the gate finally closes clean
+    # (GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRED-SUMMARY).
     #
-    # Non-blocking findings are not lost by this setting: every finding outside
-    # this set is filed as a survivor on the configured follow-up issue at gate
-    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
+    # Non-blocking findings are not lost by this setting: each becomes an
+    # inline (or body-filed) PR review thread at gate close, suppressed from
+    # re-raising by fingerprint across rounds and across gates
+    # (GATE-EXEC-FINDING-THREADS).
     blockCleanOnFindingSeverities:
       - must-fix
 

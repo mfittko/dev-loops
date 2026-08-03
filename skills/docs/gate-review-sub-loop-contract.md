@@ -616,6 +616,14 @@ the helper no-ops with a `skipped` result and the post step is skipped. The disp
 ledger is written regardless — the opt-out only suppresses the PR comment, never the
 durable ledger.
 
+`GATE-EXEC-FINDING-THREADS`'s per-finding review threads occupy the slot right after the
+verdict comment and before the fix cycle begins — the same post-verdict, pre-fix position
+this consolidated comment already occupies relative to Phase 4, so unresolved threads exist
+on the PR before any fix is attempted. On `pre_approval_gate`, an unresolved review thread
+forbids the gate's own next actions, which is why that slot matters there; the same slot is
+kept for `draft_gate` too, for uniformity, even though the draft boundary does not carry that
+specific refusal.
+
 ### Phase 4 — Fix
 
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
@@ -624,14 +632,16 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - do not broaden scope or touch unrelated files
 - run the smallest honest validation for the accepted fix scope
 - commit and push fixes on the branch
-- <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: The fix cycle
-  covers exactly the findings whose severity is in the gate's
-  `blockCleanOnFindingSeverities` set — every one of them, and nothing else. A finding at
-  any other severity MUST NOT be fixed inside the gate: it is recorded in the disposition
-  ledger and filed as a survivor per `GATE-EXEC-SURVIVOR-FILING`. A round that produces no
-  finding at a blocking severity therefore closes the gate `clean`, however many
-  non-blocking findings it recorded. Widening the blocking set is a per-gate config
-  decision (`blockCleanOnFindingSeverities`), never a round-by-round judgement call.
+- <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
+  the fix cycle covers every finding whose severity is in the gate's
+  `blockCleanOnFindingSeverities` set. Through round 3 of the gate's chain, it also covers
+  every open worth-fixing-now finding, fixed the same way even though that severity is not
+  in the blocking set. From round 4 on, an open worth-fixing-now finding is no longer fixed
+  inside the gate: it is deferred per `GATE-EXEC-THREAD-DISPOSITION` instead. A defer-severity
+  finding is never fixed inside the gate, at any round. A round that leaves no finding at a
+  blocking severity, and no in-window worth-fixing-now thread unresolved, closes the gate
+  `clean`. Widening the blocking set is a per-gate config decision
+  (`blockCleanOnFindingSeverities`), never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
 
@@ -658,9 +668,9 @@ refuses to emit a plan at all (any fail-closed refusal condition below), when th
 no prior head, or when the prior log is not `clean`. "Default" describes which decision
 procedure runs, never a per-angle presumption: the per-angle default without proof stays
 `false` (see the fail-closed defaults below). This is a narrow, fail-closed refinement of the re-fan step above, NOT an exemption from `GATE-EXEC-REGATE-MANDATORY`: the full gate chain still runs at head B (context-builder + consolidation always fresh, plus every angle whose surface changed and every mandatory angle); carry-forward only spares the reviewers that provably have nothing new to look at. An angle
-the prior log attributes any finding to at any severity, including a finding filed as a
-survivor per `GATE-EXEC-SURVIVOR-FILING` rather than fixed in-gate, is re-reviewed at every
-re-gate that follows; that is this rule's fail-closed cost, accepted deliberately.
+the prior log attributes any finding to at any severity, including a finding deferred to a
+PR review thread per `GATE-EXEC-THREAD-DISPOSITION` rather than fixed in-gate, is re-reviewed
+at every re-gate that follows; that is this rule's fail-closed cost, accepted deliberately.
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
@@ -777,20 +787,56 @@ The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.
 Each log entry records the full disposition: severity, angle, summary, affected files, and
 resolved-in SHA (for findings resolved in a later pass).
 
-### Survivor filing
+### Finding threads and disposition
 
-<!-- rule: GATE-EXEC-SURVIVOR-FILING -->
-`GATE-EXEC-SURVIVOR-FILING`: At every gate close — clean or not — EVERY finding whose
-severity is outside the gate's `blockCleanOnFindingSeverities` set MUST be appended to the
-configured follow-up issue (`gates.followUpIssue`) in exactly ONE comment per gate close,
-in ledger form (severity, angle, summary, location, disposition), via
-`append-gate-survivors.mjs --ledger <path>` against the same ledger `write-gate-findings-log.mjs`
-just wrote. Filing is mandatory, not conditional on the verdict: the ledger records what
-the gate found, and this comment is what keeps a non-blocking finding from being lost when
-the gate closes clean. The helper is idempotent per `(repo, PR, gate, head SHA)` — a
-marker-tagged comment identifies a prior filing, so re-running a gate close never
-double-files. When survivors exist and no follow-up issue is configured, the helper fails
-closed (exit 1) — the operator configures the issue or accepts that the gate cannot close.
+<!-- rule: GATE-EXEC-FINDING-THREADS -->
+`GATE-EXEC-FINDING-THREADS`: At every gate close, run `close-gate-findings.mjs --ledger <path>`
+against the same ledger `write-gate-findings-log.mjs` just wrote, in the post-verdict, pre-fix
+slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts exactly ONE PR review of type COMMENT per gate
+round: a locatable finding (an in-diff `file:line`) becomes an inline review comment, and every
+other finding is filed in the review body, with every rendered content line blockquoted so it
+can never be mistaken for a gate evidence marker. Every posted finding, inline or body-filed,
+carries a fingerprint marker on its first line (`<!-- dev-loops:finding <fp16> severity=<s>
+angle=<a> round=<n> -->`). Before posting, a candidate finding is dropped when its fingerprint
+already matches an existing thread or review body on the PR, resolved threads included:
+suppression is binding across every round of a gate's chain AND across both gates, so a
+draft-gate deferral is never re-raised at pre-approval. The reviewer briefing's second, prose
+suppression layer is owned by the [fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
+the orchestrator appends a known-findings block AFTER the angle-specific prompt in each
+reviewer's briefing, never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes —
+the prefix hash and the same-head-retry sentinel (`--same-head-retry`) stay untouched by a
+findings-thread post.
+
+<!-- rule: GATE-EXEC-THREAD-DISPOSITION -->
+`GATE-EXEC-THREAD-DISPOSITION`: A gate-authored thread's severity decides how it closes. A
+must-fix thread stays unresolved until the standard fix, reply-with-resolving-commit, resolve
+loop (Step 7 of [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)) closes it — no other
+exit exists. A worth-fixing-now thread stays unresolved and goes through that SAME loop through
+round 3 of this gate's chain; from round 4 on, an open worth-fixing-now thread is instead
+replied to and resolved by `close-gate-findings.mjs` itself, which stamps
+`disposition=deferred` onto the thread's marker first so the deferred-findings summary
+(`GATE-EXEC-DEFERRED-SUMMARY`) can tell a deferred thread apart from one the fix loop genuinely
+resolved. A defer-severity finding is replied to and resolved immediately, at the same round it
+was first posted. Because an unresolved review thread routes the PR to
+`UNRESOLVED_FEEDBACK_PRESENT` and forbids the next pre-approval gate action, an in-window
+worth-fixing-now thread forces a fix round even after the current round's severity set is
+otherwise clean — this is the existing unresolved-feedback routing, not a new enforcement path.
+A finding the fixer rejects under its triage authority is not left dangling: it is closed with
+an explicit dispute reply and resolved, and its fingerprint keeps it suppressed, so no
+gate-authored thread can deadlock the chain.
+
+<!-- rule: GATE-EXEC-DEFERRED-SUMMARY -->
+`GATE-EXEC-DEFERRED-SUMMARY`: When a `pre_approval_gate` round's ledger verdict is `clean` and
+the round closes with zero unresolved gate-authored threads, `close-gate-findings.mjs` upserts
+a single PR-scoped marker comment (`<!-- dev-loops:deferred-summary -->`) listing every
+deferred finding — severity, angle, summary, location, round, thread link — in place: one
+comment per PR, edited on each later trigger rather than accreting. The trigger is evaluated on
+every round this gate closes, including a round with zero new findings — the final clean close
+is normally exactly that round, so a zero-findings round is not an early exit from this check.
+Every row is rebuilt from the stamped `disposition=deferred` finding markers, plus the matching
+non-locatable review-body markers (permanently deferred by construction — they have no code
+location to become a resolvable thread), never from local state, so a fresh worktree reproduces
+the same summary.
 
 ## Execution mode and fan-out evidence enforcement
 
@@ -829,11 +875,11 @@ honored regardless.
 
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
-`write-gate-findings-log.mjs` writes it). Survivor filing is likewise uniform: an inline
-close is a gate close, so after the inline verdict is posted, run
-`append-gate-survivors.mjs --ledger <path>` against that same findings-log ledger exactly
-as [Survivor filing](#survivor-filing) requires for a fan-out close — the reduced review
-path never reduces what gets filed. `requireFanoutProvenance`, when enabled, is
+`write-gate-findings-log.mjs` writes it). Finding-thread posting is likewise uniform: an
+inline close is a gate close, so after the inline verdict is posted, run
+`close-gate-findings.mjs --ledger <path>` against that same findings-log ledger exactly as
+[Finding threads and disposition](#finding-threads-and-disposition) requires for a fan-out
+close — the reduced review path never reduces what gets threaded. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
 scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inline
 verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is
