@@ -556,11 +556,16 @@ function sanitizeStructuredCodeSpan(value) {
 // image-embed form `![...](url)` (a read-receipt/IP-leak vector via an
 // auto-loaded remote image), the plain markdown link form `[text](url)` (a
 // live clickable link a reviewer never asked for), and raw HTML tags (which a
-// markdown-to-HTML renderer would otherwise pass through live). Mirrors
-// post-gate-findings.mjs's HTML-comment/whitespace handling; that sibling copy
-// does not yet carry the backtick-strip or link/image/HTML neutralization
-// added here (tracked separately — this file's renderer is the one exposed to
-// the pairing-shift bypass and to arbitrary --findings-json producer input).
+// markdown-to-HTML renderer would otherwise pass through live). The
+// link/image/HTML-comment neutralization here is the same set post-gate-findings.mjs's
+// sanitizeInline now also applies (so renderFindingLine/renderRecommendationLine/
+// sanitizeCell in close-gate-findings.mjs, which build on that sibling copy, inherit
+// it too); this function additionally strips backticks unconditionally
+// (sanitizeStructuredCodeSpan) because every call site here renders free prose
+// that must never smuggle in a live code span, whereas the sibling copy keeps
+// two separate functions (a backtick-preserving prose sanitizer and a
+// backtick-stripping code-span sanitizer) since some of its call sites render
+// text a reviewer legitimately wrote inside backticks.
 //
 // The bracket neutralization below uses an HTML entity (`&#91;`), not a
 // backslash escape. A backslash escape (`\[`) introduces a NEW character

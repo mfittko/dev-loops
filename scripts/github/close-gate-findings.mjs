@@ -13,6 +13,7 @@ import {
   findMarkedComment,
   flattenPaginatedSlurp,
   listIssueComments,
+  resolveAuthenticatedLogin,
   runGhJson,
   sanitizeCodeSpan,
   sanitizeInline,
@@ -447,20 +448,6 @@ function assertGhSuccess(result) {
   }
 }
 
-// The authenticated `gh` viewer's login: the sole trust boundary for
-// deciding whether a review/thread is gate-authored (see selectDispositionTargets
-// and the suppression-folding calls in closeGateFindings below) — never
-// decided from rendered marker text alone, which a foreign comment could
-// forge just as easily as this module's own producer renders it.
-async function resolveAuthenticatedLogin({ env, ghCommand }) {
-  const payload = await runGhJson(["api", "user"], { env, ghCommand });
-  const login = typeof payload?.login === "string" ? payload.login.trim() : "";
-  if (login.length === 0) {
-    throw new Error("gh api user returned no login; cannot verify gate-authored marker provenance — fail closed.");
-  }
-  return login;
-}
-
 async function listPrReviews({ repo, pr }, { env, ghCommand }) {
   const payload = await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`],
@@ -627,8 +614,24 @@ export function isLocatableFinding(finding, commentableSet) {
 // Disposition pass
 // ---------------------------------------------------------------------------
 
-function dispositionMessage(round) {
-  return `Deferred at gate close (round ${round}); filed in the deferred summary.`;
+// The window/disposition reason named in the reply: a worth-fixing-now thread
+// deferred because it stayed open past the in-gate fix window vs. a
+// defer-severity finding that is never fix-windowed at all.
+function windowReason(severity, round) {
+  if (severity === "worth-fixing-now") {
+    return `stayed open past this gate chain's round-${WORTH_FIXING_NOW_FIX_WINDOW} worth-fixing-now fix window`;
+  }
+  return "defer-severity findings are deferred immediately, at the round they are first posted";
+}
+
+// Every deferral reply is distinct by construction through the thread's own
+// stamped marker fields (fingerprint, severity, angle) plus the window/
+// disposition reason for THIS thread, so no two threads ever receive the same
+// reply body even when a caller batches several deferrals in one pass — unlike
+// a FIX-closing reply (COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER), nothing here
+// names a "fix" because nothing was fixed.
+function dispositionMessage({ fp, severity, angle, round }) {
+  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${windowReason(severity, round)}; filed in the deferred summary.`;
 }
 
 // Every currently-unresolved gate-authored thread, whether newly posted this
@@ -659,7 +662,7 @@ function selectDispositionTargets(threads, round, login) {
     if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
       throw new Error(`Thread ${thread.threadId} carries a gate-authored finding marker selected for deferral but has no resolvable comment id (commentId=${JSON.stringify(thread.commentId)}); refuse to stamp/resolve it.`);
     }
-    targets.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity });
+    targets.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity, angle: marker.angle, fp: marker.fp });
   }
   return targets;
 }
@@ -709,10 +712,10 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login },
   if (targets.length === 0) {
     return { resolvedThreadIds: new Set(), deferredResolved: 0 };
   }
-  const message = dispositionMessage(round);
   const resolvedThreadIds = new Set();
   for (const target of targets) {
     await stampDeferredDisposition({ repo, commentId: target.commentId }, { env, ghCommand });
+    const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round });
     await replyAndMaybeResolve(
       { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
       { env, ghCommand },
@@ -735,9 +738,14 @@ function extractFindingLineFromBody(body) {
 // the marker line alone can run past list-review-threads.mjs's 200-char listing
 // excerpt once an angle/disposition suffix is stamped, and truncating the
 // summary line the same way would silently corrupt the Summary column.
-function buildThreadSummaryRows(threads, resolvedThreadIds, { repo, pr }) {
+function buildThreadSummaryRows(threads, resolvedThreadIds, { repo, pr, login }) {
   const rows = [];
   for (const thread of threads) {
+    // Gate-authored only (same author-identity check selectDispositionTargets
+    // and the suppression fold use): a foreign thread that happens to quote
+    // this module's marker shape must never be listed as one of ITS deferred
+    // findings.
+    if (thread.author !== login) continue;
     const isResolved = thread.isResolved || resolvedThreadIds.has(thread.threadId);
     if (!isResolved) continue;
     const marker = parseFindingMarker(thread.body);
@@ -791,9 +799,12 @@ function splitFindingBlocks(bodyText) {
   return blocks;
 }
 
-function buildBodyFiledSummaryRows(reviews, { repo, pr }) {
+function buildBodyFiledSummaryRows(reviews, { repo, pr, login }) {
   const rows = [];
   for (const review of reviews) {
+    // Gate-authored only, same as buildThreadSummaryRows: a foreign review
+    // body quoting this module's marker shape must never be listed here.
+    if (review.author !== login) continue;
     for (const block of splitFindingBlocks(review.body)) {
       if (!SUMMARY_SEVERITY_ORDER.includes(block.marker.severity)) continue;
       // Mirrors buildThreadSummaryRows' deferred-only filter, but a body-filed
@@ -894,9 +905,9 @@ async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
 // previously-deferred finding could only empty out by disappearing from
 // every marker source this module rebuilds from, which never happens today,
 // but the in-place update path stays unconditional on `existing` regardless).
-async function upsertDeferredSummary({ repo, pr, rows }, { env, ghCommand }) {
+async function upsertDeferredSummary({ repo, pr, rows, login }, { env, ghCommand }) {
   const comments = await listIssueComments({ repo, pr }, { env, ghCommand });
-  const existing = findMarkedComment(comments, DEFERRED_SUMMARY_MARKER);
+  const existing = findMarkedComment(comments, DEFERRED_SUMMARY_MARKER, { author: login });
   if (!existing && rows.length === 0) {
     return "no_deferred_findings";
   }
@@ -1031,7 +1042,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
       body: renderInlineCommentBody(finding, { round }),
     }));
     const response = await postReview({ repo, pr, headSha, body: reviewBody, comments }, gh);
-    reviews.push({ id: Number.isInteger(response?.id) ? response.id : null, body: reviewBody });
+    reviews.push({ id: Number.isInteger(response?.id) ? response.id : null, body: reviewBody, author: login });
   }
 
   // 7. Fresh thread snapshot for the disposition pass (always re-fetched: a
@@ -1045,7 +1056,11 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
 
   // 8. Deferred-summary trigger — evaluated unconditionally, including a
   // zero-findings round (that is exactly the round most likely to trigger it).
+  // Gate-authored only (same author-identity check as everywhere else in this
+  // module): a foreign thread quoting this module's marker shape must never
+  // count toward — or block — this gate's own trigger.
   const unresolvedGateThreadCount = threadsForDisposition.filter((thread) => {
+    if (thread.author !== login) return false;
     if (thread.isResolved || resolvedThreadIds.has(thread.threadId)) return false;
     return parseFindingMarker(thread.body) !== null;
   }).length;
@@ -1053,10 +1068,10 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   let summaryAction = "not_triggered";
   if (triggered) {
     const rows = [
-      ...buildThreadSummaryRows(threadsForDisposition, resolvedThreadIds, { repo, pr }),
-      ...buildBodyFiledSummaryRows(reviews, { repo, pr }),
+      ...buildThreadSummaryRows(threadsForDisposition, resolvedThreadIds, { repo, pr, login }),
+      ...buildBodyFiledSummaryRows(reviews, { repo, pr, login }),
     ];
-    summaryAction = await upsertDeferredSummary({ repo, pr, rows }, gh);
+    summaryAction = await upsertDeferredSummary({ repo, pr, rows, login }, gh);
   }
 
   return {

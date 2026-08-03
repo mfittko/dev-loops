@@ -825,9 +825,14 @@ checkpoint-evidence scanner (`detect-checkpoint-evidence.mjs`, via the shared
 `summarizeGateReviewComments`/`summarizeGateReviewCommentMarkers` helpers every gate-evidence
 reader calls through) excludes from the marker scan, so neither can win the newest-gate-marker
 tie-break over a genuine verdict comment. Before posting, a candidate finding is dropped when its
-fingerprint already matches an existing thread or review body on the PR, resolved threads
-included: suppression is binding across every round of a gate's chain AND across both gates, so a
-draft-gate deferral is never re-raised at pre-approval. This thread posting, and the
+fingerprint already matches an OWN-AUTHORED (the authenticated `gh` viewer's own login) existing
+thread or review body on the PR, resolved threads included — a foreign review/thread quoting or
+forging the same marker shape never suppresses a real finding, since folding a fingerprint someone
+else could freely paste in would be a forgery vector, not a provenance check; cross-author
+suppression (recognizing a finding a foreign commenter has ALREADY discussed) is instead carried by
+the reviewer briefing's second, prose suppression layer described below. Suppression is binding
+across every round of a gate's chain AND across both gates, so a draft-gate deferral is never
+re-raised at pre-approval. This thread posting, and the
 deferred-findings summary it feeds, run independently of `gates.postFindingsComments`: that
 toggle governs only the consolidated `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's
 second, prose suppression layer is owned by the
@@ -854,18 +859,30 @@ worth-fixing-now thread forces a fix round even after the current round's severi
 otherwise clean — this is the existing unresolved-feedback routing, not a new enforcement path.
 A finding the fixer rejects under its triage authority is not left dangling: it is closed with
 an explicit dispute reply and resolved, and its fingerprint keeps it suppressed, so no
-gate-authored thread can deadlock the chain. Every closing reply here, single-thread or batched,
-follows `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`'s per-thread distinctness requirement: it names
-the specific change that fixed that thread rather than a body copied across threads.
+gate-authored thread can deadlock the chain. Distinctness differs by what closed the thread: a
+FIX-closing reply (the standard fix loop, or a dispute reply) follows
+`COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change that fixed that thread,
+with the resolving commit — nothing was fixed for a thread the fix loop never touched, so this
+requirement cannot apply verbatim there. A DEFERRAL reply (`close-gate-findings.mjs` past the
+worth-fixing-now window, or a defer-severity finding closed immediately) is instead distinct by
+construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
+round) and states the window/disposition reason (see `dispositionMessage` in
+`close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
+when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-DEFERRED-SUMMARY -->
 `GATE-EXEC-DEFERRED-SUMMARY`: When a `pre_approval_gate` round's ledger verdict is `clean` and
-the round closes with zero unresolved gate-authored threads, `close-gate-findings.mjs` upserts
-a single PR-scoped marker comment (`<!-- dev-loops:deferred-summary -->`) listing every
-deferred finding — severity, angle, summary, location, round, thread link — in place: one
-comment per PR, edited on each later trigger rather than accreting. The trigger is evaluated on
-every round this gate closes, including a round with zero new findings — the final clean close
-is normally exactly that round, so a zero-findings round is not an early exit from this check.
+the round closes with zero unresolved gate-authored threads, `close-gate-findings.mjs` evaluates
+the deferred-summary trigger and rebuilds the full row set — severity, angle, summary, location,
+round, thread link — for every deferred finding. The trigger is evaluated on every round this
+gate closes, including a round with zero new findings — the final clean close is normally exactly
+that round, so a zero-findings round is not an early exit from this check — but evaluating the
+trigger is not the same as posting: with zero deferred rows and no pre-existing summary comment,
+the trigger posts nothing (there is nothing yet to tell an operator about, and an empty-table
+comment on every clean close would be noise, not signal). A summary comment is created the first
+time the rebuilt row set is non-empty; from then on, that one PR-scoped marker comment
+(`<!-- dev-loops:deferred-summary -->`) is upserted in place — edited on each later trigger,
+including one whose row set has since emptied out, rather than accreting a second comment.
 Every row is rebuilt from finding markers carrying the optional `disposition=deferred` field
 (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
 never from local state, so a fresh worktree reproduces the same summary. A THREAD marker is

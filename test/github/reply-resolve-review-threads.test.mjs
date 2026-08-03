@@ -38,7 +38,6 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       author: "all",
       message: undefined,
       messageMap: undefined,
-      includeResolved: false,
       resolve: false,
     },
   );
@@ -52,13 +51,12 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       author: "reviewer-x",
       message: "Fixed in abc1234",
       messageMap: undefined,
-      includeResolved: false,
       resolve: true,
     },
   );
 
   assert.deepEqual(
-    parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message-map", "tmp/map.json", "--include-resolved"]),
+    parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message-map", "tmp/map.json"]),
     {
       help: false,
       repo: "owner/repo",
@@ -66,16 +64,15 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       author: "all",
       message: undefined,
       messageMap: "tmp/map.json",
-      includeResolved: true,
       resolve: false,
     },
   );
 });
 
-test("parseReplyResolveThreadsCliArgs rejects --include-resolved without --message-map", () => {
+test("parseReplyResolveThreadsCliArgs rejects --message and --message-map together", () => {
   assert.throws(
-    () => parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--include-resolved"]),
-    /--include-resolved requires --message-map/,
+    () => parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message", "x", "--message-map", "tmp/map.json"]),
+    /--message and --message-map are mutually exclusive/,
   );
 });
 
@@ -993,107 +990,6 @@ test("reply-resolve-review-threads posts a distinct mapped reply body per thread
     assert.equal(parsed.matchedThreadCount, 2);
     assert.equal(parsed.repliedThreadCount, 2);
     assert.deepEqual(parsed.results.map((r) => r.threadId).sort(), ["THREAD_1", "THREAD_2"]);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("reply-resolve-review-threads falls back to --message for a matched thread missing a --message-map entry", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-fallback-"));
-
-  try {
-    const gh = await writeGhStub(tempDir, [
-      {
-        stdout: createReviewThreadsPayload([
-          {
-            id: "THREAD_1",
-            isResolved: false,
-            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
-          {
-            id: "THREAD_2",
-            isResolved: false,
-            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
-        ]),
-      },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        assertStdinIncludes: ['"body":"Fixed the null check in file-a.mjs in 93cd7f8."'],
-        stdout: '{"id":2101,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2101"}\n',
-      },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
-        assertStdinIncludes: ['"body":"Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."'],
-        stdout: '{"id":2102,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2102"}\n',
-      },
-    ]);
-    const mapPath = path.join(tempDir, "message-map.json");
-    await writeJsonHelper(mapPath, { THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8." });
-
-    const result = await runNode(
-      [
-        "--repo", "owner/repo", "--pr", "17",
-        "--message-map", mapPath,
-        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
-      ],
-      { env: gh.env },
-    );
-
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.repliedThreadCount, 2);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("reply-resolve-review-threads --include-resolved replies without re-resolving an already-resolved mapped thread", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-include-resolved-"));
-
-  try {
-    const gh = await writeGhStub(tempDir, [
-      {
-        stdout: createReviewThreadsPayload([
-          {
-            id: "THREAD_1",
-            isResolved: true,
-            comments: { nodes: [{ id: "PRRC_node_301", databaseId: 301, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
-          },
-        ]),
-      },
-      {
-        assertArgs: ["repos/owner/repo/pulls/17/comments/301/replies"],
-        stdout: '{"id":2201,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2201"}\n',
-      },
-    ]);
-    const mapPath = path.join(tempDir, "message-map.json");
-    await writeJsonHelper(mapPath, { THREAD_1: "Retroactively documented the fix landed in 93cd7f8 for the record." });
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath, "--include-resolved"],
-      { env: gh.env },
-    );
-
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.matchedThreadCount, 1);
-    assert.deepEqual(parsed.results, [
-      {
-        threadId: "THREAD_1",
-        commentId: 301,
-        replyId: 2201,
-        replyUrl: "https://github.com/owner/repo/pull/17#discussion_r2201",
-        resolved: false,
-        alreadyResolved: true,
-      },
-    ]);
-
-    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
-    assert.equal(ghLog.length, 2, "only capture + reply should have run; no resolve mutation for an already-resolved thread");
-    assert.ok(!ghLog.some((line) => line.includes("resolveReviewThread")), "resolve mutation must not be issued for an already-resolved thread");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

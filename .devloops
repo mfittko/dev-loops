@@ -58,7 +58,7 @@ gates:
     # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
     #
     # worth-fixing-now findings still go through the normal fan-in flow
-    # (ledger + findings comment) as long as that flow is followed; this key
+    # (ledger + finding-threads review) as long as that flow is followed; this key
     # does not itself force a count or a ledger entry for worth-fixing-now
     # (upsert-checkpoint-verdict only requires explicit counts for the
     # severities listed here). They no longer count toward the ledger's clean
@@ -68,9 +68,13 @@ gates:
     # deferred. A NON-LOCATABLE one is body-filed instead: stamped deferred
     # immediately and tracked only through the disposition ledger and its
     # fingerprint, with no review-thread force-fix guarantee
-    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval
-    # blocks on both severities, but it re-reviews through its own, mostly
-    # disjoint angle pool (draft and preApproval share only
+    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval's
+    # own blockCleanOnFindingSeverities below is must-fix only too, same as
+    # here — a worth-fixing-now finding never blocks either gate's clean
+    # verdict on its own; an in-window (round <= 3) locatable one still forces
+    # a fix round through the unresolved-feedback routing described above,
+    # regardless of severity's effect on the verdict. preApproval re-reviews
+    # through its own, mostly disjoint angle pool (draft and preApproval share only
     # contradiction-lens) and does not re-raise a draft-gate finding as a
     # fresh finding of its own: fingerprint suppression across gates keeps a
     # deferred draft-gate thread from being re-raised by preApproval's own

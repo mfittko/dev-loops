@@ -1496,7 +1496,7 @@ test("closeGateFindings (R3): a zero-findings clean pre_approval_gate round with
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
       userEntry(),
-      reviewsEntry([{ id: 700, body: oldReviewBody }]),
+      reviewsEntry([{ id: 700, body: oldReviewBody, user: { login: AUTHENTICATED_LOGIN } }]),
       threadsEntry([threadOldResolved, threadFixedResolved]),
       threadsEntry([threadOldResolved, threadFixedResolved]),
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
@@ -1611,12 +1611,58 @@ test("closeGateFindings (R3): a second run with an existing deferred-summary com
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
       threadsEntry([threadOldResolved]),
       threadsEntry([threadOldResolved]),
-      issueCommentsEntry([{ id: 9999, body: "<!-- dev-loops:deferred-summary -->\nprior table" }]),
+      issueCommentsEntry([{ id: 9999, body: "<!-- dev-loops:deferred-summary -->\nprior table", user: { login: AUTHENTICATED_LOGIN } }]),
       updateCommentEntry(9999),
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.summary, "updated");
+    },
+  ));
+});
+
+// Round-1-must-fix residual (author scoping): a FOREIGN-authored unresolved
+// thread carrying a valid finding marker must never block the deferred-summary
+// trigger, and a FOREIGN-authored resolved thread / review body carrying a
+// valid marker must never be listed in the summary — only THIS tool's own
+// (authenticated-login) markers count, same as suppression/disposition.
+test("closeGateFindings (R3): a FOREIGN-authored unresolved thread never blocks the trigger, and FOREIGN-authored markers never appear in the summary", async () => {
+  const foreignUnresolved = threadNode({
+    id: "THREAD_FOREIGN_OPEN",
+    isResolved: false,
+    path: "src/cache.mjs",
+    line: 9,
+    commentId: 6700,
+    author: "someone-else",
+    body: `${buildFindingMarker({ fp: "1111111111111111", severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`,
+  });
+  const foreignReviewBody = [
+    "Gate findings — pre_approval_gate round 1 @ abc123d",
+    `<!-- dev-loops:gate-findings-review pre_approval_gate ${HEAD_SHA} round=1 -->`,
+    "",
+    buildFindingMarker({ fp: "2222222222222222", severity: "defer", angle: "naming", round: 1, disposition: "deferred" }),
+    "> **defer** (`naming`): a foreign reviewer's own finding",
+  ].join("\n");
+  const ledger = makeLedger({ verdict: "clean", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      userEntry(),
+      reviewsEntry([{ id: 800, body: foreignReviewBody, user: { login: "someone-else" } }]),
+      threadsEntry([foreignUnresolved]),
+      threadsEntry([foreignUnresolved]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
+      threadsEntry([foreignUnresolved]),
+      threadsEntry([foreignUnresolved]),
+      issueCommentsEntry([]), // findMarkedComment lookup — no existing summary
+      // No PATCH/reply/resolve/comment-issue-CREATE entries: a regression that
+      // treats the foreign thread/review as gate-authored (blocking the
+      // trigger, or listing it in the summary) would overflow the stub.
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.summary, "no_deferred_findings");
     },
   ));
 });

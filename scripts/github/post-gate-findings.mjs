@@ -231,18 +231,33 @@ export function buildFindingsMarker({ gate }) {
 // space and trim. LLM-generated free text often carries embedded newlines, which
 // would otherwise break a single Markdown list item across lines.
 //
-// Additionally neutralize any embedded HTML-comment delimiters (`<!--` / `-->`).
-// The findings comment is keyed by a hidden marker that IS an HTML comment
-// (buildFindingsMarker), and free text comes from scoped-review agents. Without
-// this, a finding field could inject a second `<!-- dev-loops:gate-findings ... -->`
-// marker (breaking idempotent comment matching) or otherwise smuggle an HTML
-// comment into the rendered body. We escape the opening/closing angle brackets so
-// the delimiter renders as visible literal text and cannot form a real comment.
+// Additionally neutralize any embedded HTML-comment delimiters (`<!--` / `-->`),
+// any other raw `<` (a markdown-to-HTML renderer would otherwise pass a raw tag
+// through live), and the markdown link/image bracket forms `[text](url)` /
+// `![alt](url)` (a live clickable link, or an auto-loaded remote image and its
+// read-receipt/IP-leak risk, that a finding field never asked for). The
+// findings comment is keyed by a hidden marker that IS an HTML comment
+// (buildFindingsMarker), and free text comes from scoped-review agents or
+// arbitrary --findings/--findings-json producer input, so every one of these
+// is untrusted. Every neutralization here is an HTML ENTITY, never a
+// backslash-escape: an entity has no failure mode where a value's own literal
+// character absorbs the escape and turns it into something live again (mirrors
+// upsert-checkpoint-verdict.mjs's sanitizeStructuredInline, which this
+// function is now at parity with). We escape the opening/closing angle
+// brackets and brackets so each delimiter renders as visible literal text and
+// can never form real markdown/HTML.
 export function sanitizeInline(value) {
   return String(value)
     .replace(/\s+/g, " ")
     .replace(/<!--/g, "&lt;!--")
     .replace(/-->/g, "--&gt;")
+    .replace(/</g, "&lt;")
+    // Neutralize a plain link's opening bracket (any `[` NOT already part of an
+    // image's `![`, handled next) before the image-form pass below, so an
+    // image's `[` (still preceded by a literal `!` here) is told apart from a
+    // plain link's `[`.
+    .replace(/(?<!!)\[/g, "&#91;")
+    .replace(/!\[/g, "!&#91;")
     .trim();
 }
 
@@ -359,14 +374,39 @@ export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
 // as an example, or a hostile comment crafted to forge one), and this
 // function's result is PATCHed in place by the caller — so a quoted marker
 // must never be treated as the genuine, idempotency-keying one.
-export function findMarkedComment(comments, marker) {
+//
+// `author` (optional) is the second, orthogonal trust boundary: the caller's
+// own authenticated `gh` login. When given, a comment is only considered a
+// match if it was authored by that login — a foreign comment forging the
+// exact marker shape must never be mistaken for this tool's own idempotent
+// comment (and then PATCHed as if it were). Comments here are the raw GitHub
+// REST shape (`user.login`), not the normalized `author` field this repo's
+// other GraphQL-derived thread/review objects carry.
+export function findMarkedComment(comments, marker, { author } = {}) {
   for (const comment of comments) {
+    if (author !== undefined && comment?.user?.login !== author) continue;
     if (comment && typeof comment.body === "string"
       && comment.body.split(/\r?\n/).some((line) => line.startsWith(marker))) {
       return comment;
     }
   }
   return null;
+}
+
+// The authenticated `gh` viewer's own login: the trust boundary every
+// gate-authored-provenance decision in this repo's gate tooling is anchored
+// to (never rendered marker text alone, which a foreign comment could forge
+// just as easily as this repo's own producers render it). Shared by every
+// caller that needs to scope a marker read/write to its own comments —
+// currently this module's own idempotent upsert and
+// close-gate-findings.mjs's disposition/suppression/deferred-summary passes.
+export async function resolveAuthenticatedLogin({ env, ghCommand }) {
+  const payload = await runGhJson(["api", "user"], { env, ghCommand });
+  const login = typeof payload?.login === "string" ? payload.login.trim() : "";
+  if (login.length === 0) {
+    throw new Error("gh api user returned no login; cannot verify gate-authored marker provenance — fail closed.");
+  }
+  return login;
 }
 
 function parseCommentMutationResponse(payload) {
@@ -426,8 +466,9 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
   }
   const marker = buildFindingsMarker({ gate: options.gate });
   const desiredBody = renderFindingsCommentBody({ gate: options.gate, headSha: options.headSha, findings });
+  const login = await resolveAuthenticatedLogin({ env, ghCommand });
   const comments = await listIssueComments({ repo: options.repo, pr: options.pr }, { env, ghCommand });
-  const existing = findMarkedComment(comments, marker);
+  const existing = findMarkedComment(comments, marker, { author: login });
   const base = {
     ok: true,
     repo: options.repo,
