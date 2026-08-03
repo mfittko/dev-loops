@@ -638,9 +638,12 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   every open worth-fixing-now finding, fixed the same way even though that severity is not
   in the blocking set. From round 4 on, an open worth-fixing-now finding is no longer fixed
   inside the gate: it is deferred per `GATE-EXEC-THREAD-DISPOSITION` instead. A defer-severity
-  finding is never fixed inside the gate, at any round. A round that leaves no finding at a
-  blocking severity, and no in-window worth-fixing-now thread unresolved, closes the gate
-  `clean`. Widening the blocking set is a per-gate config decision
+  finding is never fixed inside the gate, at any round. Two layers govern this, and they stay
+  distinct: the LEDGER verdict is `clean` whenever no finding at a blocking severity remains,
+  computed from `blockCleanOnFindingSeverities` alone and never from an open worth-fixing-now
+  thread; an unresolved in-window worth-fixing-now THREAD still forces another fix round, but
+  through the unresolved-feedback routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing
+  what the ledger verdict `clean` means. Widening the blocking set is a per-gate config decision
   (`blockCleanOnFindingSeverities`), never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
@@ -772,7 +775,7 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","file":"path.mjs","line":42,"disposition":"accepted-for-fix"}]'
 ```
 
 `--findings-file` reads the same JSON array from a file (identical validation) —
@@ -784,7 +787,8 @@ use it for any non-trivial ledger so the array never rides a shell string;
 tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
-Each log entry records the full disposition: severity, angle, summary, affected files, and
+Each log entry records the full disposition: severity, angle, summary, affected files, optional
+1-based `line` (drives inline-vs-body-filed placement in `GATE-EXEC-FINDING-THREADS` below), and
 resolved-in SHA (for findings resolved in a later pass).
 
 ### Finding threads and disposition
@@ -792,16 +796,23 @@ resolved-in SHA (for findings resolved in a later pass).
 <!-- rule: GATE-EXEC-FINDING-THREADS -->
 `GATE-EXEC-FINDING-THREADS`: At every gate close, run `close-gate-findings.mjs --ledger <path>`
 against the same ledger `write-gate-findings-log.mjs` just wrote, in the post-verdict, pre-fix
-slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts exactly ONE PR review of type COMMENT per gate
-round: a locatable finding (an in-diff `file:line`) becomes an inline review comment, and every
-other finding is filed in the review body, with every rendered content line blockquoted so it
-can never be mistaken for a gate evidence marker. Every posted finding, inline or body-filed,
-carries a fingerprint marker on its first line (`<!-- dev-loops:finding <fp16> severity=<s>
-angle=<a> round=<n> -->`). Before posting, a candidate finding is dropped when its fingerprint
-already matches an existing thread or review body on the PR, resolved threads included:
-suppression is binding across every round of a gate's chain AND across both gates, so a
-draft-gate deferral is never re-raised at pre-approval. The reviewer briefing's second, prose
-suppression layer is owned by the [fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
+slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts at most one PR review of type COMMENT per gate
+round: a round whose candidates are all suppressed by fingerprint, or whose ledger carries no
+finding at all, posts none. A locatable finding (an in-diff `file:line`) becomes an inline review
+comment, and every other finding is filed in the review body, with every rendered content line
+blockquoted so it can never be mistaken for a gate evidence marker. A finding anchored to
+unchanged code has no in-diff `file:line` and is therefore always body-filed, tracked through the
+disposition ledger and its fingerprint rather than a review thread; the thread-based force-fix
+guarantee `GATE-EXEC-THREAD-DISPOSITION` describes applies to locatable findings only. Every
+posted finding, inline or body-filed, carries a fingerprint marker on its first line (`<!--
+dev-loops:finding <fp16> severity=<s> angle=<a> round=<n> -->`). Before posting, a candidate
+finding is dropped when its fingerprint already matches an existing thread or review body on the
+PR, resolved threads included: suppression is binding across every round of a gate's chain AND
+across both gates, so a draft-gate deferral is never re-raised at pre-approval. This thread
+posting, and the deferred-findings summary it feeds, run independently of
+`gates.postFindingsComments`: that toggle governs only the consolidated `GATE-EXEC-POST-BEFORE-FIX`
+comment. The reviewer briefing's second, prose suppression layer is owned by the
+[fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
 the orchestrator appends a known-findings block AFTER the angle-specific prompt in each
 reviewer's briefing, never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes —
 the prefix hash and the same-head-retry sentinel (`--same-head-retry`) stay untouched by a

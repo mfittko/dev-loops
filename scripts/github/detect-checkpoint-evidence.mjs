@@ -231,6 +231,22 @@ function emptyGateSummary() {
     updatedAt: null,
   };
 }
+// Machine-authored gate artifacts that must never win the newest-gate-marker
+// tie-break in summarizeGateReviewCommentMarkers: close-gate-findings.mjs's
+// posted findings review always embeds this gate's name in its header line and
+// can quote the current head sha inside a finding's own free text (the lenient
+// gate-name+hex-token fallback in parseGateReviewCommentFields would otherwise
+// happily match that), and the deferred-summary PR comment quotes a gate name
+// plus a sha-shaped id in its table rows the same way. Both are excluded here,
+// at the merge point, rather than patched per-caller — the scanner is the
+// single place every marker consumer (this file, pre-pr-ready-gate.mjs,
+// countVerdictComments) ultimately reads through.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /<!--\s*dev-loops:(?:gate-findings-review|deferred-summary)\b/;
+
+export function isGateMachineArtifactBody(body) {
+  return typeof body === "string" && GATE_MACHINE_ARTIFACT_MARKER_RE.test(body);
+}
+
 function normalizeGateSummary(summary) {
   if (!summary) {
     return emptyGateSummary();
@@ -708,7 +724,7 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     // Graceful fallback: PR reviews fetch failure is non-fatal.
     // We continue with issue comments only.
   }
-  const allComments = [...commentsPayload, ...prReviews];
+  const allComments = [...commentsPayload, ...prReviews].filter((comment) => !isGateMachineArtifactBody(comment?.body));
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);

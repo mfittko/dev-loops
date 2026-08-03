@@ -2047,6 +2047,98 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
   }
 });
 
+test("detect-checkpoint-evidence: a posted gate-findings-review body can never win the newest-gate-marker tie-break (evidence-scan hijack)", async () => {
+  // close-gate-findings.mjs's posted findings review always embeds the gate
+  // name in its header line, and a finding's own free text can mention the
+  // current head sha in "head <sha>" context — exactly what the LENIENT
+  // gate-name+hex-token fallback in parseGateReviewCommentFields used to match,
+  // making the review win the newest-marker tie-break over a genuine (older, or
+  // altogether absent) verdict comment.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-evidence-hijack-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const headSha = "abc1234def5678900000000000000000000000a";
+    const hijackReviewBody = [
+      "Gate findings — pre_approval_gate round 2 @ abc1234",
+      `<!-- dev-loops:gate-findings-review pre_approval_gate ${headSha} round=2 -->`,
+      "",
+      `> **must-fix** (\`security\`): the sentinel recorded for head ${headSha} is never verified`,
+    ].join("\n");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([{
+          id: 900,
+          body: hijackReviewBody,
+          submitted_at: "2026-05-30T23:25:00Z",
+          html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-900",
+        }])}\n`,
+      },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    // With no genuine verdict comment on the PR, pre-approval evidence must
+    // remain ABSENT (not_established) — never hijacked into a visible-but-bad
+    // marker sourced from the posted findings review.
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean current-head pre_approval_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence: a rendered deferred-summary comment can never win the newest-gate-marker tie-break (evidence-scan hijack)", async () => {
+  // The deferred-summary comment quotes a gate name and a sha-shaped id in its
+  // table rows (thread links, a gate name in a row's Angle/Summary cell) the
+  // same way — same hijack surface as the gate-findings-review body, on the
+  // issue-comment stream instead of the PR-reviews stream.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-deferred-summary-hijack-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const headSha = "bcd2345ef56789000000000000000000000000b";
+    const deferredSummaryBody = [
+      "<!-- dev-loops:deferred-summary -->",
+      "### Deferred gate findings — PR #17",
+      "",
+      "| Severity | Angle | Summary | Location | Round | Thread |",
+      "| --- | --- | --- | --- | --- | --- |",
+      `| worth-fixing-now | pre_approval_gate | quotes head ${headSha} in its own text | — | 2 | — |`,
+    ].join("\n");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([{ id: 55, body: deferredSummaryBody, updated_at: "2026-05-30T23:25:00Z" }])}\n`,
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean current-head pre_approval_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineReason, id, updatedAt }) {
   const modeLine = inlineReason
     ? `**Execution mode:** ${executionMode} — ${inlineReason}`

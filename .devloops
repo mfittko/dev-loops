@@ -17,10 +17,6 @@ gates:
   # angle — no two freshly-reviewed angles may share a reviewer. See
   # skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
-  # A non-blocking finding a gate close does not fix in-gate becomes a PR
-  # review thread: fixed in-gate through round 3 of the gate's chain, then
-  # deferred with a reply + resolve from round 4 (GATE-EXEC-FINDING-THREADS,
-  # GATE-EXEC-THREAD-DISPOSITION).
   draft:
     dynamic:
       subtractive: true
@@ -62,26 +58,23 @@ gates:
     # (ledger + findings comment) as long as that flow is followed; this key
     # does not itself force a count or a ledger entry for worth-fixing-now
     # (upsert-checkpoint-verdict only requires explicit counts for the
-    # severities listed here). They just stop blocking the draft-to-ready
-    # transition.
-    # preApproval blocks on both, but it re-reviews through its own, mostly
-    # disjoint angle pool (draft and preApproval share only contradiction-lens)
-    # and does not carry a specific unblocked draft-gate finding forward — the
-    # ledger records it "deferred" and nothing re-raises it (fingerprint
-    # suppression carries across gates). A worth-fixing-now finding from a
-    # draft-only angle is not "caught later" by preApproval's own fan-out; it
-    # stays disposed on its own PR review thread. This also affects light-mode
-    # dispatch: resolveGateDispatchMode escalates inline to full fan-out only
-    # on a blocking-severity inline finding, so a light-dispatched draft PR
-    # whose inline pass surfaces only worth-fixing-now now stays inline
-    # instead of escalating.
+    # severities listed here). They no longer count toward the ledger's clean
+    # verdict, but each stays open as an unresolved PR review thread, fixed
+    # in-gate through round 3 of this gate's chain; from round 4 on it is
+    # instead replied to, resolved, and stamped deferred
+    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval
+    # blocks on both severities, but it re-reviews through its own, mostly
+    # disjoint angle pool (draft and preApproval share only
+    # contradiction-lens) and does not re-raise a draft-gate finding as a
+    # fresh finding of its own: fingerprint suppression across gates keeps a
+    # deferred draft-gate thread from being re-raised by preApproval's own
+    # fan-out. This also affects light-mode dispatch: resolveGateDispatchMode
+    # escalates inline to full fan-out only on a blocking-severity inline
+    # finding, so a light-dispatched draft PR whose inline pass surfaces only
+    # worth-fixing-now stays inline instead of escalating.
     #
-    # Non-blocking findings are not lost by this setting: each becomes an
-    # inline (or body-filed) PR review thread at gate close, fixed in-gate
-    # through round 3 of this gate's chain and deferred with a reply + resolve
-    # from round 4 (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION);
-    # a deferred finding is rolled into the single summary comment posted when
-    # pre-approval finally closes clean (GATE-EXEC-DEFERRED-SUMMARY).
+    # A deferred finding is rolled into the single summary comment posted
+    # when pre-approval finally closes clean (GATE-EXEC-DEFERRED-SUMMARY).
     blockCleanOnFindingSeverities:
       - must-fix
   preApproval:
