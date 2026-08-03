@@ -152,6 +152,16 @@ function collapseWhitespace(value) {
   return String(value).replace(/\s+/gu, " ").trim();
 }
 
+// Entity-encode the two literal delimiters a machine-artifact marker opens/closes
+// on (see packages/core/src/github/copilot-helpers.mjs's isGateMachineArtifactBody)
+// so a free-text field can never quote one at column 0 of a rendered verdict comment
+// and get the whole comment mistaken for a machine artifact by the shared summarizers.
+// Hand-copied from scripts/github/upsert-checkpoint-verdict.mjs's
+// encodeMachineArtifactMarkerDelimiters — this fallback is zero-dep and cannot import it.
+function encodeMachineArtifactMarkerDelimiters(value) {
+  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+}
+
 function smartTruncate(value, limit) {
   const text = String(value);
   if (text.length <= limit) {
@@ -295,7 +305,9 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
-  const summary = smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH);
+  const summary = encodeMachineArtifactMarkerDelimiters(
+    smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH),
+  );
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -314,7 +326,7 @@ export function renderFallbackGateReviewCommentBody({
     "",
     `**Findings summary:** ${summary}`,
     "",
-    `**Next action:** ${nextAction}`,
+    `**Next action:** ${encodeMachineArtifactMarkerDelimiters(String(nextAction ?? ""))}`,
   );
   return lines.join("\n");
 }

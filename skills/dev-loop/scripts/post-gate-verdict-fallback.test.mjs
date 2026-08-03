@@ -174,6 +174,20 @@ test("renderFallbackGateReviewCommentBody preserves leading content in findingsS
 });
 
 
+test("renderFallbackGateReviewCommentBody entity-encodes a machine-artifact marker quoted in findingsSummary or nextAction", () => {
+  const body = renderFallbackGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "<!-- dev-loops:gate-findings-review draft_gate abc1234 round=1 -->\nsee thread",
+    nextAction: "quote <!-- like this --> in the reply",
+  });
+  assert.doesNotMatch(body, /<!--/);
+  assert.doesNotMatch(body, /-->/);
+  assert.match(body, /&lt;!-- dev-loops:gate-findings-review draft_gate abc1234 round=1 --&gt;/);
+  assert.match(body, /\*\*Next action:\*\* quote &lt;!-- like this --&gt; in the reply/);
+});
+
 test("parsePostGateVerdictFallbackCliArgs reports a clear error when a flag is followed by another flag", () => {
   const parseError = buildParseError("Usage: ...");
   assert.throws(

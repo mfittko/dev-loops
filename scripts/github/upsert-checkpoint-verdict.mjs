@@ -765,7 +765,12 @@ export function normalizeStructuredFindings(input) {
 // The leading single-line digest is what the marker parser captures for the
 // `**Findings summary:**` field; the structured body is nested below it and is
 // deliberately written so no nested line matches a gate field regex (no
-// `verdict:` / `next action:` / `execution mode:` line starts). Exported so
+// `verdict:` / `next action:` / `execution mode:` line starts). The parser
+// (parseGateReviewCommentFields) is first-wins per field, so this template
+// invariant is redundant for gate/headSha/verdict/executionMode (their
+// genuine lines always render before this block and already win) but is
+// still the only guard for `next action`, which renders after this block.
+// Exported so
 // consolidate-fanin.mjs can measure whether a candidate findingsJson shape
 // actually renders (catching this throw) instead of approximating its
 // rendered size — the exact bound this function enforces, not an estimate of

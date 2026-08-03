@@ -269,50 +269,68 @@ function parseGateReviewCommentFields(body) {
     }
     const line = stripped;
 
+    // First-wins per field: a genuine comment renders its structured block
+    // first, so only the first column-0 match for each field is captured. A
+    // free-text field (findings summary, next action) rendered later in the
+    // SAME comment can embed a newline plus a spoofed "Verdict: clean" (or
+    // any other field label) at column 0; without this guard that later line
+    // would win and let reviewer-controlled text flip or null the verdict.
     let match = line.match(/^(?:[-*]\s*)?(?:gate(?:\s+name)?|gate\s+review)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.gate = normalizeGateReviewName(match[1]);
+      if (fields.gate === null) {
+        fields.gate = normalizeGateReviewName(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:head\s+sha(?:\s+reviewed)?|reviewed\s+head\s+sha)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      if (fields.headSha === null) {
+        fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?verdict\s*:\s*(.+)$/iu);
     if (match) {
-      fields.verdict = normalizeGateReviewVerdict(match[1]);
+      if (fields.verdict === null) {
+        fields.verdict = normalizeGateReviewVerdict(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:findings(?:\s+summary)?|summary)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.findingsSummary = match[1].trim();
+      if (fields.findingsSummary === null) {
+        fields.findingsSummary = match[1].trim();
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?next\s+action\s*:\s*(.+)$/iu);
     if (match) {
-      fields.nextAction = match[1].trim();
+      if (fields.nextAction === null) {
+        fields.nextAction = match[1].trim();
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?execution\s+mode\s*:\s*(.+)$/iu);
     if (match) {
-      const rest = match[1].trim();
-      // Split on the first em-dash / en-dash / " - " separator to recover an
-      // optional inline reason: "inline_single_agent — <reason>".
-      const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
-      const modeToken = sepMatch ? sepMatch[1].trim() : rest;
-      const reasonToken = sepMatch ? sepMatch[2].trim() : "";
-      fields.executionMode = normalizeGateExecutionMode(modeToken);
-      // Only record an inline reason for inline_single_agent. A trailing
-      // "— text" on a fanout_fanin (or invalid) mode line must not surface an
-      // inconsistent mode/reason pair, so leave inlineReason null otherwise.
-      if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
-        fields.inlineReason = reasonToken;
+      if (fields.executionMode === null) {
+        const rest = match[1].trim();
+        // Split on the first em-dash / en-dash / " - " separator to recover an
+        // optional inline reason: "inline_single_agent — <reason>".
+        const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
+        const modeToken = sepMatch ? sepMatch[1].trim() : rest;
+        const reasonToken = sepMatch ? sepMatch[2].trim() : "";
+        fields.executionMode = normalizeGateExecutionMode(modeToken);
+        // Only record an inline reason for inline_single_agent. A trailing
+        // "— text" on a fanout_fanin (or invalid) mode line must not surface an
+        // inconsistent mode/reason pair, so leave inlineReason null otherwise.
+        if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
+          fields.inlineReason = reasonToken;
+        }
       }
       continue;
     }

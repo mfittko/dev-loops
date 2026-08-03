@@ -654,6 +654,25 @@ test("matchGateReviewCommentHeader also recognizes post-gate-verdict-fallback.mj
   assert.equal(matchGateReviewCommentHeader(body), "draft_gate");
 });
 
+// Anti-drift, cross-producer: the fallback poster's own findings-summary/next-action
+// render paths must entity-encode the machine-artifact marker delimiters the same way
+// the primary producer's encodeMachineArtifactMarkerDelimiters does (see the parity
+// test above for --findings-summary), so a findings summary quoting the marker at
+// column 0 cannot make a fallback-posted verdict disappear from the evidence scan.
+test("a fallback-rendered comment whose findings summary quotes the gate-findings-review marker literal is entity-encoded and still survives the shared-summarizer filter", () => {
+  const body = renderFallbackGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "<!-- dev-loops:gate-findings-review draft_gate abc1234 round=1 -->\nsee the thread for detail",
+    nextAction: "fix the open thread",
+  });
+  assert.ok(!isGateMachineArtifactBody(body), "a genuine fallback-posted verdict must never be excluded as a machine artifact");
+  const summary = summarizeGateReviewComments([{ id: 1, body, updated_at: "2026-01-01T00:00:00Z" }]);
+  assert.ok(summary.draft_gate, "the fallback comment must still win marker selection as this gate's verdict");
+  assert.equal(summary.draft_gate.verdict, "findings_present");
+});
+
 test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-draft-"));
   try {
