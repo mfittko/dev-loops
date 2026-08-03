@@ -243,7 +243,7 @@ export function baseAngleName(angle) {
  * @param {unknown} recordedAngles — array of `{ angle: string, ... }` entries (provenance.perAngle or normalized per-angle findings)
  * @param {object} [gateAngleContract]
  * @param {string[]} [gateAngleContract.mandatoryAngles] — angles that must always be represented
- * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted skips the foreign-angle check; {@link FANIN_SYNTHETIC_ANGLES} are unioned in before membership is checked
+ * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted/empty skips the foreign-angle check; {@link FANIN_SYNTHETIC_ANGLES} are unioned in before membership is checked
  * @returns {{ missingMandatory: string[], foreignAngles: string[] }}
  */
 export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [], pool = null } = {}) {
