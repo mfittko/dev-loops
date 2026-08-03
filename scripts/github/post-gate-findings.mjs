@@ -361,8 +361,8 @@ export function flattenPaginatedSlurp(payload) {
 // call site), and parse its stdout as JSON. Exported so sibling GitHub
 // scripts that only ever need a stdin-less `gh` call (no `--input -` payload)
 // can reuse this instead of re-implementing the same exit-code check.
-export async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
+export async function runGhJson(args, { env, ghCommand, runChild: run = runChild }) {
+  const result = await run(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);
@@ -370,10 +370,10 @@ export async function runGhJson(args, { env, ghCommand }) {
   return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
 }
 
-export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
+export async function listIssueComments({ repo, pr }, { env, ghCommand, runChild: run }) {
   const payload = await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`],
-    { env, ghCommand },
+    { env, ghCommand, runChild: run },
   );
   return flattenPaginatedSlurp(payload);
 }
@@ -422,8 +422,8 @@ export function findMarkedComment(comments, marker, { author } = {}) {
 // caller that needs to scope a marker read/write to its own comments —
 // currently this module's own idempotent upsert and
 // close-gate-findings.mjs's disposition/suppression/deferred-summary passes.
-export async function resolveAuthenticatedLogin({ env, ghCommand }) {
-  const payload = await runGhJson(["api", "user"], { env, ghCommand });
+export async function resolveAuthenticatedLogin({ env, ghCommand, runChild: run }) {
+  const payload = await runGhJson(["api", "user"], { env, ghCommand, runChild: run });
   const login = typeof payload?.login === "string" ? payload.login.trim() : "";
   if (login.length === 0) {
     throw new Error("gh api user returned no login; cannot verify gate-authored marker provenance — fail closed.");
@@ -450,10 +450,10 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
   return parseCommentMutationResponse(payload);
 }
 
-export async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
+export async function updateComment({ repo, commentId, body }, { env, ghCommand, runChild: run }) {
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
-    { env, ghCommand },
+    { env, ghCommand, runChild: run },
   );
   return parseCommentMutationResponse(payload);
 }
