@@ -1,0 +1,17 @@
+# 0045. Replace issue-append survivor filing with inline review-thread disposition
+
+## Status
+
+Accepted — 2026-08-03 ([PR 1553](https://github.com/mfittko/dev-loops/pull/1553))
+
+## Context
+
+[PR 1551](https://github.com/mfittko/dev-loops/pull/1551) shipped `gates.followUpIssue` and `append-gate-survivors.mjs`: every gate round's non-blocking findings were appended, as one paginated idempotent comment, to a configured tracker issue. The findings shipped instantly, but the receipt an operator would actually triage from — a single ever-growing issue comment, with no per-finding code location, no round-scoped fix window, and no suppression tied to the PR the finding came from — could not be acted on from the PR under review at all. The operator ordered the surface reversed before it ever posted against a real tracker issue, in favor of surfacing findings directly on the PR conversation the fixer is already working: inline review threads with fingerprint dedupe.
+
+## Decision
+
+`close-gate-findings.mjs` (`GATE-EXEC-FINDING-THREADS`, `GATE-EXEC-THREAD-DISPOSITION`, `GATE-EXEC-DEFERRED-SUMMARY` in `skills/docs/gate-review-sub-loop-contract.md`) replaces `append-gate-survivors.mjs` and `gates.followUpIssue` entirely. Every gate round posts ONE PR review of type COMMENT: a locatable (in-diff `file:line`) finding becomes its own fingerprint-marked inline review thread; everything else is filed in the review body, stamped deferred at post time since it never gets a thread to resolve through. A must-fix thread always stays open through the standard fix loop. A worth-fixing-now thread stays open and fixable through round 3 of the gate's chain; from round 4 on, an open thread is replied to, stamped `disposition=deferred`, and resolved by the gate itself rather than re-fixed. A defer-severity thread is replied to and resolved immediately. Every candidate finding is deduped by fingerprint against every existing thread and review body, resolved threads included, so a finding already raised, fixed, or deferred is never re-posted — across rounds and across gates. When a `pre_approval_gate` round closes clean with zero unresolved gate-authored threads, one upserted PR comment lists every deferred finding, rebuilt from its marker rather than a separate durable store.
+
+## Consequences
+
+A gate finding now lives entirely on the PR being reviewed — an inline thread the fixer already sees, or a body block folded into the same review — instead of a side comment on a tracker issue the fixer may never open. There is no `gates.followUpIssue` config surface anymore, and the fingerprint suppression that made survivor filing idempotent across rounds is reused unchanged for the same purpose here. The three-round worth-fixing-now window and the disposition pass make the drift the round-1-3 in-gate fix cost was accepted for visible in the same place the fix happens, at the cost of a review thread whose lifetime is scoped to one PR: a finding that survives past merge has no representation once the PR closes, unlike an issue-filed survivor.

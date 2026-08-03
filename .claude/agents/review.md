@@ -43,13 +43,13 @@ Follow those owners, then return your findings via the structured artifact below
     "angle": "<angle>",
     "verdict": "clean" | "findings_present",
     "findings": [
-      { "severity": "must-fix" | "worth-fixing-now" | "defer", "file": "<path>", "line": 0, "summary": "<concise>", "recommendation": "<concise fix>" }
+      { "severity": "must-fix" | "worth-fixing-now" | "defer", "file": "<path>", "line": "<1-based line>", "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
     "contextWidened": ["<adjacent-path-consulted>", "..."]
   }
   ```
 
-  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `defer`). `file`/`line`/`recommendation` are optional per finding. `contextWidened` is optional: list the adjacent files/modules you opened beyond the briefing to judge this angle (omit or leave empty if you reviewed only `changedFiles`).
+  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `defer`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `contextWidened` is optional: list the adjacent files/modules you opened beyond the briefing to judge this angle (omit or leave empty if you reviewed only `changedFiles`).
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 

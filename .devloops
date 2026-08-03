@@ -117,23 +117,10 @@ gates:
     # beside it, each pass creating fresh surface for the next.
     #
     # Unlike the draft gate, this IS a relaxation below the shipped default's
-    # intent: pre-approval is the last bar before merge. A LOCATABLE
-    # worth-fixing-now finding unblocked here still gets a fix round through
-    # round 3 of this gate's chain (its PR review thread stays open and routes
-    # through the standard fix loop); from round 4 it is deferred — the
-    # thread is replied to and resolved. A NON-LOCATABLE one is body-filed and
-    # deferred immediately instead, with no thread to force a fix through.
-    # Either way it is rolled into the single deferred-findings summary
-    # comment posted when the gate finally closes clean
-    # (GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRED-SUMMARY).
-    #
-    # Non-blocking findings are not lost by this setting: a LOCATABLE one
-    # becomes an inline PR review thread at gate close, force-fixed through
-    # the round 1-3 window then deferred; a NON-LOCATABLE one is body-filed
-    # instead and deferred by construction, tracked through the disposition
-    # ledger and its fingerprint rather than a thread. Both are suppressed
-    # from re-raising by fingerprint across rounds and across gates
-    # (GATE-EXEC-FINDING-THREADS).
+    # intent: pre-approval is the last bar before merge. See the draft-gate
+    # entry above for how a LOCATABLE vs NON-LOCATABLE finding is disposed
+    # (owned by GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRED-SUMMARY,
+    # GATE-EXEC-FINDING-THREADS) — it applies here unchanged.
     blockCleanOnFindingSeverities:
       - must-fix
 

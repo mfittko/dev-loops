@@ -319,7 +319,22 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
-async function runGhJson(args, { env, ghCommand }) {
+// Shared by every sibling GitHub script that reads a `--paginate --slurp`
+// endpoint (an array of per-page arrays) rather than hand-rolling the same
+// flatten check at each call site.
+export function flattenPaginatedSlurp(payload) {
+  if (Array.isArray(payload) && payload.every(p => Array.isArray(p))) {
+    return payload.flat();
+  }
+  return Array.isArray(payload) ? payload : [];
+}
+
+// Shared `gh` invoke-and-parse helper: run a `gh` subcommand, fail loudly on a
+// non-zero exit (naming the command so a failure is traceable back to the
+// call site), and parse its stdout as JSON. Exported so sibling GitHub
+// scripts that only ever need a stdin-less `gh` call (no `--input -` payload)
+// can reuse this instead of re-implementing the same exit-code check.
+export async function runGhJson(args, { env, ghCommand }) {
   const result = await runChild(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
@@ -333,16 +348,21 @@ export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
     ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`],
     { env, ghCommand },
   );
-  // --slurp returns an array of pages; flatten to a single comment list.
-  if (Array.isArray(payload) && payload.every(p => Array.isArray(p))) {
-    return payload.flat();
-  }
-  return Array.isArray(payload) ? payload : [];
+  return flattenPaginatedSlurp(payload);
 }
 
+// Line-start anchored: every marker this module's own producers (and
+// close-gate-findings.mjs's deferred-summary marker) render is always the
+// FIRST character of its own line — never rendered mid-line. Matching on
+// `body.includes(marker)` alone would also honor a marker merely QUOTED
+// inside a comment's free text (a reply that pastes a prior comment's marker
+// as an example, or a hostile comment crafted to forge one), and this
+// function's result is PATCHed in place by the caller — so a quoted marker
+// must never be treated as the genuine, idempotency-keying one.
 export function findMarkedComment(comments, marker) {
   for (const comment of comments) {
-    if (comment && typeof comment.body === "string" && comment.body.includes(marker)) {
+    if (comment && typeof comment.body === "string"
+      && comment.body.split(/\r?\n/).some((line) => line.startsWith(marker))) {
       return comment;
     }
   }
@@ -368,7 +388,7 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
   return parseCommentMutationResponse(payload);
 }
 
-async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
+export async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
     { env, ghCommand },

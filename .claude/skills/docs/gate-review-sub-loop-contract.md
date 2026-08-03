@@ -845,8 +845,9 @@ replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferred-findings summary
 (`GATE-EXEC-DEFERRED-SUMMARY`) can tell a deferred thread apart from one the fix loop genuinely
 resolved. A defer-severity finding is replied to and resolved immediately, at the same round it
-was first posted. Because an unresolved review thread routes the PR to
-`UNRESOLVED_FEEDBACK_PRESENT` and forbids the next pre-approval gate action, an in-window
+was first posted. Because an unresolved review thread routes the PR to the
+`unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
+and forbids the next pre-approval gate action, an in-window
 worth-fixing-now thread forces a fix round even after the current round's severity set is
 otherwise clean — this is the existing unresolved-feedback routing, not a new enforcement path.
 A finding the fixer rejects under its triage authority is not left dangling: it is closed with

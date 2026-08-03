@@ -27,6 +27,23 @@ const REPO = "owner/repo";
 const PR = 42;
 const HEAD_SHA = "abc123def4560000000000000000000000000000";
 
+// The `gh api user` login closeGateFindings resolves once and uses as the
+// sole trust boundary for gate-authored provenance (selectDispositionTargets'
+// author check, and the suppression-folding calls in the orchestrator).
+// Every review/thread fixture in this file defaults its author to this login
+// so existing marker-recognition coverage keeps passing unchanged; a test
+// that needs to prove FOREIGN authorship is rejected passes an explicit,
+// different author instead.
+const AUTHENTICATED_LOGIN = "gate-bot";
+
+// The very first gh call closeGateFindings makes (resolveAuthenticatedLogin).
+function userEntry({ login = AUTHENTICATED_LOGIN } = {}) {
+  return {
+    assertArgs: ["api", "user"],
+    stdout: `${JSON.stringify({ login })}\n`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
@@ -71,7 +88,7 @@ function threadsGraphqlResponse(nodes) {
   })}\n`;
 }
 
-function threadNode({ id, isResolved = false, path: filePath = null, line = null, commentId, body, author = "prior-reviewer" }) {
+function threadNode({ id, isResolved = false, path: filePath = null, line = null, commentId, body, author = AUTHENTICATED_LOGIN }) {
   return {
     id,
     isResolved,
@@ -169,7 +186,9 @@ function createCommentEntry() {
 function updateCommentEntry(commentId) {
   return {
     assertArgs: ["api", "-X", "PATCH", `repos/${REPO}/issues/comments/${commentId}`, "-f"],
-    stdout: `${JSON.stringify({ id: commentId })}\n`,
+    // html_url is required by post-gate-findings.mjs's shared updateComment
+    // (parseCommentMutationResponse), which close-gate-findings.mjs now reuses.
+    stdout: `${JSON.stringify({ id: commentId, html_url: `https://github.com/${REPO}/issues/${PR}#issuecomment-${commentId}` })}\n`,
   };
 }
 
@@ -491,6 +510,7 @@ test("closeGateFindings: readLedger trims a files[0] entry so the finding still 
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -552,6 +572,7 @@ test("closeGateFindings: full round — inline must-fix, body-filed defer, suppr
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadSuppressing, threadOpenWfn]), // fetchAllReviewThreads (threadsPrePost)
       threadsEntry([threadSuppressing, threadOpenWfn]), // captureParsedReviewThreads (full-body join)
@@ -628,6 +649,7 @@ test("countVerdictComments (round source A): a post-gate-findings comment and a 
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -652,6 +674,7 @@ test("countVerdictComments (round source A): N genuine verdict comments for THIS
   const ledger = makeLedger({ gate: "draft_gate", findings: [] });
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -674,6 +697,7 @@ test("countVerdictComments (round source A): a comment merely QUOTING the verdic
   const quotedHeaderReply = `> ${verdictCommentBody("draft_gate").split("\n")[0]}\nAgreed, looks good.`;
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -702,6 +726,7 @@ test("countVerdictComments (round source A): the SAME reviewed head's verdict on
   const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 501, body: verdictCommentBody("pre_approval_gate") }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -721,6 +746,7 @@ test("countVerdictComments (round source A): DISTINCT reviewed heads across the 
   const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 501, body: verdictCommentBody("pre_approval_gate", nthHeadSha(2)) }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -745,6 +771,7 @@ test("countVerdictComments (round source A): a PR review merely quoting the verd
   const headerOnlyNoHeadSha = "### Gate review: `pre_approval_gate`\n\nThis PR follows the standard gate-review comment format.";
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 501, body: headerOnlyNoHeadSha }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -777,6 +804,7 @@ test("closeGateFindings: an open worth-fixing-now thread stays unresolved AT ROU
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
@@ -788,6 +816,81 @@ test("closeGateFindings: an open worth-fixing-now thread stays unresolved AT ROU
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.round, 3);
       assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+// ---------------------------------------------------------------------------
+// Integration (marker provenance): gate-authored is decided by AUTHOR
+// IDENTITY (the authenticated `gh` viewer's login), never by rendered marker
+// text alone — a foreign comment can quote the exact marker shape this
+// module renders just as easily as this module's own producer does.
+// ---------------------------------------------------------------------------
+
+test("closeGateFindings (marker provenance): a FOREIGN-authored thread past the fix window, carrying a valid finding marker, is never selected for disposition", async () => {
+  const foreignThread = threadNode({
+    id: "THREAD_FOREIGN",
+    isResolved: false,
+    path: "src/cache.mjs",
+    line: 9,
+    commentId: 6900,
+    author: "someone-else",
+    body: `${buildFindingMarker({ fp: "abcdefabcdefabcd", severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`,
+  });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      userEntry(),
+      reviewsEntry([]),
+      threadsEntry([foreignThread]),
+      threadsEntry([foreignThread]),
+      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
+      threadsEntry([foreignThread]),
+      threadsEntry([foreignThread]),
+      // No getReviewCommentEntry/patchReviewCommentEntry/postReplyEntry/
+      // resolveThreadEntry: a regression that PATCHes or resolves this
+      // foreign-authored thread would overflow the stub and fail the run.
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+test("closeGateFindings (marker provenance): a FOREIGN-authored review body carrying a valid finding marker is never folded into the suppression set", async () => {
+  const finding = { severity: "defer", angle: "naming", summary: "a finding a foreign commenter already quoted the marker for" };
+  const fp = fingerprintFinding(finding);
+  const foreignReviewBody = [
+    "Gate findings — draft_gate round 1 @ abc123d",
+    `<!-- dev-loops:gate-findings-review draft_gate ${HEAD_SHA} round=1 -->`,
+    "",
+    buildFindingMarker({ fp, severity: "defer", angle: "naming", round: 1 }),
+    "> **defer** (`naming`): a finding a foreign commenter already quoted the marker for",
+  ].join("\n");
+  const ledger = makeLedger({ gate: "draft_gate", findings: [finding] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      userEntry(),
+      // No `user.login` on this review: listPrReviews resolves its author to
+      // null, which never matches the authenticated login — the finding must
+      // NOT be suppressed by this review's marker.
+      reviewsEntry([{ id: 500, body: foreignReviewBody }]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
+      filesEntry([]),
+      { ...postReviewEntry({ id: 900030 }), assertStdinIncludes: [fp, "a finding a foreign commenter already quoted the marker for"] },
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.suppressed, 0);
+      assert.equal(result.bodyFiled, 1);
     },
   ));
 });
@@ -809,6 +912,7 @@ test("closeGateFindings: an unresolved defer-severity thread is replied-to + res
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadDefer]),
       threadsEntry([threadDefer]),
@@ -847,6 +951,7 @@ test("closeGateFindings: a thread selected for deferral whose REST-fetched body 
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadWs]),
       threadsEntry([threadWs]),
@@ -887,6 +992,7 @@ test("closeGateFindings: a worth-fixing-now thread deferred this run is included
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
@@ -928,6 +1034,7 @@ test("closeGateFindings: the deferred summary carries a finding summary longer t
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadLong]),
       threadsEntry([threadLong]),
@@ -963,6 +1070,7 @@ test("closeGateFindings: fetchThreadsWithFullBodies fails closed when the full-b
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadMissingJoin]), // fetchAllReviewThreads: truncated to the 200-char excerpt
       threadsEntry([]), // captureParsedReviewThreads: the join MISSES this comment entirely
@@ -994,6 +1102,7 @@ test("closeGateFindings: a join miss on a SHORT body (never truncated) does not 
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadShort]), // fetchAllReviewThreads (threadsPrePost)
       threadsEntry([]), // captureParsedReviewThreads: the join MISSES this comment entirely
@@ -1027,6 +1136,7 @@ test("closeGateFindings: a join miss on a SHORT body that legitimately ends with
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadEllipsis]),
       threadsEntry([]), // join miss
@@ -1066,6 +1176,7 @@ test("closeGateFindings: fetchThreadsWithFullBodies fails closed for a truncated
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadNoCommentId]),
       threadsEntry([]),
@@ -1099,6 +1210,7 @@ test("closeGateFindings: a gate-authored thread selected for deferral with no re
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadNoCommentId]),
       threadsEntry([threadNoCommentId]),
@@ -1132,6 +1244,7 @@ test("closeGateFindings: an open worth-fixing-now thread at round <= 3 is left u
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
@@ -1158,6 +1271,7 @@ test("closeGateFindings: a finding whose line is outside the diff falls back to 
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -1210,7 +1324,8 @@ test("closeGateFindings: dedupe suppresses a fingerprint match from a resolved t
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
-      reviewsEntry([{ id: 500, body: oldReviewBody }]),
+      userEntry(),
+      reviewsEntry([{ id: 500, body: oldReviewBody, user: { login: AUTHENTICATED_LOGIN } }]),
       threadsEntry([threadSuppressing]),
       threadsEntry([threadSuppressing]),
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
@@ -1247,6 +1362,7 @@ test("closeGateFindings: a finding fingerprint merely QUOTED (mid-line or blockq
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 500, body: oldReviewBody }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -1279,6 +1395,7 @@ test("closeGateFindings (R8): round counting takes the max — a gate-header mar
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 600, body: oldReviewBody }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -1294,11 +1411,15 @@ test("closeGateFindings (R8): round counting takes the max — a gate-header mar
   ));
 });
 
-// Coverage: (a) the gate-scoping guard — a HIGHER round on the OTHER gate's
-// header must never leak into this gate's round; (b) the FINDING_MARKER_RE_GLOBAL
-// max branch — a body-filed finding marker's own round, when it exceeds its
-// header's round, is what actually decides the result.
-test("closeGateFindings (R8): the round cross-check never mixes gates, and a body-filed finding marker's round can exceed its header's round", async () => {
+// Coverage: the gate-scoping guard — a HIGHER round on the OTHER gate's own
+// header must never leak into this gate's round; only THIS gate's own header
+// round wins over a lower primary verdict-comment count. (The round
+// cross-check no longer also scans finding markers inside a review body for
+// a round: renderReviewBody stamps the header and every finding marker in
+// that same body from the SAME `round` variable, and an inline finding
+// marker never appears in a review BODY at all, so that scan could never
+// find a round its own header did not already carry — it was dead code.)
+test("closeGateFindings (R8): the round cross-check never mixes gates — a HIGHER round on the OTHER gate's header must never leak into this gate's round", async () => {
   // A separate posted review per gate (a single review is always headed by
   // exactly ONE gate's own header — renderReviewBody never mixes them).
   const draftGateReviewBody = [
@@ -1311,13 +1432,13 @@ test("closeGateFindings (R8): the round cross-check never mixes gates, and a bod
     "Gate findings — pre_approval_gate round 2 @ abc123d",
     `<!-- dev-loops:gate-findings-review pre_approval_gate ${HEAD_SHA} round=2 -->`,
     "",
-    buildFindingMarker({ fp: "5555555555555555", severity: "defer", angle: "naming", round: 7, disposition: "deferred" }),
-    "> **defer** (`naming`): a finding carried open since round 7",
+    "No out-of-diff findings this round.",
   ].join("\n");
   const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 601, body: draftGateReviewBody }, { id: 602, body: preApprovalGateReviewBody }]),
       threadsEntry([]),
       threadsEntry([]),
@@ -1327,9 +1448,10 @@ test("closeGateFindings (R8): the round cross-check never mixes gates, and a bod
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
-      // Neither the draft_gate header's round=9 nor the primary count of 1 wins:
-      // the pre_approval_gate finding marker's round=7 does.
-      assert.equal(result.round, 7);
+      // draft_gate's header round=9 must never leak into pre_approval_gate's
+      // round: the pre_approval_gate header's own round=2 wins over the
+      // lower primary verdict-comment count of 1.
+      assert.equal(result.round, 2);
     },
   ));
 });
@@ -1373,6 +1495,7 @@ test("closeGateFindings (R3): a zero-findings clean pre_approval_gate round with
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 700, body: oldReviewBody }]),
       threadsEntry([threadOldResolved, threadFixedResolved]),
       threadsEntry([threadOldResolved, threadFixedResolved]),
@@ -1411,6 +1534,7 @@ test("closeGateFindings (R3): a fresh in-window body-filed worth-fixing-now find
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([]),
       threadsEntry([]),
@@ -1447,18 +1571,22 @@ test("closeGateFindings (R3): a legacy body-filed marker lacking the disposition
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([{ id: 701, body: legacyBodyFiledReviewBody }]),
       threadsEntry([]),
       threadsEntry([]),
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
       threadsEntry([]),
       threadsEntry([]),
-      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
-      { ...createCommentEntry(), assertArgNotContains: ["predates the unconditional stamp"] },
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]), // findMarkedComment lookup — no existing summary
+      // No createCommentEntry: the legacy marker is excluded (no disposition
+      // field), no thread row exists either, so zero deferred rows plus no
+      // pre-existing summary comment means upsertDeferredSummary skips
+      // posting entirely — a create call here would overflow the stub.
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
-      assert.equal(result.summary, "created");
+      assert.equal(result.summary, "no_deferred_findings");
     },
   ));
 });
@@ -1476,6 +1604,7 @@ test("closeGateFindings (R3): a second run with an existing deferred-summary com
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOldResolved]),
       threadsEntry([threadOldResolved]),
@@ -1511,6 +1640,7 @@ test("closeGateFindings: a finding whose own text quotes the literal 'dispositio
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
@@ -1548,6 +1678,7 @@ test("closeGateFindings: stampDeferredDisposition skips the PATCH when the marke
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
@@ -1575,11 +1706,12 @@ test("closeGateFindings: stampDeferredDisposition skips the PATCH when the marke
 test("closeGateFindings: a paginated (--slurp page-array) reviews/files response is flattened, not just the flat-array shape", async () => {
   const finding = { severity: "worth-fixing-now", angle: "dry", summary: "duplicated validation logic", files: ["src/utils.mjs"], line: 5 };
   const fp = fingerprintFinding(finding);
-  const suppressingReview = { id: 900, body: `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "dry", round: 1 })}\n> old finding` };
+  const suppressingReview = { id: 900, body: `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "dry", round: 1 })}\n> old finding`, user: { login: AUTHENTICATED_LOGIN } };
   const ledger = makeLedger({ gate: "draft_gate", findings: [finding] });
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
+      userEntry(),
       // Two-page reviews response: the suppressing fingerprint only appears on
       // page 2 — a flattening regression would silently empty the suppression
       // set (this finding would be re-posted).
@@ -1630,6 +1762,7 @@ test("closeGateFindings: countLocalFindingsLogFiles counts real <gate>-*.json fi
 
 function minimalRoundEntries() {
   return [
+    userEntry(),
     reviewsEntry([]),
     threadsEntry([]),
     threadsEntry([]),

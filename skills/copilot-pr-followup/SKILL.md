@@ -243,7 +243,7 @@ same fix → reply-with-resolving-commit → resolve path, not a separate one.
    - if the guard exits non-zero (`remote_ahead`), stop writing locally, reconcile to the refreshed remote head, then restart the fixer pass
 3. classify findings:
    - must-fix: blocks gate; always fixed
-   - worth-fixing-now: blocks gate when `blockCleanOnFindingSeverities` includes it; fixed when blocking
+   - worth-fixing-now: blocks gate when `blockCleanOnFindingSeverities` includes it; a LOCATABLE finding is also fixed through round 3 of the gate's chain even when not blocking (then deferred), while a NON-LOCATABLE one is deferred immediately (`GATE-EXEC-BLOCKING-ONLY-FIX` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#phase-4--fix))
    - defer / non-blocking / disagree
 4. apply only the accepted narrow fixes
 5. run the smallest validation that honestly proves the fix
@@ -363,7 +363,8 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
    angle-specific prompt and never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`
    hashes, listing every currently open or resolved gate-authored finding thread so the
    reviewer does not re-raise what a thread already covers; build the block from
-   `node scripts/github/list-review-threads.mjs --repo <owner/name> --pr <number>` output, never
+   `node scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
+   (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt), never
    an ad-hoc GraphQL call. The block's content, dedupe contract, and prefix-hash non-interference
    are owned by `GATE-EXEC-FINDING-THREADS` in
    [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition).

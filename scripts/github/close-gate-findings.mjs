@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
@@ -10,11 +9,19 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { commentIssue } from "./comment-issue.mjs";
-import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import {
+  findMarkedComment,
+  flattenPaginatedSlurp,
+  listIssueComments,
+  runGhJson,
+  sanitizeCodeSpan,
+  sanitizeInline,
+  updateComment,
+} from "./post-gate-findings.mjs";
 import { matchGateReviewCommentHeader } from "./upsert-checkpoint-verdict.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
-import { captureParsedReviewThreads, replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
+import { captureParsedReviewThreads, replyAndMaybeResolve, runChildWithInput } from "./_review-thread-mutations.mjs";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
 Post a closed gate round's findings (write-gate-findings-log.mjs ledger) as ONE PR
@@ -28,7 +35,8 @@ is replied-to + resolved ("deferred at gate close") from round 4; defer-severity
 is replied-to + resolved immediately. Finally, on a pre_approval_gate round whose
 ledger verdict is clean and that closes with zero unresolved gate-authored
 threads, a single combined PR comment summarizing every deferred finding is
-created (or updated in place on a later run).
+created (or updated in place on a later run); a trigger with zero deferred
+findings and no pre-existing summary comment posts nothing.
 
 Round number = the MAXIMUM of three worktree-independent-first sources:
   (A) count of DISTINCT reviewed-head SHAs across this gate's own verdict comments —
@@ -37,8 +45,7 @@ Round number = the MAXIMUM of three worktree-independent-first sources:
       (repos/.../pulls/.../reviews) — deduped so the same head's verdict landing on
       both surfaces counts once, current round's own verdict comment already posted
       by the time this runs;
-  (B) the highest round= recorded on this gate's own posted review headers/finding
-      markers (co-located with a review whose body also carries this gate's own
+  (B) the highest round= recorded on this gate's own posted review headers (the
       "gate-findings-review <gate>" marker, so it can never mix rounds across gates);
   (C) count of local <gate>-*.json findings-log files under --tmp-root/gate-findings/....
 (A) is primary and survives a fresh worktree/clone; (B) and (C) are cross-checks that
@@ -56,7 +63,7 @@ Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "round": N,
     "posted": <inline comment count>, "bodyFiled": <non-locatable finding count>,
     "suppressed": <dedupe-dropped count>, "deferredResolved": <disposition reply+resolve count>,
-    "summary": "created"|"updated"|"not_triggered" }
+    "summary": "created"|"updated"|"no_deferred_findings"|"not_triggered" }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -138,7 +145,6 @@ export function buildFindingMarker({ fp, severity, angle, round, disposition }) 
 // this module renders is always the first character of its own line, so this
 // anchor costs nothing against genuine markers.
 const FINDING_MARKER_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+disposition=(deferred))?\s*-->/m;
-const FINDING_MARKER_RE_GLOBAL = new RegExp(FINDING_MARKER_RE.source, "gm");
 const FINDING_MARKER_FP_ONLY_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
 
 export function parseFindingMarker(text) {
@@ -423,41 +429,36 @@ async function readLedger(ledgerPath) {
 // gh plumbing
 // ---------------------------------------------------------------------------
 
-function runChildWithInput(command, args, env, stdinText) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-    if (stdinText === undefined) {
-      child.stdin.end();
-    } else {
-      child.stdin.end(stdinText);
-    }
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
+// Thin local wrapper over the shared stdin-piping child-process runner
+// (_review-thread-mutations.mjs's runChildWithInput, reused rather than
+// re-implemented here) for the calls in this module that pass no stdin.
 function runChildPlain(command, args, env) {
   return runChildWithInput(command, args, env, undefined);
 }
 
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChildPlain(ghCommand, args, env);
+// Collapses this module's five gh-invocation exit-code checks (postReview,
+// stampDeferredDisposition's GET and PATCH, plus the two read paths now
+// delegated to post-gate-findings.mjs's own runGhJson) into one assertion,
+// rather than five copy-pasted `if (result.code !== 0) throw ...` blocks.
+function assertGhSuccess(result) {
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);
   }
-  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
 }
 
-function flattenPaginatedSlurp(payload) {
-  if (Array.isArray(payload) && payload.every((p) => Array.isArray(p))) {
-    return payload.flat();
+// The authenticated `gh` viewer's login: the sole trust boundary for
+// deciding whether a review/thread is gate-authored (see selectDispositionTargets
+// and the suppression-folding calls in closeGateFindings below) — never
+// decided from rendered marker text alone, which a foreign comment could
+// forge just as easily as this module's own producer renders it.
+async function resolveAuthenticatedLogin({ env, ghCommand }) {
+  const payload = await runGhJson(["api", "user"], { env, ghCommand });
+  const login = typeof payload?.login === "string" ? payload.login.trim() : "";
+  if (login.length === 0) {
+    throw new Error("gh api user returned no login; cannot verify gate-authored marker provenance — fail closed.");
   }
-  return Array.isArray(payload) ? payload : [];
+  return login;
 }
 
 async function listPrReviews({ repo, pr }, { env, ghCommand }) {
@@ -467,7 +468,11 @@ async function listPrReviews({ repo, pr }, { env, ghCommand }) {
   );
   return flattenPaginatedSlurp(payload)
     .filter((r) => r && typeof r.body === "string" && r.body.trim().length > 0)
-    .map((r) => ({ id: Number.isInteger(r.id) ? r.id : null, body: r.body }));
+    .map((r) => ({
+      id: Number.isInteger(r.id) ? r.id : null,
+      body: r.body,
+      author: typeof r?.user?.login === "string" && r.user.login.length > 0 ? r.user.login : null,
+    }));
 }
 
 async function fetchPrFiles({ repo, pr }, { env, ghCommand }) {
@@ -486,24 +491,8 @@ async function postReview({ repo, pr, headSha, body, comments }, { env, ghComman
     env,
     `${JSON.stringify(payload)}\n`,
   );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
+  assertGhSuccess(result);
   return parseJsonText(result.stdout, { label: "gh api pulls reviews (POST)" });
-}
-
-async function updateIssueComment({ repo, commentId, body }, { env, ghCommand }) {
-  const result = await runChildPlain(
-    ghCommand,
-    ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label: "gh api issues comments (PATCH)" });
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +551,13 @@ function collectVerdictHeadShas(comments, gate, headShas) {
 }
 
 // Scoped strictly to review bodies that carry THIS gate's own header marker —
-// never mixes draft_gate/pre_approval_gate round numbers together.
+// never mixes draft_gate/pre_approval_gate round numbers together. Only the
+// header's own round= is read: renderReviewBody stamps the header and every
+// finding marker in that same body from the SAME `round` variable, and an
+// inline-comment finding marker (a locatable finding's own thread) never
+// appears in a review BODY at all — only in the separate review comment
+// GitHub attaches it to — so scanning finding markers here could never find a
+// round the header does not already carry.
 function crossCheckRoundFromReviewBodies(bodies, gate) {
   let max = 0;
   for (const body of bodies) {
@@ -570,9 +565,6 @@ function crossCheckRoundFromReviewBodies(bodies, gate) {
     const header = body.match(REVIEW_HEADER_RE);
     if (!header || header[1] !== gate) continue;
     max = Math.max(max, Number(header[3]));
-    for (const match of body.matchAll(FINDING_MARKER_RE_GLOBAL)) {
-      max = Math.max(max, Number(match[4]));
-    }
   }
   return max;
 }
@@ -639,18 +631,25 @@ function dispositionMessage(round) {
   return `Deferred at gate close (round ${round}); filed in the deferred summary.`;
 }
 
-// Every currently-unresolved gate-authored (marker-bearing) thread, whether
-// newly posted this round or carried open from an earlier one, is reconciled
-// against the CURRENT round — not the round recorded on its own marker. A
-// worth-fixing-now finding first raised at round 1 and still open when the
-// chain reaches round 4 is deferred then, exactly like one raised fresh at
-// round 4.
-function selectDispositionTargets(threads, round) {
+// Every currently-unresolved gate-authored thread, whether newly posted this
+// round or carried open from an earlier one, is reconciled against the
+// CURRENT round — not the round recorded on its own marker. A worth-fixing-now
+// finding first raised at round 1 and still open when the chain reaches round
+// 4 is deferred then, exactly like one raised fresh at round 4.
+function selectDispositionTargets(threads, round, login) {
   const targets = [];
   for (const thread of threads) {
     if (thread.isResolved) continue;
+    // Gate-authored is decided by AUTHOR IDENTITY (the authenticated `gh`
+    // viewer's own login), never by rendered marker text alone: a foreign
+    // comment can quote the exact marker shape this module renders just as
+    // easily as this module's own producer does, and this function's result
+    // is PATCHed (stampDeferredDisposition) and resolved — mutating a
+    // third-party comment on the strength of its own words would be a forgery
+    // vector, not a provenance check.
+    if (thread.author !== login) continue;
     const marker = parseFindingMarker(thread.body);
-    if (!marker) continue; // not a gate-authored thread
+    if (!marker) continue; // author matches, but carries no parseable finding marker
     if (!isDeferredAtRound(marker.severity, round)) continue;
     // commentId is null whenever list-review-threads.mjs could not resolve a
     // finite databaseId for the thread's first comment. Reject it here, named
@@ -679,10 +678,7 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
     ["api", `repos/${repo}/pulls/comments/${commentId}`],
     env,
   );
-  if (current.code !== 0) {
-    const detail = current.stderr.trim() || `exit code ${current.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
+  assertGhSuccess(current);
   const payload = parseJsonText(current.stdout, { label: "gh api pulls comments (GET)" });
   // Trimmed to match parseReviewThreads' normalizeBody, which is what
   // selectDispositionTargets parsed thread.body through to select this exact
@@ -701,18 +697,15 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
     ["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "-f", `body=${stamped}`],
     env,
   );
-  if (patched.code !== 0) {
-    const detail = patched.stderr.trim() || `exit code ${patched.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
+  assertGhSuccess(patched);
 }
 
 // `snapshot` is the full-body review-thread snapshot the caller already
 // fetched alongside `threads` (fetchThreadsWithFullBodies) — reused here as
 // the reply-target validation snapshot rather than re-fetching it, since it is
 // already fresh (fetched immediately before this pass runs).
-async function runDispositionPass({ repo, pr, round, threads, snapshot }, { env, ghCommand }) {
-  const targets = selectDispositionTargets(threads, round);
+async function runDispositionPass({ repo, pr, round, threads, snapshot, login }, { env, ghCommand }) {
+  const targets = selectDispositionTargets(threads, round, login);
   if (targets.length === 0) {
     return { resolvedThreadIds: new Set(), deferredResolved: 0 };
   }
@@ -894,12 +887,22 @@ async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
   return { threads: threadsWithFullBodies, snapshot };
 }
 
+// No summary comment is ever CREATED for a zero-deferral trigger: there is
+// nothing yet to tell an operator about, and posting an empty-table comment
+// on every clean close would be noise, not signal. An EXISTING summary
+// comment is still updated in place even when rows is now empty (a
+// previously-deferred finding could only empty out by disappearing from
+// every marker source this module rebuilds from, which never happens today,
+// but the in-place update path stays unconditional on `existing` regardless).
 async function upsertDeferredSummary({ repo, pr, rows }, { env, ghCommand }) {
-  const body = renderDeferredSummaryBody({ pr, rows });
   const comments = await listIssueComments({ repo, pr }, { env, ghCommand });
   const existing = findMarkedComment(comments, DEFERRED_SUMMARY_MARKER);
+  if (!existing && rows.length === 0) {
+    return "no_deferred_findings";
+  }
+  const body = renderDeferredSummaryBody({ pr, rows });
   if (existing) {
-    await updateIssueComment({ repo, commentId: existing.id, body }, { env, ghCommand });
+    await updateComment({ repo, commentId: existing.id, body }, { env, ghCommand });
     return "updated";
   }
   await commentIssue({ repo, issue: pr, body }, { env, ghCommand });
@@ -969,13 +972,26 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const tmpRoot = options.tmpRoot || "tmp";
   const gh = { env, ghCommand };
 
+  // 0. The authenticated login — the trust boundary for every provenance
+  // decision below (which review/thread is gate-authored), resolved once and
+  // reused rather than trusted from rendered marker text.
+  const login = await resolveAuthenticatedLogin(gh);
+
   // 1. Review bodies (suppression + gate-scoped round cross-check).
   const reviews = await listPrReviews({ repo, pr }, gh);
   // 2. All review threads, resolved included (suppression), full bodies joined.
   const { threads: threadsPrePost } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
   const suppressed = new Set();
-  for (const review of reviews) collectFingerprints(review.body, suppressed);
-  for (const thread of threadsPrePost) collectFingerprints(thread.body, suppressed);
+  // Only OUR OWN review/thread bodies fold their finding markers into the
+  // suppression set: a foreign review or thread quoting (or forging) a marker
+  // that happens to fingerprint-match a real finding must never silently
+  // suppress it from being re-raised.
+  for (const review of reviews) {
+    if (review.author === login) collectFingerprints(review.body, suppressed);
+  }
+  for (const thread of threadsPrePost) {
+    if (thread.author === login) collectFingerprints(thread.body, suppressed);
+  }
 
   // 3. Round.
   const verdictComments = await listIssueComments({ repo, pr }, gh);
@@ -1023,7 +1039,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // an earlier round must be reconciled against THIS round regardless).
   const { threads: threadsForDisposition, snapshot: dispositionSnapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
   const { resolvedThreadIds, deferredResolved } = await runDispositionPass(
-    { repo, pr, round, threads: threadsForDisposition, snapshot: dispositionSnapshot },
+    { repo, pr, round, threads: threadsForDisposition, snapshot: dispositionSnapshot, login },
     gh,
   );
 

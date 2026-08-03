@@ -8,6 +8,7 @@ import { writeGhStub } from "../_helpers.mjs";
 
 import {
   buildFindingsMarker,
+  findMarkedComment,
   parseFindings,
   parsePostGateFindingsCliArgs,
   postGateFindings,
@@ -232,6 +233,15 @@ test("buildFindingsMarker is keyed by gate only (head-SHA independent)", () => {
     buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234" }),
     buildFindingsMarker({ gate: "draft_gate", headSha: "abc1234567890abcdef" }),
   );
+});
+
+test("findMarkedComment (contradiction-lens): a marker merely QUOTED mid-line (not at line start) is never matched", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  const quoting = { id: 1, body: `See the prior comment: ${marker} for context.` };
+  const blockquoted = { id: 2, body: `> ${marker}\nAgreed.` };
+  const genuine = { id: 3, body: `${marker}\n### Gate fan-out findings: draft_gate` };
+  assert.equal(findMarkedComment([quoting, blockquoted], marker), null);
+  assert.equal(findMarkedComment([quoting, genuine], marker), genuine);
 });
 
 test("renderFindingsCommentBody groups by severity and renders file refs", () => {
