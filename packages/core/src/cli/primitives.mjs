@@ -126,13 +126,21 @@ export function parseIssueNumber(value, parseError = null) {
   return parsePositiveInteger(value, "--issue", parseError);
 }
 
-export function runChild(command, args, env = process.env) {
+// `stdinText` is optional and additive: omit it and stdin stays closed exactly
+// as before. Supply it (a `gh api ... --input -` payload) and it is piped in,
+// so a caller that needs stdin no longer has to reach for a second, separately
+// injected runner — every gh call in a script can route through the ONE
+// runChild its tests already stub.
+export function runChild(command, args, env = process.env, stdinText = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { env, stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += String(chunk); });
     child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    if (stdinText !== undefined) {
+      child.stdin.end(stdinText);
+    }
     child.on("error", reject);
     child.on("close", (code) => { resolve({ code, stdout, stderr }); });
   });
