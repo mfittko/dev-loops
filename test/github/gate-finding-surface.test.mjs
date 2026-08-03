@@ -313,6 +313,8 @@ test("readGateFindingsLedger rejects a malformed finding entry, naming its index
   await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: 0 }), /findings\[1\]\.line must be a positive integer/);
   await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: -3 }), /findings\[1\]\.line must be a positive integer/);
   await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: "2" }), /findings\[1\]\.line must be a positive integer/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", files: "src/a.mjs" }), /findings\[1\]\.files must be an array/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", files: { path: "src/a.mjs" } }), /findings\[1\]\.files must be an array/);
 });
 
 test("readGateFindingsLedger returns the normalized ledger for a valid file", async () => {
