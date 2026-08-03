@@ -4,7 +4,13 @@ import path from "node:path";
 import test from "node:test";
 
 const RUNTIME_ROOTS = ["scripts", "lib", "cli", "extension"];
-const deepImportPattern = /packages\/core\/src\//;
+// The boundary is about module resolution: runtime surfaces must import via
+// the @dev-loops/core package entry, never deep into packages/core/src. Only
+// import/export/require specifiers count — comments, doc prose, and
+// filesystem-path constants (asset copiers, atlas source labels) may name
+// packages/core/src freely.
+const deepImportPattern =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s+)["'][^"']*packages\/core\/src\//m;
 
 async function* walk(dirUrl) {
   const { readdir } = await import("node:fs/promises");
@@ -17,6 +23,15 @@ async function* walk(dirUrl) {
     yield childUrl;
   }
 }
+
+test("deep-import pattern catches real import specifiers only", () => {
+  assert.match(`import { x } from "../../packages/core/src/config/config.mjs";`, deepImportPattern);
+  assert.match(`const m = await import("packages/core/src/loop/run-context.mjs");`, deepImportPattern);
+  assert.match(`const m = require("../packages/core/src/x.mjs");`, deepImportPattern);
+  assert.match(`export { y } from "../../packages/core/src/y.mjs";`, deepImportPattern);
+  assert.doesNotMatch(`// synced from packages/core/src/loop/run-context.mjs`, deepImportPattern);
+  assert.doesNotMatch(`const source = "packages/core/src/loop/run-context.mjs";`, deepImportPattern);
+});
 
 test("runtime surfaces use the @dev-loops/core boundary instead of deep packages/core/src imports", async () => {
   const offenders = [];
