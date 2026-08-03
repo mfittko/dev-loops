@@ -9,14 +9,14 @@ import test from "node:test";
 // nobody runs documents an invariant the repo stopped honoring
 // (test/core-runtime-boundary.test.mjs sat red and unrun exactly this way).
 // Coverage is computed from the scripts transitively reachable from the
-// `verify` and `test` scripts only: a token in an unreachable script (e.g. a
-// standalone helper suite) does not count as coverage.
+// `verify` script only: a token in an unreachable script (e.g. a standalone
+// helper suite) does not count as coverage.
 
 const repoRootPath = fileURLToPath(new URL("../../", import.meta.url));
 
 async function coveredTestFiles() {
   const pkg = JSON.parse(await readFile(path.join(repoRootPath, "package.json"), "utf8"));
-  const queue = ["verify", "test"];
+  const queue = ["verify"];
   const visited = new Set();
   const covered = new Set();
   while (queue.length > 0) {

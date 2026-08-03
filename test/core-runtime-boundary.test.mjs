@@ -12,9 +12,10 @@ const RUNTIME_ROOTS = ["scripts", "lib", "cli", "extension"];
 // import/export keyword (the STATIC_SPECIFIER_RE shape from
 // test/contracts/no-package-escaping-imports.test.mjs) so prose like
 // `copied from "packages/core/src/x.mjs"` cannot match; the binding-list char
-// class spans newlines for multiline import blocks. Residual known gap: a
-// comment embedding a quoted `import(...)`/`require(...)` code sample would
-// still match the dynamic branches.
+// class spans newlines for multiline import blocks. Residual known gap:
+// comment-embedded code samples still match when they look like real
+// specifiers — a quoted `import(...)`/`require(...)` sample anywhere, or a
+// block-comment line that itself leads with `import`/`export`.
 const deepImportPattern =
   /(?:^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"']*packages\/core\/src\//m;
 
