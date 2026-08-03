@@ -14,15 +14,20 @@ import {
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] (--message <text> | --message-map <path>) [--resolve]
+const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] ((--message <text> | stdin) | --message-map <path>) [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
+A message source is always required, in one of two mutually exclusive modes:
+  - single shared body for every matched thread: --message <text>, or the same text piped
+    via stdin (exactly one of the two, never both)
+  - per-thread bodies: --message-map <path> — stdin is never read in this mode
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
   --author <login>      Match threads containing a comment from this author (default: all)
-  --message <text>      Reply body text; provide exactly one message source via --message or stdin.
-                        Mutually exclusive with --message-map.
+  --message <text>      Shared reply body text for every matched thread; provide exactly one
+                        message source via --message or stdin (not both). Mutually exclusive
+                        with --message-map.
   --message-map <path>  JSON file mapping threadId -> distinct reply body for that thread. Every
                         matched thread must have an entry here, or the run fails closed (listing
                         the unmapped thread ids) before any reply or resolve mutation is sent.

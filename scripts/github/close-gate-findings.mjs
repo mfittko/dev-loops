@@ -290,11 +290,22 @@ export function renderReviewBody({ gate, headSha, round, nonLocatable }) {
 // Table-cell sanitization
 // ---------------------------------------------------------------------------
 
-// Entity-encode a table cell: sanitizeCodeSpan neutralizes embedded
-// HTML-comment delimiters/backticks; `|` is additionally entity-encoded
-// (never backslash-escaped — a backslash-escape is itself a bypass vector for
-// the next consumer) so a finding field can never break out of its table cell.
+// Entity-encode a BARE table cell (severity, angle, summary, thread label —
+// none of these render inside a code span in the table below): sanitizeInline
+// neutralizes embedded HTML-comment delimiters/tags/link/image syntax and
+// backticks; `|` is additionally entity-encoded (never backslash-escaped — a
+// backslash-escape is itself a bypass vector for the next consumer) so a
+// finding field can never break out of its table cell.
 function sanitizeCell(value) {
+  return sanitizeInline(value).replace(/\|/g, "&#124;");
+}
+
+// Entity-encode a table cell that IS wrapped in its own backtick code span
+// (only `location` below). A code span is already inert to markdown/HTML, so
+// sanitizeCodeSpan's backtick-strip + whitespace-collapse is enough; using the
+// bare-cell sanitizeCell here would double-encode already-inert content and
+// render its entities as visible literal text instead of the original value.
+function sanitizeCodeSpanCell(value) {
   return sanitizeCodeSpan(value).replace(/\|/g, "&#124;");
 }
 
@@ -344,7 +355,7 @@ export function renderDeferredSummaryBody({ pr, rows }) {
       const threadCell = row.threadUrl ? `[${sanitizeCell(row.threadLabel ?? row.threadUrl)}](${row.threadUrl})` : "—";
       lines.push(
         `| ${sanitizeCell(row.severity)} | ${sanitizeCell(row.angle)} | ${sanitizeCell(row.summary)} | `
-        + `${row.location === "—" ? "—" : `\`${sanitizeCell(row.location)}\``} | ${row.round} | ${threadCell} |`,
+        + `${row.location === "—" ? "—" : `\`${sanitizeCodeSpanCell(row.location)}\``} | ${row.round} | ${threadCell} |`,
       );
     }
   }

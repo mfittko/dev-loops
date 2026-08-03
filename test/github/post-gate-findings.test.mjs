@@ -252,22 +252,27 @@ test("buildFindingsMarker is keyed by gate only (head-SHA independent)", () => {
 
 test("findMarkedComment (contradiction-lens): a marker merely QUOTED mid-line (not at line start) is never matched", () => {
   const marker = buildFindingsMarker({ gate: "draft_gate" });
-  const quoting = { id: 1, body: `See the prior comment: ${marker} for context.` };
-  const blockquoted = { id: 2, body: `> ${marker}\nAgreed.` };
-  const genuine = { id: 3, body: `${marker}\n### Gate fan-out findings: draft_gate` };
-  assert.equal(findMarkedComment([quoting, blockquoted], marker), null);
-  assert.equal(findMarkedComment([quoting, genuine], marker), genuine);
+  const quoting = { id: 1, body: `See the prior comment: ${marker} for context.`, user: { login: "gate-bot" } };
+  const blockquoted = { id: 2, body: `> ${marker}\nAgreed.`, user: { login: "gate-bot" } };
+  const genuine = { id: 3, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
+  assert.equal(findMarkedComment([quoting, blockquoted], marker, { author: "gate-bot" }), null);
+  assert.equal(findMarkedComment([quoting, genuine], marker, { author: "gate-bot" }), genuine);
 });
 
-test("findMarkedComment (marker provenance): an optional expected author excludes a FOREIGN comment forging the exact marker shape", () => {
+test("findMarkedComment (marker provenance): a required expected author excludes a FOREIGN comment forging the exact marker shape", () => {
   const marker = buildFindingsMarker({ gate: "draft_gate" });
   const foreign = { id: 1, body: `${marker}\nforged by someone else`, user: { login: "someone-else" } };
   const genuine = { id: 2, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
-  // No author filter: either comment matches (first one wins) — unchanged default behavior.
-  assert.equal(findMarkedComment([foreign], marker), foreign);
-  // With an author filter, only the matching login's comment is honored.
+  // Only the matching login's comment is honored.
   assert.equal(findMarkedComment([foreign], marker, { author: "gate-bot" }), null);
   assert.equal(findMarkedComment([foreign, genuine], marker, { author: "gate-bot" }), genuine);
+});
+
+test("findMarkedComment fails closed when author is omitted (never falls back to matching every author)", () => {
+  const marker = buildFindingsMarker({ gate: "draft_gate" });
+  const genuine = { id: 1, body: `${marker}\n### Gate fan-out findings: draft_gate`, user: { login: "gate-bot" } };
+  assert.throws(() => findMarkedComment([genuine], marker, {}), /requires a non-empty author/);
+  assert.throws(() => findMarkedComment([genuine], marker), /requires a non-empty author/);
 });
 
 test("renderFindingsCommentBody groups by severity and renders file refs", () => {
@@ -414,6 +419,31 @@ test("renderFindingsCommentBody neutralizes raw HTML tags and markdown link/imag
   assert.ok(body.includes("&#91;link](http://evil.example)"));
   assert.ok(!body.includes("![image](http://evil.example/x.png)"), "a live markdown image embed must never survive unescaped");
   assert.ok(body.includes("!&#91;image](http://evil.example/x.png)"));
+});
+
+// Composition regression (renderer-security): sanitizeCodeSpan must NOT layer
+// entity encoding on top of a value that is about to be wrapped in its own
+// backtick code span — a code span is already inert (CommonMark parses it
+// before link/image/HTML syntax), so encoding `[` there would render the
+// entity's own literal text (`app/&#91;id]/page.tsx`) instead of the legible
+// bracketed path. The same value rendered as bare prose (summary, no code
+// span) still needs the full neutralization since it is NOT inert there.
+test("sanitizeCodeSpan leaves a bracketed path verbatim inside its code span; sanitizeInline still neutralizes the same value in prose", () => {
+  const findings = parseFindings(JSON.stringify([
+    {
+      severity: "must-fix",
+      angle: "renderer-security",
+      summary: "Route param mismatch in app/[id]/page.tsx",
+      files: ["app/[id]/page.tsx"],
+    },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // The file ref, rendered inside its own code span, survives verbatim.
+  const filesLine = body.split("\n").find(line => line.trim().startsWith("- files:"));
+  assert.ok(filesLine, "expected a files line for the finding");
+  assert.equal(filesLine.trim(), "- files: `app/[id]/page.tsx`");
+  // The same value in the bare-prose summary field is neutralized.
+  assert.ok(body.includes("Route param mismatch in app/&#91;id]/page.tsx"), "the same value in bare prose must still be neutralized");
 });
 
 // ---------------------------------------------------------------------------

@@ -244,7 +244,7 @@ same fix → reply-with-resolving-commit → resolve path, not a separate one.
    - for one thread, must use the deterministic helper `reply-resolve-review-thread.mjs` from the resolved skill scripts directory
    - for multiple matching unresolved threads, use `reply-resolve-review-threads.mjs --message-map <path>` (a JSON file mapping threadId to its distinct resolution body) instead of ad hoc inline `gh api` / `gh api graphql` mutations; `--message` alone is only for the shared-root-cause case above
    - when using the single-thread helper, pair `--comment-id` and `--thread-id` from the same fresh PR thread snapshot rather than mixing ids across review rounds
-   - use a body file under `tmp/` rather than inline shell text for the single-thread reply body; for the batch helper, prefer stdin from that same `tmp/` body file rather than inline shell text
+   - use a body file under `tmp/` rather than inline shell text for the single-thread reply body (via `--message` or stdin); the batch helper takes its per-thread bodies from `--message-map <path>` — a JSON file, never stdin — so there is no separate stdin body file to prefer there
    - when the intent is GitHub linkability, keep commit SHAs and issue/PR refs as plain text (for example 3ee82fc and owner/repo#70) and do not wrap them in backticks
    - keep backticks for actual code/path/CLI literals only
    - if either helper was newly added or recently changed, smoke-check it against one real thread before assuming the rest of the loop can rely on it
@@ -349,7 +349,7 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
    `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`: Each reviewer MUST be briefed to review like an external code reviewer hunting real bugs: read the FULL diff (from `scope.diffPath`, or `git diff` when null) and the bundled adjacent code (callers, callees, imports) rather than re-deriving them, then review adversarially for concrete defects (edge cases, input validation, numeric coercion incl. NaN/Infinity/floats/negatives, null/undefined, boundary conditions, mismatched caller/callee contracts, dedup/identity bugs) with `file:line` + the failing scenario — not process nits like "no test exists". Reviewers MAY widen scope (open adjacent repo files beyond the bundle) only when their angle genuinely needs more, recording that in the optional `contextWidened` field on their findings artifact. The LAYOUT of this briefing (invariant block first, this adversarial angle prompt last) and the `--prefix-hash`/`--prefix-file` sentinel recording are owned by `GATE-EXEC-BRIEFING-PREFIX` — not restated here.
    Each reviewer's briefing also carries a known-findings block, appended AFTER this
    angle-specific prompt and never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`
-   hashes, listing every currently open or resolved gate-authored finding thread so the
+   hashes, listing every currently open or resolved finding thread regardless of author so the
    reviewer does not re-raise what a thread already covers; build the block from
    `node scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
    (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt), never

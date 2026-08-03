@@ -16,6 +16,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
+import { sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
@@ -527,71 +528,25 @@ for (const disposition of RESOLVED_DISPOSITIONS) {
     throw new Error(`RESOLVED_DISPOSITIONS contains "${disposition}", which is not in write-gate-findings-log.mjs's VALID_DISPOSITIONS`);
   }
 }
-// Sanitize text rendered inside an inline backtick code span (angle labels,
-// file refs, severity/verdict/disposition). Strip backticks FIRST (before
-// collapsing whitespace) so NO field rendered through this sanitizer can carry
-// a stray backtick onto the rendered line: a lone backtick in one field would
-// otherwise shift CommonMark's left-to-right backtick pairing and prevent a
-// LATER field's own code span from ever forming, silently unwrapping it back
-// to raw, unescaped markdown (see the pairing-shift regression test below).
-// Stripping — not backslash-escaping — is deliberate: escaping would require
-// also pre-doubling any literal backslash already in the value to avoid the
-// escape being absorbed by it, and these fields never carry semantically
-// load-bearing backticks (enum labels, paths). Beyond backtick-stripping and
-// whitespace-collapsing, this sanitizer does NOT need to neutralize markdown
-// link/image/HTML syntax: the value is placed inside a backtick code span,
-// which CommonMark parses before link/image/HTML syntax, so the whole value —
-// including any embedded `](url)` — renders as inert literal text regardless.
-function sanitizeStructuredCodeSpan(value) {
-  return String(value)
-    .replace(/`/gu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
-}
-// Sanitize free text for a single-line markdown bullet's summary field. This
-// value is NOT wrapped in a code span (it renders as free prose), so unlike
-// sanitizeStructuredCodeSpan it must also neutralize markdown/HTML syntax the
-// value could otherwise smuggle in: HTML-comment delimiters (a finding field
-// could otherwise inject a hidden marker into the rendered body), the markdown
-// image-embed form `![...](url)` (a read-receipt/IP-leak vector via an
-// auto-loaded remote image), the plain markdown link form `[text](url)` (a
-// live clickable link a reviewer never asked for), and raw HTML tags (which a
-// markdown-to-HTML renderer would otherwise pass through live). The
-// link/image/HTML-comment neutralization here is the same set post-gate-findings.mjs's
-// sanitizeInline now also applies (so renderFindingLine/renderRecommendationLine/
-// sanitizeCell in close-gate-findings.mjs, which build on that sibling copy, inherit
-// it too); this function additionally strips backticks unconditionally
-// (sanitizeStructuredCodeSpan) because every call site here renders free prose
-// that must never smuggle in a live code span, whereas the sibling copy keeps
-// two separate functions (a backtick-preserving prose sanitizer and a
-// backtick-stripping code-span sanitizer) since some of its call sites render
-// text a reviewer legitimately wrote inside backticks.
-//
-// The bracket neutralization below uses an HTML entity (`&#91;`), not a
-// backslash escape. A backslash escape (`\[`) introduces a NEW character
-// (`\`) whose own escaping must then be correct — and it isn't: a
-// value-supplied literal backslash immediately before `[` (e.g.
-// `\[text](url)`) absorbs the inserted escape, turning it into `\\[`, which
-// CommonMark parses as an escaped-literal-backslash followed by a live,
-// unescaped `[`. An entity has no such failure mode: the parser's
-// link/image bracket-matching scans the raw source for the literal `[`
-// character, and `&#91;` never contains one — it only decodes to the
-// bracket glyph as opaque text once rendering is done, after link/image
-// syntax has already been resolved. There is no escape character for a
-// later replacement (or a value's own content) to absorb.
-function sanitizeStructuredInline(value) {
-  return sanitizeStructuredCodeSpan(value)
-    .replace(/<!--/gu, "&lt;!--")
-    .replace(/-->/gu, "--&gt;")
-    .replace(/</gu, "&lt;")
-    // Neutralize a plain link's opening bracket (any `[` NOT already part of
-    // an image's `![`, handled next) so `[text](url)` can never open a live
-    // link. Order matters: this runs BEFORE the image-form neutralization
-    // below so it can tell an image's `[` (still preceded by a literal `!`
-    // here) apart from a plain link's `[`.
-    .replace(/(?<!!)\[/gu, "&#91;")
-    .replace(/!\[/gu, "!&#91;");
-}
+// Thin aliases onto the canonical code-span/prose sanitizer pair
+// (post-gate-findings.mjs's sanitizeCodeSpan/sanitizeInline). Both files used
+// to keep their own byte-for-byte copy of this logic (plus a ~30-line
+// rationale comment on each side citing the other); there is now exactly one
+// implementation, imported here, so the two can never drift out of parity
+// again. sanitizeStructuredCodeSpan renders enum labels/paths/refs inside a
+// backtick code span (angle, file, severity/verdict/disposition); a code span
+// is inert to markdown/HTML, so it only needs backtick-stripping (a stray
+// backtick would prematurely close the span, unwrapping it back to raw
+// markdown) and whitespace collapsing. sanitizeStructuredInline renders bare
+// prose (the finding summary, not wrapped in a code span) — it composes that
+// same code-span-safe base (so a stray backtick in summary can never shift
+// CommonMark's left-to-right backtick pairing and break a LATER field's own
+// code span on the same line) plus HTML-comment/tag/link/image-embed
+// neutralization, all via HTML entities rather than backslash escapes (an
+// entity has no failure mode where a value's own literal character absorbs
+// the escape and turns it live again).
+const sanitizeStructuredCodeSpan = sanitizeCodeSpan;
+const sanitizeStructuredInline = sanitizeInline;
 // Normalize a single finding object into a deterministic render entry, or null
 // when it carries no usable summary.
 function normalizeStructuredFinding(f) {

@@ -227,47 +227,59 @@ export function buildFindingsMarker({ gate }) {
   return `<!-- dev-loops:gate-findings gate=${gate} -->`;
 }
 
-// Collapse any run of whitespace (newlines, tabs, repeated spaces) to a single
-// space and trim. LLM-generated free text often carries embedded newlines, which
-// would otherwise break a single Markdown list item across lines.
-//
-// Additionally neutralize any embedded HTML-comment delimiters (`<!--` / `-->`),
-// any other raw `<` (a markdown-to-HTML renderer would otherwise pass a raw tag
-// through live), and the markdown link/image bracket forms `[text](url)` /
-// `![alt](url)` (a live clickable link, or an auto-loaded remote image and its
-// read-receipt/IP-leak risk, that a finding field never asked for). The
-// findings comment is keyed by a hidden marker that IS an HTML comment
-// (buildFindingsMarker), and free text comes from scoped-review agents or
-// arbitrary --findings/--findings-json producer input, so every one of these
-// is untrusted. Every neutralization here is an HTML ENTITY, never a
-// backslash-escape: an entity has no failure mode where a value's own literal
-// character absorbs the escape and turns it into something live again (mirrors
-// upsert-checkpoint-verdict.mjs's sanitizeStructuredInline, which this
-// function is now at parity with). We escape the opening/closing angle
-// brackets and brackets so each delimiter renders as visible literal text and
-// can never form real markdown/HTML.
-export function sanitizeInline(value) {
+// Sanitize free text rendered INSIDE an inline backtick code span (`angle`,
+// file refs). A code span's content is inert: CommonMark parses a code span
+// BEFORE link/image/HTML syntax, so entity-encoding those constructs here
+// would render the entity's own characters as visible text instead of the
+// value's literal ones (`app/[id]/page.tsx` would render as
+// `app/&#91;id]/page.tsx` rather than the legible original) — the code span
+// already neutralizes the markup on its own, with no help needed. Only two
+// transforms are still required: strip any literal backtick (it would
+// prematurely close the code span, breaking out into raw Markdown for the
+// remainder of the list item — backticks are never meaningful in an angle
+// label or a file path) and collapse embedded whitespace/newlines
+// (LLM-generated free text often carries them, which would otherwise split a
+// single Markdown list item across lines). This repo's own machine-artifact
+// marker delimiters (`<!--` / `-->`, see buildFindingsMarker) are still
+// entity-encoded despite the code span's inertness to markdown:
+// findMarkedComment matches the RAW comment body for a line starting with the
+// marker BEFORE any markdown rendering happens, so a code-span value that
+// lands as the first token on its own line must never be able to forge one.
+export function sanitizeCodeSpan(value) {
   return String(value)
+    .replace(/`/g, "")
     .replace(/\s+/g, " ")
     .replace(/<!--/g, "&lt;!--")
     .replace(/-->/g, "--&gt;")
+    .trim();
+}
+
+// Sanitize free text rendered as bare prose (`summary`, `disposition`): NOT
+// wrapped in a code span, so — unlike sanitizeCodeSpan — it is not already
+// inert to markdown/HTML. Composes the code-span-safe base (backtick strip, so
+// a stray backtick here can never shift CommonMark's left-to-right backtick
+// pairing and unwrap a LATER field's own code span on the same rendered line;
+// whitespace collapse; marker-delimiter encoding) PLUS the neutralization bare
+// prose still needs: any other raw `<` (a markdown-to-HTML renderer would
+// otherwise pass a raw tag through live) and the markdown link/image bracket
+// forms `[text](url)` / `![alt](url)` (a live clickable link, or an
+// auto-loaded remote image and its read-receipt/IP-leak risk, that a finding
+// field never asked for). Free text comes from scoped-review agents or
+// arbitrary --findings/--findings-json producer input, so every one of these
+// is untrusted. Every neutralization here is an HTML ENTITY, never a
+// backslash-escape: an entity has no failure mode where a value's own literal
+// character absorbs the escape and turns it into something live again.
+// upsert-checkpoint-verdict.mjs's sanitizeStructuredInline now imports this
+// exact function instead of keeping its own copy.
+export function sanitizeInline(value) {
+  return sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
     // Neutralize a plain link's opening bracket (any `[` NOT already part of an
     // image's `![`, handled next) before the image-form pass below, so an
     // image's `[` (still preceded by a literal `!` here) is told apart from a
     // plain link's `[`.
     .replace(/(?<!!)\[/g, "&#91;")
-    .replace(/!\[/g, "!&#91;")
-    .trim();
-}
-
-// Sanitize free text that is rendered INSIDE an inline backtick code span
-// (`angle`, file refs). On top of sanitizeInline, strip any literal backtick:
-// a backtick inside the span would prematurely close it, breaking out into raw
-// Markdown (injection) for the remainder of the list item. Backticks are never
-// meaningful in an angle label or a file path, so dropping them is safe.
-export function sanitizeCodeSpan(value) {
-  return sanitizeInline(String(value).replace(/`/g, ""));
+    .replace(/!\[/g, "!&#91;");
 }
 
 export function renderFindingsCommentBody({ gate, headSha, findings }) {
@@ -375,16 +387,26 @@ export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
 // function's result is PATCHed in place by the caller — so a quoted marker
 // must never be treated as the genuine, idempotency-keying one.
 //
-// `author` (optional) is the second, orthogonal trust boundary: the caller's
-// own authenticated `gh` login. When given, a comment is only considered a
-// match if it was authored by that login — a foreign comment forging the
-// exact marker shape must never be mistaken for this tool's own idempotent
-// comment (and then PATCHed as if it were). Comments here are the raw GitHub
-// REST shape (`user.login`), not the normalized `author` field this repo's
-// other GraphQL-derived thread/review objects carry.
+// `author` is the second, orthogonal trust boundary: the caller's own
+// authenticated `gh` login. A comment is only considered a match if it was
+// authored by that login — a foreign comment forging the exact marker shape
+// must never be mistaken for this tool's own idempotent comment (and then
+// PATCHed as if it were). Comments here are the raw GitHub REST shape
+// (`user.login`), not the normalized `author` field this repo's other
+// GraphQL-derived thread/review objects carry.
+//
+// `author` is REQUIRED, not optional: an omitted author used to fail OPEN
+// (every comment matched regardless of who authored it), which is exactly the
+// forgery this trust boundary exists to close. Every caller has an
+// authenticated login available (resolveAuthenticatedLogin) by the time it
+// needs to find its own marked comment, so there is no legitimate call site
+// that cannot supply one.
 export function findMarkedComment(comments, marker, { author } = {}) {
+  if (typeof author !== "string" || author.trim().length === 0) {
+    throw new Error("findMarkedComment requires a non-empty author (the authenticated gh viewer's own login); omitting it would fail open and let a foreign comment forging the marker be mistaken for this tool's own idempotent comment.");
+  }
   for (const comment of comments) {
-    if (author !== undefined && comment?.user?.login !== author) continue;
+    if (comment?.user?.login !== author) continue;
     if (comment && typeof comment.body === "string"
       && comment.body.split(/\r?\n/).some((line) => line.startsWith(marker))) {
       return comment;
