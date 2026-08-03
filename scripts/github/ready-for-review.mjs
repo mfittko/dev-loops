@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, summarizeGateReviewComments, summarizeGateReviewCommentMarkers } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { normalizePrReviewsPayload } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
@@ -74,12 +75,7 @@ async function fetchGateEvidence({ repo, pr, headSha }, { env, ghCommand }) {
   // fetch failure is non-fatal: legacy issue-comment verdicts still validate.
   try {
     const rv = await runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`], env);
-    if (rv.code === 0) {
-      const rvRaw = parseJsonText(rv.stdout), rvFlat = Array.isArray(rvRaw) ? (rvRaw.every(e=>Array.isArray(e)) ? rvRaw.flat() : rvRaw) : [];
-      comments.push(...rvFlat
-        .filter((x) => x && typeof x === "object" && x.state !== "PENDING" && typeof x.submitted_at === "string" && typeof x.body === "string" && x.body.trim().length > 0)
-        .map((x) => ({ id: x.id, body: x.body, surface: "review", html_url: x.html_url ?? null, created_at: x.submitted_at, updated_at: x.submitted_at, user: x.user })));
-    }
+    if (rv.code === 0) comments.push(...normalizePrReviewsPayload(parseJsonText(rv.stdout)));
   } catch {}
   const cs = summarizeGateReviewComments(comments), ms = summarizeGateReviewCommentMarkers(comments, { headSha });
   const dg = cs.draft_gate ? { ...cs.draft_gate, visible: true } : { visible: false };

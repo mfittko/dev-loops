@@ -14,6 +14,7 @@ import {
   fingerprintFinding,
   isDeferredAtRound,
   isLocatableFinding,
+  normalizePrReviewsPayload,
   parseFindingMarker,
   readGateFindingsLedger,
   renderInlineCommentBody,
@@ -327,4 +328,28 @@ test("readGateFindingsLedger returns the normalized ledger for a valid file", as
       assert.deepEqual(ledger.findings[0].files, ["src/a.mjs"]);
     },
   );
+});
+
+test("normalizePrReviewsPayload keeps only submitted reviews with a real timestamp and body", () => {
+  const keep = { id: 1, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z", body: "Gate review: draft_gate", html_url: "https://x/pr#pullrequestreview-1" };
+  const out = normalizePrReviewsPayload([
+    keep,
+    { id: 2, state: "PENDING", submitted_at: "2026-08-04T00:00:00Z", body: "unsubmitted verdict body" },
+    { id: 3, state: "COMMENTED", submitted_at: "", body: "empty timestamp" },
+    { id: 4, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z", body: "   " },
+    { id: 5, state: "COMMENTED", body: "missing timestamp" },
+    null,
+    "junk",
+  ]);
+  assert.deepEqual(out, [{
+    id: 1,
+    body: "Gate review: draft_gate",
+    surface: "review",
+    html_url: "https://x/pr#pullrequestreview-1",
+    created_at: "2026-08-04T00:00:00Z",
+    updated_at: "2026-08-04T00:00:00Z",
+  }]);
+  assert.deepEqual(normalizePrReviewsPayload([[keep], []]), normalizePrReviewsPayload([keep]));
+  assert.deepEqual(normalizePrReviewsPayload("not-an-array"), []);
+  assert.equal(normalizePrReviewsPayload([{ ...keep, html_url: 42 }])[0].html_url, null);
 });

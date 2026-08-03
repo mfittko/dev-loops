@@ -346,6 +346,61 @@ test("succeeds when the clean draft verdict lives only in the review stream (sin
   }
 });
 
+test("still marks ready off an issue-comment verdict when the reviews fetch fails (fail-open)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-reviews-fetch-fail-"));
+
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: "abc123def456",
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+              },
+            },
+          },
+        }),
+      },
+      {
+        stdout: JSON.stringify([
+          { name: "test", state: "success", bucket: "pass" },
+        ]),
+      },
+      {
+        stdout: JSON.stringify([
+          {
+            body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+            id: 101,
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
+            created_at: "2026-06-05T00:00:00Z",
+            updated_at: "2026-06-05T00:00:00Z",
+          },
+        ]),
+      },
+      { stdout: "", stderr: "HTTP 500", exitCode: 1 }, // reviews fetch fails
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17"],
+      { env },
+    );
+
+    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.action, "marked_ready");
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("refuses to mark ready when PR title contains a WIP marker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-wip-title-"));
 

@@ -21,6 +21,30 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 
+// Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
+// comment-stream shape the gate summarizers consume. The single definition of
+// "what counts as a valid review-sourced verdict candidate": non-pending, a
+// non-empty submitted_at, a non-empty body. Every reader (evidence scanner,
+// ready gate) MUST use this rather than reimplementing the filter — two copies
+// of this predicate drifted once already.
+export function normalizePrReviewsPayload(payload) {
+  if (!Array.isArray(payload)) return [];
+  const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
+  return flat
+    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
+    .map((r) => ({
+      id: r.id,
+      body: r.body,
+      // The gate round's single visible surface is a PR review, so the poster
+      // needs to know a verdict came from here (PUT pulls/reviews/{id}) rather
+      // than from the legacy issue-comment stream (PATCH issues/comments/{id}).
+      surface: "review",
+      html_url: typeof r.html_url === "string" ? r.html_url : null,
+      created_at: r.submitted_at,
+      updated_at: r.submitted_at,
+    }));
+}
+
 export const VALID_FINDING_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_LEDGER_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);

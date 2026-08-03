@@ -27,6 +27,7 @@ import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, re
 import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshAngles, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { normalizePrReviewsPayload } from "./_gate-finding-surface.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -220,23 +221,6 @@ function normalizeIssueCommentsPayload(payload) {
     return payload.flat();
   }
   return payload;
-}
-function normalizePrReviewsPayload(payload) {
-  if (!Array.isArray(payload)) return [];
-  const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
-  return flat
-    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
-    .map((r) => ({
-      id: r.id,
-      body: r.body,
-      // The gate round's single visible surface is a PR review, so the poster
-      // needs to know a verdict came from here (PUT pulls/reviews/{id}) rather
-      // than from the legacy issue-comment stream (PATCH issues/comments/{id}).
-      surface: "review",
-      html_url: typeof r.html_url === "string" ? r.html_url : null,
-      created_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-      updated_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-    }));
 }
 function emptyGateSummary() {
   return {
