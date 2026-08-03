@@ -1074,9 +1074,14 @@ disabled entry still a hard ceiling. A delta-suffixed angle (`<angle>-delta-at-.
 to only the current head's delta) counts toward its base angle for both checks.
 Fan-in synthetic angles (`FANIN_SYNTHETIC_ANGLES` from `@dev-loops/core/loop/gate-fanin`;
 currently `pr-checklist-matrix`, the entry `consolidate-fanin --pr-checklist-matrix clean`
-upserts) are always legal in the foreign-angle check regardless of pool config or
-`gates.rejectForeignAngles` — they are fan-in-mandated, not pool-configured, so a repo
-never has to list them per-gate.
+upserts) are always legal in the foreign-angle check, regardless of pool config,
+`gates.rejectForeignAngles`, or an `enabled: false` entry for the angle. The entry is
+minted by the fan-in itself, never dispatched from the pool, so a gate whose pool omits
+the angle (e.g. the shipped draft pool) accepts it without listing it per-gate; the
+disabled-entry ceiling above still governs pool WIDENING (dynamic dispatch), while this
+exemption covers only the fan-in-minted recorded entry. The angle may additionally be
+pool-configured where a gate wants it reviewed as a real angle — the shipped preApproval
+pool lists `pr-checklist-matrix` as mandatory.
 This is independent of `requireFanoutProvenance`, and is exempt for
 `inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out
 data to validate). At merge-evidence time, when a gate configures any mandatory
