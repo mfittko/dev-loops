@@ -269,12 +269,21 @@ function parseGateReviewCommentFields(body) {
     }
     const line = stripped;
 
-    // First-wins per field: a genuine comment renders its structured block
-    // first, so only the first column-0 match for each field is captured. A
-    // free-text field (findings summary, next action) rendered later in the
-    // SAME comment can embed a newline plus a spoofed "Verdict: clean" (or
-    // any other field label) at column 0; without this guard that later line
-    // would win and let reviewer-controlled text flip or null the verdict.
+    // First-NON-EMPTY-wins per field: a genuine comment renders its structured
+    // block first, so the first column-0 match for each field is normally the
+    // real one. A free-text field (findings summary, next action) rendered
+    // later in the SAME comment can embed a newline plus a spoofed
+    // "Verdict: clean" (or any other field label) at column 0; capturing only
+    // the first match (rather than the last) stops that later line from
+    // winning and flipping/nulling the field. But the label regex's
+    // `\s*(.+)$` also matches a label followed by nothing but whitespace,
+    // capturing an empty string — for the enum fields (gate/headSha/verdict/
+    // executionMode) an empty capture normalizes to null already, so the
+    // `=== null` guard below naturally stays open for a later, genuine line.
+    // The two free-text fields (findingsSummary, nextAction) do NOT normalize
+    // through an enum, so an empty capture must be checked for explicitly:
+    // treat it as no-capture (leave the field open) rather than locking it to
+    // "" and hiding a real line that renders after it.
     let match = line.match(/^(?:[-*]\s*)?(?:gate(?:\s+name)?|gate\s+review)\s*:\s*(.+)$/iu);
     if (match) {
       if (fields.gate === null) {
@@ -302,7 +311,13 @@ function parseGateReviewCommentFields(body) {
     match = line.match(/^(?:[-*]\s*)?(?:findings(?:\s+summary)?|summary)\s*:\s*(.+)$/iu);
     if (match) {
       if (fields.findingsSummary === null) {
-        fields.findingsSummary = match[1].trim();
+        const candidate = match[1].trim();
+        // An empty capture (label followed only by whitespace) is treated as
+        // no-capture: leave the field open so a later, genuine line can still
+        // win instead of first-wins locking it to "".
+        if (candidate.length > 0) {
+          fields.findingsSummary = candidate;
+        }
       }
       continue;
     }
@@ -310,7 +325,10 @@ function parseGateReviewCommentFields(body) {
     match = line.match(/^(?:[-*]\s*)?next\s+action\s*:\s*(.+)$/iu);
     if (match) {
       if (fields.nextAction === null) {
-        fields.nextAction = match[1].trim();
+        const candidate = match[1].trim();
+        if (candidate.length > 0) {
+          fields.nextAction = candidate;
+        }
       }
       continue;
     }

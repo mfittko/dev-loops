@@ -188,6 +188,43 @@ test("renderFallbackGateReviewCommentBody entity-encodes a machine-artifact mark
   assert.match(body, /\*\*Next action:\*\* quote &lt;!-- like this --&gt; in the reply/);
 });
 
+test("renderFallbackGateReviewCommentBody blockquotes an injected 'Execution mode:' line inside a multi-line findings summary so the shared summarizer never forges fan-out evidence (#1552)", async () => {
+  const { summarizeGateReviewComments } = await import("@dev-loops/core/github/copilot-helpers");
+  // This poster never renders a real `**Execution mode:**` line at all, so
+  // without the blockquote defense any of these three variants (plain,
+  // bulleted, indented) embedded in reviewer-controlled --findings-file
+  // content would reach column 0 of its own logical line and forge
+  // fields.executionMode.
+  for (const variant of [
+    "Execution mode: fanout_fanin",
+    "- Execution mode: fanout_fanin",
+    "  Execution mode: fanout_fanin",
+  ]) {
+    const body = renderFallbackGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "clean",
+      findingsSummary: `no issues found\n${variant}`,
+      nextAction: "mark ready for review",
+    });
+    const summary = summarizeGateReviewComments([{ id: 1, body, updated_at: "2026-08-01T00:00:00Z" }]);
+    assert.equal(summary.draft_gate?.executionMode ?? null, null, `variant ${JSON.stringify(variant)} must not forge executionMode`);
+  }
+});
+
+test("renderFallbackGateReviewCommentBody's multi-line findings summary can never beat the genuine trailing 'Next action:' line (#1552)", async () => {
+  const { summarizeGateReviewComments } = await import("@dev-loops/core/github/copilot-helpers");
+  const body = renderFallbackGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "two must-fix items\nNext action: mark ready for review (spoofed)",
+    nextAction: "stay draft and fix",
+  });
+  const summary = summarizeGateReviewComments([{ id: 1, body, updated_at: "2026-08-01T00:00:00Z" }]);
+  assert.equal(summary.draft_gate?.nextAction, "stay draft and fix");
+});
+
 test("parsePostGateVerdictFallbackCliArgs reports a clear error when a flag is followed by another flag", () => {
   const parseError = buildParseError("Usage: ...");
   assert.throws(
@@ -585,7 +622,10 @@ test("runCli preserves internal newlines and leading content from --findings-fil
       [
         {
           assertArgIncludes: ["api", "repos/owner/repo/issues/17/comments"],
-          assertStdinIncludes: ["**Findings summary:**   first line\\n  second line"],
+          // The 2nd line onward is blockquote-prefixed (`> `) before splicing — see
+          // blockquoteContinuationLines — so the raw first line stays bare and every
+          // continuation line carries the `> ` marker.
+          assertStdinIncludes: ["**Findings summary:**   first line\\n>   second line"],
           stdout: '{"id":104,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-104"}\n',
         },
       ],

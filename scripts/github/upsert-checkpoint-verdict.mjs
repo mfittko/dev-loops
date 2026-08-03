@@ -169,6 +169,22 @@ function normalizeExecutionMode(value) {
 function encodeMachineArtifactMarkerDelimiters(value) {
   return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
 }
+// Blockquote-prefix every continuation line (2nd line onward) of a newline-preserving
+// free-text field (currently only --findings-file content) before it is spliced into
+// the rendered comment body. copilot-helpers.mjs's stripGateCommentMarkdown trims each
+// line and strips `#`/`**` but NOT a leading "> ", so a reviewer-controlled line inside
+// the free text — e.g. "Execution mode: fanout_fanin" or "Next action: <spoof>" at
+// column 0 — can never reach column 0 of its own logical line and match a field regex.
+// Mirrors close-gate-findings.mjs's renderNonLocatableBlock blockquote defense. Applied
+// AFTER truncation/marker-delimiter-encoding so the blockquote markers themselves never
+// count against the field's length budget or get re-encoded.
+function blockquoteContinuationLines(value) {
+  const lines = String(value).split(/\r?\n/u);
+  if (lines.length <= 1) {
+    return value;
+  }
+  return [lines[0], ...lines.slice(1).map((line) => `> ${line}`)].join("\n");
+}
 function normalizeRequiredText(value, flag) {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (normalized.length === 0) {
@@ -765,11 +781,17 @@ export function normalizeStructuredFindings(input) {
 // The leading single-line digest is what the marker parser captures for the
 // `**Findings summary:**` field; the structured body is nested below it and is
 // deliberately written so no nested line matches a gate field regex (no
-// `verdict:` / `next action:` / `execution mode:` line starts). The parser
-// (parseGateReviewCommentFields) is first-wins per field, so this template
-// invariant is redundant for gate/headSha/verdict/executionMode (their
-// genuine lines always render before this block and already win) but is
-// still the only guard for `next action`, which renders after this block.
+// `verdict:` / `next action:` / `execution mode:` line starts) — belt-and-braces
+// alongside the parser's actual guards. The real guards against a per-angle
+// finding's own free text forging a field (including `next action`, which
+// renders after this block) are: (1) parseGateReviewCommentFields is
+// first-NON-EMPTY-wins per field, so a genuine line rendered before this block
+// always wins over a spoofed one rendered after it, and (2) any free-text
+// field that preserves newlines (the --findings-file path above) has every
+// continuation line blockquoted (`> `) before splicing, so an embedded
+// "next action:"/"execution mode:"/etc. line can never sit at column 0 of its
+// own logical line for the parser to match. This template's own bullet/
+// backtick shape is a redundant third layer, not the only guard.
 // Exported so
 // consolidate-fanin.mjs can measure whether a candidate findingsJson shape
 // actually renders (catching this throw) instead of approximating its
@@ -1471,8 +1493,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // renders as its own `**Gate evidence note:**` line (see
     // renderGateReviewCommentBody), driven by coordination.gateEvidenceNote
     // passed straight through below.
-    options.findingsSummary = encodeMachineArtifactMarkerDelimiters(
-      enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content"),
+    options.findingsSummary = blockquoteContinuationLines(
+      encodeMachineArtifactMarkerDelimiters(
+        enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content"),
+      ),
     );
   }
   // The findings-summary the comment is compared/round-tripped against. With a

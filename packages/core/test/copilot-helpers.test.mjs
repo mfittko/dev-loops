@@ -123,6 +123,35 @@ test("parseGateReviewCommentBody keeps the genuine verdict when a later column-0
   assert.equal(result.verdict, "findings_present");
 });
 
+test("parseGateReviewCommentMarkerBody treats an empty-capture label line as no-capture, so a later genuine next-action line still wins (#1552)", () => {
+  // The field regex's `\s*(.+)$` also matches a label followed only by
+  // whitespace, capturing "". Before the fix, first-wins locked nextAction to
+  // that "" forever; now an empty capture is treated as no-capture and the
+  // field stays open for the later, genuine line.
+  const body = [
+    "### Gate review: `draft_gate`",
+    "",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** clean",
+    "",
+    "**Findings summary:** no issues found",
+    "",
+    "**Next action:** ",
+    "**Next action:** real",
+  ].join("\n");
+
+  const result = parseGateReviewCommentMarkerBody(body);
+  assert.ok(result !== null);
+  assert.equal(result.nextAction, "real");
+
+  // The whole-body parse (which requires nextAction non-null) must not come
+  // back null either — this is what made the fallback comment invisible to
+  // every evidence reader before the fix.
+  const wholeBody = parseGateReviewCommentBody(body);
+  assert.ok(wholeBody !== null);
+  assert.equal(wholeBody.nextAction, "real");
+});
+
 test("parseGateReviewCommentMarkerBody parses partial new-format markers", () => {
   const body = [
     "### Gate review: `pre_approval_gate`",
