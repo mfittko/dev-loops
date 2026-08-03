@@ -232,8 +232,9 @@ export function baseAngleName(angle) {
 /**
  * Validate a recorded fan-out angle list against a gate's configured angle
  * contract: every mandatory angle must be represented, and — when a pool is
- * supplied — every recorded angle must be a member of it (delta-suffixed
- * angles count toward their {@link baseAngleName}). Pure; shared by the write
+ * supplied — every recorded angle must be a member of it or of
+ * {@link FANIN_SYNTHETIC_ANGLES} (delta-suffixed angles count toward their
+ * {@link baseAngleName}). Pure; shared by the write
  * path (write-gate-findings-log's `provenance.perAngle`, upsert-checkpoint-verdict's
  * `--findings-json` per-angle results) and the merge-evidence read path
  * (detect-checkpoint-evidence re-validating the ledger's `provenance.perAngle`)
@@ -242,7 +243,7 @@ export function baseAngleName(angle) {
  * @param {unknown} recordedAngles — array of `{ angle: string, ... }` entries (provenance.perAngle or normalized per-angle findings)
  * @param {object} [gateAngleContract]
  * @param {string[]} [gateAngleContract.mandatoryAngles] — angles that must always be represented
- * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted skips the foreign-angle check
+ * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted skips the foreign-angle check; {@link FANIN_SYNTHETIC_ANGLES} are unioned in before membership is checked
  * @returns {{ missingMandatory: string[], foreignAngles: string[] }}
  */
 export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [], pool = null } = {}) {

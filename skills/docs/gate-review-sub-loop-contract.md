@@ -1072,6 +1072,11 @@ angles minus disabled entries), widened to the global lens catalog
 dynamic resolution may legitimately dispatch catalog angles then, with a
 disabled entry still a hard ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
 to only the current head's delta) counts toward its base angle for both checks.
+Fan-in synthetic angles (`FANIN_SYNTHETIC_ANGLES` from `@dev-loops/core/loop/gate-fanin`;
+currently `pr-checklist-matrix`, the entry `consolidate-fanin --pr-checklist-matrix clean`
+upserts) are always legal in the foreign-angle check regardless of pool config or
+`gates.rejectForeignAngles` — they are fan-in-mandated, not pool-configured, so a repo
+never has to list them per-gate.
 This is independent of `requireFanoutProvenance`, and is exempt for
 `inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out
 data to validate). At merge-evidence time, when a gate configures any mandatory
