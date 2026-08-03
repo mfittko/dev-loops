@@ -310,6 +310,24 @@ test("isGateMachineArtifactBody recognizes both machine-authored artifact marker
   assert.equal(isGateMachineArtifactBody(null), false);
 });
 
+// The single-surface round posts ONE review carrying BOTH the findings marker
+// and the verdict header. That body IS the verdict, so the producer-owned
+// header un-excludes it; only a marker-bearing body with no header stays out.
+test("isGateMachineArtifactBody does NOT exclude a marker-bearing body that also carries the genuine gate verdict header", () => {
+  const marker = "<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->";
+  const singleSurface = [
+    "### Gate review: `draft_gate`",
+    marker,
+    "",
+    "**Verdict:** findings_present",
+  ].join("\n");
+  assert.equal(isGateMachineArtifactBody(singleSurface), false);
+  // Same body minus the header: still a machine artifact.
+  assert.equal(isGateMachineArtifactBody(singleSurface.split("\n").slice(1).join("\n")), true);
+  // A quoted/blockquoted header is not the producer's own header line.
+  assert.equal(isGateMachineArtifactBody(`${marker}\n> ### Gate review: \`draft_gate\``), true);
+});
+
 test("summarizeGateReviewComments excludes a machine-authored gate-findings-review artifact even though it names a gate and a hex sha", () => {
   const comments = [
     {

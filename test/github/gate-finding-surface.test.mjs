@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
 import {
@@ -12,6 +15,7 @@ import {
   isDeferredAtRound,
   isLocatableFinding,
   parseFindingMarker,
+  readGateFindingsLedger,
   renderInlineCommentBody,
   renderNonLocatableBlock,
 } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -253,4 +257,72 @@ test("collectVerdictHeadShas: only a genuine verdict header with a parseable rev
     heads,
   );
   assert.deepEqual([...heads], [HEAD_SHA]);
+});
+
+// ---------------------------------------------------------------------------
+// Ledger read + validate
+// ---------------------------------------------------------------------------
+
+// This is the single shared validator both producers (close-gate-findings.mjs,
+// upsert-checkpoint-verdict.mjs) read their round through, so every rejection
+// branch is pinned here rather than through one CLI's happy path.
+const VALID_LEDGER = {
+  repo: "owner/repo",
+  pr: 17,
+  gate: "draft_gate",
+  headSha: HEAD_SHA,
+  verdict: "findings_present",
+  findings: [{ severity: "defer", angle: "coverage", summary: "no test for the retry path" }],
+};
+
+async function withLedgerFile(raw, assertRejection) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ledger-validate-"));
+  try {
+    const ledgerPath = path.join(dir, "ledger.json");
+    await writeFile(ledgerPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
+    await assertRejection(ledgerPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const rejects = (raw, message) => withLedgerFile(raw, (ledgerPath) => assert.rejects(() => readGateFindingsLedger(ledgerPath), message));
+
+test("readGateFindingsLedger rejects a malformed envelope with a branch-specific message", async () => {
+  await rejects("{not json", /must contain valid JSON/);
+  await rejects("[]", /must contain a JSON object/);
+  await rejects("null", /must contain a JSON object/);
+  await rejects({ ...VALID_LEDGER, repo: "not-a-slug" }, /"repo" must be an owner\/name slug/);
+  await rejects({ ...VALID_LEDGER, pr: undefined }, /is missing a valid "pr" number/);
+  await rejects({ ...VALID_LEDGER, pr: "17" }, /is missing a valid "pr" number/);
+  await rejects({ ...VALID_LEDGER, pr: 0 }, /is missing a valid "pr" number/);
+  await rejects({ ...VALID_LEDGER, gate: "some_other_gate" }, /"gate" must be draft_gate or pre_approval_gate/);
+  await rejects({ ...VALID_LEDGER, headSha: "abc123" }, /"headSha" must be the full/);
+  await rejects({ ...VALID_LEDGER, verdict: "maybe" }, /"verdict" must be clean, findings_present, or blocked/);
+  await rejects({ ...VALID_LEDGER, findings: {} }, /"findings" must be an array/);
+});
+
+test("readGateFindingsLedger rejects a malformed finding entry, naming its index", async () => {
+  const withFinding = (finding) => ({ ...VALID_LEDGER, findings: [VALID_LEDGER.findings[0], finding] });
+  await rejects(withFinding(null), /findings\[1\] is malformed/);
+  await rejects(withFinding({ angle: "coverage", summary: "no severity" }), /findings\[1\] is malformed/);
+  await rejects(withFinding({ severity: "urgent", angle: "coverage", summary: "unknown severity" }), /findings\[1\] is malformed/);
+  await rejects(withFinding({ severity: "defer", summary: "no angle" }), /findings\[1\] is malformed/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage" }), /findings\[1\] is malformed/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: 2.5 }), /findings\[1\]\.line must be a positive integer/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: 0 }), /findings\[1\]\.line must be a positive integer/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: -3 }), /findings\[1\]\.line must be a positive integer/);
+  await rejects(withFinding({ severity: "defer", angle: "coverage", summary: "x", line: "2" }), /findings\[1\]\.line must be a positive integer/);
+});
+
+test("readGateFindingsLedger returns the normalized ledger for a valid file", async () => {
+  await withLedgerFile(
+    { ...VALID_LEDGER, findings: [{ ...VALID_LEDGER.findings[0], files: ["  src/a.mjs  "], line: 4 }] },
+    async (ledgerPath) => {
+      const ledger = await readGateFindingsLedger(ledgerPath);
+      assert.equal(ledger.repo, "owner/repo");
+      assert.equal(ledger.gate, "draft_gate");
+      assert.deepEqual(ledger.findings[0].files, ["src/a.mjs"]);
+    },
+  );
 });
