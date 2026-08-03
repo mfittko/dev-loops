@@ -69,6 +69,18 @@ async function fetchGateEvidence({ repo, pr, headSha }, { env, ghCommand }) {
   const r = await runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`], env);
   if (r.code !== 0) throw new Error(`Failed to fetch PR comments`);
   const raw = parseJsonText(r.stdout), comments = Array.isArray(raw) ? (raw.every(e=>Array.isArray(e)) ? raw.flat() : raw) : [];
+  // The gate round's single visible surface is a PR review, so the verdict may
+  // live in the review stream rather than the issue-comment stream. A reviews
+  // fetch failure is non-fatal: legacy issue-comment verdicts still validate.
+  try {
+    const rv = await runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`], env);
+    if (rv.code === 0) {
+      const rvRaw = parseJsonText(rv.stdout), rvFlat = Array.isArray(rvRaw) ? (rvRaw.every(e=>Array.isArray(e)) ? rvRaw.flat() : rvRaw) : [];
+      comments.push(...rvFlat
+        .filter((x) => x && typeof x === "object" && x.state !== "PENDING" && typeof x.submitted_at === "string" && typeof x.body === "string" && x.body.trim().length > 0)
+        .map((x) => ({ id: x.id, body: x.body, surface: "review", html_url: x.html_url ?? null, created_at: x.submitted_at, updated_at: x.submitted_at, user: x.user })));
+    }
+  } catch {}
   const cs = summarizeGateReviewComments(comments), ms = summarizeGateReviewCommentMarkers(comments, { headSha });
   const dg = cs.draft_gate ? { ...cs.draft_gate, visible: true } : { visible: false };
   const dm = ms.draft_gate ? { ...ms.draft_gate, visible: true, contractComplete: ms.draft_gate.contractComplete === true } : { visible: false, contractComplete: false };
