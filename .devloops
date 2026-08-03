@@ -17,9 +17,25 @@ gates:
   # angle — no two freshly-reviewed angles may share a reviewer. See
   # skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
+  # Consolidated issue that receives the ledger comment for every non-blocking
+  # ("survivor") finding a gate close does not fix in-gate. Mandatory: a gate
+  # close with survivors and no configured issue fails closed
+  # (GATE-EXEC-SURVIVOR-FILING).
+  followUpIssue: 1544
   draft:
     dynamic:
       subtractive: true
+    # Ordered, first-match-wins diff-class angle tiers (GATE-EXEC-DIFF-CLASS-TIER).
+    # A tier round is a normal fanout_fanin round with a reduced angle set: the
+    # mandatory floor is unioned in regardless, and a config-source-touching or
+    # unclassifiable delta always falls through to the full pool.
+    tiers:
+      - name: docs-only
+        match: { kinds: [docs], maxLines: 300 }
+        angles: [link-check, contract-surface, gate-evidence]
+      - name: small-non-code
+        match: { kinds: [docs, test, config], maxLines: 50 }
+        angles: [correctness, gate-evidence, link-check]
     # Only per-layer DELTAS live here — angles that merely restate an
     # extension-defaults.yaml draft-pool entry byte-for-byte are a no-op under
     # merge-by-name (D3) and have been trimmed. This repo's draft gate keeps
@@ -59,14 +75,22 @@ gates:
     # finding, so a light-dispatched draft PR whose inline pass surfaces only
     # worth-fixing-now now stays inline instead of escalating.
     #
-    # Interim: the better shape is the full severity set with a round cap, so
-    # the first rounds still block and only a demonstrated plateau softens.
-    # Revisit this once that lands.
+    # Non-blocking findings are not lost by this setting: every finding outside
+    # this set is filed as a survivor on the configured follow-up issue at gate
+    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
     blockCleanOnFindingSeverities:
       - must-fix
   preApproval:
     dynamic:
       subtractive: true
+    # Ordered, first-match-wins diff-class angle tiers (GATE-EXEC-DIFF-CLASS-TIER).
+    # No inline arm here: this gate's mandatory angles cannot attest per-angle
+    # coverage from a single-agent pass, so a tier only ever reduces the
+    # fan-out's angle set, never its execution mode.
+    tiers:
+      - name: small-non-code
+        match: { kinds: [docs, test, config], maxLines: 50 }
+        angles: [docs]
     # Only per-layer DELTAS live here (see the draft-gate comment above for
     # why byte-identical restatements were trimmed). This repo's preApproval
     # gate keeps the full shipped preApproval pool at its shipped
@@ -98,9 +122,9 @@ gates:
     # are filed as follow-up issues and named in the verdict, which is the only
     # thing that keeps this from being lossy.
     #
-    # Revisit when the round cap lands: the correct shape is the full severity
-    # set for the first N rounds, softening only on a demonstrated plateau,
-    # rather than a permanently softened final gate.
+    # Non-blocking findings are not lost by this setting: every finding outside
+    # this set is filed as a survivor on the configured follow-up issue at gate
+    # close (GATE-EXEC-SURVIVOR-FILING), in one ledger comment per gate close.
     blockCleanOnFindingSeverities:
       - must-fix
 

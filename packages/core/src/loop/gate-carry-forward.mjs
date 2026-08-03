@@ -161,8 +161,11 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
 // reviewed surface. A clean verdict produced under the OLD config cannot
 // carry across such a delta, and a converged Copilot round cannot be treated
 // as still-converged either. classifyFile correctly reports these as
-// "config"; this predicate is the carry-forward-specific override.
-const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+)$/;
+// "config"; this predicate is the carry-forward-specific override. The
+// shipped defaults file is in this class too: it is the layer that ships the
+// angle pool and reviewer prompts, so a delta touching it must never be
+// carried across or reviewed under a reduced diff-class tier.
+const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
 export function isDevLoopConfigSourcePath(filePath) {
   if (typeof filePath !== "string") return false;
   // Normalize Windows separators like classifyFile does, so a

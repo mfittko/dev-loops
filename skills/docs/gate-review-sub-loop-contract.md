@@ -271,6 +271,16 @@ prefix across spawns), best case turns N cache-writes into 1 write + N reads on 
 fan-out. The unmeasurability from inside the harness is a reason to prefer the zero-extra-cost
 one-reviewer form, not a reason to make the win opt-in.
 
+<!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
+`GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST run the round's validation set exactly
+once, before any reviewer is dispatched, via `run-gate-validation.mjs`, and MUST persist
+the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
+that artifact exists, the briefing prefix MUST point every reviewer at it
+(`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
+rather than executing any suite it records. A reviewer that finds the artifact absent,
+unreadable, or stamped with a different head SHA MUST report a gate-evidence finding; it
+MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
+
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
 Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../../agents/review.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
@@ -303,7 +313,11 @@ construction and the shared-prefix prompt-cache opportunity is destroyed byte on
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
 PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary. The PR body and each linked-issue body are
+changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `## Validation
+results at this head`, present only when a validation-results artifact was threaded
+(`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the five fixed sections are the
+whole prefix, byte-identical to before the conditional section existed. The PR body and
+each linked-issue body are
 author-controlled GitHub text (PR author or linked-issue author), so each is carried in
 its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
 text, so a hostile body cannot forge a `##`/`###` section heading (e.g. a fake linked-issue
@@ -362,12 +376,12 @@ rule that all of the round's sentinels share ONE identical hash. See
 sequentially and MUST record why parallel execution was impractical.
 
 **Re-run rule:** In subsequent retry cycles (Phase 5), re-running is governed by
-[GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed): re-run by
-default, carry a previously-clean angle forward ONLY on proof its review surface
-was not touched, and always re-run every mandatory / always-run angle. A clean
-angle is re-reviewed whenever the new head's delta touches its surface or it
-previously returned `findings_present`; it is spared only when the delta provably
-cannot affect it.
+[GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed): carry-forward is the
+default posture, so the seam runs first and its plan decides the re-dispatch set — every
+angle it proves untouched keeps its clean verdict, everything it leaves unproven is
+re-reviewed, and every mandatory / always-run angle is re-reviewed regardless. A clean
+angle is re-reviewed whenever the new head's delta touches its surface or the prior log
+attributes any finding to it; it is spared only when the delta provably cannot affect it.
 
 #### Sentinel lifecycle
 
@@ -610,9 +624,14 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - do not broaden scope or touch unrelated files
 - run the smallest honest validation for the accepted fix scope
 - commit and push fixes on the branch
-- the fix cycle covers **all** blocking severities, not only `must-fix`. If
-  `blockCleanOnFindingSeverities` includes `worth-fixing-now`, then worth-fixing-now
-  findings must also be fixed before the gate can reach `clean`.
+- <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: The fix cycle
+  covers exactly the findings whose severity is in the gate's
+  `blockCleanOnFindingSeverities` set — every one of them, and nothing else. A finding at
+  any other severity MUST NOT be fixed inside the gate: it is recorded in the disposition
+  ledger and filed as a survivor per `GATE-EXEC-SURVIVOR-FILING`. A round that produces no
+  finding at a blocking severity therefore closes the gate `clean`, however many
+  non-blocking findings it recorded. Widening the blocking set is a per-gate config
+  decision (`blockCleanOnFindingSeverities`), never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
 
@@ -621,12 +640,27 @@ After applying fixes and advancing the head SHA:
 - <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
 - continue the fix-then-retry cycle until the synthesis verdict is `clean`
-- on retry, re-invoke every reviewer whose review surface the new head's delta touched (always including any angle that previously returned `findings_present`), and re-invoke every mandatory / always-run angle; the context-builder and consolidation always run fresh. A previously-clean angle whose surface the delta provably did NOT touch MAY instead be **carried forward** per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed) below — never skipped by guesswork
+- on retry, re-invoke every reviewer whose review surface the new head's delta touched (always including any angle that previously returned `findings_present`), and re-invoke every mandatory / always-run angle; the context-builder and consolidation always run fresh. A previously-clean angle whose surface the delta provably did NOT touch is by default **carried forward** per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed) below, on that rule's proof and never on guesswork
 - a clean pass means all gate-specific review angles pass and no findings with a severity in `blockCleanOnFindingSeverities` remain
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
-<!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On a head bump, a previously-**clean** angle verdict MAY be carried forward to the new head — reusing the prior reviewer's clean result instead of re-fanning that angle — ONLY when the delta between the prior reviewed head (A) and the new head (B) provably does not touch that angle's **review surface**. This is a narrow, fail-closed refinement of the re-fan step above, NOT an exemption from `GATE-EXEC-REGATE-MANDATORY`: the full gate chain still runs at head B (context-builder + consolidation always fresh, plus every angle whose surface changed and every mandatory angle); carry-forward only spares the reviewers that provably have nothing new to look at.
+<!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On a head bump, a previously-**clean** angle verdict IS
+carried forward to the new head by default — reusing the prior reviewer's clean result
+instead of re-fanning that angle — whenever, and ONLY when, the delta between the prior
+reviewed head (A) and the new head (B) provably does not touch that angle's **review
+surface**. Carry-forward is the DEFAULT posture at every re-gate: the re-dispatch set is
+what this rule leaves unproven — every angle whose review surface the delta touches, every
+angle the prior log attributes a finding to at any severity, and every mandatory /
+always-run angle — and each angle the seam marks `carried` keeps its proven verdict. A full
+re-dispatch of the entire resolved angle set is the EXCEPTION: it is taken when the seam
+refuses to emit a plan at all (any fail-closed refusal condition below), when the gate has
+no prior head, or when the prior log is not `clean`. "Default" describes which decision
+procedure runs, never a per-angle presumption: the per-angle default without proof stays
+`false` (see the fail-closed defaults below). This is a narrow, fail-closed refinement of the re-fan step above, NOT an exemption from `GATE-EXEC-REGATE-MANDATORY`: the full gate chain still runs at head B (context-builder + consolidation always fresh, plus every angle whose surface changed and every mandatory angle); carry-forward only spares the reviewers that provably have nothing new to look at. An angle
+the prior log attributes any finding to at any severity, including a finding filed as a
+survivor per `GATE-EXEC-SURVIVOR-FILING` rather than fixed in-gate, is re-reviewed at every
+re-gate that follows; that is this rule's fail-closed cost, accepted deliberately.
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
@@ -743,6 +777,21 @@ The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.
 Each log entry records the full disposition: severity, angle, summary, affected files, and
 resolved-in SHA (for findings resolved in a later pass).
 
+### Survivor filing
+
+<!-- rule: GATE-EXEC-SURVIVOR-FILING -->
+`GATE-EXEC-SURVIVOR-FILING`: At every gate close — clean or not — EVERY finding whose
+severity is outside the gate's `blockCleanOnFindingSeverities` set MUST be appended to the
+configured follow-up issue (`gates.followUpIssue`) in exactly ONE comment per gate close,
+in ledger form (severity, angle, summary, location, disposition), via
+`append-gate-survivors.mjs --ledger <path>` against the same ledger `write-gate-findings-log.mjs`
+just wrote. Filing is mandatory, not conditional on the verdict: the ledger records what
+the gate found, and this comment is what keeps a non-blocking finding from being lost when
+the gate closes clean. The helper is idempotent per `(repo, PR, gate, head SHA)` — a
+marker-tagged comment identifies a prior filing, so re-running a gate close never
+double-files. When survivors exist and no follow-up issue is configured, the helper fails
+closed (exit 1) — the operator configures the issue or accepts that the gate cannot close.
+
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
@@ -759,10 +808,13 @@ evidence check (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`) is
 not — leaving today's rejection byte-identical:
 
 - `localImplementation.lightMode.enabled` is `true` in config;
-- the reviewed head's scope is **re-derived fail-closed** at merge time — the merge-base
-  diff (`git diff <base>...<head>`, the same scope resolution `resolve-gate-dispatch`
-  uses) is genuinely under the configured `maxFiles`/`maxLines`. If scope cannot be
-  derived (missing base ref, git failure), the inline verdict is rejected;
+- the reviewed head's scope is **re-derived fail-closed** at merge time via
+  `detectMergeBaseScope` (the three-dot merge-base diff, `git diff <base>...<head>`) and
+  is genuinely under the configured `maxFiles`/`maxLines`. This is deliberately NOT the
+  two-dot `detectScope` that `resolve-gate-dispatch` uses at dispatch time: the merge-time
+  check re-derives against the merge base so a non-fast-forward advance cannot understate
+  scope. If scope cannot be derived (missing base ref, git failure), the inline verdict is
+  rejected;
 - the PR carries **no `gate:full` label** (the label always forces the full fan-out —
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.
@@ -777,11 +829,43 @@ honored regardless.
 
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
-`write-gate-findings-log.mjs` writes it). `requireFanoutProvenance`, when enabled, is
+`write-gate-findings-log.mjs` writes it). Survivor filing is likewise uniform: an inline
+close is a gate close, so after the inline verdict is posted, run
+`append-gate-survivors.mjs --ledger <path>` against that same findings-log ledger exactly
+as [Survivor filing](#survivor-filing) requires for a fan-out close — the reduced review
+path never reduces what gets filed. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
 scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inline
 verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is
 disabled, or whose scope is underivable remains rejected exactly as before.
+
+### Diff-class angle tiers
+
+<!-- rule: GATE-EXEC-DIFF-CLASS-TIER -->
+`GATE-EXEC-DIFF-CLASS-TIER`: A gate MAY configure `gates.<gate>.tiers`, an ordered,
+first-match-wins list of diff classes (`match: { kinds?, maxFiles?, maxLines? }`), each
+naming a reduced angle set for the diffs it matches. A tier round is FANOUT-ONLY: it is a
+normal `fanout_fanin` round with a smaller resolved angle set, produced by a real
+per-angle fan-out, a real findings-log ledger, and real provenance; there is no separate
+evidence path and no new `executionMode`. The resolver unions the gate's mandatory angles
+into every matched tier's set, so `GATE-EXEC-ANGLE-COVERAGE` holds unchanged, and fails
+closed to the untriered angle set on any uncertain input: the `gate:full` label, no
+configured tiers, a changed file whose kind classifyFile cannot resolve, a changed file
+that is a dev-loop config-source path, an unavailable diff/scope, or a tier naming an
+angle outside the gate's resolved pool.
+
+**Precedence.** `gate:full` label > lightMode inline (dispatch-level) > tier > dynamic
+subtractive reduction > the full resolved pool. The tier is consulted first, and Phase 2's
+carry-forward subtraction runs second, against whichever set (tiered or full) the tier
+decision left in place. Subtractive reduction alone was insufficient for the diff classes a
+tier targets: `dynamic.subtractive` reduces per CATEGORY, so it still keeps the full
+per-category width for a triggered category (a docs change still runs every doc-inclusive
+angle); a tier instead caps the whole set for a diff class known in advance to be small or
+non-code, which subtractive reduction by category cannot express.
+
+The handoff envelope built for the fan-out advertises the gate's UNTRIERED run-set; tier
+reduction is applied when the per-round context artifact is built, not reflected back into
+the envelope's own advertised angle set.
 
 ### Fan-out provenance (closing the self-produced-artifact loophole)
 

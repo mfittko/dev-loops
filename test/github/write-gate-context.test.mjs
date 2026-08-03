@@ -178,6 +178,7 @@ async function writeDraftDevLoops(repoRoot, overrides = {}) {
     mandatoryAngles = ["gate-evidence"],
     excludeAngles = [],
     dynamicAngles = true,
+    tiers = [],
   } = overrides;
   const entries = buildAngleEntries({ angles, mandatoryAngles, excludeAngles });
   const lines = ["version: 1", "gates:", "  draft:", "    dynamic:", `      subtractive: ${dynamicAngles}`, "    angles:"];
@@ -190,7 +191,38 @@ async function writeDraftDevLoops(repoRoot, overrides = {}) {
     if (entry.mandatory) lines.push("        mandatory: true");
     if (entry.enabled === false) lines.push("        enabled: false");
   }
+  if (tiers.length > 0) {
+    lines.push("    tiers:");
+    for (const tier of tiers) {
+      lines.push(`      - name: ${tier.name}`);
+      lines.push(`        match: { kinds: [${(tier.match.kinds ?? []).join(", ")}] }`);
+      lines.push(`        angles: [${tier.angles.join(", ")}]`);
+    }
+  }
   await writeFile(path.join(repoRoot, ".devloops"), `${lines.join("\n")}\n`, "utf8");
+}
+
+const DOCS_TIER = [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }];
+
+// gh stub whose `pr view --json labels` answer is injectable, for the
+// derive-gate:full-from-live-labels CLI path.
+function stubGhRunWithLabels(labelsAnswer) {
+  return async function run(_command, args) {
+    if (args[0] === "pr" && args[1] === "view") {
+      const jsonFields = args[args.indexOf("--json") + 1] ?? "";
+      if (jsonFields.includes("labels")) {
+        if (labelsAnswer instanceof Error) {
+          return { code: 1, stdout: "", stderr: labelsAnswer.message };
+        }
+        return { code: 0, stdout: JSON.stringify({ labels: labelsAnswer }), stderr: "" };
+      }
+      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+    }
+    if (args[0] === "issue" && args[1] === "view") {
+      return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: `stubGhRunWithLabels: unexpected gh call: ${args.join(" ")}` };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +477,7 @@ test("buildGateContextArtifact records angles + rationale + scope", () => {
     diffPath: null,
     acceptanceCriteria: "#5",
     validationPosture: "npm test",
+    validationResultsPath: null,
   });
 });
 
@@ -677,6 +710,7 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
       diffPath: null,
       acceptanceCriteria: "#877",
       validationPosture: "npm run verify",
+      validationResultsPath: null,
     });
 
     // Round-trips on disk.
@@ -684,6 +718,131 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
       repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
     assert.deepEqual(onDisk.resolvedAngles, resolver.recommendedAngles);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Tier resolution needs real hunk text for its line-count fact (an empty
+// diffOutput fails closed as scope_unavailable), so this fixture carries a
+// genuine docs-only diff body unlike the synthetic DOCS_ONLY_DIFF above.
+const DOCS_ONLY_DIFF_WITH_TEXT = {
+  nameStatusOutput: "M\tdocs/foo.md\nM\tREADME.md\n",
+  diffOutput: [
+    "diff --git a/docs/foo.md b/docs/foo.md",
+    "index 1111111..2222222 100644",
+    "--- a/docs/foo.md",
+    "+++ b/docs/foo.md",
+    "@@ -1 +1,2 @@",
+    "-# Old heading",
+    "+# New heading",
+    "+More detail.",
+    "diff --git a/README.md b/README.md",
+    "index 3333333..4444444 100644",
+    "--- a/README.md",
+    "+++ b/README.md",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "",
+  ].join("\n"),
+};
+
+test("buildGateContext applies a matching diff-class tier (tier angles + tier rationale persisted)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig({
+      tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }],
+    });
+
+    const resolver = await resolveGateAnglesDynamic(config, "draft", { diff: DOCS_ONLY_DIFF_WITH_TEXT });
+    assert.equal(resolver.dynamicAnglesActive, true);
+    assert.deepEqual([...resolver.recommendedAngles].sort(), ["gate-evidence", "link-check"]);
+
+    // hasFullLabel: false is the caller's ATTESTATION that the live PR carries
+    // no gate:full label — the only value that enables tier reduction.
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF_WITH_TEXT,
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        branch: "issue-1550",
+        touchedFiles: ["docs/foo.md", "README.md"],
+        hasFullLabel: false,
+      },
+      { repoRoot },
+    );
+
+    // Tier-reduced set persisted verbatim, mandatory floor included.
+    assert.deepEqual(result.artifact.resolvedAngles, resolver.recommendedAngles);
+    assert.ok(result.artifact.resolvedAngles.includes("gate-evidence"));
+    // Angles outside the tier are dropped with the tier named in the reason.
+    const dropped = result.artifact.rationale.find((r) => r.angle === "coverage");
+    assert.equal(dropped.action, "dropped");
+    assert.match(dropped.reason, /tier:docs-only/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext fails closed to the untriered set when hasFullLabel is omitted (no attestation)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig({
+      tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }],
+    });
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF_WITH_TEXT,
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        branch: "issue-1550",
+        touchedFiles: ["docs/foo.md", "README.md"],
+      },
+      { repoRoot },
+    );
+    // A caller that never checked the labels must not get the reduced tier:
+    // "docs" survives untriered dynamic resolution but is not in the tier set.
+    assert.ok(result.artifact.resolvedAngles.includes("docs"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext skips tier reduction when hasFullLabel is set", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const config = draftConfig({
+      tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["link-check"] }],
+    });
+    const untiered = await resolveGateAnglesDynamic(config, "draft", {
+      diff: DOCS_ONLY_DIFF_WITH_TEXT,
+      hasFullLabel: true,
+    });
+    // Full-label resolution must not collapse to the tier set.
+    assert.ok(untiered.recommendedAngles.length > 2);
+
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF_WITH_TEXT,
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        branch: "issue-1550",
+        touchedFiles: ["docs/foo.md", "README.md"],
+        hasFullLabel: true,
+      },
+      { repoRoot },
+    );
+    assert.deepEqual(result.artifact.resolvedAngles, untiered.recommendedAngles);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1043,6 +1202,63 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
     assert.equal(artifact.scope.diffPath, null);
     assert.deepEqual(artifact.scope.changedFiles, []);
     assert.equal(Object.prototype.hasOwnProperty.call(artifact, "adjacentCode"), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// The three-angle tier set on this fixture is DOCS_TIER's link-check plus both
+// mandatory floors (gate-evidence from the fixture .devloops, pr-description
+// from the shipped defaults, merged by name). The untriered assertions below
+// must therefore pin an angle the tier set EXCLUDES — a bare size check would
+// also hold for the tier set itself and pin nothing.
+const TIERED_ANGLE_SET = ["gate-evidence", "link-check", "pr-description"];
+
+function assertUntriered(artifact, message) {
+  assert.notDeepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET, message);
+  // "docs" survives dynamic subtractive resolution for a docs-only diff but is
+  // not in the tier set, so its presence proves the tier was NOT applied.
+  assert.ok(artifact.resolvedAngles.includes("docs"), `${message}: expected a non-tier angle (docs) in ${JSON.stringify(artifact.resolvedAngles)}`);
+}
+
+test("CLI derives gate:full from live PR labels: unlabelled PR applies the tier, labelled PR gets the untriered set", async () => {
+  for (const [labels, expectTier] of [[[], true], [[{ name: "gate:full" }], false]]) {
+    const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+    try {
+      await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+      await main([
+        "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
+        "--head-sha", headSha, "--base", baseSha,
+      ], { repoRoot, run: stubGhRunWithLabels(labels) });
+
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 60, gate: "draft_gate", headSha,
+      }, { repoRoot });
+
+      if (expectTier) {
+        assert.deepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET);
+      } else {
+        assertUntriered(artifact, "gate:full label yields the untriered set");
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("CLI fails closed to the untriered set when the labels read errors", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+    await main([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot, run: stubGhRunWithLabels(new Error("labels read boom")) });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 61, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assertUntriered(artifact, "failed labels read must not grant the reduced tier");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -2351,6 +2567,137 @@ test("writeGateContext: --prefix-file fails closed (throws) on an empty file", a
       "--prefix-file", prefixFile,
     ]);
     await assert.rejects(() => writeGateContext(options, { repoRoot }), /--prefix-file.*empty/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// --validation-results (GATE-EXEC-VALIDATION-ARTIFACT) — AC3
+// ---------------------------------------------------------------------------
+
+test("renderBriefingPrefix: validationResultsPath absent renders byte-identical to before (no trailing section)", () => {
+  const base = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
+  };
+  const withoutFlag = renderBriefingPrefix(base);
+  const withNullFlag = renderBriefingPrefix({ ...base, validationResultsPath: null });
+  assert.equal(withoutFlag.text, withNullFlag.text);
+  assert.doesNotMatch(withoutFlag.text, /## Validation results at this head/);
+});
+
+test("renderBriefingPrefix: validationResultsPath present appends the section LAST with exact wording, path verbatim, deterministic across two renders", () => {
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
+    validationResultsPath: "/abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json",
+  };
+  const r1 = renderBriefingPrefix(input);
+  const r2 = renderBriefingPrefix(input);
+  assert.equal(r1.text, r2.text, "deterministic across two renders");
+
+  const expectedSection = [
+    "## Validation results at this head",
+    "",
+    "The gate preamble ran this round's validation suites once and recorded them here:",
+    "  /abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json",
+    "",
+    "Read that record for suite status, exit codes, and output tails. Executing a suite it",
+    "already records is outside a read-only angle review's scope. If the record is absent,",
+    "unreadable, or stamped with a head SHA other than abc1234, say so as a gate-evidence",
+    "finding instead of substituting your own run.",
+  ].join("\n");
+  assert.ok(r1.text.endsWith(expectedSection + "\n"), "section is the LAST content, exact wording");
+  // Appears exactly once, and after the "## Changed files" section that
+  // otherwise ends the prefix.
+  const changedFilesIndex = r1.text.indexOf("## Changed files + adjacent-code summary");
+  const validationIndex = r1.text.indexOf("## Validation results at this head");
+  assert.ok(changedFilesIndex !== -1 && validationIndex > changedFilesIndex);
+});
+
+test("writeGateContext: --validation-results records the absolute path at scope.validationResultsPath and renders the trailing section", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-validation-results-"));
+  try {
+    const validationResultsFile = path.join(repoRoot, "some", "nested", "validation.json");
+    await mkdir(path.dirname(validationResultsFile), { recursive: true });
+    await writeFile(validationResultsFile, JSON.stringify({ ok: true, allPassed: true }), "utf8");
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "84", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      "--validation-results", validationResultsFile,
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.equal(result.artifact.scope.validationResultsPath, validationResultsFile);
+    assert.ok(path.isAbsolute(result.artifact.scope.validationResultsPath));
+
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.match(onDisk, /## Validation results at this head/);
+    assert.ok(onDisk.trim().endsWith("finding instead of substituting your own run."));
+    assert.ok(onDisk.includes(`  ${validationResultsFile}`));
+
+    const reread = await readGateContext({
+      repo: "owner/repo", pr: 84, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(reread.scope.validationResultsPath, validationResultsFile);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: --validation-results fails closed (throws) on a missing file, no artifact written", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-validation-results-missing-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "85", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      "--validation-results", path.join(repoRoot, "does-not-exist.json"),
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /--validation-results.*unreadable/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 85, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no artifact written when --validation-results fails closed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("main: --validation-results missing file exits 1 with {ok:false} on stderr", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-validation-results-cli-"));
+  try {
+    // Nested try/finally: main() sets the GLOBAL process.exitCode on fail-closed,
+    // so restore it even if an assertion below throws — otherwise the mutated
+    // global leaks into subsequent tests and cascades false failures.
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890",
+        "--angles", '["scope"]',
+        "--validation-results", path.join(repoRoot, "nope.json"),
+      ], { repoRoot, run: stubGhRun });
+
+      assert.equal(process.exitCode, 1);
+      // stderr also carries the unrelated "no --base given" thin-briefing
+      // warning ahead of the fail-closed JSON error line; take the LAST line.
+      const stderrLines = stderrChunks.join("").trim().split("\n");
+      const err = JSON.parse(stderrLines[stderrLines.length - 1]);
+      assert.equal(err.ok, false);
+      assert.match(err.error, /--validation-results.*unreadable/);
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = priorExitCode;
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

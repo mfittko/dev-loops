@@ -34,7 +34,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 
@@ -144,6 +144,8 @@ Optional:
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
   --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue.
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -262,6 +264,8 @@ export function parseWriteGateContextCliArgs(argv) {
       "pr-body": { type: "string" },
       "issue-body": { type: "string" },
       "prefix-file": { type: "string" },
+      "validation-results": { type: "string" },
+      "full-label": { type: "boolean" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -284,6 +288,8 @@ export function parseWriteGateContextCliArgs(argv) {
     prBody: null,
     issueBody: null,
     prefixFile: null,
+    validationResultsPath: null,
+    fullLabel: false,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -366,6 +372,18 @@ export function parseWriteGateContextCliArgs(argv) {
         throw parseError("--prefix-file must not be empty/whitespace-only");
       }
       options.prefixFile = trimmed;
+      continue;
+    }
+    if (token.name === "validation-results") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) {
+        throw parseError("--validation-results must not be empty/whitespace-only");
+      }
+      options.validationResultsPath = trimmed;
+      continue;
+    }
+    if (token.name === "full-label") {
+      options.fullLabel = true;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -505,6 +523,31 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 }
 
 /**
+ * Build the deterministic path for the shared validation-results artifact
+ * (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
+ * this round's validation suites, run once and read (not re-run) by every
+ * per-angle reviewer via the briefing-prefix section {@link renderBriefingPrefix}
+ * appends when `validationResultsPath` is threaded. Mirrors
+ * buildGateContextPath/buildGateDiffPath/buildGateBriefingPrefixPath. Exported
+ * so `run-gate-validation.mjs` (the producer) and this module's CLI/context
+ * artifact (the consumer that records the path) agree on the location without
+ * re-implementing the slug/segment-safety logic.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative validation-results path
+ */
+export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.validation.json`);
+}
+
+/**
  * Size cap (bytes) above which the rendered briefing prefix falls back to
  * pointer mode for the diff section (a scope.diffPath reference when present,
  * else an explicit unavailable-pointer disclosure) instead of inlining the
@@ -591,6 +634,11 @@ function pickFence(text) {
  * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
+ * @param {string|null} [input.validationResultsPath] — absolute path to the
+ *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
+ *   When non-empty, ONE additional `## Validation results at this head` section is
+ *   appended LAST, after the changed-files summary. Omitted entirely when absent
+ *   (byte-identical to the pre-AC3 prefix).
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
@@ -598,6 +646,7 @@ export function renderBriefingPrefix({
   repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
+  validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -698,6 +747,30 @@ export function renderBriefingPrefix({
     lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
   }
 
+  const trimmedValidationResultsPath = typeof validationResultsPath === "string"
+    ? validationResultsPath.trim()
+    : "";
+  if (trimmedValidationResultsPath.length > 0) {
+    lines.push("");
+    lines.push("## Validation results at this head");
+    lines.push("");
+    lines.push(
+      "The gate preamble ran this round's validation suites once and recorded them here:",
+    );
+    lines.push(`  ${trimmedValidationResultsPath}`);
+    lines.push("");
+    lines.push(
+      "Read that record for suite status, exit codes, and output tails. Executing a suite it",
+    );
+    lines.push(
+      "already records is outside a read-only angle review's scope. If the record is absent,",
+    );
+    lines.push(
+      `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
+    );
+    lines.push("finding instead of substituting your own run.");
+  }
+
   return { text: lines.join("\n") + "\n", prefixMode, diffBytes };
 }
 
@@ -780,6 +853,13 @@ export function buildGateContextArtifact(options) {
       diffPath: options.diffPath ?? null,
       acceptanceCriteria: options.acceptanceCriteria ?? null,
       validationPosture: options.validationPosture ?? null,
+      // Absolute path to the run-gate-validation.mjs artifact for this head SHA
+      // (GATE-EXEC-VALIDATION-ARTIFACT), threaded into the rendered briefing
+      // prefix's trailing "## Validation results at this head" section. Always
+      // present (defaulting null) so every caller's scope object has the same
+      // key set, unlike the conditionally-added acceptanceCriteriaSource/diffSource
+      // fields below (which distinguish "never resolved" from "resolved absent").
+      validationResultsPath: options.validationResultsPath ?? null,
     },
   };
   // How scope.acceptanceCriteria came to be — "provided" (caller flag,
@@ -978,10 +1058,12 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  *
  * @param {object} options — parsed CLI options shape, optionally carrying
  *   `diffOutput`, `prBody`, `issueBody`/`issueSections` (all null-safe; a
- *   caller with none of these still gets a valid — if thin — prefix), and
+ *   caller with none of these still gets a valid — if thin — prefix),
  *   `prefixFile` (a path to an ALREADY-rendered prefix whose exact bytes are
  *   recorded verbatim instead of self-rendering — see the CLI's
- *   `--prefix-file` doc above).
+ *   `--prefix-file` doc above), and `validationResultsPath` (a path to the
+ *   run-gate-validation.mjs artifact; fails closed when missing/unreadable —
+ *   see the CLI's `--validation-results` doc above).
  * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file" }>}
  */
@@ -1000,6 +1082,23 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     tmpRoot: options.tmpRoot || "tmp",
   });
+
+  // `--validation-results` (GATE-EXEC-VALIDATION-ARTIFACT): fail closed before
+  // any write when the supplied path is missing/unreadable — a reviewer must
+  // never be pointed at a validation record that does not actually exist.
+  // Resolved to an ABSOLUTE path (independent of prefix mode: this feeds
+  // scope.validationResultsPath and, in self-rendered mode below, the trailing
+  // briefing-prefix section) so the artifact and prefix always agree with
+  // whatever CWD produced them, regardless of a later reader's own CWD.
+  if (typeof options.validationResultsPath === "string" && options.validationResultsPath.length > 0) {
+    const resolvedValidationResultsPath = path.resolve(repoRoot, options.validationResultsPath);
+    try {
+      await readFile(resolvedValidationResultsPath);
+    } catch (err) {
+      throw new Error(`--validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
+    }
+    options.validationResultsPath = resolvedValidationResultsPath;
+  }
 
   // `--prefix-file` (an orchestrator that already briefed reviewers with its
   // OWN rendered prefix cannot ever match verify-briefing-prefixes.mjs's
@@ -1038,6 +1137,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       diffPath: options.diffPath ?? null,
       changedFiles: options.changedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
+      validationResultsPath: options.validationResultsPath ?? null,
     });
     prefixBytes = Buffer.from(rendered.text, "utf8");
     prefixMode = rendered.prefixMode;
@@ -1101,8 +1201,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  */
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const configKey = mapGateToConfigKey(input.gate);
+  // input.hasFullLabel is an ATTESTATION about the live PR's gate:full label,
+  // not a preference: only an explicit `false` (caller checked the labels and
+  // the label is absent) enables diff-class tier reduction. An omitted or
+  // truthy value fails closed to the untriered set, so a caller that never
+  // looked at the labels can never grant the reduced tier on a labelled PR.
   const resolverResult = await resolveGateAnglesDynamic(input.config, configKey, {
     diff: input.diff,
+    hasFullLabel: input.hasFullLabel !== false,
   });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -1475,8 +1581,34 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
           `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
         );
       }
+      // The gate:full label must not depend on the operator remembering
+      // --full-label: derive it from the live PR when the flag is absent, and
+      // fail CLOSED (treat as labelled → untriered set) when the read fails.
+      // --prefix-file mode never touches GitHub, so the label CANNOT be
+      // derived there — an omitted flag in that mode also fails closed to the
+      // untriered set rather than silently tier-reducing a labelled PR.
+      if (options.fullLabel !== true && !options.prefixFile) {
+        try {
+          const { pr } = await viewPr(
+            { repo: options.repo, pr: options.pr, fields: "labels" },
+            { run },
+          );
+          options.fullLabel = Array.isArray(pr?.labels)
+            && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
+        } catch (error) {
+          options.fullLabel = true;
+          process.stderr.write(
+            `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
+          );
+        }
+      } else if (options.fullLabel !== true && options.prefixFile) {
+        options.fullLabel = true;
+        process.stderr.write(
+          `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
+        );
+      }
       const configKey = mapGateToConfigKey(options.gate);
-      const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff });
+      const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
         process.stderr.write(
