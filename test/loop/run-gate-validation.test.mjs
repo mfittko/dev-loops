@@ -260,6 +260,34 @@ test("per-suite log file is written at the recorded outputPath with the suite's 
   }
 });
 
+test("a suite name containing ':' writes its log under a '-'-mapped filename (Windows-safe)", async () => {
+  const { repoRoot, headSha } = await makeFixtureRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({
+        name: "fixture", version: "0.0.0", private: true,
+        scripts: { "verify": "node -e \"console.log('v')\"", "assets:check": "node -e \"console.log('colon-ran')\"" },
+      }, null, 2),
+      "utf8",
+    );
+    const { code, stdout, stderr } = await runNode(SCRIPT, [
+      "--repo", "owner/repo", "--pr", "10", "--gate", "draft_gate", "--head-sha", headSha,
+      "--suite", "assets:check",
+    ], { cwd: repoRoot });
+    assert.equal(code, 0, stderr);
+    const artifact = JSON.parse(stdout.trim());
+    const suite = artifact.suites[0];
+    // The artifact keeps the real suite name; only the log filename is mapped.
+    assert.equal(suite.name, "assets:check");
+    assert.ok(suite.outputPath.endsWith(`draft_gate-${headSha}.validation-assets-check.log`), suite.outputPath);
+    const logContent = await readFile(path.resolve(repoRoot, suite.outputPath), "utf8");
+    assert.match(logContent, /colon-ran/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("--jq/--silent behave per the base guarantee", async () => {
   const { repoRoot, headSha } = await makeFixtureRepo();
   try {

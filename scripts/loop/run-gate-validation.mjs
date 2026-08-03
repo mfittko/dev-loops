@@ -263,7 +263,14 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
   for (const name of suites) {
     const { command, exitCode, output } = await runSuite(name, { repoRoot });
     const cleaned = stripAnsi(output);
-    const outputPath = path.join(artifactDir, `${gate}-${headSha}.validation-${name}.log`);
+    // ":" is a routine npm-script-key character (assets:check, schema:check)
+    // but not a valid filename character on Windows, so it is mapped to "-"
+    // in the log filename only; the artifact's `name` field keeps the real
+    // suite name. Two keys differing only by ":" vs "-" would share a log
+    // file; accepted, since both must already be safe path segments and the
+    // artifact entries stay distinct.
+    const logName = name.replace(/:/g, "-");
+    const outputPath = path.join(artifactDir, `${gate}-${headSha}.validation-${logName}.log`);
     await writeFile(path.resolve(repoRoot, outputPath), cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`, "utf8");
     suiteResults.push({
       name,
