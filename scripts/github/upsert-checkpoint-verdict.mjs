@@ -838,6 +838,22 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
+// The literal header line renderGateReviewCommentBody always emits first —
+// exported so any consumer that needs to recognize "is this comment a real
+// gate verdict comment" (close-gate-findings.mjs's round-source (A) count)
+// reads the SAME producer-owned literal rather than restating it, so the two
+// can never drift when the label wording changes. Line-start anchored (`m`)
+// so a quoted header in a reply/blockquote can't match.
+export const GATE_REVIEW_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
+
+// Returns the matched gate name ("draft_gate" | "pre_approval_gate") when
+// `body` opens with a genuine gate verdict comment header, else null.
+export function matchGateReviewCommentHeader(body) {
+  if (typeof body !== "string") return null;
+  const match = body.match(GATE_REVIEW_COMMENT_HEADER_RE);
+  return match ? match[1] : null;
+}
+
 export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,

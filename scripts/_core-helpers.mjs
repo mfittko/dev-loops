@@ -18,6 +18,7 @@ export {
   containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
+  isGateMachineArtifactBody,
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,

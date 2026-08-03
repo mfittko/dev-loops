@@ -775,7 +775,7 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","file":"path.mjs","line":42,"disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
 `--findings-file` reads the same JSON array from a file (identical validation) —
@@ -800,18 +800,30 @@ slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts at most one PR review of type C
 round: a round whose candidates are all suppressed by fingerprint, or whose ledger carries no
 finding at all, posts none. A locatable finding (an in-diff `file:line`) becomes an inline review
 comment, and every other finding is filed in the review body, with every rendered content line
-blockquoted so it can never be mistaken for a gate evidence marker. A finding anchored to
-unchanged code has no in-diff `file:line` and is therefore always body-filed, tracked through the
-disposition ledger and its fingerprint rather than a review thread; the thread-based force-fix
-guarantee `GATE-EXEC-THREAD-DISPOSITION` describes applies to locatable findings only. Every
+blockquoted so it can never be mistaken for a genuine gate verdict comment by the line-start
+`gate:`/`head sha:`/`verdict:`/`summary:` structured field parser; that defense is targeted, not
+absolute — it does not by itself defeat the lenient gate-name-plus-hex-token fallback the
+checkpoint-evidence scanner also runs, which is why the machine-artifact exclusion below exists
+as a second, independent layer. A finding anchored to unchanged code has no in-diff `file:line`
+and is therefore always body-filed, tracked through the disposition ledger and its fingerprint
+rather than a review thread; the thread-based force-fix guarantee `GATE-EXEC-THREAD-DISPOSITION`
+describes applies to locatable findings only — a body-filed finding at any non-`must-fix`
+severity is instead deferred by construction (see `GATE-EXEC-DEFERRED-SUMMARY` below). Every
 posted finding, inline or body-filed, carries a fingerprint marker on its first line (`<!--
-dev-loops:finding <fp16> severity=<s> angle=<a> round=<n> -->`). Before posting, a candidate
-finding is dropped when its fingerprint already matches an existing thread or review body on the
-PR, resolved threads included: suppression is binding across every round of a gate's chain AND
-across both gates, so a draft-gate deferral is never re-raised at pre-approval. This thread
-posting, and the deferred-findings summary it feeds, run independently of
-`gates.postFindingsComments`: that toggle governs only the consolidated `GATE-EXEC-POST-BEFORE-FIX`
-comment. The reviewer briefing's second, prose suppression layer is owned by the
+dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`); the
+review itself opens with a `<!-- dev-loops:gate-findings-review <gate> <headSha> round=<n> -->`
+header marker on its second line. Both this header marker and the deferred-summary comment's own
+`<!-- dev-loops:deferred-summary -->` marker are machine-authored gate artifacts that the
+checkpoint-evidence scanner (`detect-checkpoint-evidence.mjs`, via the shared
+`summarizeGateReviewComments`/`summarizeGateReviewCommentMarkers` helpers every gate-evidence
+reader calls through) excludes from the marker scan, so neither can win the newest-gate-marker
+tie-break over a genuine verdict comment. Before posting, a candidate finding is dropped when its
+fingerprint already matches an existing thread or review body on the PR, resolved threads
+included: suppression is binding across every round of a gate's chain AND across both gates, so a
+draft-gate deferral is never re-raised at pre-approval. This thread posting, and the
+deferred-findings summary it feeds, run independently of `gates.postFindingsComments`: that
+toggle governs only the consolidated `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's
+second, prose suppression layer is owned by the
 [fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
 the orchestrator appends a known-findings block AFTER the angle-specific prompt in each
 reviewer's briefing, never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes —
@@ -844,10 +856,15 @@ deferred finding — severity, angle, summary, location, round, thread link — 
 comment per PR, edited on each later trigger rather than accreting. The trigger is evaluated on
 every round this gate closes, including a round with zero new findings — the final clean close
 is normally exactly that round, so a zero-findings round is not an early exit from this check.
-Every row is rebuilt from the stamped `disposition=deferred` finding markers, plus the matching
-non-locatable review-body markers (permanently deferred by construction — they have no code
-location to become a resolvable thread), never from local state, so a fresh worktree reproduces
-the same summary.
+Every row is rebuilt from finding markers carrying the optional `disposition=deferred` field
+(`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
+never from local state, so a fresh worktree reproduces the same summary. A THREAD marker is
+stamped `disposition=deferred` only when the thread disposition pass defers it (a
+worth-fixing-now thread past round 3, or a defer-severity thread immediately). A non-locatable
+(body-filed) marker is stamped `disposition=deferred` unconditionally, for any severity other
+than `must-fix`, at the round it is first posted — permanently deferred by construction, since a
+body-filed finding has no code location and so can never become a resolvable thread through
+which the standard fix loop could otherwise close it.
 
 ## Execution mode and fan-out evidence enforcement
 

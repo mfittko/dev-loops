@@ -20,6 +20,7 @@ import {
   renderReviewBody,
   sortSummaryRows,
 } from "../../scripts/github/close-gate-findings.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts/github/close-gate-findings.mjs");
 const REPO = "owner/repo";
@@ -81,21 +82,18 @@ function threadNode({ id, isResolved = false, path: filePath = null, line = null
   };
 }
 
-// Mirrors upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody: the
-// literal "### Gate review: `<gate>`" header line is the distinctive marker
-// countVerdictComments now matches on (never the lenient gate-name+hex-token
-// field parser), so a realistic fixture must carry it.
+// Rendered through the real producer (upsert-checkpoint-verdict.mjs's
+// renderGateReviewCommentBody) rather than restating its header literal, so
+// this fixture can never drift from what countVerdictComments'
+// matchGateReviewCommentHeader actually recognizes.
 function verdictCommentBody(gate, headSha = HEAD_SHA) {
-  return [
-    `### Gate review: \`${gate}\``,
-    "",
-    `**Reviewed head SHA:** \`${headSha}\``,
-    "**Verdict:** clean",
-    "",
-    "**Findings summary:** no issues found",
-    "",
-    "**Next action:** proceed",
-  ].join("\n");
+  return renderGateReviewCommentBody({
+    gate,
+    headSha,
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "proceed",
+  });
 }
 
 function reviewsEntry(reviews) {
@@ -243,6 +241,13 @@ test("buildFindingMarker caps the angle field at 40 chars so a long label can ne
 test("buildFindingMarker with a disposition round-trips through parseFindingMarker", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "defer", angle: "naming", round: 1, disposition: "deferred" });
   assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "defer", angle: "naming", round: 1, disposition: "deferred" });
+});
+
+test("buildFindingMarker throws on a disposition value other than \"deferred\"", () => {
+  // FINDING_MARKER_RE only ever accepts the literal `deferred` in this field;
+  // any other value would build a marker this module's own parser cannot
+  // read back, silently dropping the finding from disposition/suppression.
+  assert.throws(() => buildFindingMarker({ fp: "0123456789abcdef", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "accepted-for-fix" }));
 });
 
 test("parseFindingMarker (marker provenance): a marker quoted mid-line (not at line start) is never honored", () => {
@@ -655,6 +660,53 @@ test("countVerdictComments (round source A): N genuine verdict comments for THIS
   ));
 });
 
+test("countVerdictComments (round source A): a comment merely QUOTING the verdict header (a blockquoted reply) never counts toward the round", async () => {
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+  const quotedHeaderReply = `> ${verdictCommentBody("draft_gate").split("\n")[0]}\nAgreed, looks good.`;
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([
+        { id: 1, body: verdictCommentBody("draft_gate") },
+        { id: 2, body: quotedHeaderReply },
+      ]),
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      // 1 genuine verdict comment — the blockquoted reply must never count.
+      assert.equal(result.round, 1);
+    },
+  ));
+});
+
+// Input-validation (round 2 fix): a verdict posted via the PR-review
+// escape-hatch path (upsert-checkpoint-verdict.mjs's alternative to the
+// default issue-comment post) is counted too — round source (A) previously
+// read only issue comments, so a chain whose verdict history lands as PR
+// reviews would undercount forever.
+test("countVerdictComments (round source A): a verdict posted as a PR REVIEW body (the escape-hatch path) counts toward the round", async () => {
+  const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([{ id: 501, body: verdictCommentBody("pre_approval_gate") }]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      // 1 issue-comment verdict + 1 review-posted verdict = round 2.
+      assert.equal(result.round, 2);
+    },
+  ));
+});
+
 // ---------------------------------------------------------------------------
 // Integration: round-window boundary (round 3 stays in-window, round 4 defers)
 // ---------------------------------------------------------------------------
@@ -718,6 +770,46 @@ test("closeGateFindings: an unresolved defer-severity thread is replied-to + res
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// Determinism (round 2 fix): stampDeferredDisposition now trims the REST
+// payload body the same way parseReviewThreads' normalizeBody trims thread.body
+// — a leading-whitespace-padded body (a hand-edited first comment, or a client
+// that prepends indentation) must still parse and get PATCHed, not silently
+// skip the stamp while reply+resolve proceeds unstamped.
+test("closeGateFindings: a thread selected for deferral whose REST-fetched body has LEADING WHITESPACE before the marker is still stamped", async () => {
+  const marker = buildFindingMarker({ fp: "5555555555555555", severity: "worth-fixing-now", angle: "perf", round: 1 });
+  const threadWs = threadNode({
+    id: "THREAD_WS",
+    isResolved: false,
+    path: "src/cache.mjs",
+    line: 9,
+    commentId: 6600,
+    body: `${marker}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`,
+  });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadWs]),
+      threadsEntry([threadWs]),
+      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      threadsEntry([threadWs]),
+      threadsEntry([threadWs]),
+      // The REST GET fixture body carries a leading space before the marker —
+      // a plain .trim() mismatch, not a FINDING_MARKER_RE anchoring gap.
+      getReviewCommentEntry(6600, ` ${marker}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`),
+      patchReviewCommentEntry(6600),
+      postReplyEntry(6600, { id: 7600 }),
+      resolveThreadEntry("THREAD_WS"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 1);
     },
   ));
@@ -795,6 +887,38 @@ test("closeGateFindings: the deferred summary carries a finding summary longer t
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.summary, "created");
+    },
+  ));
+});
+
+// Determinism (round 2 fix): fetchAllReviewThreads (the listing walk) and
+// captureParsedReviewThreads (the full-body walk) are two INDEPENDENT
+// paginated GraphQL calls; a thread present in one and absent from the other
+// must fail the run rather than silently degrade every downstream decision
+// (marker parsing, disposition, suppression) to the truncated excerpt.
+test("closeGateFindings: fetchThreadsWithFullBodies fails closed when the full-body join misses a thread whose listing excerpt was truncated", async () => {
+  const longBody = "x".repeat(220);
+  const threadMissingJoin = threadNode({
+    id: "THREAD_MISS",
+    isResolved: false,
+    path: "src/cache.mjs",
+    line: 9,
+    commentId: 7000,
+    body: longBody,
+  });
+  const ledger = makeLedger({ findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadMissingJoin]), // fetchAllReviewThreads: truncated to the 200-char excerpt
+      threadsEntry([]), // captureParsedReviewThreads: the join MISSES this comment entirely
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /Could not resolve the full body/,
+      );
     },
   ));
 });
@@ -906,6 +1030,44 @@ test("closeGateFindings: dedupe suppresses a fingerprint match from a resolved t
       assert.equal(result.suppressed, 2);
       assert.equal(result.posted, 0);
       assert.equal(result.bodyFiled, 0);
+    },
+  ));
+});
+
+// Coverage: FINDING_MARKER_FP_ONLY_RE (collectFingerprints' suppression scan)
+// is line-start anchored — a marker merely QUOTED mid-line or blockquoted in a
+// prior review body (a realistic shape: reviewer text discussing a prior
+// finding) must never enter the suppression set, unlike the genuine
+// line-start case pinned by the dedupe test above.
+test("closeGateFindings: a finding fingerprint merely QUOTED (mid-line or blockquoted) in a prior review body is never suppressed", async () => {
+  const findingViaBody = { severity: "defer", angle: "naming", summary: "old finding text discussed again" };
+  const fp = fingerprintFinding(findingViaBody);
+  const quotedMarker = buildFindingMarker({ fp, severity: "defer", angle: "naming", round: 1 });
+  const oldReviewBody = [
+    "Gate findings — draft_gate round 1 @ abc123d",
+    `<!-- dev-loops:gate-findings-review draft_gate ${HEAD_SHA} round=1 -->`,
+    "",
+    `see prior: ${quotedMarker}`,
+    `> ${quotedMarker}`,
+    "No out-of-diff findings this round.",
+  ].join("\n");
+  const ledger = makeLedger({ gate: "draft_gate", findings: [findingViaBody] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([{ id: 500, body: oldReviewBody }]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
+      filesEntry([]),
+      { ...postReviewEntry({ id: 900020 }), assertStdinIncludes: [fp, "old finding text discussed again"] },
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.suppressed, 0);
+      assert.equal(result.bodyFiled, 1);
     },
   ));
 });
@@ -1044,31 +1206,63 @@ test("closeGateFindings (R3): a zero-findings clean pre_approval_gate round with
   ));
 });
 
-// Correctness regression pin: a body-filed worth-fixing-now finding posted
-// IN-WINDOW (round <= the fix window) must never appear in the deferred
-// summary, even once a later clean round triggers it — it carries no
-// disposition=deferred stamp (only round/severity-defer findings do), so
-// buildBodyFiledSummaryRows correctly excludes it.
-test("closeGateFindings (R3): an in-window (round <= 3) body-filed worth-fixing-now finding never appears in the deferred summary", async () => {
-  const inWindowBodyFiledReviewBody = [
+// Correctness regression pin (round 2 fix): a body-filed finding never gets a
+// resolvable thread, so it is deferred BY CONSTRUCTION at render time — the
+// round<=3 in-gate fix window only applies to a THREADED (locatable) finding.
+// A fresh worth-fixing-now finding posted IN-WINDOW (round 1) is stamped
+// disposition=deferred the moment it is posted and appears in the deferred
+// summary the SAME run triggers.
+test("closeGateFindings (R3): a fresh in-window body-filed worth-fixing-now finding is stamped deferred at render time and appears in the deferred summary this SAME run triggers", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "correctness", summary: "off-by-one in the round-3 boundary check" };
+  const fp = fingerprintFinding(finding);
+  const ledger = makeLedger({ verdict: "clean", findings: [finding] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([]),
+      filesEntry([]),
+      { ...postReviewEntry({ id: 900010 }), assertStdinIncludes: [fp, "disposition=deferred", "off-by-one in the round-3 boundary check"] },
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([]), // findMarkedComment lookup — no existing summary
+      { ...createCommentEntry(), assertArgContains: ["off-by-one in the round-3 boundary check"] },
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.bodyFiled, 1);
+      assert.equal(result.summary, "created");
+    },
+  ));
+});
+
+// Defensive-only case: a LEGACY marker that predates this module's
+// unconditional body-filed stamping (or one that was hand-authored) and
+// therefore lacks the disposition=deferred field is still excluded from the
+// summary — buildBodyFiledSummaryRows never fabricates the field.
+test("closeGateFindings (R3): a legacy body-filed marker lacking the disposition field is defensively excluded from the deferred summary", async () => {
+  const legacyBodyFiledReviewBody = [
     "Gate findings — pre_approval_gate round 1 @ abc123d",
     `<!-- dev-loops:gate-findings-review pre_approval_gate ${HEAD_SHA} round=1 -->`,
     "",
     buildFindingMarker({ fp: "6666666666666666", severity: "worth-fixing-now", angle: "correctness", round: 1 }),
-    "> **worth-fixing-now** (`correctness`): off-by-one already fixed in round 1",
+    "> **worth-fixing-now** (`correctness`): predates the unconditional stamp",
   ].join("\n");
   const ledger = makeLedger({ verdict: "clean", findings: [] });
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
-      reviewsEntry([{ id: 701, body: inWindowBodyFiledReviewBody }]),
+      reviewsEntry([{ id: 701, body: legacyBodyFiledReviewBody }]),
       threadsEntry([]),
       threadsEntry([]),
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
       threadsEntry([]),
       threadsEntry([]),
       issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
-      { ...createCommentEntry(), assertArgNotContains: ["off-by-one already fixed"] },
+      { ...createCommentEntry(), assertArgNotContains: ["predates the unconditional stamp"] },
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });

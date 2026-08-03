@@ -15,6 +15,35 @@ const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 
+// Machine-authored gate artifacts that must never win the newest-gate-marker
+// tie-break in summarizeGateReviewComments/summarizeGateReviewCommentMarkers:
+// close-gate-findings.mjs's posted findings review always embeds this gate's
+// name in its header line and can quote the current head sha inside a
+// finding's own free text (the lenient gate-name+hex-token fallback in
+// parseGateReviewCommentFields would otherwise happily match that), and the
+// deferred-summary PR comment quotes a gate name plus a sha-shaped id in its
+// table rows the same way. Both are excluded HERE, inside the two shared
+// summarizers, because this module is the true merge point: every consumer
+// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs)
+// calls summarizeGateReviewComments/summarizeGateReviewCommentMarkers to turn
+// a raw comment/review list into a gate verdict, so filtering here — rather
+// than per-caller — covers all of them by construction. countVerdictComments
+// in close-gate-findings.mjs does not read through here; it has its own
+// strict line-start header regex and needs no exclusion.
+//
+// Anchored to the start of a line (`^` with `m`) so only a marker rendered as
+// the first character of its own line is excluded — a genuine verdict
+// comment whose findings summary merely QUOTES the marker text mid-line (for
+// example, describing this very mechanism) still counts as evidence. Both
+// producers render their marker at column 0 (close-gate-findings.mjs's
+// review-header marker and the deferred-summary comment's leading marker
+// line), so the anchor costs nothing against genuine artifacts.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|deferred-summary)\b/mu;
+
+export function isGateMachineArtifactBody(body) {
+  return typeof body === "string" && GATE_MACHINE_ARTIFACT_MARKER_RE.test(body);
+}
+
 export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
 }
@@ -367,6 +396,9 @@ export function summarizeGateReviewComments(comments) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentBody(comment?.body);
     if (!parsed) {
       continue;
@@ -413,6 +445,9 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentMarkerBody(comment?.body);
     if (!parsed) {
       continue;

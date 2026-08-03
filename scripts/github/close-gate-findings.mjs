@@ -11,6 +11,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { commentIssue } from "./comment-issue.mjs";
 import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { matchGateReviewCommentHeader } from "./upsert-checkpoint-verdict.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
@@ -110,8 +111,17 @@ function isDeferredAtRound(severity, round) {
 // deferral suppresses re-raising the same finding at pre-approval too).
 // `disposition` is optional: pass "deferred" only when the finding is disposed
 // as deferred at render time (a body-filed finding, which never gets its own
-// resolvable thread, must be stamped up front rather than later).
+// resolvable thread, must be stamped up front rather than later). FINDING_MARKER_RE
+// (below) only ever accepts the literal `deferred` in that field, so any other
+// value would be silently unparseable by this module's own parser — throw here
+// instead, at the one place the marker is built, rather than let a producer and
+// this module's own reader disagree on the accepted vocabulary.
+const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
+
 export function buildFindingMarker({ fp, severity, angle, round, disposition }) {
+  if (disposition !== undefined && !VALID_MARKER_DISPOSITIONS.has(disposition)) {
+    throw new Error(`buildFindingMarker: disposition must be "deferred" (or omitted), got ${JSON.stringify(disposition)}`);
+  }
   const dispositionField = disposition ? ` disposition=${slugForMarker(disposition)}` : "";
   return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round}${dispositionField} -->`;
 }
@@ -215,17 +225,20 @@ export function renderInlineCommentBody(finding, { round }) {
 // text is worded.
 //
 // A body-filed finding never gets a resolvable thread (it lives in a review
-// body, not a review comment), so it never passes through the thread
-// disposition pass. Its disposition must therefore be decided HERE, at render
-// time, against the round it is posted at — mirroring exactly what the thread
-// disposition pass would decide were this the same finding threaded instead.
-// A worth-fixing-now finding posted in-window (round <= the fix window) is
-// intentionally left un-deferred: buildBodyFiledSummaryRows only lists rows
-// stamped disposition=deferred, so an in-window body-filed finding that is
-// later fixed correctly never appears in the deferred summary.
+// body, not a review comment) and so never passes through the thread
+// disposition pass (which is where a THREADED worth-fixing-now finding gets
+// its round<=3 in-gate fix window before deferring). A body-filed finding has
+// no such window to begin with — there is no thread to fix it through — so it
+// is deferred BY CONSTRUCTION, at render time, regardless of round: every
+// non-must-fix severity (worth-fixing-now, defer) is stamped
+// disposition=deferred the moment it is posted. must-fix stays unstamped
+// (the ledger blocks a clean verdict on it; it is never body-filed as an
+// accepted outcome). This is what keeps the finding from being suppressed by
+// its own fingerprint on a later run while tracked nowhere (buildFingerprint
+// suppression + zero surface = permanent silent loss).
 function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
-  const disposition = isDeferredAtRound(finding.severity, round) ? "deferred" : undefined;
+  const disposition = finding.severity === "must-fix" ? undefined : "deferred";
   const lines = [
     buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round, disposition }),
     `> ${renderFindingLine(finding)}`,
@@ -502,16 +515,14 @@ async function updateIssueComment({ repo, commentId, body }, { env, ghCommand })
 // token anywhere in the body) is what keeps this count scoped to real verdict
 // comments — every one of those three machine artifacts otherwise also mentions
 // this gate's name and a hex SHA, and is itself posted to the PR's issue-comment
-// stream. Line-start anchored (`m`) so a quoted header in a reply can't count.
-const VERDICT_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
-
+// stream. matchGateReviewCommentHeader (imported from upsert-checkpoint-verdict.mjs,
+// the producer of that literal) is line-start anchored so a quoted header in a
+// reply can't count, and keeps this consumer from drifting from the producer if
+// the label wording ever changes.
 function countVerdictComments(comments, gate) {
   let count = 0;
   for (const comment of comments) {
-    const body = comment?.body;
-    if (typeof body !== "string") continue;
-    const match = body.match(VERDICT_COMMENT_HEADER_RE);
-    if (match && match[1] === gate) count += 1;
+    if (matchGateReviewCommentHeader(comment?.body) === gate) count += 1;
   }
   return count;
 }
@@ -631,9 +642,17 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
     throw new Error(`gh command failed: ${detail}`);
   }
   const payload = parseJsonText(current.stdout, { label: "gh api pulls comments (GET)" });
-  const body = typeof payload?.body === "string" ? payload.body : "";
+  // Trimmed to match parseReviewThreads' normalizeBody, which is what
+  // selectDispositionTargets parsed thread.body through to select this exact
+  // comment as a deferral target: two differently normalized copies of one
+  // body could disagree on whether `^` (FINDING_MARKER_RE is line-start
+  // anchored) matches a marker preceded by leading whitespace.
+  const body = typeof payload?.body === "string" ? payload.body.trim() : "";
   const marker = parseFindingMarker(body);
-  if (!marker || marker.disposition === "deferred") return;
+  if (!marker) {
+    throw new Error(`Review comment ${commentId} was selected as a deferral target but no longer carries a parseable finding marker; refuse to resolve it unstamped.`);
+  }
+  if (marker.disposition === "deferred") return;
   const stamped = body.replace(FINDING_MARKER_RE, (m) => m.replace(/\s*-->$/, " disposition=deferred -->"));
   const patched = await runChildPlain(
     ghCommand,
@@ -717,8 +736,14 @@ function splitFindingBlocks(bodyText) {
   const blocks = [];
   let current = null;
   for (const rawLine of lines) {
+    // Marker recognition is column-0 only (FINDING_MARKER_RE is line-start
+    // anchored), matching exactly what selectDispositionTargets/
+    // collectFingerprints/parseFindingMarker(thread.body) accept elsewhere in
+    // this module — a leading-whitespace-padded line here would otherwise
+    // feed a summary row while contributing nothing to suppression or thread
+    // disposition, two acceptance rules for the same marker text.
+    const marker = rawLine.startsWith("<!--") ? parseFindingMarker(rawLine) : null;
     const trimmed = rawLine.trim();
-    const marker = trimmed.startsWith("<!--") ? parseFindingMarker(trimmed) : null;
     if (marker) {
       current = { marker, lines: [] };
       blocks.push(current);
@@ -736,12 +761,13 @@ function buildBodyFiledSummaryRows(reviews, { repo, pr }) {
   for (const review of reviews) {
     for (const block of splitFindingBlocks(review.body)) {
       if (!SUMMARY_SEVERITY_ORDER.includes(block.marker.severity)) continue;
-      // Mirrors buildThreadSummaryRows' deferred-only filter: a body-filed
-      // finding is stamped disposition=deferred at render time (see
-      // renderNonLocatableBlock) exactly when the CLI defers it. An in-window
-      // worth-fixing-now finding is NOT stamped, so it correctly never appears
-      // here even if the underlying issue was later fixed (there is no thread
-      // to re-derive that from for a body-filed finding).
+      // Mirrors buildThreadSummaryRows' deferred-only filter, but a body-filed
+      // finding is stamped disposition=deferred unconditionally at render time
+      // (see renderNonLocatableBlock) — every non-must-fix body-filed finding
+      // is deferred by construction, round-independent, since it never gets a
+      // thread to fix it through. This check is therefore now a defensive
+      // no-op for anything this module renders; it still protects against a
+      // hand-authored or historical marker that lacks the field.
       if (block.marker.disposition !== "deferred") continue;
       const parsedLine = parseFindingLine(block.lines[0] ?? "");
       rows.push({
@@ -775,7 +801,17 @@ function buildFullBodyByCommentId(comments) {
 // suppression, the deferred-summary text) needs the UNTRUNCATED body, so join
 // the listing (threadId/commentId/path/line/isResolved) with
 // captureParsedReviewThreads' full first-comment text, keyed on the comment
-// databaseId the two share.
+// databaseId the two share. The two are INDEPENDENT paginated GraphQL walks,
+// though: a thread created or cursor-shifted between them can be present in
+// one and absent from the other, so a join miss must fail closed rather than
+// silently fall back to the truncated excerpt (which could run every
+// downstream decision on a body cut mid-marker, varying with fetch
+// interleaving alone). The excerpt is self-identifying — excerptBody appends
+// a trailing U+2026 exactly when it truncated — so only fail when the join
+// misses AND the listing body carries that truncation marker; a short body
+// that never needed truncation is already complete, and is safe to keep as-is.
+const BODY_EXCERPT_ELLIPSIS = "…";
+
 async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
   const threads = await fetchAllReviewThreads({ repo, pr }, gh);
   const snapshot = await captureParsedReviewThreads({ repo, pr }, gh);
@@ -783,7 +819,11 @@ async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
   const threadsWithFullBodies = threads.map((thread) => {
     if (thread.commentId === null) return thread;
     const fullBody = fullBodyByCommentId.get(String(thread.commentId));
-    return fullBody === undefined ? thread : { ...thread, body: fullBody };
+    if (fullBody !== undefined) return { ...thread, body: fullBody };
+    if (typeof thread.body === "string" && thread.body.endsWith(BODY_EXCERPT_ELLIPSIS)) {
+      throw new Error(`Could not resolve the full body for review comment ${thread.commentId}: the listing excerpt was truncated and the full-body join missed it.`);
+    }
+    return thread;
   });
   return { threads: threadsWithFullBodies, snapshot };
 }
@@ -873,7 +913,13 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
 
   // 3. Round.
   const verdictComments = await listIssueComments({ repo, pr }, gh);
-  const primaryRound = countVerdictComments(verdictComments, gate);
+  // A verdict can also land as a PR review (the escape-hatch path
+  // upsert-checkpoint-verdict.mjs supports alongside its default issue-comment
+  // post) — count review-posted verdicts too so that path is not invisible to
+  // the round. `reviews` is already fetched above (step 1); this module's own
+  // gate-findings review body never opens with the "### Gate review:" header,
+  // so there is no self-count risk.
+  const primaryRound = countVerdictComments(verdictComments, gate) + countVerdictComments(reviews, gate);
   const crossCheckRound = crossCheckRoundFromReviewBodies(reviews.map((r) => r.body), gate);
   const fallbackRound = await countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
   const round = Math.max(primaryRound, crossCheckRound, fallbackRound, 1);
