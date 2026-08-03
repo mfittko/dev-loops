@@ -56,7 +56,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -679,7 +679,7 @@ function resolvePrChecklistMatrixUpsert(rawValue) {
   if (rawValue.trim().toLowerCase() !== "clean") {
     throw new Error('--pr-checklist-matrix accepts only "clean"');
   }
-  return { angle: "pr-checklist-matrix", verdict: "clean", findings: [] };
+  return { angle: FANIN_SYNTHETIC_ANGLES[0], verdict: "clean", findings: [] };
 }
 
 export async function consolidateGateFanin(options) {
@@ -770,7 +770,7 @@ export async function consolidateGateFanin(options) {
 
   if (options.prChecklistMatrix !== undefined) {
     const hasPrChecklistMatrix = rawArtifacts.some(
-      (a) => typeof a.angle === "string" && a.angle.trim() === "pr-checklist-matrix",
+      (a) => typeof a.angle === "string" && a.angle.trim() === FANIN_SYNTHETIC_ANGLES[0],
     );
     if (!hasPrChecklistMatrix) {
       rawArtifacts.push(resolvePrChecklistMatrixUpsert(options.prChecklistMatrix));

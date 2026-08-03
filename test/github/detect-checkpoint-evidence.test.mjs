@@ -1479,6 +1479,25 @@ test("buildPreMergeGateCheck WARNS (does not fail) on a foreign angle when rejec
   assert.match(result.warnings[0], /rejectForeignAngles is false/);
 });
 
+test("buildPreMergeGateCheck accepts the fan-in synthetic pr-checklist-matrix angle when the pool omits it (#1494)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "draft_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }] },
+        mandatoryAngles: [],
+        anglePool: ["dry", "kiss"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+  assert.deepEqual(result.warnings ?? [], []);
+});
+
 test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base mandatory angle", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,

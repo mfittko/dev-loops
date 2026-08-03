@@ -886,6 +886,20 @@ test("checkProvenanceAngleCoverage rejects an angle outside the configured pool 
   });
 });
 
+test("checkProvenanceAngleCoverage accepts the fan-in synthetic pr-checklist-matrix angle when the gate's pool omits it (#1494)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    // draft's configured pool (scope, coverage, pr-description) does not list
+    // pr-checklist-matrix; the fan-in-synthetic exemption must let it through
+    // without a warning.
+    const result = await checkProvenanceAngleCoverage(
+      { perAngle: [{ angle: "scope", reviewer: "r1" }, { angle: "pr-description", reviewer: "r2" }, { angle: "pr-checklist-matrix", reviewer: "r3" }] },
+      "draft_gate",
+      { repoRoot },
+    );
+    assert.equal(result.warning ?? null, null);
+  });
+});
+
 test("checkProvenanceAngleCoverage warns (does not fail) on a foreign angle when gates.rejectForeignAngles is false", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     const result = await checkProvenanceAngleCoverage(
