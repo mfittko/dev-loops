@@ -8,9 +8,15 @@ const RUNTIME_ROOTS = ["scripts", "lib", "cli", "extension"];
 // the @dev-loops/core package entry, never deep into packages/core/src. Only
 // import/export/require specifiers count — comments, doc prose, and
 // filesystem-path constants (asset copiers, atlas source labels) may name
-// packages/core/src freely.
+// packages/core/src freely. The static branch is anchored to a line-leading
+// import/export keyword (the STATIC_SPECIFIER_RE shape from
+// test/contracts/no-package-escaping-imports.test.mjs) so prose like
+// `copied from "packages/core/src/x.mjs"` cannot match; the binding-list char
+// class spans newlines for multiline import blocks. Residual known gap: a
+// comment embedding a quoted `import(...)`/`require(...)` code sample would
+// still match the dynamic branches.
 const deepImportPattern =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s+)["'][^"']*packages\/core\/src\//m;
+  /(?:^[ \t]*(?:import\s*(?:[\w$*,{}\s]*?\bfrom\s*)?|export\s*[\w$*,{}\s]*?\bfrom\s*)|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"']*packages\/core\/src\//m;
 
 async function* walk(dirUrl) {
   const { readdir } = await import("node:fs/promises");
@@ -26,10 +32,14 @@ async function* walk(dirUrl) {
 
 test("deep-import pattern catches real import specifiers only", () => {
   assert.match(`import { x } from "../../packages/core/src/config/config.mjs";`, deepImportPattern);
+  assert.match(`import "../../packages/core/src/register-globals.mjs";`, deepImportPattern);
+  assert.match(`import {\n  a,\n  b,\n} from "../../packages/core/src/config/config.mjs";`, deepImportPattern);
   assert.match(`const m = await import("packages/core/src/loop/run-context.mjs");`, deepImportPattern);
   assert.match(`const m = require("../packages/core/src/x.mjs");`, deepImportPattern);
   assert.match(`export { y } from "../../packages/core/src/y.mjs";`, deepImportPattern);
   assert.doesNotMatch(`// synced from packages/core/src/loop/run-context.mjs`, deepImportPattern);
+  assert.doesNotMatch(`// copied from "packages/core/src/config/default.json"`, deepImportPattern);
+  assert.doesNotMatch(`// e.g. import { x } from "packages/core/src/y.mjs"`, deepImportPattern);
   assert.doesNotMatch(`const source = "packages/core/src/loop/run-context.mjs";`, deepImportPattern);
 });
 
