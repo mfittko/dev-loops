@@ -246,7 +246,7 @@ test("copilot-pr-followup mandates upsert helper command for gate comments", asy
   assert.match(copilotFollowupSkill, /--head-sha\s+<current_head_sha>/);
   assert.match(copilotFollowupSkill, /--verdict\s+<clean\|findings_present\|blocked>/);
   assert.match(copilotFollowupSkill, /--gate\s+<draft_gate\|pre_approval_gate>/);
-  assert.match(copilotFollowupSkill, /Do NOT use.*gh pr comment.*gh pr review.*gate comments.*upsert-checkpoint-verdict/i);
+  assert.match(copilotFollowupSkill, /Do NOT use.*gh pr comment.*gh pr review.*gate verdicts.*upsert-checkpoint-verdict/i);
 });
 
 test("public dev-loop contract keeps conflict reconciliation local and context-first", async () => {

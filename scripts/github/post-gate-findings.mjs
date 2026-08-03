@@ -378,9 +378,8 @@ export async function listIssueComments({ repo, pr }, { env, ghCommand, runChild
   return flattenPaginatedSlurp(payload);
 }
 
-// Line-start anchored: every marker this module's own producers (and
-// close-gate-findings.mjs's deferred-summary marker) render is always the
-// FIRST character of its own line — never rendered mid-line. Matching on
+// Line-start anchored: every marker this module's own producers render is
+// always the FIRST character of its own line — never rendered mid-line. Matching on
 // `body.includes(marker)` alone would also honor a marker merely QUOTED
 // inside a comment's free text (a reply that pastes a prior comment's marker
 // as an example, or a hostile comment crafted to forge one), and this
@@ -420,8 +419,8 @@ export function findMarkedComment(comments, marker, { author } = {}) {
 // to (never rendered marker text alone, which a foreign comment could forge
 // just as easily as this repo's own producers render it). Shared by every
 // caller that needs to scope a marker read/write to its own comments —
-// currently this module's own idempotent upsert and
-// close-gate-findings.mjs's disposition/suppression/deferred-summary passes.
+// currently this module's own idempotent upsert, the gate verdict poster's
+// finding-surface suppression, and close-gate-findings.mjs's disposition pass.
 export async function resolveAuthenticatedLogin({ env, ghCommand, runChild: run }) {
   const payload = await runGhJson(["api", "user"], { env, ghCommand, runChild: run });
   const login = typeof payload?.login === "string" ? payload.login.trim() : "";

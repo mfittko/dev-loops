@@ -1,17 +1,29 @@
 # Checkpoint Verdict Comment Contract
 
-Canonical owner for gate-review **PR comment field** rules for the two gate boundaries in
+Canonical owner for gate-review **verdict field** rules for the two gate boundaries in
 the dev-loop workflow: `draft_gate` and `pre_approval_gate`.
 
 ## Purpose
 
-Gate-review PR comments make the workflow auditable and transparent from the PR
+Gate-review verdicts make the workflow auditable and transparent from the PR
 conversation alone. A reviewer or maintainer can inspect which gate ran, which head
 commit was reviewed, whether it passed cleanly, and whether a result is current for
 the latest head — without relying on local or session-only artifacts.
 
+<!-- rule: GATE-COMMENT-SINGLE-SURFACE -->
+`GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
+review of type COMMENT, posted by `upsert-checkpoint-verdict.mjs`. Its body carries the required
+verdict fields below; with `--findings-ledger`, that same review also carries the round's
+findings — locatable ones as its inline comments, the rest body-filed under the verdict fields
+(`GATE-EXEC-FINDING-THREADS`, [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+No separate verdict issue comment, no separate findings review, and no deferred-summary comment
+is posted. Each finding's text appears exactly once across the round; the body's per-angle
+breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
+review body; a verdict posted as an ISSUE comment by an earlier version still validates and is
+still corrected on its own surface (back-compat read), but new rounds never create one.
+
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
-`GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict comment evidence contract only.
+`GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
 It does not restate the full PR follow-up procedure; that
 remains owned by the relevant workflow skill. The broader family-local PR lifecycle
 that consumes this evidence is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
@@ -56,7 +68,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 ## Required fields
 
 <!-- rule: GATE-COMMENT-REQUIRED-FIELDS -->
-`GATE-COMMENT-REQUIRED-FIELDS`: Every gate-review PR comment MUST include:
+`GATE-COMMENT-REQUIRED-FIELDS`: Every gate-review verdict body MUST include:
 
 | Field | Description |
 |---|---|
@@ -86,14 +98,15 @@ Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER
 The visible PR comment is a summary for auditability; the disposition ledger is the
 complete durable record.
 
-Disposing of the ledger's non-blocking findings as PR review threads is owned by
-`GATE-EXEC-FINDING-THREADS` and `GATE-EXEC-THREAD-DISPOSITION`
-([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+Disposing of the ledger's non-blocking findings as inline review threads on the round's own
+review is owned by `GATE-EXEC-FINDING-THREADS` and `GATE-EXEC-THREAD-DISPOSITION`
+([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition));
+a deferred finding's record is owned by `GATE-EXEC-DEFERRAL-RECORD` there too.
 
 ## Readable deterministic format
 
 <!-- rule: GATE-COMMENT-VALIDATION-REPORTING -->
-`GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible comment compact, deterministic, and
+`GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible verdict body compact, deterministic, and
 slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
 `Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
 MUST stay deterministically parseable even if label wording changes. Validation reporting
@@ -166,14 +179,14 @@ so the two rules do not conflict.
 
 | Scenario | Rule |
 |---|---|
-| Same head SHA rerun | Idempotent behavior: do not post a second visible marker for the same gate+head. Reuse/suppress by default; if correction is needed, update/replace the existing marker in place. |
-| New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict comment MUST be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
-| New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` comment is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
+| Same head SHA rerun | Idempotent behavior: do not post a second visible surface for the same gate+head. An identical rerun posts nothing; if correction is needed, update the existing review's body in place (a legacy verdict issue comment is corrected on its own surface). Inline finding comments are never re-posted — a same-head correction body-files any still-unposted finding, since GitHub exposes no endpoint to add inline comments to a submitted review. |
+| New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict review MUST be posted for the new head; the older-head surface remains but does not satisfy readiness for the new head |
+| New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` verdict is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
 
 ## Fail-closed behavior
 
 <!-- rule: GATE-COMMENT-FAIL-CLOSED -->
-`GATE-COMMENT-FAIL-CLOSED`: If the required checkpoint verdict comment cannot be posted
+`GATE-COMMENT-FAIL-CLOSED`: If the required checkpoint verdict review cannot be posted
 (for example due to a GitHub API error, permission restriction, or tooling failure), the
 workflow MUST NOT cross the gate boundary:
 
@@ -181,7 +194,7 @@ workflow MUST NOT cross the gate boundary:
 - do not declare final-approval readiness (for `pre_approval_gate`)
 
 The gate boundary is not crossed until both the review verdict is `clean` **and** the
-required visible PR comment is confirmed posted for the current head SHA.
+required visible PR review is confirmed posted for the current head SHA.
 
 ## Relationship to other contracts
 
@@ -189,7 +202,7 @@ required visible PR comment is confirmed posted for the current head SHA.
 |---|---|
 | `draft_gate` boundary | Governs the draft → ready-for-review transition in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 |
 | `pre_approval_gate` boundary | Governs final-approval readiness in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 and the narrowed [Final Approval](../final-approval/SKILL.md) route |
-| Local/session artifacts | These remain complementary; the visible PR comment is the minimum required auditable surface, not a replacement for all local artifacts |
+| Local/session artifacts | These remain complementary; the visible PR review is the minimum required auditable surface, not a replacement for all local artifacts |
 
 ## See also
 

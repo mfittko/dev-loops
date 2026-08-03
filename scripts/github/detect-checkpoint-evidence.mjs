@@ -9,8 +9,8 @@ import {
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
-// Machine-authored gate artifacts (close-gate-findings.mjs's posted findings
-// review, the deferred-summary comment) are excluded from evidence at the
+// Historical machine-authored gate artifacts (a standalone findings review, a
+// deferred-summary comment) are excluded from evidence at the
 // true merge point — inside summarizeGateReviewComments/
 // summarizeGateReviewCommentMarkers in packages/core/src/github/
 // copilot-helpers.mjs, re-exported here — so every caller of those two
