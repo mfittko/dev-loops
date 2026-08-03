@@ -422,4 +422,12 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
     );
     assert.deepEqual(result.foreignAngles, ["made-up-angle"]);
   });
+
+  test("delta-suffixed fan-in synthetic angle is never foreign when the pool omits its base", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "pr-checklist-matrix-delta-at-current-head" }],
+      { mandatoryAngles: [], pool: ["dry", "kiss"] },
+    );
+    assert.deepEqual(result.foreignAngles, []);
+  });
 });
