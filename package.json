@@ -23,7 +23,7 @@
   "scripts": {
     "verify": "run-p --aggregate-output --continue-on-error test:assets test:extension test:scripts test:core test:docs test:pack test:dev-loop test:workflows",
     "test": "run-p --aggregate-output --continue-on-error test:assets test:extension test:scripts test:core test:docs test:pack",
-    "test:assets": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/dev-loop-init-phase-smoke.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
+    "test:assets": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/dev-loop-init-phase-smoke.test.mjs test/core-runtime-boundary.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:doc-guard": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:extension": "node --import tsx --test --test-reporter ./test/failure-summary-reporter.mjs test/extension-checks.test.mjs test/extension-post-merge-update.test.mjs test/extension-command-contract.test.mjs test/extension-package-contract.test.mjs test/extension-pi-adapter.test.mjs test/dev-loops-core.test.mjs test/dev-loops-cli.test.mjs test/cli-deps-less-checkout-preflight.test.mjs",
     "test:scripts": "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none GIT_CONFIG_KEY_1=core.fsyncObjectFiles GIT_CONFIG_VALUE_1=false node --test --test-reporter ./test/failure-summary-reporter.mjs test/github/*.test.mjs test/loop/*.test.mjs test/docs/*.test.mjs test/projects/*.test.mjs test/pages/*.test.mjs",
