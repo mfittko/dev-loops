@@ -414,4 +414,12 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
     assert.deepEqual(checkFanoutAngleCoverage(undefined, { mandatoryAngles: ["a"] }).missingMandatory, ["a"]);
     assert.deepEqual(checkFanoutAngleCoverage([null, { angle: "" }, "nope"], { mandatoryAngles: [] }).foreignAngles, []);
   });
+
+  test("fan-in synthetic angle (pr-checklist-matrix) is never foreign, even when absent from the pool", () => {
+    const result = checkFanoutAngleCoverage(
+      [{ angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }],
+      { mandatoryAngles: [], pool: ["dry", "kiss"] },
+    );
+    assert.deepEqual(result.foreignAngles, ["made-up-angle"]);
+  });
 });

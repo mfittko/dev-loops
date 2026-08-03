@@ -255,11 +255,20 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
   const missingMandatory = mandatoryAngles.filter((a) => !recordedBases.has(a));
   let foreignAngles = [];
   if (Array.isArray(pool) && pool.length > 0) {
-    const poolSet = new Set(pool);
+    const poolSet = new Set([...pool, ...FANIN_SYNTHETIC_ANGLES]);
     foreignAngles = [...new Set(recorded.filter((a) => !poolSet.has(baseAngleName(a))))];
   }
   return { missingMandatory, foreignAngles };
 }
+
+/**
+ * Angles the fan-in itself mandates and may synthesize (consolidate-fanin's
+ * `--pr-checklist-matrix clean` upsert) without them appearing in any gate's
+ * configured `angles` pool. Always legal in the foreign-angle check above —
+ * requiring every consumer repo to also list them per-gate would make the two
+ * tools contradict the shared contract they implement.
+ */
+export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist-matrix"]);
 
 /**
  * Default cap on parallel fan-out reviewers when a caller does not supply one.
