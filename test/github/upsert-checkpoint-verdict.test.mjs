@@ -19,6 +19,7 @@ import {
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 import { isGateMachineArtifactBody, parseGateReviewCommentBody, summarizeGateReviewComments } from "@dev-loops/core/github/copilot-helpers";
+import { buildFindingMarker, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 
@@ -4586,4 +4587,304 @@ test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inlin
   const payload = JSON.parse(result.stderr);
   assert.equal(payload.ok, false);
   assert.match(payload.error, /--inline-reason is required for executionMode inline_single_agent/i);
+});
+
+// ---------------------------------------------------------------------------
+// Single-surface gate rounds (--findings-ledger)
+// ---------------------------------------------------------------------------
+
+const SINGLE_SURFACE_HEAD = "abc1234000000000000000000000000000000000";
+
+// A minimal in-diff patch: new-file lines 1-4 of src/db.mjs are commentable.
+const SINGLE_SURFACE_PATCH = ["@@ -1,3 +1,5 @@", " line1", "-old line2", "+new line2", "+new line3", " line4"].join("\n");
+
+async function writeSingleSurfaceLedger(tempDir, findings, overrides = {}) {
+  const ledgerPath = path.join(tempDir, "ledger.json");
+  await writeFile(ledgerPath, JSON.stringify({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findings,
+    ...overrides,
+  }), "utf8");
+  return ledgerPath;
+}
+
+// The gh calls a --findings-ledger round makes, in order: the coordination
+// context + internal-only probe, then the finding-surface reads
+// (login, reviews, issue comments, threads, PR files).
+function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], reviews = [], threads = [], files = [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }], lightFacts = reviews.length > 0 } = {}) {
+  return [
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+      stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft, headRefOid: SINGLE_SURFACE_HEAD, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+    },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: SINGLE_SURFACE_HEAD }) + "\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
+    // A visible same-head inline verdict makes detect-checkpoint-evidence fetch
+    // the light-mode facts (base ref + labels) before the internal-only probe.
+    ...(lightFacts ? [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' }] : []),
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/db.mjs\n" },
+    { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: threads } } } } }) + "\n",
+    },
+    ...(files === null ? [] : [{ assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/files?per_page=100"], stdout: JSON.stringify(files) + "\n" }]),
+  ];
+}
+
+const LOCATABLE_FINDING = { severity: "must-fix", angle: "correctness", summary: "SQL injection in the query builder", files: ["src/db.mjs"], line: 2, recommendation: "parameterize it" };
+const BODY_FILED_FINDING = { severity: "defer", angle: "coverage", summary: "inconsistent casing in constants" };
+
+// AC1 + AC2: one review carries the verdict fields, the reduced per-angle
+// digest, the body-filed finding, and the locatable finding as an INLINE
+// comment — each finding's text appearing exactly once across the round.
+test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locatable finding, body-filed rest, counts-only digest", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, BODY_FILED_FINDING]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "defer", summary: BODY_FILED_FINDING.summary }] },
+    ]), "utf8");
+
+    let postedPayload = null;
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsJson: findingsPath,
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.surface, "review");
+    assert.equal(result.round, 1);
+    assert.equal(result.inlineComments, 1);
+    assert.equal(result.bodyFiled, 1);
+    assert.equal(result.suppressed, 0);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    postedPayload = JSON.parse(postCall.stdinText);
+    assert.equal(postedPayload.event, "COMMENT");
+    assert.equal(postedPayload.commit_id, SINGLE_SURFACE_HEAD);
+
+    // The locatable finding is an inline comment on the review, and its text
+    // appears there and nowhere else.
+    assert.equal(postedPayload.comments.length, 1);
+    assert.equal(postedPayload.comments[0].path, "src/db.mjs");
+    assert.equal(postedPayload.comments[0].line, 2);
+    assert.equal(postedPayload.comments[0].side, "RIGHT");
+    assert.match(postedPayload.comments[0].body, /SQL injection in the query builder/);
+    assert.doesNotMatch(postedPayload.body, /SQL injection in the query builder/);
+
+    // The body-filed finding's text appears exactly once in the body.
+    assert.equal(postedPayload.body.split(BODY_FILED_FINDING.summary).length - 1, 1);
+
+    // The per-angle digest carries angle, verdict and counts only.
+    assert.match(postedPayload.body, /^- `correctness` → `findings_present` \(1 finding\)$/m);
+    assert.match(postedPayload.body, /^- `coverage` → `findings_present` \(1 finding\)$/m);
+    // The gate-scoped round marker rides on the same body.
+    assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// AC5: an own-authored thread already carrying the finding's fingerprint drops
+// it before posting; a foreign-authored one never does.
+test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-authored thread already covers, but not a foreign one", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-suppress-"));
+  try {
+    const foreignFinding = { severity: "worth-fixing-now", angle: "dry", summary: "duplicated validation logic", files: ["src/utils.mjs"] };
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, foreignFinding]);
+    const threadFor = (finding, author) => ({
+      id: `THREAD_${author}`,
+      isResolved: true,
+      isOutdated: false,
+      path: finding.files[0],
+      line: finding.line ?? null,
+      comments: { nodes: [{ id: "gid-1", databaseId: 601, body: buildFindingMarker({ fp: fingerprintFinding(finding), severity: finding.severity, angle: finding.angle, round: 1 }), author: { login: author, __typename: "User" } }] },
+    });
+
+    const entries = [
+      ...singleSurfaceLeadingEntries({ threads: [threadFor(LOCATABLE_FINDING, "gate-bot"), threadFor(foreignFinding, "someone-else")] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":702,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-702"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.suppressed, 1);
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.bodyFiled, 1);
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.doesNotMatch(posted.body, /SQL injection in the query builder/);
+    assert.match(posted.body, /duplicated validation logic/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// AC4: a same-head rerun corrects the existing REVIEW in place. GitHub exposes
+// no endpoint to add inline comments to a submitted review, so every
+// still-unposted finding is body-filed instead of dropped.
+test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head REVIEW in place, body-filing the findings", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-update-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING]);
+    const existingReview = {
+      id: 705,
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-705",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }),
+    };
+    const entries = [
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/705", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** findings_present", "SQL injection in the query builder"],
+        stdout: '{"id":705,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-705"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "1 finding",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "updated");
+    assert.equal(result.surface, "review");
+    assert.equal(result.commentId, 705);
+    // No inline comments on a correction; the locatable finding is body-filed.
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.bodyFiled, 1);
+    assert.ok(!calls.some((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// AC4: an identical same-head rerun posts nothing at all.
+test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun is a noop that posts nothing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-noop-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, []);
+    const existingReview = {
+      id: 706,
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-706",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "findings_present",
+        findingsSummary: "1 finding",
+        nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+        round: 1,
+        nonLocatableFindings: [],
+      }),
+    };
+    const { runChild, calls } = makeGhMock(singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }), { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "1 finding",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "noop");
+    assert.equal(result.surface, "review");
+    assert.equal(result.commentId, 706);
+    assert.ok(!calls.some((c) => c.args.includes("POST") || c.args.includes("PUT")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Fail closed rather than post one round's findings onto another's verdict.
+test("upsert-checkpoint-verdict rejects a --findings-ledger written for a different gate/head", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-mismatch-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [], { gate: "pre_approval_gate" });
+    const { runChild } = makeGhMock(singleSurfaceLeadingEntries(), { repeatLastOnOverflow: true });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "findings_present",
+        findingsSummary: "no findings",
+        findingsLedger: ledgerPath,
+        nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /refuse to post another round's findings/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
