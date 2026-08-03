@@ -400,8 +400,8 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
     const { runChild } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ], { repeatLastOnOverflow: true });
     const result = await upsertCheckpointVerdict({
@@ -808,9 +808,9 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
         stdout: '[]\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Next action:** mark ready for review"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Next action:** mark ready for review"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -836,7 +836,8 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      surface: "review",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix"],
@@ -875,9 +876,9 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
         stdout: '[]\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
-          "body=### Gate review: `draft_gate`",
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `draft_gate`",
           // Only the first line of --findings-file content stays bare; every
           // continuation line is blockquote-prefixed before splicing (see
           // blockquoteContinuationLines) so an embedded field-shaped line (e.g.
@@ -888,11 +889,11 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
           "> - item 2",
           "> **bold note**",
         ],
-        assertArgNotContains: [
+        assertStdinNotIncludes: [
           "\\n## Section A",
           "\\n- item 1",
         ],
-        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
 
@@ -945,14 +946,14 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
         stdout: '[]\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
           "file content wins",
         ],
-        assertArgNotContains: [
+        assertStdinNotIncludes: [
           "should be overridden",
         ],
-        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-103"}\n',
+        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
       },
     ]);
 
@@ -994,8 +995,8 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
     const { runChild, calls } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ], { repeatLastOnOverflow: true });
 
@@ -1015,10 +1016,9 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
 
-    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/issues/17/comments"));
-    assert.ok(postCall, "expected the comment-post gh call");
-    const bodyArg = postCall.args.find((a) => a.startsWith("body="));
-    const body = bodyArg.slice("body=".length);
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    assert.ok(postCall, "expected the gate-review post gh call");
+    const body = JSON.parse(postCall.stdinText).body;
 
     // The genuine fields (rendered LAST, from the real --next-action/executionMode
     // options) must win over the injected lines the file's continuation content
@@ -1062,9 +1062,9 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
         stdout: '[]\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Verdict:** clean"],
-        assertArgNotContains: ["Blocking severities"],
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** clean"],
+        assertStdinNotIncludes: ["Blocking severities"],
         stdout: '{"id":104,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-104"}\n',
       },
     ]);
@@ -1254,18 +1254,18 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
         }]])}\n`,
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
-          "body=### Gate review: `pre_approval_gate`",
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `pre_approval_gate`",
           "**Findings summary:** no issues found",
           "**Gate evidence note:** Copilot review rounds exhausted (5/2); current head has zero unresolved threads and green CI, so pre_approval_gate fallback is allowed without another Copilot re-request.",
         ],
         // The evidence note must render on its own labeled line — never spliced
         // with `;` into the findings summary (pre-fix render).
-        assertArgNotContains: [
+        assertStdinNotIncludes: [
           "**Findings summary:** no issues found; Copilot review rounds exhausted",
         ],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -1291,7 +1291,8 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      surface: "review",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix"],
@@ -1341,13 +1342,13 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
         }]])}\n`,
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
-          "body=### Gate review: `pre_approval_gate`",
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `pre_approval_gate`",
           "**Findings summary:** commands: npm test; tests: 46, pass: 46, fail: 0; ci: GitHub CI test passed on the current head.",
         ],
         assertArgNotContains: ["stdout: this raw passing output should not appear"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const result = await runNode([
@@ -1380,7 +1381,8 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      surface: "review",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["must-fix"],
@@ -1464,6 +1466,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
+      surface: "issue_comment",
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
@@ -1497,16 +1500,15 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
     const { runChild: runChild1, calls: calls1 } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-103"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
       },
     ], { repeatLastOnOverflow: true });
     const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1 });
     assert.equal(created.action, "created");
 
-    const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/issues/17/comments"));
-    const bodyArg = postCall.args.find((a) => a.startsWith("body="));
-    const postedBody = bodyArg.slice("body=".length);
+    const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    const postedBody = JSON.parse(postCall.stdinText).body;
 
     // Re-parsing the posted body recovers exactly the fields that were rendered
     // in — this is what the same-head noop compare (~1517) relies on.
@@ -1530,7 +1532,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
     assert.equal(second.action, "noop");
     assert.equal(second.commentId, 103);
     // Same-head noop means no create/update comment call fires.
-    assert.ok(!calls2.some((c) => c.args.includes("repos/owner/repo/issues/17/comments")));
+    assert.ok(!calls2.some((c) => c.args.includes("repos/owner/repo/pulls/17/reviews")));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1766,6 +1768,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
+      surface: "issue_comment",
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
@@ -1858,6 +1861,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 101,
+      surface: "issue_comment",
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678000000000000000000000000000000000\` (comment 202). The old comment is stale for the current head.",
       executionMode: "inline_single_agent",
@@ -1951,6 +1955,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       headSha: "abc1234000000000000000000000000000000000",
       currentHeadSha: "abc1234000000000000000000000000000000000",
       commentId: 202,
+      surface: "issue_comment",
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
@@ -2066,8 +2071,8 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
         ])}\n`,
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
 
@@ -2205,9 +2210,9 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Verdict:** clean"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -2295,9 +2300,9 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Verdict:** clean"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -2339,9 +2344,9 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Verdict:** clean"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -2389,9 +2394,9 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Verdict:** clean"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -2733,7 +2738,15 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- post the draft_gate verdict + restore ready ---
-      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-900"}\n' },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        // The posted draft_gate review must carry the fanout_fanin execution
+        // mode, proving the caller's mode is preserved across the recursive
+        // re-entry. The body travels on stdin (`--input -`), so it is pinned
+        // here rather than through the args-only gh log below.
+        assertStdinIncludes: ["Gate review: `draft_gate`", "**Execution mode:** fanout_fanin"],
+        stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-900"}\n',
+      },
       { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
     ], { matchMode: "claims", logCalls: true });
     const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
@@ -2762,10 +2775,10 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     // The PR was converted to draft, then re-marked ready (the full transition).
     assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
     assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
-    // The posted draft_gate comment must carry the fanout_fanin execution mode,
-    // proving the caller's mode is preserved across the recursive re-entry.
-    assert.ok(/Gate review: `draft_gate`/.test(ghLog), "expected a draft_gate verdict to be posted");
-    assert.ok(/\*\*Execution mode:\*\* fanout_fanin/.test(ghLog), "expected fanout_fanin in the posted verdict body");
+    // The posted review itself (event, endpoint, and the fanout_fanin body) is
+    // pinned by the review-POST stub entry's assertStdinIncludes above — the gh
+    // log records args only, and the body now travels on stdin.
+    assert.ok(/pulls\/17\/reviews/.test(ghLog), "expected a draft_gate verdict review to be posted");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2958,8 +2971,8 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
       // --- post the draft_gate verdict + post-creation verify + restore ready ---
-      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-900"}\n' },
-      { assertArgs: ["api", "repos/owner/repo/issues/comments/900"], stdout: '{"id":900}\n' },
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-900"}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/900"], stdout: '{"id":900}\n' },
       { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
     ], { matchMode: "claims", logCalls: true });
     // A real (non-empty) run id — the production default — activates the
@@ -3140,8 +3153,8 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
       },
       // Call 8: create the pre_approval_gate comment
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments"],
-        stdout: '{"id":200,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-200"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":200,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-200"}\n',
       },
     ]);
 
@@ -3163,7 +3176,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
     assert.equal(payload.action, "created");
     assert.equal(payload.gate, "pre_approval_gate");
     assert.equal(payload.commentId, 200);
-    assert.equal(payload.commentUrl, "https://github.com/owner/repo/pull/17#issuecomment-200");
+    assert.equal(payload.commentUrl, "https://github.com/owner/repo/pull/17#pullrequestreview-200");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3204,8 +3217,8 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
       },
       // Call 8: create the draft_gate comment
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments"],
-        stdout: '{"id":300,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-300"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":300,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-300"}\n',
       },
     ], { repeatLastOnOverflow: true });
 
@@ -4107,9 +4120,9 @@ test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix
         stdout: '[]\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`"],
-        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
     const result = await runNode([
@@ -4173,8 +4186,8 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const result = await runNode([
@@ -4201,8 +4214,8 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const result = await runNode([
@@ -4238,15 +4251,15 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
           "**Execution mode:** fanout_fanin",
           "- `correctness` → `findings_present`",
           "  - [`must-fix`] broken edge case (`a.mjs:7`)",
           "- `coverage` → `clean`",
           "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const result = await runNode([
@@ -4339,9 +4352,9 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         }]])}\n`,
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
-          "body=### Gate review: `pre_approval_gate`",
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
           "- `dry` → `findings_present`",
           // The structured single-line digest stays plain; the gateEvidenceNote
@@ -4349,10 +4362,10 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
           "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
           `**Gate evidence note:** ${roundExhaustionNote}`,
         ],
-        assertArgNotContains: [
+        assertStdinNotIncludes: [
           `**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
         ],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
 
@@ -4483,9 +4496,9 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "**Execution mode:** inline_single_agent — manual single-agent run"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "**Execution mode:** inline_single_agent — manual single-agent run"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const inline = await runNode([
@@ -4503,9 +4516,9 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     const env2 = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Execution mode:** fanout_fanin"],
-        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-102"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Execution mode:** fanout_fanin"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
     const fanout = await runNode([
@@ -4537,9 +4550,9 @@ test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["**Execution mode:** fanout_fanin"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Execution mode:** fanout_fanin"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
     const result = await runNode([

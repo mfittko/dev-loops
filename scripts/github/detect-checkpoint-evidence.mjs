@@ -222,6 +222,10 @@ function normalizePrReviewsPayload(payload) {
     .map((r) => ({
       id: r.id,
       body: r.body,
+      // The gate round's single visible surface is a PR review, so the poster
+      // needs to know a verdict came from here (PUT pulls/reviews/{id}) rather
+      // than from the legacy issue-comment stream (PATCH issues/comments/{id}).
+      surface: "review",
       html_url: typeof r.html_url === "string" ? r.html_url : null,
       created_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
       updated_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
@@ -230,6 +234,7 @@ function normalizePrReviewsPayload(payload) {
 function emptyGateSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
@@ -245,6 +250,7 @@ function normalizeGateSummary(summary) {
   }
   return {
     visible: true,
+    surface: summary.surface ?? "issue_comment",
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -257,6 +263,7 @@ function normalizeGateSummary(summary) {
 function emptyGateMarkerSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
@@ -275,6 +282,7 @@ function normalizeGateMarkerSummary(summary) {
   }
   return {
     visible: true,
+    surface: summary.surface ?? "issue_comment",
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,

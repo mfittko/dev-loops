@@ -454,6 +454,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       currentHeadSha: "abc1234",
       draftGate: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
@@ -464,6 +465,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       },
       preApprovalGate: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
@@ -474,6 +476,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       },
       draftGateMarker: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
@@ -487,6 +490,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       },
       preApprovalGateMarker: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
