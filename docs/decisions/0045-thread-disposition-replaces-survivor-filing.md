@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-08-03 ([PR 1553](https://github.com/mfittko/dev-loops/pull/1553))
+Superseded by [0046](0046-one-review-surface-per-gate-round.md) — 2026-08-04 ([PR 1558](https://github.com/mfittko/dev-loops/pull/1558))
 
 ## Context
 

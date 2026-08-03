@@ -1,0 +1,17 @@
+# 0046. One PR review carries the whole gate round, and a deferral is recorded on its thread plus the ledger
+
+## Status
+
+Accepted — 2026-08-04 ([PR 1558](https://github.com/mfittko/dev-loops/pull/1558))
+
+## Context
+
+[0045](./0045-thread-disposition-replaces-survivor-filing.md) moved gate findings onto the PR under review: `close-gate-findings.mjs` posted its own review of type COMMENT for the round's findings, and a clean `pre_approval_gate` close upserted one further PR comment (`GATE-EXEC-DEFERRED-SUMMARY`) listing every deferred finding. The verdict itself was a third surface, an issue comment posted by `upsert-checkpoint-verdict.mjs`. One gate round therefore produced up to three separate conversation entries, each carrying an overlapping copy of the same finding text: the verdict comment's per-angle breakdown, the findings review, and the deferred summary. The operator reading the PR had to reconcile three renderings of one round, and the deferred summary in particular restated content already durably recorded on each finding's own thread and in the `tmp/gate-findings/...` ledger. [Issue 1556](https://github.com/mfittko/dev-loops/issues/1556) ordered the surfaces collapsed.
+
+## Decision
+
+A gate round produces exactly ONE new visible surface (`GATE-COMMENT-SINGLE-SURFACE`): a single PR review of type COMMENT posted by `upsert-checkpoint-verdict.mjs`. Passing that round's ledger via `--findings-ledger` puts the verdict fields and the round's findings on that one review — locatable findings as its inline comments, everything else body-filed under the verdict fields — so each finding's text appears exactly once per round and the body's per-angle breakdown degrades to `angle → verdict (+ count)`. `close-gate-findings.mjs` keeps only the thread disposition pass and posts nothing of its own. The deferred-summary comment is removed outright, and `GATE-EXEC-DEFERRED-SUMMARY` is renamed to `GATE-EXEC-DEFERRAL-RECORD`: a deferred finding's record lives in exactly two places, the resolving reply on its own thread and the durable findings-log ledger, never a third summary comment. Reading gate evidence follows the same collapse — the verdict is read from the review body, and the producer-owned `### Gate review:` header overrides the machine-artifact exclusion the findings-review marker would otherwise apply to that body. Rejected: keeping the findings review separate and only dropping the summary comment (still two overlapping surfaces per round, and the verdict's per-angle breakdown still duplicates finding text); keeping the summary comment and rebuilding it from thread markers (the rebuild source is the record, so the comment is a cache with no reader the ledger does not already serve).
+
+## Consequences
+
+The PR conversation now shows one entry per gate round, and the round's findings are anchored where they are fixed. The verdict-post path is the only writer of the visible surface, which makes the single-surface guarantee testable as a call-count on one poster instead of a coordination invariant across two. Two costs are accepted. GitHub exposes no endpoint to add inline comments to an already-submitted review, so a same-head correction can only body-file a finding the original post did not carry. And an operator who wants the full deferred set at a glance reads the ledger rather than a PR comment; a verdict posted as an issue comment by an earlier version still validates and is still corrected on its own surface, but no new round creates one.
