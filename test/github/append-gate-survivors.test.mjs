@@ -160,6 +160,23 @@ test("renderSurvivorsCommentBody neutralizes Copilot summon tokens so a filed su
   assert.equal(containsBareCopilotSummon(body), false, "rendered survivors body must not arm the anti-summon guard");
 });
 
+test("renderSurvivorsCommentBody strips stray cell backticks so no cell can pair a span across the | boundary", () => {
+  // A lone backtick in the Summary cell would otherwise pair with the Location
+  // cell's code-span backtick after GFM splits the row, rendering the summary's
+  // @copilot as a live mention while the line-oriented scan sees it in-span.
+  const survivors = [
+    { severity: "defer", angle: "a", summary: "use ` then @copilot here", files: ["a.md"] },
+  ];
+  const body = renderSurvivorsCommentBody({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", survivors });
+  const row = body.split("\n").find((line) => line.includes("| defer |"));
+  const cells = row.split("|").map((c) => c.trim());
+  for (const cell of cells) {
+    const backticks = (cell.match(/`/g) ?? []).length;
+    assert.equal(backticks % 2, 0, `cell carries an unmatched backtick: ${JSON.stringify(cell)}`);
+    assert.ok(!/(^|\s)@copilot\b/.test(cell), `cell carries a bare summon token: ${JSON.stringify(cell)}`);
+  }
+});
+
 test("renderSurvivorsCommentBody strips backticks from file refs so a path cannot close its code span", () => {
   const survivors = [
     { severity: "defer", angle: "a", summary: "s", files: ["x`](http://evil) **bold** `y", "a|b.md"] },

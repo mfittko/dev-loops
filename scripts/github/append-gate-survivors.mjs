@@ -49,13 +49,18 @@ const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 // Ranking for deterministic survivor-table ordering (worth-fixing-now before defer).
 const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
 
-// Entity-encode a table cell: sanitizeInline neutralizes embedded HTML-comment
-// delimiters and whitespace runs (shared with post-gate-findings.mjs); `|` is
-// additionally entity-encoded (never backslash-escaped — a backslash-escape is
-// itself a bypass vector for the next consumer that doesn't expect it) so a
-// finding field can never break out of its Markdown table cell.
+// Entity-encode a table cell: sanitizeCodeSpan neutralizes embedded
+// HTML-comment delimiters and whitespace runs AND strips literal backticks
+// (shared with post-gate-findings.mjs); `|` is additionally entity-encoded
+// (never backslash-escaped — a backslash-escape is itself a bypass vector for
+// the next consumer that doesn't expect it) so a finding field can never break
+// out of its Markdown table cell. Backtick-stripping is load-bearing for every
+// cell, not just the code-span Location cell: GFM splits the row on `|` before
+// inline parsing, so a stray backtick in one cell can pair with a code-span
+// backtick in a later cell and hide a live mention from the line-oriented
+// summon-token scan while GitHub still renders it as a mention.
 function sanitizeCell(value) {
-  return sanitizeInline(value).replace(/\|/g, "&#124;");
+  return sanitizeCodeSpan(value).replace(/\|/g, "&#124;");
 }
 
 export function buildSurvivorsMarker({ repo, pr, gate, headSha }) {

@@ -829,7 +829,11 @@ honored regardless.
 
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
-`write-gate-findings-log.mjs` writes it). `requireFanoutProvenance`, when enabled, is
+`write-gate-findings-log.mjs` writes it). Survivor filing is likewise uniform: an inline
+close is a gate close, so after the inline verdict is posted, run
+`append-gate-survivors.mjs --ledger <path>` against that same findings-log ledger exactly
+as [Survivor filing](#survivor-filing) requires for a fan-out close — the reduced review
+path never reduces what gets filed. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
 scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inline
 verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is
