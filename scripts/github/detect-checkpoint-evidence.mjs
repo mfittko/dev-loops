@@ -60,45 +60,49 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     "currentHeadSha": "abc1234",
     "draftGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "contractComplete": true,
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateSatisfied": true,
     "preApprovalGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preApprovalGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "contractComplete": true,
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preMergeGateCheck": {
@@ -107,6 +111,9 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     },
     "evidenceState": "satisfied"
   }
+  (surface is "review"|"issue_comment" (null when not visible): which GitHub
+  surface carries that verdict — new rounds always post a PR review,
+  "issue_comment" is a legacy verdict comment still read for back-compat.)
   (evidenceState is "satisfied"|"not_established"|"violation": "not_established"
   means evidence for the current head simply doesn't exist yet (draft,
   mid-Copilot-loop, pre-approval not yet re-run after a fix commit); "violation"

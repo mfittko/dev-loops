@@ -34,8 +34,10 @@ Output (stdout, JSON):
     "headSha": "abc1234",
     "currentHeadSha": "abc1234",
     "commentId": 101,
-    "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101"
+    "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101"
   }
+  (commentId/commentUrl identify the posted gate verdict review; a legacy
+  verdict issue comment corrected in place yields an #issuecomment- URL.)
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
