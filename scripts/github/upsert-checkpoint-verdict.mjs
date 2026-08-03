@@ -157,15 +157,27 @@ function normalizeExecutionMode(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
 }
+// Entity-encode the two literal delimiters this repo's own machine-artifact
+// markers open/close on (`<!--`/`-->`, see copilot-helpers.mjs's
+// GATE_MACHINE_ARTIFACT_MARKER_RE and this file's own finding/review-header
+// markers in close-gate-findings.mjs) so a free-text field can never quote one
+// at column 0 of a rendered verdict comment and be mistaken for a genuine
+// machine artifact by the shared comment summarizers. sanitizeStructuredInline
+// already does this for the --findings-json render path; this is the
+// equivalent for the free-text findings-summary/next-action/--findings-file
+// paths below, which render with newlines preserved and no other escaping.
+function encodeMachineArtifactMarkerDelimiters(value) {
+  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+}
 function normalizeRequiredText(value, flag) {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (normalized.length === 0) {
     throw parseError(`${flag} must be a non-empty string`);
   }
   if (flag === "--findings-summary") {
-    return summarizeCheckpointVerdictText(normalized);
+    return encodeMachineArtifactMarkerDelimiters(summarizeCheckpointVerdictText(normalized));
   }
-  return enforcePostedCommentLimit(collapseWhitespace(normalized), MAX_GATE_COMMENT_TEXT_LENGTH, flag);
+  return encodeMachineArtifactMarkerDelimiters(enforcePostedCommentLimit(collapseWhitespace(normalized), MAX_GATE_COMMENT_TEXT_LENGTH, flag));
 }
 function collapseWhitespace(value) {
   return String(value).replace(/\s+/gu, " ").trim();
@@ -1454,7 +1466,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // renders as its own `**Gate evidence note:**` line (see
     // renderGateReviewCommentBody), driven by coordination.gateEvidenceNote
     // passed straight through below.
-    options.findingsSummary = enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content");
+    options.findingsSummary = encodeMachineArtifactMarkerDelimiters(
+      enforcePostedCommentLimit(trimmedEnd, MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-file content"),
+    );
   }
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser

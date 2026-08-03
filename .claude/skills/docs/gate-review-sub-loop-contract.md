@@ -635,16 +635,21 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers every finding whose severity is in the gate's
   `blockCleanOnFindingSeverities` set. Through round 3 of the gate's chain, it also covers
-  every open worth-fixing-now finding, fixed the same way even though that severity is not
-  in the blocking set. From round 4 on, an open worth-fixing-now finding is no longer fixed
-  inside the gate: it is deferred per `GATE-EXEC-THREAD-DISPOSITION` instead. A defer-severity
-  finding is never fixed inside the gate, at any round. Two layers govern this, and they stay
-  distinct: the LEDGER verdict is `clean` whenever no finding at a blocking severity remains,
-  computed from `blockCleanOnFindingSeverities` alone and never from an open worth-fixing-now
-  thread; an unresolved in-window worth-fixing-now THREAD still forces another fix round, but
-  through the unresolved-feedback routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing
-  what the ledger verdict `clean` means. Widening the blocking set is a per-gate config decision
-  (`blockCleanOnFindingSeverities`), never a round-by-round judgement call.
+  every open LOCATABLE worth-fixing-now finding — one anchored to an in-diff `file:line` and
+  tracked through its own resolvable review thread per `GATE-EXEC-FINDING-THREADS` — fixed the
+  same way even though that severity is not in the blocking set. From round 4 on, an open
+  locatable worth-fixing-now finding is no longer fixed inside the gate: it is deferred per
+  `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
+  no code location, so it never gets a thread to fix through) is outside this round window
+  entirely — it is deferred by construction at post time, at any round, per
+  `GATE-EXEC-DEFERRED-SUMMARY`. A defer-severity finding is never fixed inside the gate, at any
+  round. Two layers govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
+  no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
+  and never from an open worth-fixing-now thread; an unresolved in-window locatable
+  worth-fixing-now THREAD still forces another fix round, but through the unresolved-feedback
+  routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
+  means. Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
+  never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
 

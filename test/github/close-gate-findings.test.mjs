@@ -84,8 +84,8 @@ function threadNode({ id, isResolved = false, path: filePath = null, line = null
 
 // Rendered through the real producer (upsert-checkpoint-verdict.mjs's
 // renderGateReviewCommentBody) rather than restating its header literal, so
-// this fixture can never drift from what countVerdictComments'
-// matchGateReviewCommentHeader actually recognizes.
+// this fixture can never drift from what round source (A)'s
+// matchGateReviewCommentHeader/reviewed-head-SHA parsing actually recognizes.
 function verdictCommentBody(gate, headSha = HEAD_SHA) {
   return renderGateReviewCommentBody({
     gate,
@@ -94,6 +94,15 @@ function verdictCommentBody(gate, headSha = HEAD_SHA) {
     findingsSummary: "no issues found",
     nextAction: "proceed",
   });
+}
+
+// A distinct-but-valid 40-hex "reviewed head sha" for round-history fixtures.
+// Round source (A) counts DISTINCT reviewed-head SHAs (see
+// close-gate-findings.mjs's collectVerdictHeadShas), so N round-history
+// verdict-comment fixtures must carry N distinct heads to model N completed
+// rounds — the way production data (a new head per fix round) actually would.
+function nthHeadSha(n) {
+  return `${HEAD_SHA.slice(0, -2)}${String(n).padStart(2, "0")}`;
 }
 
 function reviewsEntry(reviews) {
@@ -537,7 +546,7 @@ test("closeGateFindings: full round — inline must-fix, body-filed defer, suppr
     author: "gate-bot",
   });
 
-  const verdictComments = [1, 2, 3, 4].map((n) => ({ id: 8000 + n, body: verdictCommentBody("pre_approval_gate") }));
+  const verdictComments = [1, 2, 3, 4].map((n) => ({ id: 8000 + n, body: verdictCommentBody("pre_approval_gate", nthHeadSha(n)) }));
 
   const ledger = makeLedger({ findings: [finding.must, finding.suppressed, finding.deferBody] });
 
@@ -623,8 +632,8 @@ test("countVerdictComments (round source A): a post-gate-findings comment and a 
       threadsEntry([]),
       threadsEntry([]),
       issueCommentsEntry([
-        { id: 1, body: verdictCommentBody("pre_approval_gate") },
-        { id: 2, body: verdictCommentBody("pre_approval_gate") },
+        { id: 1, body: verdictCommentBody("pre_approval_gate", nthHeadSha(1)) },
+        { id: 2, body: verdictCommentBody("pre_approval_gate", nthHeadSha(2)) },
         { id: 3, body: findingsCommentBody },
         { id: 4, body: deferredSummaryBody },
       ]),
@@ -633,7 +642,7 @@ test("countVerdictComments (round source A): a post-gate-findings comment and a 
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
-      // 2 genuine verdict comments — never 4.
+      // 2 genuine verdict comments (distinct reviewed heads) — never 4.
       assert.equal(result.round, 2);
     },
   ));
@@ -647,7 +656,7 @@ test("countVerdictComments (round source A): N genuine verdict comments for THIS
       threadsEntry([]),
       threadsEntry([]),
       issueCommentsEntry([
-        ...[1, 2, 3].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") })),
+        ...[1, 2, 3].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) })),
         { id: 4, body: verdictCommentBody("pre_approval_gate") },
       ]),
       threadsEntry([]),
@@ -683,12 +692,13 @@ test("countVerdictComments (round source A): a comment merely QUOTING the verdic
   ));
 });
 
-// Input-validation (round 2 fix): a verdict posted via the PR-review
-// escape-hatch path (upsert-checkpoint-verdict.mjs's alternative to the
-// default issue-comment post) is counted too — round source (A) previously
-// read only issue comments, so a chain whose verdict history lands as PR
-// reviews would undercount forever.
-test("countVerdictComments (round source A): a verdict posted as a PR REVIEW body (the escape-hatch path) counts toward the round", async () => {
+// Round source (A) also scans PR reviews for a verdict-headed body, as
+// defense in depth (see the comment above collectVerdictHeadShas). Round is
+// the SIZE of the SET of distinct reviewed-head SHAs across BOTH streams, so
+// the SAME head's verdict landing on both surfaces must count ONCE, not
+// twice — a raw per-stream comment count would inflate the round and end the
+// worth-fixing-now fix window early.
+test("countVerdictComments (round source A): the SAME reviewed head's verdict on BOTH the issue-comment and PR-review streams counts ONCE", async () => {
   const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
@@ -701,8 +711,51 @@ test("countVerdictComments (round source A): a verdict posted as a PR REVIEW bod
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
-      // 1 issue-comment verdict + 1 review-posted verdict = round 2.
+      // Same reviewed head (HEAD_SHA) on both streams — one distinct head, round 1.
+      assert.equal(result.round, 1);
+    },
+  ));
+});
+
+test("countVerdictComments (round source A): DISTINCT reviewed heads across the issue-comment and PR-review streams count distinctly", async () => {
+  const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([{ id: 501, body: verdictCommentBody("pre_approval_gate", nthHeadSha(2)) }]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate", nthHeadSha(1)) }]),
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      // Two distinct reviewed heads, one per stream — round 2.
       assert.equal(result.round, 2);
+    },
+  ));
+});
+
+test("countVerdictComments (round source A): a PR review merely quoting the verdict header, with no parseable reviewed-head line, does not count", async () => {
+  const ledger = makeLedger({ gate: "pre_approval_gate", findings: [] });
+  // A third-party review that quotes the header literal (e.g. summarizing the
+  // gate's own comment format) but carries no `**Reviewed head SHA:**` line at
+  // all — it can never be attributed to a distinguishable head, so it must
+  // not silently count toward the round.
+  const headerOnlyNoHeadSha = "### Gate review: `pre_approval_gate`\n\nThis PR follows the standard gate-review comment format.";
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([{ id: 501, body: headerOnlyNoHeadSha }]),
+      threadsEntry([]),
+      threadsEntry([]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("pre_approval_gate") }]),
+      threadsEntry([]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      // Only the issue comment's head counts — the header-only review contributes nothing.
+      assert.equal(result.round, 1);
     },
   ));
 });
@@ -727,7 +780,7 @@ test("closeGateFindings: an open worth-fixing-now thread stays unresolved AT ROU
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
-      issueCommentsEntry([1, 2, 3].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      issueCommentsEntry([1, 2, 3].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
     ],
@@ -797,7 +850,7 @@ test("closeGateFindings: a thread selected for deferral whose REST-fetched body 
       reviewsEntry([]),
       threadsEntry([threadWs]),
       threadsEntry([threadWs]),
-      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
       threadsEntry([threadWs]),
       threadsEntry([threadWs]),
       // The REST GET fixture body carries a leading space before the marker —
@@ -830,7 +883,7 @@ test("closeGateFindings: a worth-fixing-now thread deferred this run is included
     body: `${buildFindingMarker({ fp: "8888888888888888", severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`,
   });
   const ledger = makeLedger({ verdict: "clean", findings: [] });
-  const verdictComments = [1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("pre_approval_gate") }));
+  const verdictComments = [1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("pre_approval_gate", nthHeadSha(n)) }));
 
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
@@ -923,6 +976,145 @@ test("closeGateFindings: fetchThreadsWithFullBodies fails closed when the full-b
   ));
 });
 
+// Input-validation (round 3 fix): a join miss must NOT fail closed when the
+// listing body was never truncated in the first place — only a body BOTH
+// over list-review-threads.mjs's BODY_EXCERPT_MAX_CHARS AND ending with the
+// ellipsis glyph is genuinely truncated (isTruncatedListingExcerpt).
+test("closeGateFindings: a join miss on a SHORT body (never truncated) does not fail closed — the run completes on the listing body", async () => {
+  const shortBody = `${buildFindingMarker({ fp: "2222222222222222", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): short body`;
+  const threadShort = threadNode({
+    id: "THREAD_SHORT",
+    isResolved: false,
+    path: "src/naming.mjs",
+    line: 3,
+    commentId: 7100,
+    body: shortBody,
+  });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadShort]), // fetchAllReviewThreads (threadsPrePost)
+      threadsEntry([]), // captureParsedReviewThreads: the join MISSES this comment entirely
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
+      threadsEntry([threadShort]), // fetchAllReviewThreads (threadsForDisposition)
+      threadsEntry([threadShort]), // captureParsedReviewThreads (disposition snapshot) — normal join hit
+      getReviewCommentEntry(7100, shortBody),
+      patchReviewCommentEntry(7100),
+      postReplyEntry(7100, { id: 7900 }),
+      resolveThreadEntry("THREAD_SHORT"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+test("closeGateFindings: a join miss on a SHORT body that legitimately ends with its own ellipsis character does not fail closed", async () => {
+  const shortBodyEndingInEllipsis = `${buildFindingMarker({ fp: "3333333333333333", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): trailing thought…`;
+  const threadEllipsis = threadNode({
+    id: "THREAD_ELLIPSIS",
+    isResolved: false,
+    path: "src/naming.mjs",
+    line: 3,
+    commentId: 7101,
+    body: shortBodyEndingInEllipsis,
+  });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadEllipsis]),
+      threadsEntry([]), // join miss
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
+      threadsEntry([threadEllipsis]),
+      threadsEntry([threadEllipsis]), // disposition snapshot — normal join hit
+      getReviewCommentEntry(7101, shortBodyEndingInEllipsis),
+      patchReviewCommentEntry(7101),
+      postReplyEntry(7101, { id: 7901 }),
+      resolveThreadEntry("THREAD_ELLIPSIS"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// Determinism (round 3 fix): the `thread.commentId === null` early return in
+// fetchThreadsWithFullBodies used to bypass the truncation guard entirely — a
+// thread with no resolvable comment id can never be found in the full-body
+// join no matter how the two walks interleave, so a truncated excerpt on that
+// path must fail closed exactly like an ordinary join miss, keyed on threadId
+// since there is no commentId to name.
+test("closeGateFindings: fetchThreadsWithFullBodies fails closed for a truncated thread that carries no comment id to join against", async () => {
+  const longBody = "y".repeat(220);
+  const threadNoCommentId = threadNode({
+    id: "THREAD_NO_ID",
+    isResolved: false,
+    path: "src/cache.mjs",
+    line: 9,
+    commentId: null,
+    body: longBody,
+  });
+  const ledger = makeLedger({ findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadNoCommentId]),
+      threadsEntry([]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /Could not resolve the full body for review thread THREAD_NO_ID/,
+      );
+    },
+  ));
+});
+
+// Input-validation (round 3 fix): commentId is validated BEFORE it is ever
+// interpolated into a `pulls/comments/{commentId}` API path — a thread whose
+// first comment has no resolvable databaseId can never be stamped/resolved,
+// so selectDispositionTargets must reject it by threadId rather than let
+// stampDeferredDisposition hit `pulls/comments/null` and surface an opaque
+// "gh command failed: <404 text>" naming neither the thread nor the cause.
+test("closeGateFindings: a gate-authored thread selected for deferral with no resolvable comment id fails closed, named by threadId", async () => {
+  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): short body`;
+  const threadNoCommentId = threadNode({
+    id: "THREAD_NO_COMMENT_ID",
+    isResolved: false,
+    path: "src/naming.mjs",
+    line: 3,
+    commentId: null,
+    body: shortBody,
+  });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
+
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      reviewsEntry([]),
+      threadsEntry([threadNoCommentId]),
+      threadsEntry([threadNoCommentId]),
+      issueCommentsEntry([{ id: 1, body: verdictCommentBody("draft_gate") }]),
+      threadsEntry([threadNoCommentId]),
+      threadsEntry([threadNoCommentId]),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /THREAD_NO_COMMENT_ID carries a gate-authored finding marker.*no resolvable comment id/s,
+      );
+    },
+  ));
+});
+
 // ---------------------------------------------------------------------------
 // Integration: in-window worth-fixing-now stays unresolved
 // ---------------------------------------------------------------------------
@@ -943,7 +1135,7 @@ test("closeGateFindings: an open worth-fixing-now thread at round <= 3 is left u
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
-      issueCommentsEntry([1, 2].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      issueCommentsEntry([1, 2].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
     ],
@@ -1322,7 +1514,7 @@ test("closeGateFindings: a finding whose own text quotes the literal 'dispositio
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
-      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
       // GET returns the body with the marker's OWN disposition field still
@@ -1359,7 +1551,7 @@ test("closeGateFindings: stampDeferredDisposition skips the PATCH when the marke
       reviewsEntry([]),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
-      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate") }))),
+      issueCommentsEntry([1, 2, 3, 4].map((n) => ({ id: n, body: verdictCommentBody("draft_gate", nthHeadSha(n)) }))),
       threadsEntry([threadOpenWfn]),
       threadsEntry([threadOpenWfn]),
       getReviewCommentEntry(6501, alreadyStampedBody),

@@ -9,12 +9,16 @@ import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub
 import {
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
+  GATE_REVIEW_COMMENT_HEADER_RE,
+  matchGateReviewCommentHeader,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+import { isGateMachineArtifactBody, summarizeGateReviewComments } from "@dev-loops/core/github/copilot-helpers";
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 
@@ -600,6 +604,54 @@ test("summarizeCheckpointVerdictText does not treat markdown headings as shell c
     summarizeCheckpointVerdictText(narrative),
     "# Summary Validation recap passed through manual review. ## Notes This is prose, not a shell transcript.",
   );
+});
+
+// Producer hardening: a free-text findings summary that itself quotes one of
+// this repo's own machine-artifact marker literals (column 0 of a line) must
+// not let the rendered verdict comment get mistaken for that artifact by the
+// shared summarizers (packages/core/src/github/copilot-helpers.mjs) — which
+// would silently erase the gate's own evidence for the current head.
+test("a --findings-summary quoting the gate-findings-review marker literal is entity-encoded and the rendered comment still survives the shared-summarizer filter", () => {
+  const options = parseUpsertCheckpointVerdictCliArgs([
+    "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+    "--verdict", "findings_present",
+    "--findings-summary", "<!-- dev-loops:gate-findings-review draft_gate abc1234 round=1 -->\nsee the thread for detail",
+    "--next-action", "fix the open thread",
+    "--inline-reason", DEFAULT_TEST_INLINE_REASON,
+  ]);
+  // Encoded at parse time — the marker's opening delimiter can never survive
+  // as a literal `<!--` in the value this module renders into the comment.
+  assert.doesNotMatch(options.findingsSummary, /<!--/);
+
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: options.findingsSummary,
+    nextAction: options.nextAction,
+  });
+  assert.ok(!isGateMachineArtifactBody(body), "a genuine verdict comment must never be excluded as a machine artifact");
+  const summary = summarizeGateReviewComments([{ id: 1, body, updated_at: "2026-01-01T00:00:00Z" }]);
+  assert.ok(summary.draft_gate, "the comment must still win marker selection as this gate's verdict");
+  assert.equal(summary.draft_gate.verdict, "findings_present");
+});
+
+// Anti-drift, cross-producer: skills/dev-loop/scripts/post-gate-verdict-fallback.mjs
+// restates the "### Gate review: `<gate>`" header literal by hand (its own
+// docstring says it mirrors renderGateReviewCommentBody's shape); pin that a
+// fallback-posted verdict is still recognized by the SAME exported recognizer
+// close-gate-findings.mjs's round source (A) reads, so a fallback-posted
+// verdict is never silently uncounted.
+test("matchGateReviewCommentHeader also recognizes post-gate-verdict-fallback.mjs's hand-rendered header", () => {
+  const body = renderFallbackGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "all clear",
+    nextAction: "merge",
+  });
+  assert.match(body, GATE_REVIEW_COMMENT_HEADER_RE);
+  assert.equal(matchGateReviewCommentHeader(body), "draft_gate");
 });
 
 test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () => {

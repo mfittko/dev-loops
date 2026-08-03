@@ -13,7 +13,7 @@ import { commentIssue } from "./comment-issue.mjs";
 import { findMarkedComment, listIssueComments, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { matchGateReviewCommentHeader } from "./upsert-checkpoint-verdict.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
@@ -31,9 +31,12 @@ threads, a single combined PR comment summarizing every deferred finding is
 created (or updated in place on a later run).
 
 Round number = the MAXIMUM of three worktree-independent-first sources:
-  (A) count of this gate's own verdict comments on the PR (repos/.../issues/.../comments,
-      one new comment per newly-gated head — the same history detect-checkpoint-evidence
-      reads), current round's own verdict comment already posted by the time this runs;
+  (A) count of DISTINCT reviewed-head SHAs across this gate's own verdict comments —
+      issue comments (repos/.../issues/.../comments, the same history
+      detect-checkpoint-evidence reads) plus any verdict-headed PR review body
+      (repos/.../pulls/.../reviews) — deduped so the same head's verdict landing on
+      both surfaces counts once, current round's own verdict comment already posted
+      by the time this runs;
   (B) the highest round= recorded on this gate's own posted review headers/finding
       markers (co-located with a review whose body also carries this gate's own
       "gate-findings-review <gate>" marker, so it can never mix rounds across gates);
@@ -94,12 +97,15 @@ function slugForMarker(value) {
   return bounded.length > 0 ? bounded : "unknown";
 }
 
-// True when a finding at `severity`, reconciled against the CURRENT round,
-// is disposed as deferred: must-fix never defers; worth-fixing-now defers only
+// True when a finding at `severity`, reconciled against the CURRENT round, is
+// disposed as deferred: must-fix never defers; worth-fixing-now defers only
 // once the chain is past the in-gate fix window; defer always defers
-// immediately. Shared by the thread disposition pass (selectDispositionTargets)
-// and body-filed finding rendering (renderNonLocatableBlock) so both paths
-// agree on exactly when a finding counts as deferred.
+// immediately. Governs the THREAD disposition pass (selectDispositionTargets)
+// ONLY — a locatable finding's round-gated fix window, decided through its own
+// resolvable review thread. Body-filed finding rendering (renderNonLocatableBlock)
+// deliberately does NOT call this: a body-filed finding never gets a thread to
+// fix through, so it is stamped deferred unconditionally at render time,
+// regardless of round (see that function's own comment).
 function isDeferredAtRound(severity, round) {
   if (severity === "must-fix") return false;
   if (severity === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
@@ -234,8 +240,9 @@ export function renderInlineCommentBody(finding, { round }) {
 // disposition=deferred the moment it is posted. must-fix stays unstamped
 // (the ledger blocks a clean verdict on it; it is never body-filed as an
 // accepted outcome). This is what keeps the finding from being suppressed by
-// its own fingerprint on a later run while tracked nowhere (buildFingerprint
-// suppression + zero surface = permanent silent loss).
+// its own fingerprint (fingerprintFinding, matched back on a later run via
+// collectFingerprints) while tracked nowhere else (fingerprint suppression +
+// zero surface = permanent silent loss).
 function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
   const disposition = finding.severity === "must-fix" ? undefined : "deferred";
@@ -519,12 +526,39 @@ async function updateIssueComment({ repo, commentId, body }, { env, ghCommand })
 // the producer of that literal) is line-start anchored so a quoted header in a
 // reply can't count, and keeps this consumer from drifting from the producer if
 // the label wording ever changes.
-function countVerdictComments(comments, gate) {
-  let count = 0;
+//
+// The literal "**Reviewed head SHA:** `<sha>`" line renderGateReviewCommentBody
+// always renders immediately after the header identifies WHICH head a matched
+// comment is evidence for. Round source (A) is the SIZE of the SET of distinct
+// reviewed-head SHAs collected across BOTH the issue-comment and PR-review
+// streams (collectVerdictHeadShas below), never an additive raw comment count:
+// this module's own sanctioned producer (upsert-checkpoint-verdict.mjs) only
+// ever posts an issue comment (createComment/updateComment, both against
+// repos/{repo}/issues/{pr}/comments), and COPILOT-FOLLOWUP-GATE-COMMENT-CANONICAL
+// (skills/copilot-pr-followup/SKILL.md) forbids posting a gate verdict as a
+// `gh pr review`. The PR-review stream is scanned anyway, purely as defense in
+// depth: detect-checkpoint-evidence.mjs's own gate-evidence read has
+// historically had to merge a comments scan with a reviews scan to guard
+// against a duplicate/hand-posted verdict landing there, so a verdict for the
+// SAME head could in principle exist on both surfaces. Deduping by head (not
+// by raw comment/review count) means that duplication can never inflate the
+// round and end the worth-fixing-now fix window early. A comment/review body
+// that matches the header literal but carries no parseable reviewed-head line
+// contributes nothing — it cannot be a genuine verdict for any distinguishable
+// head, so it must not silently count.
+const REVIEWED_HEAD_SHA_RE = /^\*\*Reviewed head SHA:\*\*\s*`([0-9a-f]{7,64})`\s*$/m;
+
+function extractReviewedHeadSha(body) {
+  const match = typeof body === "string" ? body.match(REVIEWED_HEAD_SHA_RE) : null;
+  return match ? match[1].toLowerCase() : null;
+}
+
+function collectVerdictHeadShas(comments, gate, headShas) {
   for (const comment of comments) {
-    if (matchGateReviewCommentHeader(comment?.body) === gate) count += 1;
+    if (matchGateReviewCommentHeader(comment?.body) !== gate) continue;
+    const headSha = extractReviewedHeadSha(comment.body);
+    if (headSha) headShas.add(headSha);
   }
-  return count;
 }
 
 // Scoped strictly to review bodies that carry THIS gate's own header marker —
@@ -618,6 +652,14 @@ function selectDispositionTargets(threads, round) {
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue; // not a gate-authored thread
     if (!isDeferredAtRound(marker.severity, round)) continue;
+    // commentId is null whenever list-review-threads.mjs could not resolve a
+    // finite databaseId for the thread's first comment. Reject it here, named
+    // by threadId, rather than let it reach stampDeferredDisposition and
+    // interpolate unchecked into `pulls/comments/null` — a bare "gh command
+    // failed: <404 text>" names neither the thread nor the cause.
+    if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
+      throw new Error(`Thread ${thread.threadId} carries a gate-authored finding marker selected for deferral but has no resolvable comment id (commentId=${JSON.stringify(thread.commentId)}); refuse to stamp/resolve it.`);
+    }
     targets.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity });
   }
   return targets;
@@ -785,11 +827,19 @@ function buildBodyFiledSummaryRows(reviews, { repo, pr }) {
   return rows;
 }
 
+// Only a non-empty string body is a usable join hit. A comment whose
+// databaseId resolves but whose body is missing/empty (a minimized comment, a
+// GraphQL field genuinely absent) must NOT silently blank a thread's body —
+// that thread has a real listing excerpt already, and replacing it with "" is
+// strictly worse than a join MISS (which at least falls through to the
+// existing-excerpt/truncation check below); "" simply drops the thread out of
+// marker parsing, disposition, and suppression with no signal at all.
 function buildFullBodyByCommentId(comments) {
   const map = new Map();
   for (const comment of comments) {
-    if (typeof comment?.databaseId === "string" && comment.databaseId.length > 0) {
-      map.set(comment.databaseId, typeof comment.body === "string" ? comment.body : "");
+    if (typeof comment?.databaseId === "string" && comment.databaseId.length > 0
+      && typeof comment.body === "string" && comment.body.length > 0) {
+      map.set(comment.databaseId, comment.body);
     }
   }
   return map;
@@ -806,21 +856,37 @@ function buildFullBodyByCommentId(comments) {
 // one and absent from the other, so a join miss must fail closed rather than
 // silently fall back to the truncated excerpt (which could run every
 // downstream decision on a body cut mid-marker, varying with fetch
-// interleaving alone). The excerpt is self-identifying — excerptBody appends
-// a trailing U+2026 exactly when it truncated — so only fail when the join
-// misses AND the listing body carries that truncation marker; a short body
-// that never needed truncation is already complete, and is safe to keep as-is.
+// interleaving alone). The excerpt is self-identifying — excerptBody only ever
+// appends a trailing U+2026 when the body's length actually exceeded
+// list-review-threads.mjs's BODY_EXCERPT_MAX_CHARS — so only fail when the
+// join misses AND the listing body is BOTH over that length AND ends with the
+// ellipsis; a short body that legitimately ends with its own literal "…"
+// character (a reviewer's own prose) never needed truncation and is already
+// complete, so it is safe to keep as-is.
 const BODY_EXCERPT_ELLIPSIS = "…";
+
+function isTruncatedListingExcerpt(body) {
+  return typeof body === "string" && body.length > BODY_EXCERPT_MAX_CHARS && body.endsWith(BODY_EXCERPT_ELLIPSIS);
+}
 
 async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
   const threads = await fetchAllReviewThreads({ repo, pr }, gh);
   const snapshot = await captureParsedReviewThreads({ repo, pr }, gh);
   const fullBodyByCommentId = buildFullBodyByCommentId(snapshot.comments);
   const threadsWithFullBodies = threads.map((thread) => {
-    if (thread.commentId === null) return thread;
+    if (thread.commentId === null) {
+      // No databaseId means the join key itself is unavailable for this
+      // thread — it can never be found in fullBodyByCommentId no matter how
+      // the two walks interleave, so treat this exactly like a join miss
+      // rather than silently returning the (possibly truncated) excerpt.
+      if (isTruncatedListingExcerpt(thread.body)) {
+        throw new Error(`Could not resolve the full body for review thread ${thread.threadId}: the listing excerpt was truncated and the thread has no comment id to join the full body against.`);
+      }
+      return thread;
+    }
     const fullBody = fullBodyByCommentId.get(String(thread.commentId));
     if (fullBody !== undefined) return { ...thread, body: fullBody };
-    if (typeof thread.body === "string" && thread.body.endsWith(BODY_EXCERPT_ELLIPSIS)) {
+    if (isTruncatedListingExcerpt(thread.body)) {
       throw new Error(`Could not resolve the full body for review comment ${thread.commentId}: the listing excerpt was truncated and the full-body join missed it.`);
     }
     return thread;
@@ -913,13 +979,13 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
 
   // 3. Round.
   const verdictComments = await listIssueComments({ repo, pr }, gh);
-  // A verdict can also land as a PR review (the escape-hatch path
-  // upsert-checkpoint-verdict.mjs supports alongside its default issue-comment
-  // post) — count review-posted verdicts too so that path is not invisible to
-  // the round. `reviews` is already fetched above (step 1); this module's own
+  // `reviews` is already fetched above (step 1); this module's own
   // gate-findings review body never opens with the "### Gate review:" header,
-  // so there is no self-count risk.
-  const primaryRound = countVerdictComments(verdictComments, gate) + countVerdictComments(reviews, gate);
+  // so there is no self-count risk scanning it here too.
+  const verdictHeadShas = new Set();
+  collectVerdictHeadShas(verdictComments, gate, verdictHeadShas);
+  collectVerdictHeadShas(reviews, gate, verdictHeadShas);
+  const primaryRound = verdictHeadShas.size;
   const crossCheckRound = crossCheckRoundFromReviewBodies(reviews.map((r) => r.body), gate);
   const fallbackRound = await countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
   const round = Math.max(primaryRound, crossCheckRound, fallbackRound, 1);

@@ -24,12 +24,14 @@ const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // deferred-summary PR comment quotes a gate name plus a sha-shaped id in its
 // table rows the same way. Both are excluded HERE, inside the two shared
 // summarizers, because this module is the true merge point: every consumer
-// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs)
-// calls summarizeGateReviewComments/summarizeGateReviewCommentMarkers to turn
-// a raw comment/review list into a gate verdict, so filtering here — rather
-// than per-caller — covers all of them by construction. countVerdictComments
-// in close-gate-findings.mjs does not read through here; it has its own
-// strict line-start header regex and needs no exclusion.
+// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs,
+// request-copilot-review.mjs) calls summarizeGateReviewComments/
+// summarizeGateReviewCommentMarkers to turn a raw comment/review list into a
+// gate verdict, so filtering here — rather than per-caller — covers all of
+// them by construction. close-gate-findings.mjs's round counting does not
+// read through here; it matches upsert-checkpoint-verdict.mjs's own
+// producer-owned header literal via the exported matchGateReviewCommentHeader
+// and needs no exclusion.
 //
 // Anchored to the start of a line (`^` with `m`) so only a marker rendered as
 // the first character of its own line is excluded — a genuine verdict

@@ -5,6 +5,7 @@ import {
   containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
+  isGateMachineArtifactBody,
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
@@ -240,6 +241,76 @@ test("summarizeGateReviewComments defaults executionMode and inlineReason to nul
   const summary = summarizeGateReviewComments(comments);
   assert.equal(summary.draft_gate?.executionMode, null);
   assert.equal(summary.draft_gate?.inlineReason, null);
+});
+
+// This module is the true merge point for the machine-artifact exclusion
+// (see the comment above GATE_MACHINE_ARTIFACT_MARKER_RE): filtering here,
+// rather than per-caller, is what covers every consumer
+// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs,
+// request-copilot-review.mjs) by construction, so the exclusion must be pinned
+// at THIS level, not only indirectly via one caller's CLI tests.
+test("isGateMachineArtifactBody recognizes both machine-authored artifact markers, column-0 only", () => {
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->\nfindings"), true);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary -->\n### Deferred gate findings"), true);
+  assert.equal(isGateMachineArtifactBody("some prose\n<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->"), true);
+  // Mid-line (not the first character of its own line) never matches.
+  assert.equal(isGateMachineArtifactBody("see `<!-- dev-loops:gate-findings-review` for the marker shape"), false);
+  assert.equal(isGateMachineArtifactBody(null), false);
+});
+
+test("summarizeGateReviewComments excludes a machine-authored gate-findings-review artifact even though it names a gate and a hex sha", () => {
+  const comments = [
+    {
+      body: [
+        "<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->",
+        "> **worth-fixing-now** (`perf`): stale cache not invalidated",
+      ].join("\n"),
+      id: 1,
+    },
+  ];
+  assert.equal(summarizeGateReviewComments(comments).draft_gate, null);
+});
+
+test("summarizeGateReviewComments excludes a machine-authored deferred-summary artifact even though it names a gate and a sha-shaped id", () => {
+  const comments = [
+    {
+      body: [
+        "<!-- dev-loops:deferred-summary -->",
+        "### Deferred gate findings — PR #42",
+        "",
+        "| Severity | Angle | Summary | Location | Round | Thread |",
+        "| --- | --- | --- | --- | --- | --- |",
+        "| worth-fixing-now | draft_gate | quotes head aaa1111bbb2222c3333 | — | 1 | — |",
+      ].join("\n"),
+      id: 2,
+    },
+  ];
+  assert.equal(summarizeGateReviewComments(comments).draft_gate, null);
+});
+
+test("summarizeGateReviewCommentMarkers excludes the same machine-authored artifacts as summarizeGateReviewComments", () => {
+  const comments = [
+    { body: "<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->\nfindings body", id: 1 },
+  ];
+  assert.equal(summarizeGateReviewCommentMarkers(comments, { headSha: "aaa1111" }).draft_gate, null);
+});
+
+test("summarizeGateReviewComments still counts a genuine verdict comment that merely QUOTES the machine-artifact marker MID-LINE", () => {
+  const comments = [
+    {
+      body: [
+        "### Gate review: `draft_gate`",
+        "**Reviewed head SHA:** `aaa1111`",
+        "**Verdict:** clean",
+        "**Findings summary:** this gate excludes any body starting with `<!-- dev-loops:gate-findings-review` from evidence",
+        "**Next action:** merge",
+      ].join("\n"),
+      id: 3,
+    },
+  ];
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate?.commentId, 3);
+  assert.equal(summary.draft_gate?.verdict, "clean");
 });
 
 test("summarizeGateReviewCommentMarkers filters by headSha when provided", () => {
