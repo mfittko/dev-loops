@@ -146,6 +146,16 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
   }
   const missing = ["repo", "pr", "gate", "prevHead", "headSha"].filter((k) => options[k] === undefined);
   if (missing.length > 0) throw parseError(`Missing required arguments: ${missing.join(", ")}`);
+  // FAIL-CLOSED: a same-head "carry" is not a carry at all — it would re-seed the
+  // CURRENT round from its own (possibly retired) verdict, the exact channel
+  // round retirement (GATE-EXEC-ROUND-RETIREMENT) discards. A fresh fan-out at
+  // the same head must re-review every angle.
+  // startsWith, not ===: --prev-head is full-SHA-validated but --head-sha
+  // accepts 7-64 hex, so an abbreviated spelling of the same commit must not
+  // slip past the guard.
+  if (options.prevHead.startsWith(options.headSha)) {
+    throw parseError("--prev-head equals --head-sha — a same-head carry-forward would re-seed the round from its own prior verdict (retired rounds included); re-review the angles instead");
+  }
   return options;
 }
 

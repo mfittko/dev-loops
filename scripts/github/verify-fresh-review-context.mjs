@@ -78,7 +78,10 @@ Options:
                   safety argument. A hash MISMATCH (the context-builder WAS
                   re-run) or an existing sentinel with no recorded prefix hash
                   still fails closed — never a general bypass of the
-                  contamination guard. See "Sentinel lifecycle" in
+                  contamination guard. The mismatch refusal is not a dead end:
+                  retire the round explicitly (retire-gate-round.mjs,
+                  GATE-EXEC-ROUND-RETIREMENT) and re-fan fresh at the same
+                  head. See "Sentinel lifecycle" in
                   skills/docs/gate-review-sub-loop-contract.md.
   --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
                   semantics; kept for existing callers).
@@ -164,10 +167,16 @@ function resolveHeadRound(cwd = process.cwd()) {
     return null; // not a git repo / git unavailable
   }
 }
+// The live-sentinel filename prefix, owned here by the sentinel producer and
+// imported by every consumer that globs sentinels (verify-briefing-prefixes,
+// retire-gate-round, write-gate-context's rebuild warning) so the vocabulary
+// cannot drift.
+export const CHECKPOINT_SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 function sentinelRelative(scope, round) {
   const scopeSuffix = scope ? `-${scope}` : "";
   const roundSuffix = round ? `-${round}` : "";
-  return path.join("tmp", `checkpoint-context-sentinel${scopeSuffix}${roundSuffix}.json`);
+  return path.join("tmp", `${CHECKPOINT_SENTINEL_PREFIX.slice(0, -1)}${scopeSuffix}${roundSuffix}.json`);
 }
 function legacySentinelRelative(scope) {
   const suffix = scope ? `-${scope}` : "";
@@ -383,7 +392,7 @@ async function main(argv = process.argv.slice(2)) {
         fresh: false,
         sentinelCreated: false,
         round: round ?? null,
-        reason: `--same-head-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; use the standard head-bump retry instead."}`,
+        reason: `--same-head-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; retire the round explicitly (retire-gate-round.mjs) before re-fanning at this head."}`,
       }, false);
     }
     return finish({

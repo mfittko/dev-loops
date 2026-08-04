@@ -3122,3 +3122,39 @@ test("renderBriefingPrefix carries the worktree root and the git -C cwd-independ
   assert.ok(text.indexOf("Shell cwd is NOT trustworthy") < text.indexOf("## PR body"));
   assert.ok(text.includes("repoRoot"));
 });
+
+test("writeGateContext warns, naming the retirement command, when a rebuild overwrites a differing prefix at a head with live sentinels", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-warn-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  try {
+    // --head-sha may legitimately be abbreviated; the sentinel filename always
+    // embeds the FULL sha, and the warning must still fire (matched on the
+    // trailing full-SHA component with startsWith).
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]',
+      "--acceptance-criteria", "#9",
+    ];
+    const first = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    assert.equal(first.warning, undefined);
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+    // The OTHER gate's sentinel at the same head must not count.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-pre-approval-gate-yagni-${fullSha}.json`), "{}\n", "utf8");
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    assert.match(rebuilt.warning, /retire-gate-round\.mjs --gate draft_gate/);
+    assert.match(rebuilt.warning, /1 reviewer sentinel/);
+    // Same-bytes rewrite never warns (idempotent rerun, no invalidation).
+    const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    assert.equal(idempotent.warning, undefined);
+    // The pre-approval gate's own rebuild warns against ITS sentinel only.
+    const paArgs = baseArgs.map((a) => (a === "draft_gate" ? "pre_approval_gate" : a));
+    await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA body."]), { repoRoot });
+    const paRebuilt = await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA corrected."]), { repoRoot });
+    assert.match(paRebuilt.warning, /retire-gate-round\.mjs --gate pre_approval_gate/);
+    assert.match(paRebuilt.warning, /1 reviewer sentinel/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});

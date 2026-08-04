@@ -30,20 +30,21 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
 import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -664,7 +665,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gate.replace(/_/g, "-")}-<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   lines.push(
@@ -1069,7 +1070,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  *   run-gate-validation.mjs artifact; fails closed when missing/unreadable —
  *   see the CLI's `--validation-results` doc above).
  * @param {{ repoRoot?: string }} [runtime]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file" }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
@@ -1159,13 +1160,68 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
+  // Rebuild detection: overwriting a DIFFERENT prefix at a head that already
+  // has reviewer sentinels invalidates every one of them (their recorded hash
+  // can never match the new bytes), stranding the round. The rebuild itself is
+  // legitimate — warn and name the sanctioned retirement command instead of
+  // refusing or silently invalidating (GATE-EXEC-ROUND-RETIREMENT).
+  let rebuildWarning = null;
+  let existingBytes = null;
+  let readError = null;
+  // ONE copy of the operator-facing recovery command: the three warning
+  // branches below differ only in what went wrong, never in the remedy.
+  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
+  const warn = (text) => {
+    rebuildWarning = text;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  };
+  try {
+    existingBytes = await readFile(fullPrefixPath);
+  } catch (err) {
+    // ENOENT is the normal first-build case. Any other read failure means the
+    // rebuild-vs-identical comparison cannot run — surface that AS a warning
+    // (the rebuild is never refused — GATE-EXEC-ROUND-RETIREMENT).
+    if (err.code !== "ENOENT") readError = err;
+  }
+  if (readError !== null) {
+    warn(retireHint(`Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
+  } else if (existingBytes !== null) {
+    if (!existingBytes.equals(prefixBytes)) {
+      // Scoped to THIS gate's sentinels (the other gate's live round at the
+      // same head is not invalidated by this rebuild), and matched on the
+      // trailing full-SHA filename component with startsWith so a legitimately
+      // abbreviated --head-sha still detects them.
+      const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
+      const headPrefix = String(options.headSha).trim().toLowerCase();
+      // Only a missing tmp/ dir means "no sentinels". Any other scan failure
+      // (EACCES, ENOTDIR, ...) must neither be swallowed (it could hide live
+      // sentinels) nor refuse the rebuild (the rebuild is never refused —
+      // GATE-EXEC-ROUND-RETIREMENT): it surfaces AS the warning.
+      let scanError = null;
+      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
+        if (err.code === "ENOENT") return [];
+        scanError = err;
+        return [];
+      });
+      const liveSentinels = tmpDirEntries.filter((e) => {
+        if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
+        const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
+        return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
+      }).length;
+      if (scanError !== null) {
+        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
+      } else if (liveSentinels > 0) {
+        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match)`));
+      }
+    }
+  }
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
 
-  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode };
+  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode, ...(rebuildWarning ? { warning: rebuildWarning } : {}) };
 }
 
 /**
@@ -1193,7 +1249,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string }>}
  *   prefixMode is never "file" here — this programmatic entrypoint never threads a
  *   `prefixFile` into its internal writeGateContext() call, so it always self-renders.
  *   "file" mode is CLI-only (main()'s `--prefix-file` flag).

@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
+import { CHECKPOINT_SENTINEL_PREFIX as SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
 Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (skills/docs/gate-review-sub-loop-contract.md):
@@ -58,14 +59,15 @@ ONE identical prefix hash — two DIFFERENT hashes for the same gate fails close
 as a within-gate byte-identity violation, even when each hash individually
 matches a known record. When no records are present the check falls back to
 the conservative flat rule (all sentinels must share one hash).
-Never manually clear sentinels.`.trim();
+Never manually clear sentinels — after a legitimate context rebuild at the same
+head, retire-gate-round.mjs is the sanctioned path that moves them aside.`.trim();
 
 // Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
 // HEAD` value, so a short prefix would glob zero sentinels and read as a
 // vacuous pass — fail closed on anything shorter instead.
 const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {
@@ -201,7 +203,7 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
   let best = null;
   let bestLen = -1;
   for (const gate of gateNames) {
-    const prefix = gate.replace(/_/g, "-");
+    const prefix = gateScopePrefix(gate).slice(0, -1);
     if ((s === prefix || s.startsWith(`${prefix}-`)) && prefix.length > bestLen) {
       best = gate;
       bestLen = prefix.length;
