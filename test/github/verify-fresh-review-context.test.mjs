@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -733,7 +733,7 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
     const output = JSON.parse(fresh.stdout.trim());
     // The reported root is the cwd the sentinel validated — the authoritative
     // path for `git -C <repoRoot>` in cwd-resetting reviewer shells.
-    assert.equal(output.repoRoot, await realpathOf(tmpDir));
+    assert.equal(output.repoRoot, await realpath(tmpDir));
     const refused = runScript(["--scope", "root-probe"], { cwd: tmpDir });
     assert.equal(refused.status, 1);
     assert.equal(JSON.parse(refused.stdout.trim()).repoRoot, undefined);
@@ -747,13 +747,8 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
     assert.equal(retried.status, 0, retried.stderr);
     const retryOut = JSON.parse(retried.stdout.trim());
     assert.equal(retryOut.sameHeadRetry, true);
-    assert.equal(retryOut.repoRoot, await realpathOf(tmpDir));
+    assert.equal(retryOut.repoRoot, await realpath(tmpDir));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
-
-async function realpathOf(p) {
-  const { realpath } = await import("node:fs/promises");
-  return realpath(p);
-}

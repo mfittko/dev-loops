@@ -2482,7 +2482,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-angle> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt`. Refuse to proceed on contamination or a missing artifact.",
       "",
-      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Address the tree explicitly — every git command as \`git -C ${path.resolve(repoRoot)} ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's own output echoes this root as \`repoRoot\`.`,
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above FROM this worktree with its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C ${path.resolve(repoRoot)} ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
       "## PR body",
       "",
