@@ -2037,8 +2037,15 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     for (const a of members) grouped.add(a);
     result.push({ name: group.name, angles: members });
   }
+  // Dispatch-unit names key reviewer-sentinel scopes and batching, so they
+  // must be unique. An ungrouped angle whose name collides with an emitted
+  // group's name gets a disambiguated singleton unit name.
+  const usedNames = new Set(result.map((g) => g.name));
   for (const name of angles) {
-    if (!grouped.has(name)) result.push({ name, angles: [name] });
+    if (grouped.has(name)) continue;
+    const unitName = usedNames.has(name) ? `angle:${name}` : name;
+    usedNames.add(unitName);
+    result.push({ name: unitName, angles: [name] });
   }
   return result;
 }

@@ -3302,6 +3302,16 @@ test("resolveFanoutGroups: grouped default batches resolved angles onto their co
   ]);
 });
 
+test("resolveFanoutGroups: an ungrouped angle colliding with an emitted group name gets a disambiguated unit name", () => {
+  const config = fanoutConfig([{ name: "docs", angles: ["link-check"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["link-check", "docs"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["link-check"] },
+    { name: "angle:docs", angles: ["docs"] },
+  ]);
+  assert.equal(new Set(result.map((g) => g.name)).size, result.length);
+});
+
 test("resolveFanoutGroups: an angle not covered by any group forms an implicit singleton group", () => {
   const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
   const result = resolveFanoutGroups(config, "draft", ["scope"]);
