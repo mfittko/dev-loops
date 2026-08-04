@@ -698,3 +698,12 @@ test("renderFindingsCommentBody states that only the latest round is shown (#AC2
   assert.ok(body.includes("only the latest posted round"));
   assert.ok(body.includes("per-round gate reviews"));
 });
+
+test("a legacy defer-severity finding parses, normalizes, and renders the new label", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]));
+  assert.equal(findings[0].severity, "nice-to-have");
+  assert.equal(findings[0].disposition, "deferred");
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("Nice to have (1)"));
+  assert.ok(!body.includes("[`defer`]"));
+});

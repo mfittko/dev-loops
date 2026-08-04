@@ -135,7 +135,7 @@ Optional:
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
                                              Also, when given alongside --findings-json, its
-                                             known-severity (must-fix/worth-fixing-now/defer)
+                                             known-severity (must-fix/worth-fixing-now/nice-to-have)
                                              values are SUMMED and used as the posted
                                              "Findings summary:" total whenever that sum is
                                              HIGHER than --findings-json's own (possibly
@@ -617,7 +617,9 @@ function normalizeStructuredFinding(f) {
     return null;
   }
   const entry = {
-    severity: typeof f.severity === "string" ? f.severity.trim() : "",
+    // Alias-normalized so a legacy-spelled input can never render the retired
+    // word in a freshly posted comment (sort rank and label stay in sync).
+    severity: typeof f.severity === "string" ? /** @type {string} */ (normalizeSeverity(f.severity.trim())) : "",
     summary,
   };
   if (typeof f.file === "string" && f.file.trim().length > 0) {
@@ -1457,6 +1459,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     activeGateConfig.blockCleanOnFindingSeverities = activeGateConfig.blockCleanOnFindingSeverities.map(
       (sev) => /** @type {string} */ (normalizeSeverity(sev)),
     );
+  }
+  // Normalized at the CONSUME site, not only in the CLI parser: a direct
+  // programmatic caller may pass legacy-keyed counts, and the guard below
+  // must compare canonical keys on both sides.
+  if (options.findingsSeverityCounts && typeof options.findingsSeverityCounts === "object") {
+    const normalizedCounts = Object.create(null);
+    for (const [key, value] of Object.entries(options.findingsSeverityCounts)) {
+      const canonicalKey = /** @type {string} */ (normalizeSeverity(key));
+      normalizedCounts[canonicalKey] = (normalizedCounts[canonicalKey] ?? 0) + value;
+    }
+    options.findingsSeverityCounts = normalizedCounts;
   }
   if (
     options.verdict === "clean"

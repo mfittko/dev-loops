@@ -10,6 +10,7 @@ import {
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
+  normalizeStructuredFindings,
   renderGateReviewCommentBody,
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
@@ -4966,4 +4967,22 @@ test("upsert-checkpoint-verdict rejects a --findings-ledger written for a differ
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "docs", verdict: "findings_present", findings: [{ severity: "defer", summary: "legacy entry" }] },
+  ]);
+  assert.equal(angles[0].findings[0].severity, "nice-to-have");
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.ok(body.includes("[`nice-to-have`]"));
+  assert.ok(!body.includes("[`defer`]"));
 });

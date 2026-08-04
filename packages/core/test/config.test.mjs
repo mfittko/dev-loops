@@ -4618,3 +4618,17 @@ describe("resolveBaseBranch (#1368)", () => {
     assert.equal(bare, "spike/shakapacker-to-vite");
   });
 });
+
+test("resolveGateDispatchMode: legacy defer input escalates against a nice-to-have blocking entry (cross-spelling)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { preApproval: { blockCleanOnFindingSeverities: ["must-fix", "nice-to-have"] } },
+  };
+  const result = resolveGateDispatchMode(config, "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["defer"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
+});

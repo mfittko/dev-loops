@@ -84,7 +84,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     f = { ...f, severity: normalizeSeverity(f.severity) };
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
       throw parseError(`${flagLabel}[${i}].angle is required`);

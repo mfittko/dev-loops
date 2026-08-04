@@ -44,7 +44,7 @@ Follow those owners, then return your findings via the structured artifact below
     "verdict": "clean" | "findings_present",
     "headSha": "<reviewed head SHA from the briefing>",
     "findings": [
-      { "severity": "must-fix" | "worth-fixing-now" | "defer", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
+      { "severity": "must-fix" | "worth-fixing-now" | "nice-to-have", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
     "contextWidened": ["<adjacent-path-consulted>", "..."]
   }

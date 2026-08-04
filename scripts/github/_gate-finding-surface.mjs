@@ -214,7 +214,7 @@ export function renderInlineCommentBody(finding, { round }) {
 // its round<=3 in-gate fix window before deferring). A body-filed finding has
 // no such window to begin with — there is no thread to fix it through — so it
 // is deferred BY CONSTRUCTION, at render time, regardless of round: every
-// non-must-fix severity (worth-fixing-now, defer) is stamped
+// non-must-fix severity (worth-fixing-now, nice-to-have) is stamped
 // disposition=deferred the moment it is posted. must-fix stays unstamped
 // (the ledger blocks a clean verdict on it; it is never body-filed as an
 // accepted outcome). This is what keeps the finding from being suppressed by

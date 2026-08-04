@@ -1011,3 +1011,23 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("a legacy defer-severity finding normalizes to nice-to-have in the written log", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-legacy-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(path.join(tmpDir, result.path.replace(/^tmp\//, "")), "utf8").catch(() => readFile(result.path, "utf8")));
+    assert.equal(parsed.findings[0].severity, "nice-to-have");
+    assert.equal(parsed.findings[0].disposition, "deferred");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
