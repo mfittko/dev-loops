@@ -44,7 +44,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
 import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -665,7 +665,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gate.replace(/_/g, "-")}-<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   lines.push(
@@ -1166,14 +1166,26 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // legitimate — warn and name the sanctioned retirement command instead of
   // refusing or silently invalidating (GATE-EXEC-ROUND-RETIREMENT).
   let rebuildWarning = null;
+  let existingBytes = null;
+  let readError = null;
   try {
-    const existingBytes = await readFile(fullPrefixPath);
+    existingBytes = await readFile(fullPrefixPath);
+  } catch (err) {
+    // ENOENT is the normal first-build case. Any other read failure means the
+    // rebuild-vs-identical comparison cannot run — surface that AS a warning
+    // (the rebuild is never refused — GATE-EXEC-ROUND-RETIREMENT).
+    if (err.code !== "ENOENT") readError = err;
+  }
+  if (readError !== null) {
+    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  } else if (existingBytes !== null) {
     if (!existingBytes.equals(prefixBytes)) {
       // Scoped to THIS gate's sentinels (the other gate's live round at the
       // same head is not invalidated by this rebuild), and matched on the
       // trailing full-SHA filename component with startsWith so a legitimately
       // abbreviated --head-sha still detects them.
-      const gateScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${String(options.gate).replace(/_/g, "-")}-`;
+      const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
       const headPrefix = String(options.headSha).trim().toLowerCase();
       // Only a missing tmp/ dir means "no sentinels". Any other scan failure
       // (EACCES, ENOTDIR, ...) must neither be swallowed (it could hide live
@@ -1186,7 +1198,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return [];
       });
       const liveSentinels = tmpDirEntries.filter((e) => {
-        if (!e.isFile() || !e.name.startsWith(gateScopePrefix) || !e.name.endsWith(".json")) return false;
+        if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
         const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
         return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
       }).length;
@@ -1198,8 +1210,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         process.stderr.write(`WARNING: ${rebuildWarning}\n`);
       }
     }
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
   }
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");

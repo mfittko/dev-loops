@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
 Retire ONE GATE's review round at one head: move every reviewer sentinel of
@@ -36,20 +36,26 @@ Required:
                          never a side effect).
 Optional:
   --findings-dir <dir>   The round's per-angle findings artifacts directory.
-                         When given it MUST exist as a directory (fail closed
-                         on a typo rather than silently leaving artifacts
-                         live) and is moved into the retirement directory (an
-                         explicit discard that stays recoverable). Pass it
+                         When given it MUST exist as a real directory (no
+                         symlink) whose basename names the retired head SHA —
+                         both checks fail closed rather than silently leaving
+                         artifacts live or relocating an unrelated directory.
+                         It is moved into the retirement directory, an
+                         explicit discard recoverable for AUDIT only. Pass it
                          whenever artifacts were written for the retired
                          round: at the SAME head, a stale artifact would pass
                          the consolidate-fanin --head-sha stamp guard and
-                         silently mix into the new round's fan-in.
-  --tmp-root <dir>       Root tmp directory holding the sentinels (default: tmp).
+                         silently mix into the new round's fan-in. Omitting
+                         it while sentinels are retired emits a warning for
+                         the same reason.
+  --tmp-root <dir>       Root tmp directory holding the sentinels (default:
+                         tmp). MUST exist as a directory — a missing root
+                         fails closed rather than reading as an empty round.
 
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "retired": <n>,
     "sentinels": [...], "findingsDirRetired": <bool>,
-    "retirementDir": "...", "noop": <bool> }
+    "retirementDir": "...", "noop": <bool>, "warning"?: "..." }
   A gate+head with no sentinels (and no --findings-dir to move) is a NO-OP
   (retired: 0, noop: true), not an error.
 On error (stderr, JSON): { "ok": false, "error": "...",
@@ -66,8 +72,6 @@ Exit codes:
 
 const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
 const VALID_GATES = new Set(GATE_NAMES);
-// Sentinel scopes are the gate name with dashes (draft-gate-<angle>).
-const gateScopePrefix = (gate) => `${gate.replace(/_/g, "-")}-`;
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {
@@ -142,6 +146,10 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     entries = await readdir(tmpRoot, { withFileTypes: true });
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
+    // A missing tmp root means the caller pointed retirement at the wrong
+    // place: nothing sentinel-shaped could ever live there, so "retired: 0"
+    // would be the vacuous success the full-SHA guard exists to prevent.
+    throw new Error(`tmp root ${JSON.stringify(tmpRoot)} is not an existing directory — refusing a retirement that would vacuously succeed`);
   }
   const sentinels = entries
     .filter((e) => e.isFile() && e.name.startsWith(namePrefix) && e.name.endsWith(suffix))
@@ -152,15 +160,25 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   if (findingsDir !== null) {
     let stats = null;
     try {
-      stats = await stat(findingsDir);
+      stats = await lstat(findingsDir);
     } catch (err) {
       if (err.code !== "ENOENT") throw err;
     }
     // Fail closed on a typo: an explicitly named findings dir that does not
     // exist as a directory would otherwise read as "nothing to retire" while
     // the real artifacts stay live and mix into the next round's fan-in.
+    // lstat, not stat: a symlink must not smuggle an unrelated directory
+    // through the guard (rename would move the link target's namespace entry,
+    // not what the link points at — the guard and the move must agree).
     if (stats === null || !stats.isDirectory()) {
-      throw new Error(`--findings-dir ${JSON.stringify(findingsDir)} is not an existing directory — refusing a retirement that would silently leave the round's artifacts live`);
+      throw new Error(`--findings-dir ${JSON.stringify(findingsDir)} is not an existing directory (symlinks are rejected) — refusing a retirement that would silently leave the round's artifacts live`);
+    }
+    // The findings dir must be THIS round's: sanctioned round-artifact
+    // directories are keyed by the full head SHA in their basename. Without
+    // this, any existing directory could be silently relocated under an
+    // ok:true report.
+    if (!path.basename(findingsDir).includes(headSha)) {
+      throw new Error(`--findings-dir ${JSON.stringify(findingsDir)} does not name head ${headSha} in its basename — refusing to retire a directory that is not this round's artifacts`);
     }
     findingsDirPresent = true;
   }
@@ -218,7 +236,14 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       findingsDirRetired = true;
     }
     await writeRecord(false);
-    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false };
+    // An omitted --findings-dir has the same consequence as a mistyped one
+    // when the round DID write artifacts: they stay live at this head. The
+    // omission can be legitimate (no artifacts written), so it warns instead
+    // of failing closed.
+    const warning = findingsDirPresent
+      ? null
+      : "no --findings-dir was given — if the retired round wrote findings artifacts they remain LIVE at this head and would pass the head-stamp guard into the next round's fan-in";
+    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false, ...(warning ? { warning } : {}) };
   } catch (err) {
     // Partial retirement: report what already moved and where it lives, and
     // still write the audit record with the partial state — an unaudited

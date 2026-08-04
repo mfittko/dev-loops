@@ -82,7 +82,7 @@ test("retirement moves the findings-artifacts directory when given, keeping it r
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", findingsDir, tmpRoot });
     assert.equal(result.findingsDirRetired, true);
     // Explicit discard: the artifacts are out of the live fan-in path but
-    // recoverable from the retirement directory (the explicit carry).
+    // recoverable from the retirement directory for audit only.
     await assert.rejects(() => readFile(path.join(findingsDir, "scope.json")));
     const moved = JSON.parse(await readFile(path.join(result.retirementDir, "findings-artifacts", "scope.json"), "utf8"));
     assert.equal(moved.angle, "scope");
@@ -115,9 +115,10 @@ test("retired sentinels are invisible to the real verify-briefing-prefixes scan"
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", tmpRoot });
     assert.equal(result.retired, 2);
     // After retirement the same verifier invocation sees ZERO sentinels for
-    // the round — the retired prefix can never mix into a new consolidation.
+    // the round and PASSES (zero sentinels evaluate to verified: true) — the
+    // retired prefixes can never mix into a new consolidation.
     const after = spawnSync(process.execPath, [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
-    assert.ok(!(after.stdout + after.stderr).includes(sentinelName("draft-gate-scope", HEAD_A)));
+    assert.equal(after.status, 0);
   } finally {
     await rm(base, { recursive: true, force: true }).catch(() => {});
   }
@@ -198,5 +199,56 @@ test("retireGateRound normalizes an uppercase headSha before matching sentinels"
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A.toUpperCase(), reason: "case", tmpRoot });
     assert.equal(result.retired, 1);
     assert.equal(result.headSha, HEAD_A);
+  });
+});
+
+test("a missing tmp root fails closed instead of a vacuous no-op", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "retire-noroot-"));
+  try {
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", tmpRoot: path.join(base, "does-not-exist") }),
+      /not an existing directory/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("a symlinked --findings-dir is rejected", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const { symlink } = await import("node:fs/promises");
+    const realDir = path.join(tmpRoot, "real-artifacts");
+    await mkdir(realDir);
+    const link = path.join(tmpRoot, `link-${HEAD_A}`);
+    await symlink(realDir, link);
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), "{}\n", "utf8");
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", findingsDir: link, tmpRoot }),
+      /symlinks are rejected/,
+    );
+  });
+});
+
+test("a --findings-dir whose basename does not name the retired head is rejected", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const otherDir = path.join(tmpRoot, "gate-findings-unrelated");
+    await mkdir(otherDir);
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), "{}\n", "utf8");
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", findingsDir: otherDir, tmpRoot }),
+      /does not name head/,
+    );
+    // The unrelated directory was not moved.
+    const { stat } = await import("node:fs/promises");
+    assert.ok((await stat(otherDir)).isDirectory());
+  });
+});
+
+test("retiring sentinels without --findings-dir carries a live-artifacts warning", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), "{}\n", "utf8");
+    const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", tmpRoot });
+    assert.equal(result.retired, 1);
+    assert.match(result.warning, /remain LIVE/);
   });
 });

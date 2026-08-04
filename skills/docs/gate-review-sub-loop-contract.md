@@ -412,9 +412,11 @@ manual chore:
   manual clear step**.
 - **Within one round the contamination guard is preserved:** a same-scope + same-head
   re-entry still fails closed (`fresh: false`, exit 1) — that is genuine main-agent /
-  cross-session state bleed. (The one sanctioned same-head exception is the opt-in
-  `--same-head-retry` overwrite documented below — `--pr-body-fix-retry` is its deprecated
-  alias — gated on a matching prefix hash; it is not state bleed.)
+  cross-session state bleed. (Two sanctioned same-head paths exist, neither of which is
+  state bleed: the opt-in `--same-head-retry` overwrite documented below —
+  `--pr-body-fix-retry` is its deprecated alias — gated on a matching prefix hash for an
+  UNCHANGED briefing, and explicit round retirement under `GATE-EXEC-ROUND-RETIREMENT` for
+  a REBUILT briefing.)
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
   **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
   re-invokes the surface-touched angles, every angle that produced `findings_present`, and
@@ -448,7 +450,9 @@ deletion. The retry's REASON never enters the decision; the hash equality is the
 safety argument, which is why one mechanical guard covers every scenario above. A hash
 mismatch (the context-builder genuinely rebuilt the briefing) or an existing sentinel
 recording no prefix hash still fails closed — this flag is a narrow, auditable exception,
-never a general bypass of the contamination guard. Practically: re-brief the retried
+never a general bypass of the contamination guard. The mismatch case is not a dead end:
+its sanctioned recovery is retiring the round explicitly under
+`GATE-EXEC-ROUND-RETIREMENT` below. Practically: re-brief the retried
 reviewer with the UNCHANGED, byte-identical invariant prefix (do not re-run
 `write-gate-context.mjs`); for the PR-body-fix case additionally instruct the reviewer to
 fetch the CURRENT PR body/description live (e.g. `gh pr view`) rather than trust the
@@ -460,7 +464,7 @@ semantics and exit codes.
 
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
 `GATE-EXEC-ROUND-RETIREMENT`: When the gate-context bundle is legitimately REBUILT at the
-same head (the builder now resolves PR/issue inputs itself, and correcting bad or stale
+same head (the builder resolves PR/issue inputs itself, and correcting bad or stale
 seeding is a legitimate rebuild), the new briefing-prefix bytes hash differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
@@ -473,16 +477,16 @@ other gate's live round at the same head is never touched), so a
 FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
 one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
 command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
-never retires as a side effect. Pass `--findings-dir` whenever the retired round wrote
-artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
+never retires as a side effect. The caller MUST pass `--findings-dir` whenever the retired
+round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
 silently mix into the new round's fan-in; retiring them is the explicit discard. The
 retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
 into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
 one-hash-per-round invariant covers only artifacts its own reviewers wrote). Retirement
 never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
 `verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
-never reads, and sentinels of one LIVE round that disagree still fail closed. A head with no
-sentinels retires as a no-op.
+never reads, and sentinels of one LIVE round that disagree still fail closed. A gate+head
+with no sentinels and no `--findings-dir` retires as a no-op.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 

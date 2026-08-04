@@ -389,7 +389,7 @@ async function main(argv = process.argv.slice(2)) {
         fresh: false,
         sentinelCreated: false,
         round: round ?? null,
-        reason: `--same-head-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; use the standard head-bump retry instead."}`,
+        reason: `--same-head-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; retire the round explicitly (retire-gate-round.mjs) before re-fanning at this head."}`,
       }, false);
     }
     return finish({
