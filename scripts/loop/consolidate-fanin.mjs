@@ -285,7 +285,7 @@ function fitFindingsToRenderBudget(findingsJson) {
 // synthetic angle name or a missing real one would make the verdict itself
 // unpostable, which is the exact failure this exists to avoid. `verbose`
 // states the omitted count and severity breakdown; the caller (below) picks
-// `false` for a bare "N omitted — see ledger" line, decided PER ANGLE so a
+// `false` for a bare "N omitted — in ledger" line, decided PER ANGLE so a
 // round with a mix of wide and narrow angles keeps the breakdown wherever it
 // actually fits rather than dropping it everywhere the instant any single
 // angle can't afford it. Never partially truncates the marker text itself —
@@ -311,8 +311,8 @@ function buildAngleMarker(a, verbose) {
   // carries.
   const severityBreakdown = SEVERITY_ORDER.map((s) => `${s}: ${bySeverity[s]}`).join(", ");
   const summary = verbose
-    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — see the disposition ledger`
-    : `${a.findings.length} omitted — see ledger`;
+    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — in the disposition ledger`
+    : `${a.findings.length} omitted — in ledger`;
   return {
     angle: a.angle,
     verdict: a.verdict,
@@ -367,7 +367,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   const bareMarkers = findingsJson.map((a) => buildAngleMarker(a, false));
   // The bare marker is USUALLY the cheapest possible per-angle shape, but not
   // always: a narrow angle carrying very few, very short real findings can
-  // render shorter than even the compressed "N omitted — see ledger" line.
+  // render shorter than even the compressed "N omitted — in ledger" line.
   // Seed each angle with whichever of the two costs less in isolation, so the
   // tier-4 feasibility probe below tests the actual cheapest achievable shape
   // instead of assuming bare-everywhere always is the smallest. An angle
@@ -1086,7 +1086,7 @@ export async function consolidateGateFanin(options) {
   let withheldOut = false;
   if (!wholeRoundFits) {
     // A degraded round's only durable record is --ledger-out (the marker text
-    // in "findingsJson"/--out literally says "see the disposition ledger", and
+    // in "findingsJson"/--out names the machine-local findings ledger, and
     // tier 4 writes no --out file at all). Without --ledger-out nothing
     // durable lands on disk — the full findings exist only on this process's
     // stdout, which the sanctioned ledger/post path cannot consume — exactly

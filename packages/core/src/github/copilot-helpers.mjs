@@ -51,7 +51,13 @@ export function matchGateReviewCommentHeader(body) {
 // example, describing this very mechanism) still counts as evidence. Both
 // producers render their marker at column 0, so the anchor costs nothing
 // against genuine artifacts.
-const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|deferred-summary)\b/mu;
+// `gate-findings` covers BOTH the per-round review header (gate-findings-review)
+// and post-gate-findings.mjs's opt-in findings COMMENT marker (gate-findings
+// gate=...). Without the latter, the findings comment parses as a verdict
+// marker candidate (its "Gate fan-out findings:"/"Reviewed head:" lines yield
+// gate+headSha) and the verdict upsert claims and overwrites it in place — the
+// silent findings-record loss observed live on PR 1513 (#1514).
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings(?:-review)?|deferred-summary)\b/mu;
 
 export function isGateMachineArtifactBody(body) {
   if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {

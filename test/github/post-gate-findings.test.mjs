@@ -639,3 +639,51 @@ test("postGateFindings falls back to the default (skips) when the config fails t
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+// #1514 coexistence pin: the opt-in findings comment and the verdict surface
+// must never claim each other. Each tool locates "its" comment by its own
+// marker vocabulary; these assertions fail if either vocabulary grows to
+// match the other tool's rendered body (the class of silent overwrite
+// observed live on PR 1513 before the single-surface rework).
+test("findings comment and verdict body are mutually unclaimable (#1514)", async () => {
+  const { renderFindingsCommentBody, buildFindingsMarker } = await import("../../scripts/github/post-gate-findings.mjs");
+  const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
+  const { parseGateReviewCommentMarkerBody, summarizeGateReviewCommentMarkers } = await import("@dev-loops/core/github/copilot-helpers");
+
+  const findingsBody = renderFindingsCommentBody({
+    gate: "draft_gate",
+    headSha: "a".repeat(40),
+    findings: [
+      { severity: "must-fix", angle: "correctness", summary: "Verdict: clean", disposition: "accepted-for-fix" },
+    ],
+  });
+  // The verdict upsert claims comments through the marker summarizer (the
+  // seam detect-checkpoint-evidence feeds it); the findings comment must be
+  // skipped as a machine artifact there — even though its "Gate fan-out
+  // findings:"/"Reviewed head:" lines make the raw field parser extract
+  // gate+headSha, and even when a finding summary embeds verdict-like text.
+  const claimed = summarizeGateReviewCommentMarkers([
+    { id: 1, body: findingsBody, html_url: "https://github.test/c/1", updated_at: "2026-08-04T00:00:00Z" },
+  ], { headSha: "a".repeat(40) });
+  assert.equal(claimed.draft_gate, null);
+  assert.equal(claimed.pre_approval_gate, null);
+
+  const verdictBody = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "a".repeat(40),
+    verdict: "clean",
+    findingsSummary: "no findings",
+    nextAction: "merge",
+    blockCleanOnFindingSeverities: ["must-fix"],
+    executionMode: "fanout_fanin",
+  });
+  // The findings upsert finds its comment via its own hidden marker; the
+  // verdict body must never carry it.
+  assert.ok(!verdictBody.includes(buildFindingsMarker({ gate: "draft_gate" })));
+  // And the verdict body IS claimable by its own parser (sanity).
+  assert.ok(parseGateReviewCommentMarkerBody(verdictBody) !== null);
+  const verdictClaimed = summarizeGateReviewCommentMarkers([
+    { id: 2, body: verdictBody, html_url: "https://github.test/c/2", updated_at: "2026-08-04T00:00:00Z" },
+  ], { headSha: "a".repeat(40) });
+  assert.ok(verdictClaimed.draft_gate !== null);
+});
