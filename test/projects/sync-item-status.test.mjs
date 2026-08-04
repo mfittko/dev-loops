@@ -148,10 +148,12 @@ describe("sync-item-status", () => {
       assert.equal(args.pr, "10");
     });
 
-    it("a bare --item before another flag is omitted (hook parity), never a swallowed-flag error", () => {
+    it("a bare --item before another flag is omitted, never a swallowed-flag error", () => {
       // A dropped `<linked-issue>` substitution in the documented flag order
-      // produces exactly this argv; the deleted merge hook treated it as
-      // "the PR is the queue item". The neighbouring flag must still parse.
+      // produces exactly this argv. This is deliberately more lenient than
+      // the deleted merge hook (which only tolerated an empty value or a
+      // trailing bare flag): the documented invocation is mid-command, so a
+      // dropped substitution must never swallow its neighbouring flag.
       const args = parseCliArgs(["--repo", "o/n", "--item", "--to-column", "Done"]);
       assert.equal(args.item, undefined);
       assert.equal(args.toColumn, "Done");
@@ -380,15 +382,3 @@ describe("sync-item-status", () => {
   });
 });
 
-it("a bare --item mid-args (dropped template substitution, documented flag order) falls back to --pr", () => {
-  const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--pr", "10", "--item", "--logical-column", "done"]);
-  assert.equal(args.item, undefined);
-  assert.equal(args.pr, "10");
-  assert.equal(args.logicalColumn, "done");
-});
-
-it("a bare --item at the end of argv still counts as omitted", () => {
-  const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--pr", "10", "--logical-column", "done", "--item"]);
-  assert.equal(args.item, undefined);
-  assert.equal(args.pr, "10");
-});

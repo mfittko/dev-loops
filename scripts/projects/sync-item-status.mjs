@@ -20,7 +20,8 @@ and uses local gh auth.
 
 This command is BEST-EFFORT and NON-FATAL: a board that is not configured, an
 item that is not on the board, or any GitHub API failure exits 0 with a JSON
-result describing the skip/failure. It never fails the caller.
+result describing the skip/failure. It never fails the caller except under
+--silent, where a falsy --jq predicate maps to exit 1 by design.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
@@ -61,16 +62,16 @@ function parseCliArgs(argv) {
   const args = {};
   // A dropped `<linked-issue>` template substitution leaves a bare `--item`
   // directly followed by the next flag (or the end of argv). parseArgs would
-  // bind that flag as --item's value and requireValue would reject it — the
-  // deleted merge hook treated this as "the PR is the queue item", and the
-  // documented invocation relies on that lenience regardless of flag order,
-  // so drop the bare `--item` here before parsing. `--item=<value>` and a
-  // space-separated real value are untouched.
-  const argvList = [...argv];
-  const bareItemIndex = argvList.findIndex(
-    (arg, i) => arg === "--item" && (i + 1 >= argvList.length || argvList[i + 1].startsWith("-")),
+  // bind that flag as --item's value and requireValue would reject it. The
+  // deleted merge hook was only lenient for an EMPTY value or a bare flag at
+  // the end of argv; because the documented invocation now places
+  // `--item <linked-issue>` mid-command, this deliberately goes further and
+  // treats a bare `--item` as omitted in ANY position, so a dropped
+  // substitution can never swallow its neighbouring flag. `--item=<value>`
+  // and a space-separated real value are untouched.
+  const argvList = argv.filter(
+    (arg, i, list) => !(arg === "--item" && (i + 1 >= list.length || list[i + 1].startsWith("-"))),
   );
-  if (bareItemIndex !== -1) argvList.splice(bareItemIndex, 1);
   const { tokens } = parseArgs({
     args: argvList,
     options: {
@@ -108,8 +109,10 @@ function parseCliArgs(argv) {
         // A missing or empty value (`--item` alone, or `--item ""` from an
         // unfilled `<linked-issue>` template substitution) is the documented
         // "the PR is the queue item" case, not a usage error — leave args.item
-        // unset so it falls back to --pr. A value starting with "-" is still an
-        // error: that is a swallowed neighbouring flag, not an empty value.
+        // unset so it falls back to --pr. A space-separated neighbouring flag
+        // can no longer reach this branch (the argv filter above drops the
+        // bare `--item` first); only the inline `--item=-5` form still hits
+        // requireValue's rejection, as a malformed value.
         if (token.value === undefined || token.value.trim() === "") break;
         args.item = requireValue(token, "--item requires a value (positive integer)", "INVALID_ITEM");
         break;
