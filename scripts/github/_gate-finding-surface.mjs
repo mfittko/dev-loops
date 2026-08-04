@@ -22,16 +22,23 @@ import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-thr
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 
 // Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
-// comment-stream shape the gate summarizers consume. The single definition of
-// "what counts as a valid review-sourced verdict candidate": non-pending, a
-// non-empty submitted_at, a non-empty body. Every reader (evidence scanner,
-// ready gate) MUST use this rather than reimplementing the filter — two copies
-// of this predicate drifted once already.
+// comment-stream shape the gate summarizers consume. Validity comes from the
+// shared isSubmittedReview predicate below — two restatements of that
+// expression drifted once already; never inline it again.
+// The one predicate for "counts as a submitted review with content": every
+// consumer (verdict evidence, round resolution, fingerprint suppression) MUST
+// share this function, never restate the expression.
+function isSubmittedReview(r) {
+  return Boolean(r) && typeof r === "object" && r.state !== "PENDING"
+    && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0
+    && typeof r.body === "string" && r.body.trim().length > 0;
+}
+
 export function normalizePrReviewsPayload(payload) {
   if (!Array.isArray(payload)) return [];
   const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
   return flat
-    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
+    .filter(isSubmittedReview)
     .map((r) => ({
       id: r.id,
       body: r.body,
@@ -377,11 +384,10 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
     ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
   );
-  // Same validity predicate as normalizePrReviewsPayload — a PENDING
-  // (unsubmitted) review must never feed round resolution or fingerprint
-  // suppression any more than it may feed verdict evidence.
+  // A PENDING (unsubmitted) review must never feed round resolution or
+  // fingerprint suppression any more than it may feed verdict evidence.
   return flattenPaginatedSlurp(payload)
-    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
+    .filter(isSubmittedReview)
     .map((r) => ({
       id: Number.isInteger(r.id) ? r.id : null,
       body: r.body,

@@ -366,3 +366,16 @@ test("listPrReviews excludes PENDING and timestamp-less reviews from round/suppr
   const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
   assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
 });
+
+test("listPrReviews shares the full submitted-review predicate (body/junk branches too)", async () => {
+  const payload = JSON.stringify([[
+    { id: 1, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z", body: "real review", user: { login: "octocat" } },
+    { id: 2, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z", body: "   " },
+    { id: 3, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z" },
+    null,
+    "junk",
+  ]]);
+  const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
+  const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
+});
