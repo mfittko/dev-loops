@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
+import { GATE_NAMES } from "./_gate-names.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
 Retire ONE GATE's review round at one head: move every reviewer sentinel of
@@ -64,7 +65,7 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 
 const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
-const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+const VALID_GATES = new Set(GATE_NAMES);
 // Sentinel scopes are the gate name with dashes (draft-gate-<angle>).
 const gateScopePrefix = (gate) => `${gate.replace(/_/g, "-")}-`;
 const parseError = buildParseError(USAGE);
@@ -118,8 +119,17 @@ export function parseRetireGateRoundArgs(argv) {
 }
 
 export async function retireGateRound({ gate, headSha, reason, findingsDir = null, tmpRoot = "tmp" }) {
+  // Function-boundary re-validation, same rule as the CLI parser: a direct
+  // programmatic caller must not bypass the full-SHA and audited-reason
+  // guardrails.
   if (!VALID_GATES.has(gate)) {
     throw new Error(`Unknown gate ${JSON.stringify(gate)} — must be draft_gate or pre_approval_gate`);
+  }
+  if (typeof headSha !== "string" || !HEAD_SHA_RE.test(headSha)) {
+    throw new Error(`headSha must be the FULL 40-char hex head SHA, got ${JSON.stringify(headSha)}`);
+  }
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    throw new Error("reason must be a non-empty string — retirement is explicit and audited");
   }
   const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(gate)}`;
   const suffix = `-${headSha}.json`;

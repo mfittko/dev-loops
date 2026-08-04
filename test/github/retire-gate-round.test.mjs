@@ -168,3 +168,16 @@ test("CLI entry point: help, arg errors, success, and invalid --jq map to the do
     assert.equal(badJq.status, 2);
   });
 });
+
+test("retireGateRound re-validates headSha and reason at the function boundary", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: "abc1234", reason: "x", tmpRoot }),
+      /FULL 40-char/,
+    );
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "   ", tmpRoot }),
+      /non-empty string/,
+    );
+  });
+});
