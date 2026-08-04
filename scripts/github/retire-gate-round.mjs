@@ -128,6 +128,10 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   if (typeof headSha !== "string" || !HEAD_SHA_RE.test(headSha)) {
     throw new Error(`headSha must be the FULL 40-char hex head SHA, got ${JSON.stringify(headSha)}`);
   }
+  // Normalize for the sentinel filename match: sentinel names embed the
+  // lowercase rev-parse output, so an uppercase programmatic value would
+  // silently retire nothing.
+  headSha = headSha.trim().toLowerCase();
   if (typeof reason !== "string" || reason.trim().length === 0) {
     throw new Error("reason must be a non-empty string — retirement is explicit and audited");
   }
@@ -241,7 +245,13 @@ async function main() {
     return;
   }
   const jqIdx = process.argv.indexOf("--jq");
-  const jq = jqIdx !== -1 ? process.argv[jqIdx + 1] : undefined;
+  const jqValue = jqIdx !== -1 ? process.argv[jqIdx + 1] : undefined;
+  if (jqIdx !== -1 && (jqValue === undefined || jqValue.startsWith("-"))) {
+    process.stderr.write(`${JSON.stringify({ ok: false, error: "--jq requires a filter argument" })}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const jq = jqValue;
   const silent = process.argv.includes("--silent") || process.argv.includes("-s");
   try {
     const result = await retireGateRound(options);

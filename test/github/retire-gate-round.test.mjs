@@ -181,3 +181,12 @@ test("retireGateRound re-validates headSha and reason at the function boundary",
     );
   });
 });
+
+test("retireGateRound normalizes an uppercase headSha before matching sentinels", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), "{}\n", "utf8");
+    const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A.toUpperCase(), reason: "case", tmpRoot });
+    assert.equal(result.retired, 1);
+    assert.equal(result.headSha, HEAD_A);
+  });
+});

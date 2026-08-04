@@ -1175,7 +1175,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // abbreviated --head-sha still detects them.
       const gateScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${String(options.gate).replace(/_/g, "-")}-`;
       const headPrefix = String(options.headSha).trim().toLowerCase();
-      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch(() => []);
+      // Only a missing tmp/ dir means "no sentinels"; any other scan failure
+      // (EACCES, ENOTDIR, ...) must surface rather than silently suppress the
+      // rebuild warning while live sentinels exist.
+      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
+        if (err.code === "ENOENT") return [];
+        throw err;
+      });
       const liveSentinels = tmpDirEntries.filter((e) => {
         if (!e.isFile() || !e.name.startsWith(gateScopePrefix) || !e.name.endsWith(".json")) return false;
         const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
