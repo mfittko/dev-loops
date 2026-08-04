@@ -576,7 +576,7 @@ which the sanctioned ledger/post path cannot consume). Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
 most blocking severity (ties by artifact index), and an upgrade is kept only
-while the WHOLE round still renders — so a defer-only angle can stay bare
+while the WHOLE round still renders — so a nice-to-have-only angle can stay bare
 purely because a higher-severity angle consumed the budget first, even
 though its own verbose sentence would fit alone:
 
@@ -640,7 +640,10 @@ the marker text and the ledger always carry the true numbers regardless.
 Consolidation:
 
 - collate findings from all review angles
-- classify each finding: `must-fix`, `worth-fixing-now`, `defer`
+- classify each finding: `must-fix`, `worth-fixing-now`, `nice-to-have` (severity is the
+  reviewer's advisory weight only; deferral is a DISPOSITION — derived at fan-in for
+  non-blocking findings, finalized per thread by the fix cycle / gate close — so no
+  severity is spelled "defer" — the legacy spelling is normalized to `nice-to-have` on read)
 - write the disposition ledger: every finding receives a severity classification and a
   disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged)
 - produce a merged findings artifact
@@ -693,7 +696,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
   no code location, so it never gets a thread to fix through) is outside this round window
   entirely — it is deferred by construction at post time, at any round, per
-  `GATE-EXEC-DEFERRAL-RECORD`. A defer-severity finding is never fixed inside the gate, at any
+  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is never fixed inside the gate, at any
   round. Two layers govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open worth-fixing-now thread; an unresolved in-window locatable
@@ -740,7 +743,7 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 - `config-drift` → `config`/`ci`; `ci-guard` → `ci`.
 - always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
 
-**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); the angle is named by any finding in the prior log however non-blocking (a `defer` still means that angle is not provably clean); or any changed file's kind is in the angle's surface. The CLI additionally refuses to emit a plan at all — the whole run, not one angle — when: the prior log records one angle twice in `provenance.perAngle` (reviewer attribution would be ambiguous); the log's own recorded `headSha` disagrees with `--prev-head` (the log path and the diffed head would no longer agree, so a carried entry would stamp a head that was never diffed); the log's `findings` field is present but not an array (a malformed/truncated log cannot prove no angle has an open finding); a finding in that field has no angle (it cannot be attributed to a carried angle); or a finding's angle matches no `provenance.perAngle` entry (its attribution cannot be verified, base-name/case-insensitively). The delta and the worktree-head guard both run with `GIT_DIR`/`GIT_WORK_TREE` scrubbed from the git child-process environment, so an inherited repo pointer can never steer either to a different repository than the worktree at `cwd`.
+**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); the angle is named by any finding in the prior log however non-blocking (a `nice-to-have` still means that angle is not provably clean); or any changed file's kind is in the angle's surface. The CLI additionally refuses to emit a plan at all — the whole run, not one angle — when: the prior log records one angle twice in `provenance.perAngle` (reviewer attribution would be ambiguous); the log's own recorded `headSha` disagrees with `--prev-head` (the log path and the diffed head would no longer agree, so a carried entry would stamp a head that was never diffed); the log's `findings` field is present but not an array (a malformed/truncated log cannot prove no angle has an open finding); a finding in that field has no angle (it cannot be attributed to a carried angle); or a finding's angle matches no `provenance.perAngle` entry (its attribution cannot be verified, base-name/case-insensitively). The delta and the worktree-head guard both run with `GIT_DIR`/`GIT_WORK_TREE` scrubbed from the git child-process environment, so an inherited repo pointer can never steer either to a different repository than the worktree at `cwd`.
 
 **A dev-loop config-source delta re-runs EVERY angle.** `.devloops` (and its
 `.devloops.yaml/.yml/.json` and `.pi/dev-loop/settings.*`/`defaults.*` siblings)
@@ -839,8 +842,8 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
 `--ledger-out <path>` writes exactly this shape — pass that path straight to
 `--findings-file` on both tools, no hand extraction. A finding with severity
-`defer` and no `disposition` gets `deferred` derived automatically by both
-tools.
+`nice-to-have` (or the legacy `defer` spelling, normalized on read) and no
+`disposition` gets `deferred` derived automatically by both tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional
@@ -915,7 +918,7 @@ round 3 of this gate's chain; from round 4 on, an open worth-fixing-now thread i
 replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferral record
 (`GATE-EXEC-DEFERRAL-RECORD`) tells a deferred thread apart from one the fix loop genuinely
-resolved. A defer-severity finding is replied to and resolved immediately, at the same round it
+resolved. A nice-to-have finding is replied to and resolved immediately, at the same round it
 was first posted. Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
@@ -928,7 +931,7 @@ FIX-closing reply (the standard fix loop, or a dispute reply) follows
 `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change that fixed that thread,
 with the resolving commit — nothing was fixed for a thread the fix loop never touched, so this
 requirement cannot apply verbatim there. A DEFERRAL reply (`close-gate-findings.mjs` past the
-worth-fixing-now window, or a defer-severity finding closed immediately) is instead distinct by
+worth-fixing-now window, or a nice-to-have finding closed immediately) is instead distinct by
 construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
 round) and states the window/disposition reason (see `dispositionMessage` in
 `close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
@@ -942,7 +945,7 @@ durable findings-log ledger under `tmp/gate-findings/...`. Both carry the findin
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
-defers it (a worth-fixing-now thread past round 3, or a defer-severity thread immediately). A
+defers it (a worth-fixing-now thread past round 3, or a nice-to-have thread immediately). A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
 severity other than `must-fix`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a

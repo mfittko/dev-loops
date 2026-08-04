@@ -24,7 +24,7 @@ comments). Here, every unresolved gate-authored finding thread is reconciled
 against the current round: must-fix always stays open; worth-fixing-now stays open
 through round ${WORTH_FIXING_NOW_FIX_WINDOW} of this gate's chain and is replied-to
 + resolved ("deferred at gate close") from round ${WORTH_FIXING_NOW_FIX_WINDOW + 1};
-defer-severity is replied-to + resolved immediately. A deferred thread's marker is
+nice-to-have is replied-to + resolved immediately. A deferred thread's marker is
 stamped \`disposition=deferred\` before it is resolved, so the deferral disposition
 lives on the thread itself and in the durable tmp ledger.
 
@@ -67,12 +67,12 @@ function parseError(message) {
 
 // The window/disposition reason named in the reply: a worth-fixing-now thread
 // deferred because it stayed open past the in-gate fix window vs. a
-// defer-severity finding that is never fix-windowed at all.
+// nice-to-have finding that is never fix-windowed at all.
 function windowReason(severity) {
   if (severity === "worth-fixing-now") {
     return `stayed open past this gate chain's round-${WORTH_FIXING_NOW_FIX_WINDOW} worth-fixing-now fix window`;
   }
-  return "defer-severity findings are deferred immediately, at the round they are first posted";
+  return "nice-to-have findings are deferred immediately, at the round they are first posted";
 }
 
 // Every deferral reply is distinct by construction through the thread's own

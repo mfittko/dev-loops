@@ -273,7 +273,7 @@ test("writeGateFindingsLog includes disposition when present", async () => {
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Must fix", disposition: "accepted-for-fix" },
         { severity: "worth-fixing-now", angle: "dry", summary: "DRY", disposition: "deferred" },
-        { severity: "defer", angle: "naming", summary: "Style", disposition: "disputed" },
+        { severity: "nice-to-have", angle: "naming", summary: "Style", disposition: "disputed" },
       ]),
       tmpRoot: tmpDir,
     });
@@ -571,7 +571,7 @@ test("writeGateFindingsLog rejects a missing --findings-file", async () => {
   }, /Cannot read --findings-file/);
 });
 
-test("writeGateFindingsLog derives a deferred disposition for a defer-severity finding with no explicit disposition", async () => {
+test("writeGateFindingsLog derives a deferred disposition for a nice-to-have finding with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-"));
   try {
     await writeGateFindingsLog({
@@ -580,7 +580,7 @@ test("writeGateFindingsLog derives a deferred disposition for a defer-severity f
       gate: "draft_gate",
       headSha: "eeeeeeeeeeeeeeeeeeee00000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit" }]),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-5", "draft_gate-eeeeeeeeeeeeeeeeeeee00000000000000000000.json");
@@ -591,7 +591,7 @@ test("writeGateFindingsLog derives a deferred disposition for a defer-severity f
   }
 });
 
-test("writeGateFindingsLog keeps an explicit disposition on a defer-severity finding (still validated against the enum)", async () => {
+test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have finding (still validated against the enum)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-explicit-"));
   try {
     await writeGateFindingsLog({
@@ -600,7 +600,7 @@ test("writeGateFindingsLog keeps an explicit disposition on a defer-severity fin
       gate: "draft_gate",
       headSha: "ffffffffffffffffffff0000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "disputed" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "disputed" }]),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-6", "draft_gate-ffffffffffffffffffff0000000000000000000.json");
@@ -616,7 +616,7 @@ test("writeGateFindingsLog keeps an explicit disposition on a defer-severity fin
       gate: "draft_gate",
       headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
     });
   }, /disposition must be one of/);
 });
@@ -1009,5 +1009,25 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
     assert.equal(result.warning, null);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a legacy defer-severity finding normalizes to nice-to-have in the written log", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-legacy-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.findings[0].severity, "nice-to-have");
+    assert.equal(parsed.findings[0].disposition, "deferred");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });

@@ -51,11 +51,13 @@ describe("consolidateFanin — verdict", () => {
 
   test("clean when only non-blocking findings remain under default policy", () => {
     const result = consolidateFanin({
-      angleResults: [findingAngle("docs", "defer")],
+      angleResults: [findingAngle("docs", "defer")], // legacy alias input — must normalize
     });
     assert.equal(result.verdict, "clean");
     assert.equal(result.counts.findings, 1);
     assert.equal(result.counts.blocking, 0);
+    assert.equal(result.findings[0].severity, "nice-to-have");
+    assert.deepEqual(result.counts.bySeverity, { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 1 });
     assert.equal(result.findings[0].disposition, "deferred");
   });
 
@@ -66,6 +68,25 @@ describe("consolidateFanin — verdict", () => {
       consolidateFanin({
         angleResults,
         blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      }).verdict,
+      "findings_present",
+    );
+  });
+
+  test("severity gating normalizes legacy blocking-list and finding spellings", () => {
+    // Legacy-spelled blocking list against a canonical finding…
+    assert.equal(
+      consolidateFanin({
+        angleResults: [findingAngle("kiss", "nice-to-have")],
+        blockCleanOnFindingSeverities: ["defer"],
+      }).verdict,
+      "findings_present",
+    );
+    // …and the mirror: canonical blocking list against a legacy finding.
+    assert.equal(
+      consolidateFanin({
+        angleResults: [findingAngle("kiss", "defer")],
+        blockCleanOnFindingSeverities: ["nice-to-have"],
       }).verdict,
       "findings_present",
     );
@@ -110,7 +131,7 @@ describe("consolidateFanin — multi-angle merge", () => {
           verdict: "findings_present",
           findings: [
             { severity: "must-fix", summary: "a", file: "src/a.mjs", line: 10, recommendation: "fix it" },
-            { severity: "defer", summary: "b" },
+            { severity: "nice-to-have", summary: "b" },
           ],
         },
         findingAngle("docs", "worth-fixing-now", "c"),
@@ -122,7 +143,7 @@ describe("consolidateFanin — multi-angle merge", () => {
     assert.equal(result.counts.angles, 3);
     assert.equal(result.counts.findings, 3);
     assert.equal(result.counts.blocking, 2);
-    assert.deepEqual(result.counts.bySeverity, { "must-fix": 1, "worth-fixing-now": 1, "defer": 1 });
+    assert.deepEqual(result.counts.bySeverity, { "must-fix": 1, "worth-fixing-now": 1, "nice-to-have": 1 });
     const scopeFinding = result.findings.find((f) => f.angle === "scope" && f.severity === "must-fix");
     assert.equal(scopeFinding.file, "src/a.mjs");
     assert.equal(scopeFinding.line, 10);
@@ -146,13 +167,13 @@ describe("toFindingsLogShape", () => {
           verdict: "findings_present",
           findings: [{ severity: "must-fix", summary: "a", file: "src/a.mjs", recommendation: "x" }],
         },
-        findingAngle("docs", "defer", "b"),
+        findingAngle("docs", "nice-to-have", "b"),
       ],
     });
     const shaped = toFindingsLogShape(consolidated.findings);
     assert.deepEqual(shaped, [
       { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", recommendation: "x", files: ["src/a.mjs"] },
-      { severity: "defer", angle: "docs", summary: "b", disposition: "deferred" },
+      { severity: "nice-to-have", angle: "docs", summary: "b", disposition: "deferred" },
     ]);
   });
 

@@ -237,14 +237,14 @@ test("closeGateFindings rejects a missing --ledger file", async () => {
 });
 
 test("closeGateFindings rejects a finding whose files[] entry is blank", async () => {
-  const ledger = makeLedger({ findings: [{ severity: "defer", angle: "naming", summary: "x", files: ["   "] }] });
+  const ledger = makeLedger({ findings: [{ severity: "nice-to-have", angle: "naming", summary: "x", files: ["   "] }] });
   await withLedgerFile(ledger, async (ledgerPath) => {
     await assert.rejects(() => closeGateFindings({ ledgerPath }), /findings\[0\]\.files\[0\] must be a non-empty string/);
   });
 });
 
 test("closeGateFindings rejects a finding whose files[] entry is not a string", async () => {
-  const ledger = makeLedger({ findings: [{ severity: "defer", angle: "naming", summary: "x", files: [42] }] });
+  const ledger = makeLedger({ findings: [{ severity: "nice-to-have", angle: "naming", summary: "x", files: [42] }] });
   await withLedgerFile(ledger, async (ledgerPath) => {
     await assert.rejects(() => closeGateFindings({ ledgerPath }), /findings\[0\]\.files\[0\] must be a non-empty string/);
   });
@@ -468,16 +468,42 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
   ));
 });
 
-test("an unresolved defer-severity thread is replied-to + resolved immediately, at round 1", async () => {
-  const deferBody = `${buildFindingMarker({ fp: "7777777777777777", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): casing nit`;
-  const thread = threadNode({ id: "THREAD_DEFER", path: "src/naming.mjs", line: 4, commentId: 6200, body: deferBody });
+test("an unresolved nice-to-have thread is replied-to + resolved immediately, at round 1", async () => {
+  const niceToHaveBody = `${buildFindingMarker({ fp: "7777777777777777", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_DEFER", path: "src/naming.mjs", line: 4, commentId: 6200, body: niceToHaveBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
-      getReviewCommentEntry(6200, deferBody),
+      getReviewCommentEntry(6200, niceToHaveBody),
       patchReviewCommentEntry(6200),
       postReplyEntry(6200, { id: 7100 }),
       resolveThreadEntry("THREAD_DEFER"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// A pre-rename thread stamped severity=defer normalizes on read: the posted
+// deferral reply names the canonical tier, never the retired spelling.
+test("a legacy severity=defer marker posts a reply in the canonical vocabulary", async () => {
+  const legacyBody = `<!-- dev-loops:finding 8888888888888888 severity=defer angle=naming round=1 -->\n**defer** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_LEGACY", path: "src/naming.mjs", line: 4, commentId: 6300, body: legacyBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      getReviewCommentEntry(6300, legacyBody),
+      patchReviewCommentEntry(6300),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
+        assertStdinIncludes: ["severity nice-to-have", "nice-to-have findings are deferred immediately"],
+        assertStdinNotIncludes: ["severity defer,", "defer-severity"],
+        stdout: `${JSON.stringify({ id: 7200, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7200` })}\n`,
+      },
+      resolveThreadEntry("THREAD_LEGACY"),
     ],
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
@@ -564,7 +590,7 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
 // commentId is validated BEFORE it is ever interpolated into a
 // `pulls/comments/{commentId}` API path.
 test("a gate-authored thread selected for deferral with no resolvable comment id fails closed, named by threadId", async () => {
-  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): short body`;
+  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): short body`;
   const thread = threadNode({ id: "THREAD_NO_COMMENT_ID", path: "src/naming.mjs", line: 3, commentId: null, body: shortBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),

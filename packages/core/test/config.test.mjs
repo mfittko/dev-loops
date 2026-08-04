@@ -2391,7 +2391,33 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "preApproval");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "defer"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "nice-to-have"]);
+    });
+
+    test("resolveGateConfig normalizes and dedupes legacy blockCleanOnFindingSeverities spellings", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "nice-to-have"]);
+    });
+
+    test("FileConfigSchema accepts both nice-to-have and the deprecated defer spelling", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+          },
+        },
+      };
+      assert.equal(FileConfigSchema.safeParse(config).success, true);
     });
 
     test("GateConfig rejects invalid blockCleanOnFindingSeverities tokens", () => {
@@ -4617,4 +4643,18 @@ describe("resolveBaseBranch (#1368)", () => {
     assert.equal(`origin/${bare}`, "origin/spike/shakapacker-to-vite");
     assert.equal(bare, "spike/shakapacker-to-vite");
   });
+});
+
+test("resolveGateDispatchMode: legacy defer input escalates against a nice-to-have blocking entry (cross-spelling)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { preApproval: { blockCleanOnFindingSeverities: ["must-fix", "nice-to-have"] } },
+  };
+  const result = resolveGateDispatchMode(config, "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["defer"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
 });

@@ -46,7 +46,7 @@ Follow those owners, then return your findings via the structured artifact below
     "verdict": "clean" | "findings_present",
     "headSha": "<reviewed head SHA from the briefing>",
     "findings": [
-      { "severity": "must-fix" | "worth-fixing-now" | "defer", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
+      { "severity": "must-fix" | "worth-fixing-now" | "nice-to-have", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
     "contextWidened": ["<adjacent-path-consulted>", "..."]
   }
@@ -54,7 +54,7 @@ Follow those owners, then return your findings via the structured artifact below
 
   The `headSha` stamp is REQUIRED: it is the exact head SHA the briefing names, and fan-in (`consolidate-fanin --head-sha`) fails closed on a missing or mismatched stamp (`GATE-EXEC-ARTIFACT-HEAD-STAMP`).
 
-  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `defer`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list the adjacent files/modules you opened beyond the briefing to judge this angle (omit or leave empty if you reviewed only `changedFiles`).
+  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `nice-to-have`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list the adjacent files/modules you opened beyond the briefing to judge this angle (omit or leave empty if you reviewed only `changedFiles`).
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 

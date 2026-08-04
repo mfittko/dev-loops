@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -86,7 +86,7 @@ function slugForMarker(value) {
 
 // True when a finding at `severity`, reconciled against the CURRENT round, is
 // disposed as deferred: must-fix never defers; worth-fixing-now defers only
-// once the chain is past the in-gate fix window; defer always defers
+// once the chain is past the in-gate fix window; nice-to-have always defers
 // immediately. Governs the THREAD disposition pass ONLY — a locatable
 // finding's round-gated fix window, decided through its own resolvable review
 // thread. Body-filed finding rendering (renderNonLocatableBlock) deliberately
@@ -94,9 +94,10 @@ function slugForMarker(value) {
 // so it is stamped deferred unconditionally at render time, regardless of round
 // (see that function's own comment).
 export function isDeferredAtRound(severity, round) {
-  if (severity === "must-fix") return false;
-  if (severity === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
-  return true; // "defer"
+  const sev = normalizeSeverity(severity);
+  if (sev === "must-fix") return false;
+  if (sev === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
+  return true; // "nice-to-have" (and any legacy spelling of it)
 }
 
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
@@ -130,7 +131,7 @@ const FINDING_MARKER_FP_ONLY_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/
 export function parseFindingMarker(text) {
   const match = typeof text === "string" ? text.match(FINDING_MARKER_RE) : null;
   if (!match) return null;
-  return { fp: match[1], severity: match[2], angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
+  return { fp: match[1], severity: normalizeSeverity(match[2]), angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
 }
 
 // Round is embedded here (an addition beyond the finding marker's own round=,
@@ -213,7 +214,7 @@ export function renderInlineCommentBody(finding, { round }) {
 // its round<=3 in-gate fix window before deferring). A body-filed finding has
 // no such window to begin with — there is no thread to fix it through — so it
 // is deferred BY CONSTRUCTION, at render time, regardless of round: every
-// non-must-fix severity (worth-fixing-now, defer) is stamped
+// non-must-fix severity (worth-fixing-now, nice-to-have) is stamped
 // disposition=deferred the moment it is posted. must-fix stays unstamped
 // (the ledger blocks a clean verdict on it; it is never body-filed as an
 // accepted outcome). This is what keeps the finding from being suppressed by
@@ -335,6 +336,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     throw fail(`Gate findings ledger "${ledgerPath}" "findings" must be an array`);
   }
   findings.forEach((f, i) => {
+    if (f && typeof f === "object") f.severity = normalizeSeverity(f.severity);
     if (!f || typeof f !== "object" || !VALID_SEVERITIES.has(f.severity) || typeof f.angle !== "string" || typeof f.summary !== "string") {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}] is malformed (expected {severity, angle, summary})`);
     }
