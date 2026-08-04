@@ -25,7 +25,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
@@ -548,7 +548,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     // ledger's OWN fresh angles/groups — resolveFanoutGroups per candidate,
     // not once up front, since a stale checkout can record a different fresh
     // angle set than the worktree ledger.
-    const resolvedGroups = resolveFanoutGroups(config, gateKey, freshAngleNames(prov.perAngle), { fullLabel: hasFullLabel });
+    const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, freshAngleNames(prov.perAngle), { fullLabel: hasFullLabel });
     if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
     if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
@@ -679,7 +679,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       // re-validates the cardinality floor and the pairing exception against
       // this, so both agree with what readLedgerProvenanceInAny already used
       // to pick this ledger.
-      resolvedGroups: resolveFanoutGroups(config, spec.name, freshAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
+      resolvedGroups: resolveFanoutGroups(config, GATE_CONFIG_KEY[spec.name] ?? spec.name, freshAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
       ...angleFields,
     });
   }

@@ -36,6 +36,11 @@
 // consumer that only checked membership against a Set could accept a
 // silently reordered copy.
 export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
+
+// Marker gate name → gates.<key> config key. Owned here so every caller of
+// resolveFanoutGroups maps the same way; passing the marker name verbatim
+// resolves no groups and silently downgrades pairing enforcement.
+export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 
 // Pre-rename spelling of the lowest tier. Old ledgers, markers, and configs

@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -39,7 +39,6 @@ function normalizeGate(value) {
   const normalized = String(value).trim().toLowerCase();
   return gates.has(normalized) ? normalized : null;
 }
-const GATE_CONFIG_KEY = { draft_gate: "draft", pre_approval_gate: "preApproval" };
 function normalizeVerdict(value) {
   const verdicts = new Set(["clean", "findings_present", "blocked"]);
   const normalized = String(value).trim().toLowerCase();
