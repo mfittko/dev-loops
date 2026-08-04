@@ -2088,3 +2088,172 @@ test("a marker-tier round still writes a complete ledger when --out's parent dir
     assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Head-stamp guard: a stale artifact staged from an earlier round must be
+// distinguishable from a fresh verdict at the reviewed head.
+// ---------------------------------------------------------------------------
+
+const HEAD_A = "a1".repeat(20);
+const HEAD_B = "b2".repeat(20);
+
+test("parseConsolidateFaninCliArgs parses and normalizes --head-sha, rejecting non-hex", () => {
+  const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A.toUpperCase()]);
+  assert.equal(result.headSha, HEAD_A);
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", "not-a-sha"]),
+    /--head-sha must be a 7-64 char hex SHA/,
+  );
+});
+
+test("consolidateGateFanin accepts an artifact stamped with the round's head", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A });
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed, naming the angle, on a mismatched undeclared head stamp", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_B } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        (err) => err.message.includes('"scope"') && err.message.includes(HEAD_B) && err.message.includes(HEAD_A),
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a missing head stamp (unknown provenance)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /angle "scope" has no valid "headSha" stamp/,
+      );
+      // A malformed stamp is the same unknown-provenance failure, not a bypass.
+      await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", findings: [], headSha: "zz-not-hex" }), "utf8");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /angle "scope" has no valid "headSha" stamp/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin exempts a declared carried-forward angle from the head-stamp check", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A },
+        "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"], { carriedFromHead: HEAD_B })).carried,
+        });
+        // The real artifact wins for the carried angle (existing behavior);
+        // provenance stays the plan's carriedFromHead, no second field.
+        assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["coverage", "scope"]);
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin without --head-sha keeps the pre-stamp behavior for unstamped artifacts", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("consolidateGateFanin normalizes a mixed-case stamp and a programmatic mixed-case headSha", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: `  ${HEAD_A.toUpperCase()}  ` } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A.toUpperCase() });
+      assert.equal(result.overallVerdict, "clean");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: "not hex" }),
+        /--head-sha must be a 7-64 char hex SHA/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin lets a blocked artifact reach the blocked-verdict path, not the stamp guard", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "blocked", error: "sentinel refused", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /fan-in is blocked .* re-run that reviewer/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin rejects a non-string programmatic headSha (no coercion)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      for (const bad of [123, ["a1".repeat(20)], { sha: HEAD_A }]) {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: bad }),
+          /--head-sha must be a 7-64 char hex SHA string/,
+        );
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin exempts a carried angle case-insensitively but never a delta-sibling by base name", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    // Case-insensitive exact-name match: "Coverage" exempts a "coverage" artifact.
+    await withFindingsDir(
+      { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["Coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["Coverage"], { carriedFromHead: HEAD_B })).carried,
+        });
+        assert.equal(result.ok, true);
+      },
+    );
+    // No baseAngleName collapse: a fresh -delta-at-<sha> sibling is NOT exempted
+    // by its base being carried — its stale stamp still fails closed.
+    await withFindingsDir(
+      { "coverage-delta.json": { angle: "coverage-delta-at-abc1234", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            headSha: HEAD_A,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["coverage"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"], { carriedFromHead: HEAD_B })).carried,
+          }),
+          /coverage-delta-at-abc1234.*stamped for head/,
+        );
+      },
+    );
+  });
+});

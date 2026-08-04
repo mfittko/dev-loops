@@ -15,6 +15,7 @@
  *   {
  *     angle: string,
  *     verdict: "clean" | "findings_present" | "blocked",
+ *     headSha: string,   // required whenever --head-sha is given (exempt: blocked / declared-carried)
  *     findings: [{ severity, summary, file?, line?, disposition?, recommendation? }]
  *   }
  * `disposition` on an input finding is IGNORED — consolidateFanin() always
@@ -58,18 +59,30 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
 Required:
   --findings-dir <dir>          Directory containing one *.json per-angle findings
-                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }.
+                                 artifact: { angle, verdict, headSha, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }
+                                 (headSha required whenever --head-sha is given; exempt for blocked or declared-carried angles).
                                  An input finding's "disposition" (if present) is IGNORED — the
                                  output disposition is always DERIVED from severity (see below).
                                  An input finding's "recommendation" (if present) is carried through.
                                  Two artifacts naming the SAME angle fail closed (ambiguous fan-out).
 Optional:
+  --head-sha <sha>              The round's reviewed head (7-64 char hex SHA). When given,
+                                 every artifact read from --findings-dir must carry a
+                                 "headSha" stamp equal to it (trim+lowercase compare) —
+                                 a mismatched stamp OR a missing/malformed stamp FAILS
+                                 CLOSED naming the angle, unless that angle is declared in
+                                 --carried-angles (an explicit, plan-proven carry-forward
+                                 keeps the existing behavior; provenance stays the ledger's
+                                 carriedFromHead, never a second field). Omit for the
+                                 pre-stamp behavior (no head check). This is what makes a
+                                 stale artifact staged from an earlier round distinguishable
+                                 from a fresh verdict at the reviewed head.
   --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
                                  worktree's config and applies gates.<gate>.blockCleanOnFindingSeverities
                                  to the overall verdict (default when omitted: ["must-fix"]). When given,
@@ -172,7 +185,10 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, missing/empty --findings-dir, unparseable artifact, a per-angle
+  1  Argument error, a malformed --head-sha (not a 7-64 char hex SHA string), a
+     mismatched/missing/malformed artifact "headSha" stamp for a non-blocked,
+     non-carried angle when --head-sha is given,
+     missing/empty --findings-dir, unparseable artifact, a per-angle
      artifact that self-declares "carriedFromHead", schema violation, duplicate angle
      name across artifacts, blocked fan-in (a malformed or blocked per-angle artifact),
      (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
@@ -412,6 +428,14 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
 // non-empty string here and stamped it verbatim into "angles"/"findingsJson").
 const CARRIED_FROM_HEAD_RE = /^[0-9a-f]{7,64}$/i;
 
+// Normalize a candidate head SHA (flag value or artifact stamp): trim+lowercase,
+// null when not a 7-64 char hex string.
+function normalizeHeadShaValue(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return CARRIED_FROM_HEAD_RE.test(normalized) ? normalized : null;
+}
+
 // Validate + normalize (in place) a "carried" entries array's per-entry shape:
 // a non-empty "angle" and a "carriedFromHead" that is a 7-64 char hex SHA.
 // Shared by BOTH the parse-time path (validateCarryForwardPlanShape, below) and
@@ -468,6 +492,7 @@ export function parseConsolidateFaninCliArgs(argv) {
   const options = {
     help: false,
     findingsDir: undefined,
+    headSha: undefined,
     gate: undefined,
     out: undefined,
     ledgerOut: undefined,
@@ -481,6 +506,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       "findings-dir": { type: "string" },
+      "head-sha": { type: "string" },
       gate: { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
@@ -507,6 +533,14 @@ export function parseConsolidateFaninCliArgs(argv) {
     }
     if (token.name === "findings-dir") {
       options.findingsDir = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "head-sha") {
+      const headSha = normalizeHeadShaValue(requireTokenValue(token, parseError));
+      if (headSha === null) {
+        throw parseError("--head-sha must be a 7-64 char hex SHA");
+      }
+      options.headSha = headSha;
       continue;
     }
     if (token.name === "gate") {
@@ -683,6 +717,18 @@ function resolvePrChecklistMatrixUpsert(rawValue) {
 }
 
 export async function consolidateGateFanin(options) {
+  // Re-normalize/validate headSha here, not only in the CLI parser: a direct
+  // programmatic caller bypasses parseConsolidateFaninCliArgs, and an
+  // un-normalized (uppercase/padded) value would spuriously mismatch a
+  // correctly-stamped artifact — same parser-bypass hardening the
+  // carried-angles proof below already gets.
+  if (options.headSha !== undefined) {
+    const headSha = normalizeHeadShaValue(options.headSha);
+    if (headSha === null) {
+      throw new Error(`--head-sha must be a 7-64 char hex SHA string, got ${JSON.stringify(options.headSha)}`);
+    }
+    options = { ...options, headSha };
+  }
   const dir = options.findingsDir;
   let entries;
   try {
@@ -732,6 +778,14 @@ export async function consolidateGateFanin(options) {
     throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts`);
   }
 
+  // Head-stamp exemption membership: EXACT declared carried names, normalized
+  // trim+lowercase only. Deliberately NOT baseAngleName-collapsed — a
+  // -delta-at-<sha> sibling is an independently reviewed row, and collapsing
+  // would exempt a fresh sibling's stale artifact because its BASE was carried
+  // (fail-open). The carried-upsert path's base-name matching answers a
+  // different question (does a real artifact cover the carried slot).
+  const exemptCarriedKeys = new Set((options.carriedAngles ?? []).map((a) => String(a).trim().toLowerCase()));
+
   const rawArtifacts = [];
   const angleSourceFiles = new Map(); // angle -> file paths that declared it
   for (const name of files) {
@@ -750,6 +804,29 @@ export async function consolidateGateFanin(options) {
     }
     validateArtifactShape(parsed, `"${filePath}"`);
     const angle = parsed.angle.trim();
+    // Head-stamp guard: with --head-sha, an artifact must prove it was written
+    // against THIS round's head. A stale copy staged from an earlier round is
+    // otherwise indistinguishable from a fresh verdict — it would re-raise
+    // already-fixed findings or, worse, vouch clean for code its reviewer never
+    // saw. A declared carried-forward angle is exempt (the plan-proven
+    // --carried-angles declaration is the operator's explicit provenance; the
+    // ledger's carriedFromHead stays the single provenance field), and so is a
+    // "blocked" artifact — a refusing reviewer's shape carries no stamp, and
+    // the blocked-verdict fail-closed path below owns that failure with its
+    // actionable re-run message. A missing or malformed stamp on any other
+    // artifact is UNKNOWN provenance and fails closed the same way as a
+    // mismatch, so omitting the field never bypasses the guard.
+    if (options.headSha !== undefined
+        && parsed.verdict.trim() !== "blocked"
+        && !exemptCarriedKeys.has(angle.toLowerCase())) {
+      const stamp = normalizeHeadShaValue(parsed.headSha);
+      if (stamp === null) {
+        throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);
+      }
+      if (stamp !== options.headSha) {
+        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles/--carry-forward-plan`);
+      }
+    }
     if (!angleSourceFiles.has(angle)) angleSourceFiles.set(angle, []);
     angleSourceFiles.get(angle).push(filePath);
     rawArtifacts.push(parsed);

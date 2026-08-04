@@ -292,8 +292,11 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
   fails closed if the seeded artifact isn't present at the reviewer's cwd).
-- produces a focused findings artifact with verdict (clean/findings_present) and file references
+- produces a focused findings artifact with verdict (clean/findings_present) and file references, stamped per the head-stamp rule below
 - completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
+
+<!-- rule: GATE-EXEC-ARTIFACT-HEAD-STAMP -->
+`GATE-EXEC-ARTIFACT-HEAD-STAMP`: A per-angle findings artifact MUST carry a `headSha` field stamped with the reviewed head from the briefing, and Phase 3's `consolidate-fanin --head-sha <sha>` MUST fail closed, naming the angle, when an artifact's stamp differs from the round's head or is missing/malformed — unknown provenance is a failure, not a bypass. Two exemptions exist: an angle declared carried forward via `--carried-angles`/`--carry-forward-plan` (exact declared name, matched case-insensitively), which keeps the existing carry-forward behavior and leaves the ledger's `carriedFromHead` as the single provenance field; and a `verdict: "blocked"` artifact, whose refusal shape carries no stamp and whose failure is owned by the blocked-verdict fail-closed path. This is what makes a stale artifact staged out of an earlier round distinguishable from a fresh verdict at the reviewed head.
 
 #### Briefing composition: invariant prefix first
 
@@ -461,14 +464,17 @@ Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
 ```
-dev-loops gate consolidate-fanin --findings-dir <dir> \
+dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
 `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
-concatenation and never an inline interpreter over the artifacts. `--gate`
+concatenation and never an inline interpreter over the artifacts. Pass
+`--head-sha <sha>` (the round's reviewed head) on every round; the fail-closed
+stamp rule it activates is owned by `GATE-EXEC-ARTIFACT-HEAD-STAMP` (Phase 2).
+`--gate`
 applies that gate's configured `blockCleanOnFindingSeverities` to the overall
 verdict; omitting it falls back to the shipped `["must-fix"]` default. One
 invocation reads the per-angle artifacts directory and emits `findingsJson`

@@ -14,6 +14,7 @@
  *   {
  *     angle: string,
  *     verdict: "clean" | "findings_present",
+ *     headSha: string,   // reviewed head; consolidate-fanin --head-sha enforces it (GATE-EXEC-ARTIFACT-HEAD-STAMP)
  *     findings: [{ severity, file?, line?, summary, recommendation? }]
  *   }
  *
