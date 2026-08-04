@@ -420,13 +420,13 @@ manual chore:
   UNCHANGED briefing, and explicit round retirement under `GATE-EXEC-ROUND-RETIREMENT` for
   a REBUILT briefing.)
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
-  **MUST NOT** clear the sentinels of carried-forward clean angles — the one exception is
-  a round retirement (`GATE-EXEC-ROUND-RETIREMENT`), whose audited sweep moves EVERY
-  sentinel of the retired gate+head because the fresh fan-out re-reviews every angle
-  (Phase 5's re-fan
+  **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
   re-invokes the surface-touched angles, every angle that produced `findings_present`, and
   every mandatory / always-run angle; carried-forward clean angles are not re-invoked. Every
-  re-invoked angle gets a distinct new-head key, so no cleanup is required).
+  re-invoked angle gets a distinct new-head key, so no cleanup is required). A round
+  retirement (`GATE-EXEC-ROUND-RETIREMENT`) does not conflict with this: its audited sweep
+  is scoped to the retired gate+head, and a carried-forward angle's sentinel is keyed at
+  its PRIOR head, out of the sweep's reach.
 - Stale pre-round sentinels (the old scope-only name) never collide with a head-keyed round
   and are simply ignored.
 
