@@ -723,3 +723,26 @@ test("--same-head-retry without a prefix hash is a usage error, and the alias em
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("verify-fresh-review-context reports the validated repo root on fresh runs only", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-root-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const fresh = runScript(["--scope", "root-probe"], { cwd: tmpDir });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    const output = JSON.parse(fresh.stdout.trim());
+    // The reported root is the cwd the sentinel validated — the authoritative
+    // path for `git -C <repoRoot>` in cwd-resetting reviewer shells.
+    assert.equal(output.repoRoot, await realpathOf(tmpDir));
+    const refused = runScript(["--scope", "root-probe"], { cwd: tmpDir });
+    assert.equal(refused.status, 1);
+    assert.equal(JSON.parse(refused.stdout.trim()).repoRoot, undefined);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+async function realpathOf(p) {
+  const { realpath } = await import("node:fs/promises");
+  return realpath(p);
+}

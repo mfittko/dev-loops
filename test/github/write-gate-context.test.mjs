@@ -2482,6 +2482,8 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-angle> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt`. Refuse to proceed on contamination or a missing artifact.",
       "",
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Address the tree explicitly — every git command as \`git -C ${path.resolve(repoRoot)} ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's own output echoes this root as \`repoRoot\`.`,
+      "",
       "## PR body",
       "",
       "```",
@@ -3108,4 +3110,15 @@ test("resolvePrSpecContext: a refined issue mixed with a prose-only one still cl
     "linked-issue",
     "one refined issue is enough: the pointer leads somewhere with real criteria",
   );
+});
+
+test("renderBriefingPrefix carries the worktree root and the git -C cwd-independence instruction", () => {
+  const input = renderInput();
+  const { text } = renderBriefingPrefix(input);
+  assert.ok(text.includes(`worktree: ${input.worktreeRoot}`));
+  // The instruction names the explicit-root idiom for BOTH git and file reads,
+  // and appears before the PR body so it is part of the invariant header.
+  assert.ok(text.includes(`git -C ${input.worktreeRoot}`));
+  assert.ok(text.indexOf("Shell cwd is NOT trustworthy") < text.indexOf("## PR body"));
+  assert.ok(text.includes("repoRoot"));
 });

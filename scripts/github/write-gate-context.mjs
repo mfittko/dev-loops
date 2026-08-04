@@ -667,6 +667,10 @@ export function renderBriefingPrefix({
     `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gate.replace(/_/g, "-")}-<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
+  lines.push(
+    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Address the tree explicitly — every git command as \`git -C ${worktreeRoot} ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's own output echoes this root as \`repoRoot\`.`,
+  );
+  lines.push("");
   lines.push("## PR body");
   lines.push("");
   const trimmedPrBody = typeof prBody === "string" ? prBody.trim() : "";
