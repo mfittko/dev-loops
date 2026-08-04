@@ -2179,3 +2179,29 @@ test("consolidateGateFanin without --head-sha keeps the pre-stamp behavior for u
     },
   );
 });
+
+test("consolidateGateFanin normalizes a mixed-case stamp and a programmatic mixed-case headSha", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: `  ${HEAD_A.toUpperCase()}  ` } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A.toUpperCase() });
+      assert.equal(result.overallVerdict, "clean");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: "not hex" }),
+        /--head-sha must be a 7-64 char hex SHA/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin lets a blocked artifact reach the blocked-verdict path, not the stamp guard", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "blocked", error: "sentinel refused", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        (err) => !/headSha" stamp/.test(err.message),
+      );
+    },
+  );
+});

@@ -704,6 +704,18 @@ function resolvePrChecklistMatrixUpsert(rawValue) {
 }
 
 export async function consolidateGateFanin(options) {
+  // Re-normalize/validate headSha here, not only in the CLI parser: a direct
+  // programmatic caller bypasses parseConsolidateFaninCliArgs, and an
+  // un-normalized (uppercase/padded) value would spuriously mismatch a
+  // correctly-stamped artifact — same parser-bypass hardening the
+  // carried-angles proof below already gets.
+  if (options.headSha !== undefined) {
+    const headSha = String(options.headSha).trim().toLowerCase();
+    if (!CARRIED_FROM_HEAD_RE.test(headSha)) {
+      throw new Error(`--head-sha must be a 7-64 char hex SHA, got ${JSON.stringify(options.headSha)}`);
+    }
+    options = { ...options, headSha };
+  }
   const dir = options.findingsDir;
   let entries;
   try {
@@ -777,10 +789,15 @@ export async function consolidateGateFanin(options) {
     // already-fixed findings or, worse, vouch clean for code its reviewer never
     // saw. A declared carried-forward angle is exempt (the plan-proven
     // --carried-angles declaration is the operator's explicit provenance; the
-    // ledger's carriedFromHead stays the single provenance field). A missing or
-    // malformed stamp is UNKNOWN provenance and fails closed the same way, so
-    // omitting the field never bypasses the guard.
-    if (options.headSha !== undefined && !(options.carriedAngles ?? []).includes(angle)) {
+    // ledger's carriedFromHead stays the single provenance field), and so is a
+    // "blocked" artifact — a refusing reviewer's shape carries no stamp, and
+    // the blocked-verdict fail-closed path below owns that failure with its
+    // actionable re-run message. A missing or malformed stamp on any other
+    // artifact is UNKNOWN provenance and fails closed the same way as a
+    // mismatch, so omitting the field never bypasses the guard.
+    if (options.headSha !== undefined
+        && parsed.verdict.trim() !== "blocked"
+        && !(options.carriedAngles ?? []).includes(angle)) {
       const stamp = typeof parsed.headSha === "string" ? parsed.headSha.trim().toLowerCase() : null;
       if (stamp === null || !CARRIED_FROM_HEAD_RE.test(stamp)) {
         throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);

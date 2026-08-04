@@ -461,10 +461,16 @@ Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
 ```
-dev-loops gate consolidate-fanin --findings-dir <dir> \
+dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
+
+`--head-sha <sha>` is the round's reviewed head and activates the
+`GATE-EXEC-ARTIFACT-HEAD-STAMP` guard (Phase 2): every non-blocked, non-carried
+artifact must be stamped for exactly this head or the consolidation fails
+closed naming the angle. Pass it on every gate round — omitting it disables
+stale-artifact detection and is only for pre-stamp compatibility.
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure
 `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin` — never manual
