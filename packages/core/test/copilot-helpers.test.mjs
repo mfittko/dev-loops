@@ -301,9 +301,16 @@ test("summarizeGateReviewComments defaults executionMode and inlineReason to nul
 // (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs,
 // request-copilot-review.mjs) by construction, so the exclusion must be pinned
 // at THIS level, not only indirectly via one caller's CLI tests.
-test("isGateMachineArtifactBody recognizes both machine-authored artifact markers, column-0 only", () => {
+test("isGateMachineArtifactBody recognizes the machine-authored artifact markers, column-0 only, delimiter-anchored", () => {
   assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->\nfindings"), true);
   assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary -->\n### Deferred gate findings"), true);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings gate=draft_gate -->\n### Gate fan-out findings: draft_gate"), true);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary-->\ntable"), true);
+  // Delimiter anchoring: a suffixed variant of a known token is NOT an
+  // artifact (a prefix-tolerant match would swallow future markers silently).
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-extra gate=draft_gate -->\nbody"), false);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-review-extra x -->\nbody"), false);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary-x -->\nbody"), false);
   assert.equal(isGateMachineArtifactBody("some prose\n<!-- dev-loops:gate-findings-review draft_gate aaa1111 round=2 -->"), true);
   // Mid-line (not the first character of its own line) never matches.
   assert.equal(isGateMachineArtifactBody("see `<!-- dev-loops:gate-findings-review` for the marker shape"), false);

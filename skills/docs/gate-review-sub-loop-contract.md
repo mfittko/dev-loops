@@ -834,9 +834,10 @@ machine-authored gate artifact and hide it from the checkpoint-evidence scanner
 `summarizeGateReviewCommentMarkers` helpers every gate-evidence reader calls through); the
 producer-owned verdict header (`### Gate review: \`<gate>\``) on the same body overrides that, so
 the round's single surface stays readable AS the verdict. Only a marker-bearing body with no
-genuine verdict header — a historical standalone findings review, or a historical
-`<!-- dev-loops:deferred-summary -->` comment — stays excluded and can never win the
-newest-gate-marker tie-break over a real verdict.
+genuine verdict header — a historical standalone findings review, a historical
+`<!-- dev-loops:deferred-summary -->` comment, or the current opt-in findings comment
+(`dev-loops:gate-findings gate=`, `GATE-COMMENT-IDENTITY-DISJOINT`) — stays excluded and can
+never win the newest-gate-marker tie-break over a real verdict.
 
 Before posting, a candidate finding is dropped when its fingerprint already matches an
 OWN-AUTHORED (the authenticated `gh` viewer's own login) existing thread or review body on the

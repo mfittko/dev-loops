@@ -291,6 +291,8 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
     // Plain text head SHA (no backticks) so GitHub autolinks the commit.
     `Reviewed head: ${headSha}`,
     "",
+    "This comment shows only the latest posted round for this gate; earlier rounds' findings are no longer shown here and live on their own per-round gate reviews.",
+    "",
   ];
   if (findings.length === 0) {
     lines.push("No findings. All review angles passed for this head.");

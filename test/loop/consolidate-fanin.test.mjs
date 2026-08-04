@@ -1618,7 +1618,7 @@ test("a fan-in too large to render at minimum summary length still writes a comp
       assert.equal(section.findings.length, 1);
       const marker = section.findings[0].summary;
       assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
-      assert.match(marker, /see the disposition ledger/);
+      assert.match(marker, /— in the disposition ledger/);
       if (angle === MIXED_ANGLE) {
         // Highest-severity-wins: must-fix beats worth-fixing-now/defer, and
         // the marker's own disposition matches that severity's derivation
@@ -1736,7 +1736,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     // round's budget.
     assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
     assert.ok(!correctnessFinding.summary.endsWith(" …"), "a narrow angle's real finding must not be shrunk when it already fits the whole round");
-    assert.ok(!/omitted.*see the disposition ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
+    assert.ok(!/omitted.*ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
 
     // "style" (the actual cause of the overflow) IS collapsed to a marker.
     const styleFinding = byAngle.get("style").findings[0];
@@ -1750,7 +1750,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
 // findings, its bare marker} renders cheaper in isolation — not "bare
 // always wins". A single-finding angle with no file/line and a summary at or
 // under the shrink floor renders its real form (62 chars, measured) SHORTER
-// than its own bare "N omitted — see ledger" marker (83 chars, measured):
+// than its own bare "N omitted — in ledger" marker (22 chars at N=30, measured):
 // angleRenderCost(real) <= angleRenderCost(bareMarker) is true, so this angle
 // is seeded with its real findings directly and is then EXCLUDED from
 // upgradeOrder (it never enters the per-severity upgrade walk the sibling
@@ -1863,9 +1863,9 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
       assert.equal(section.verdict, "findings_present");
       assert.equal(section.findings.length, 1);
       const summary = section.findings[0].summary;
-      if (summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`) {
+      if (summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`) {
         bareCount += 1;
-      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("see the disposition ledger")) {
+      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("— in the disposition ledger")) {
         verboseCount += 1;
       } else {
         assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);
@@ -1900,7 +1900,7 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
       assert.equal(section.findings.length, 1);
       // Exactly the bare sentence — never a truncated fragment of the
       // verbose one (no " …", no cut-off mid-word).
-      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — see ledger`);
+      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — in ledger`);
       assert.equal(section.findings[0].disposition, "deferred");
     }
     // The ledger is still complete regardless of how far the marker degraded.
@@ -1959,7 +1959,7 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
     // Sanity: this fixture really does force at least one angle to bare —
     // otherwise the test would pass even with the old, unfixed ordering.
     const bareCount = [...byAngle.values()].filter(
-      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`,
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
     ).length;
     assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
   });

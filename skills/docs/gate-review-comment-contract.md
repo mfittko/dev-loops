@@ -20,11 +20,29 @@ No separate verdict issue comment, no separate findings review, and no deferred-
 is posted. Each finding's text appears exactly once across the round; the body's per-angle
 breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
 review body; a verdict posted as an ISSUE comment still validates and is still corrected on
-its own surface (back-compat read). The sanctioned poster never creates one. The single
-documented exception is the zero-dep fallback poster
+its own surface (back-compat read). The sanctioned poster never creates one. Two documented
+exceptions exist: the opt-in findings comment (`gates.postFindingsComments`,
+`GATE-COMMENT-IDENTITY-DISJOINT` below) adds a sanctioned second visible surface when a repo
+opts in, and the zero-dep fallback poster
 (`skills/dev-loop/scripts/post-gate-verdict-fallback.mjs`), used only when `@dev-loops/core`
-is absent: it cannot reach the review poster and posts a verdict issue comment, which the
-dev-loop skill already documents as a degraded audit-trail artifact.
+is absent, posts a verdict issue comment the dev-loop skill documents as a degraded
+audit-trail artifact.
+
+<!-- rule: GATE-COMMENT-IDENTITY-DISJOINT -->
+`GATE-COMMENT-IDENTITY-DISJOINT`: The verdict surface and the opt-in findings comment
+(`gates.postFindingsComments`, `post-gate-findings.mjs` — the opt-in exception
+`GATE-COMMENT-SINGLE-SURFACE` names) identify "their"
+comment by different claim keys, and each tool's upsert MUST NOT ever claim the other's comment.
+The verdict is claimed through its parsed verdict fields (gate name plus reviewed head); the
+findings comment through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim
+seam by machine-artifact filtering plus verdict-body precedence: the marker summarizer treats a
+body carrying a known machine-artifact marker token (owned by the artifact filter in
+`copilot-helpers.mjs`, delimiter-anchored so no suffixed `<token>-<x>` variant matches) as a
+non-candidate UNLESS it also carries the producer-owned verdict body heading — which is how the
+round's own review, marker and all, stays claimable while the findings comment (which never
+carries that heading) never is. That silent replacement previously destroyed a full round's
+visible findings record seconds after it was posted. Within its OWN claim key each tool keys
+identity as it needs (the findings comment's marker is deliberately gate-only).
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
