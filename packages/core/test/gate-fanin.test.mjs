@@ -56,6 +56,8 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(result.verdict, "clean");
     assert.equal(result.counts.findings, 1);
     assert.equal(result.counts.blocking, 0);
+    assert.equal(result.findings[0].severity, "nice-to-have");
+    assert.deepEqual(result.counts.bySeverity, { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 1 });
     assert.equal(result.findings[0].disposition, "deferred");
   });
 
