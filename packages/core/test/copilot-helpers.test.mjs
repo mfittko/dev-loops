@@ -889,3 +889,21 @@ test("round-trip: sanitizing a verdict body before posting keeps the anti-summon
   assert.equal(sanitized, "Finding: this comment violates the `/copilot` prohibition rule.");
   assert.equal(containsBareCopilotSummon(sanitized), false, "sanitized text must not arm the anti-summon guard");
 });
+
+test("isGateMachineArtifactBody matches exactly the known marker tokens, delimiter-anchored", async (t) => {
+  const { isGateMachineArtifactBody } = await import("../src/github/copilot-helpers.mjs");
+  const artifact = [
+    ["<!-- dev-loops:gate-findings-review draft_gate " + "a".repeat(40) + " round=1 -->\nfindings", true],
+    ["<!-- dev-loops:gate-findings gate=draft_gate -->\n### Gate fan-out findings: draft_gate", true],
+    ["<!-- dev-loops:deferred-summary -->\ntable", true],
+    ["<!-- dev-loops:deferred-summary-->\ntable", true],
+    // Delimiter anchoring: suffixed variants of a known token are NOT artifacts
+    // (a prefix-tolerant match would swallow future markers silently).
+    ["<!-- dev-loops:gate-findings-extra gate=draft_gate -->\nbody", false],
+    ["<!-- dev-loops:gate-findings-review-extra x -->\nbody", false],
+    ["<!-- dev-loops:deferred-summary-x -->\nbody", false],
+  ];
+  for (const [body, want] of artifact) {
+    assert.equal(isGateMachineArtifactBody(body), want, body.slice(0, 60));
+  }
+});

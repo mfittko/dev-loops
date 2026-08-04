@@ -58,12 +58,12 @@ export function matchGateReviewCommentHeader(body) {
 // (its "Gate fan-out findings:"/"Reviewed head:" lines yield gate+headSha)
 // and the verdict upsert claims and overwrites it in place, silently
 // destroying the round's visible findings record.
-// The alternation is exact-marker, not prefix: `gate-findings-review\b` (the
-// per-round review header), `gate-findings\s` (the findings COMMENT marker,
-// always followed by its ` gate=` attribute), and `deferred-summary\b` — a
-// bare `gate-findings\b` would also swallow any future `gate-findings-<x>`
-// marker silently.
-const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review\b|gate-findings\s|deferred-summary\b)/mu;
+// Every alternation branch is delimiter-anchored — the token must be followed
+// by whitespace or the closing `-->` — so the filter matches exactly the three
+// known marker tokens (the per-round review round marker, the findings
+// COMMENT marker with its ` gate=` attribute, and the historical
+// deferred-summary comment) and never any suffixed `<token>-<x>` variant.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|gate-findings|deferred-summary)(?=\s|-->)/mu;
 
 export function isGateMachineArtifactBody(body) {
   if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {

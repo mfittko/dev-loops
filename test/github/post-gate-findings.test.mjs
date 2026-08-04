@@ -686,14 +686,15 @@ test("findings comment and verdict body are mutually unclaimable (#1514)", async
     { id: 2, body: verdictBody, html_url: "https://github.test/c/2", updated_at: "2026-08-04T00:00:00Z" },
   ], { headSha: "a".repeat(40) });
   assert.ok(verdictClaimed.draft_gate !== null);
-  // Exact-marker boundary, pinned on the filter itself (the summarizer-level
-  // probe is masked by the verdict-header carve-out, so only a direct pin is
-  // regex-sensitive): the artifact skip covers exactly the known markers; an
-  // unknown gate-findings-<x> marker is NOT an artifact (a loose
-  // `gate-findings\b` prefix match would swallow it silently).
+  // The findings comment's body is a machine artifact (the marker-boundary
+  // cases themselves are pinned in the filter's owner suite,
+  // packages/core/test/copilot-helpers.test.mjs).
   const { isGateMachineArtifactBody } = await import("@dev-loops/core/github/copilot-helpers");
-  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-review draft_gate " + "a".repeat(40) + " round=1 -->\nfindings"), true);
   assert.equal(isGateMachineArtifactBody(findingsBody), true);
-  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary -->\ntable"), true);
-  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-extra gate=draft_gate -->\nbody"), false);
+});
+
+test("renderFindingsCommentBody states that only the latest round is shown (#AC2 stated replacement)", () => {
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [] });
+  assert.ok(body.includes("only the latest posted round"));
+  assert.ok(body.includes("per-round gate reviews"));
 });

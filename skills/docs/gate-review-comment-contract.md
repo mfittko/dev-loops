@@ -28,18 +28,19 @@ dev-loop skill already documents as a degraded audit-trail artifact.
 
 <!-- rule: GATE-COMMENT-IDENTITY-DISJOINT -->
 `GATE-COMMENT-IDENTITY-DISJOINT`: The verdict surface and the opt-in findings comment
-(`gates.postFindingsComments`, `post-gate-findings.mjs`) identify "their" comment by DISJOINT
-vocabularies, and each tool's upsert MUST NOT ever claim the other's comment. The verdict is
-claimed through its parsed verdict fields (gate name plus reviewed head, with the
-`dev-loops:gate-findings-review` header on review surfaces); the findings comment through its
-own `dev-loops:gate-findings gate=` marker. Enforced at the claim seam: the marker summarizer
-treats a machine-artifact marker body with no genuine verdict header as a non-candidate — the
-artifact filter in `copilot-helpers.mjs` owns the exact marker set (the findings comment's
-marker among them; an exact-marker match, never a `gate-findings-<x>` prefix) — so an upsert
-can never update the other tool's comment in place. That silent replacement previously
-destroyed a full round's visible findings record seconds after it was posted. Within its OWN
-vocabulary each tool keys identity as it needs (the findings comment's marker is deliberately
-gate-only); the invariant is that the vocabularies never overlap.
+(`gates.postFindingsComments`, `post-gate-findings.mjs` — the sanctioned second visible surface
+that opt-in adds beside `GATE-COMMENT-SINGLE-SURFACE`'s one-per-round review) identify "their"
+comment by different claim keys, and each tool's upsert MUST NOT ever claim the other's comment.
+The verdict is claimed through its parsed verdict fields (gate name plus reviewed head); the
+findings comment through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim
+seam by machine-artifact filtering plus verdict-body precedence: the marker summarizer treats a
+body carrying a known machine-artifact marker token (owned by the artifact filter in
+`copilot-helpers.mjs`, delimiter-anchored so no suffixed `<token>-<x>` variant matches) as a
+non-candidate UNLESS it also carries the producer-owned verdict body heading — which is how the
+round's own review, marker and all, stays claimable while the findings comment (which never
+carries that heading) never is. That silent replacement previously destroyed a full round's
+visible findings record seconds after it was posted. Within its OWN claim key each tool keys
+identity as it needs (the findings comment's marker is deliberately gate-only).
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
