@@ -686,16 +686,14 @@ test("findings comment and verdict body are mutually unclaimable (#1514)", async
     { id: 2, body: verdictBody, html_url: "https://github.test/c/2", updated_at: "2026-08-04T00:00:00Z" },
   ], { headSha: "a".repeat(40) });
   assert.ok(verdictClaimed.draft_gate !== null);
-  // Exact-marker boundary: the artifact skip covers ONLY the two real markers.
-  // An unknown gate-findings-<x> marker body with genuine verdict fields must
-  // NOT be skipped (a loose `gate-findings\b` prefix match would swallow it
-  // silently) — regression pin for the round-1 boundary defect.
-  const unknownMarkerBody = [
-    "<!-- dev-loops:gate-findings-extra gate=draft_gate -->",
-    verdictBody,
-  ].join("\n");
-  const unknownClaimed = summarizeGateReviewCommentMarkers([
-    { id: 3, body: unknownMarkerBody, html_url: "https://github.test/c/3", updated_at: "2026-08-04T00:00:00Z" },
-  ], { headSha: "a".repeat(40) });
-  assert.ok(unknownClaimed.draft_gate !== null, "an unknown gate-findings-<x> marker must not be swallowed by the artifact skip");
+  // Exact-marker boundary, pinned on the filter itself (the summarizer-level
+  // probe is masked by the verdict-header carve-out, so only a direct pin is
+  // regex-sensitive): the artifact skip covers exactly the known markers; an
+  // unknown gate-findings-<x> marker is NOT an artifact (a loose
+  // `gate-findings\b` prefix match would swallow it silently).
+  const { isGateMachineArtifactBody } = await import("@dev-loops/core/github/copilot-helpers");
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-review draft_gate " + "a".repeat(40) + " round=1 -->\nfindings"), true);
+  assert.equal(isGateMachineArtifactBody(findingsBody), true);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:deferred-summary -->\ntable"), true);
+  assert.equal(isGateMachineArtifactBody("<!-- dev-loops:gate-findings-extra gate=draft_gate -->\nbody"), false);
 });

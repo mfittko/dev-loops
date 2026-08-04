@@ -29,15 +29,17 @@ dev-loop skill already documents as a degraded audit-trail artifact.
 <!-- rule: GATE-COMMENT-IDENTITY-DISJOINT -->
 `GATE-COMMENT-IDENTITY-DISJOINT`: The verdict surface and the opt-in findings comment
 (`gates.postFindingsComments`, `post-gate-findings.mjs`) identify "their" comment by DISJOINT
-vocabularies, and neither may ever claim the other's. The verdict is claimed through the
-gate/head verdict fields and the `dev-loops:gate-findings-review` header; the findings comment
-through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim seam: the marker
-summarizer skips exactly the two machine-artifact marker bodies — `dev-loops:gate-findings-review`
-and the findings comment's `dev-loops:gate-findings gate=` marker (an exact-marker match, never a
-prefix: an unknown `gate-findings-<x>` marker is NOT skipped) — without a genuine verdict
-header, so an upsert can never update the other tool's comment in place (the silent
-findings-record overwrite observed live on PR 1513). Neither tool may key its comment identity
-on `gate` alone — that shared keying is what made the collision possible.
+vocabularies, and each tool's upsert MUST NOT ever claim the other's comment. The verdict is
+claimed through its parsed verdict fields (gate name plus reviewed head, with the
+`dev-loops:gate-findings-review` header on review surfaces); the findings comment through its
+own `dev-loops:gate-findings gate=` marker. Enforced at the claim seam: the marker summarizer
+treats a machine-artifact marker body with no genuine verdict header as a non-candidate — the
+artifact filter in `copilot-helpers.mjs` owns the exact marker set (the findings comment's
+marker among them; an exact-marker match, never a `gate-findings-<x>` prefix) — so an upsert
+can never update the other tool's comment in place. That silent replacement previously
+destroyed a full round's visible findings record seconds after it was posted. Within its OWN
+vocabulary each tool keys identity as it needs (the findings comment's marker is deliberately
+gate-only); the invariant is that the vocabularies never overlap.
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.

@@ -51,16 +51,18 @@ export function matchGateReviewCommentHeader(body) {
 // example, describing this very mechanism) still counts as evidence. Both
 // producers render their marker at column 0, so the anchor costs nothing
 // against genuine artifacts.
-// `gate-findings` covers BOTH the per-round review header (gate-findings-review)
-// and post-gate-findings.mjs's opt-in findings COMMENT marker (gate-findings
-// gate=...). Without the latter, the findings comment parses as a verdict
-// marker candidate (its "Gate fan-out findings:"/"Reviewed head:" lines yield
-// gate+headSha) and the verdict upsert claims and overwrites it in place — the
-// silent findings-record loss observed live on PR 1513 (#1514).
+// The set covers the per-round review header (gate-findings-review),
+// post-gate-findings.mjs's opt-in findings COMMENT marker (gate-findings
+// gate=...), and the historical deferred-summary comment. Without the
+// findings-comment marker, that comment parses as a verdict marker candidate
+// (its "Gate fan-out findings:"/"Reviewed head:" lines yield gate+headSha)
+// and the verdict upsert claims and overwrites it in place, silently
+// destroying the round's visible findings record.
 // The alternation is exact-marker, not prefix: `gate-findings-review\b` (the
-// per-round review header) or `gate-findings\s` (the findings COMMENT marker,
-// always followed by its ` gate=` attribute) — a bare `gate-findings\b` would
-// also swallow any future `gate-findings-<x>` marker silently.
+// per-round review header), `gate-findings\s` (the findings COMMENT marker,
+// always followed by its ` gate=` attribute), and `deferred-summary\b` — a
+// bare `gate-findings\b` would also swallow any future `gate-findings-<x>`
+// marker silently.
 const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review\b|gate-findings\s|deferred-summary\b)/mu;
 
 export function isGateMachineArtifactBody(body) {
