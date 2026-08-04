@@ -14,6 +14,7 @@ import {
   fingerprintFinding,
   isDeferredAtRound,
   isLocatableFinding,
+  listPrReviews,
   normalizePrReviewsPayload,
   parseFindingMarker,
   readGateFindingsLedger,
@@ -352,4 +353,16 @@ test("normalizePrReviewsPayload keeps only submitted reviews with a real timesta
   assert.deepEqual(normalizePrReviewsPayload([[keep], []]), normalizePrReviewsPayload([keep]));
   assert.deepEqual(normalizePrReviewsPayload("not-an-array"), []);
   assert.equal(normalizePrReviewsPayload([{ ...keep, html_url: 42 }])[0].html_url, null);
+});
+
+test("listPrReviews excludes PENDING and timestamp-less reviews from round/suppression input", async () => {
+  const payload = JSON.stringify([[
+    { id: 1, state: "COMMENTED", submitted_at: "2026-08-04T00:00:00Z", body: "real review", user: { login: "octocat" } },
+    { id: 2, state: "PENDING", submitted_at: "2026-08-04T00:00:00Z", body: "unsubmitted verdict-looking body" },
+    { id: 3, state: "COMMENTED", submitted_at: "", body: "blank timestamp" },
+    { id: 4, state: "COMMENTED", body: "missing timestamp" },
+  ]]);
+  const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
+  const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
 });

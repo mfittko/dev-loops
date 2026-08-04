@@ -377,8 +377,11 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
     ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
   );
+  // Same validity predicate as normalizePrReviewsPayload — a PENDING
+  // (unsubmitted) review must never feed round resolution or fingerprint
+  // suppression any more than it may feed verdict evidence.
   return flattenPaginatedSlurp(payload)
-    .filter((r) => r && typeof r.body === "string" && r.body.trim().length > 0)
+    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
     .map((r) => ({
       id: Number.isInteger(r.id) ? r.id : null,
       body: r.body,

@@ -115,9 +115,12 @@ function roundHistory(gate, rounds) {
 }
 
 function reviewsEntry(reviews) {
+  // Fixtures model SUBMITTED reviews; listPrReviews filters out anything
+  // without a real submitted_at (same predicate as normalizePrReviewsPayload).
+  const submitted = reviews.map((r) => ({ state: "COMMENTED", submitted_at: "2026-08-03T10:00:00Z", ...r }));
   return {
     assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`],
-    stdout: `${JSON.stringify(reviews)}\n`,
+    stdout: `${JSON.stringify(submitted)}\n`,
   };
 }
 
@@ -654,7 +657,7 @@ test("a thread whose body exceeds the 200-char listing excerpt is disposed from 
 // ---------------------------------------------------------------------------
 
 test("a paginated (--slurp page-array) reviews response is flattened, not just the flat-array shape", async () => {
-  const pagedReview = { id: 900, body: `### Gate review: \`draft_gate\`\n<!-- dev-loops:gate-findings-review draft_gate ${HEAD_SHA} round=7 -->\n\n**Reviewed head SHA:** \`${HEAD_SHA}\``, user: { login: AUTHENTICATED_LOGIN } };
+  const pagedReview = { id: 900, state: "COMMENTED", submitted_at: "2026-08-03T10:00:00Z", body: `### Gate review: \`draft_gate\`\n<!-- dev-loops:gate-findings-review draft_gate ${HEAD_SHA} round=7 -->\n\n**Reviewed head SHA:** \`${HEAD_SHA}\``, user: { login: AUTHENTICATED_LOGIN } };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       userEntry(),

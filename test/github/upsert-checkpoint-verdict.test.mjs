@@ -4742,7 +4742,7 @@ test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-au
         stdout: '{"id":702,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-702"}\n',
       },
     ];
-    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    const { runChild, calls } = makeGhMock(entries);
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -4763,6 +4763,7 @@ test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-au
     const posted = JSON.parse(postCall.stdinText);
     assert.doesNotMatch(posted.body, /SQL injection in the query builder/);
     assert.match(posted.body, /duplicated validation logic/);
+    assert.equal(calls.filter((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -4797,7 +4798,7 @@ test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head
         stdout: '{"id":705,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-705"}\n',
       },
     ];
-    const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+    const { runChild, calls } = makeGhMock(entries);
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -4818,6 +4819,7 @@ test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head
     assert.equal(result.inlineComments, 0);
     assert.equal(result.bodyFiled, 1);
     assert.ok(!calls.some((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")));
+    assert.equal(calls.filter((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/705")).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
