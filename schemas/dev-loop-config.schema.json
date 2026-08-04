@@ -207,7 +207,7 @@
                         "minLength": 1
                       },
                       "scope": {
-                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
                         "type": "string",
                         "enum": [
                           "full",
@@ -383,7 +383,7 @@
                         "minLength": 1
                       },
                       "scope": {
-                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
                         "type": "string",
                         "enum": [
                           "full",
@@ -559,7 +559,7 @@
                         "minLength": 1
                       },
                       "scope": {
-                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
                         "type": "string",
                         "enum": [
                           "full",

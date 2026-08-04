@@ -11,7 +11,6 @@ import {
   countDistinctReviewers,
   provenanceConsistencyError,
   checkFanoutAngleCoverage,
-  countFreshAngles,
   countFreshDispatchUnits,
   fanoutReviewerPairingError,
   freshAngleNames,
@@ -301,24 +300,10 @@ describe("provenance consistency (closes the self-produced loophole)", () => {
   });
 });
 
-describe("countFreshAngles (#1431 — one-reviewer-per-angle enforcement)", () => {
-  test("counts distinct angles without carriedFromHead", () => {
-    assert.equal(countFreshAngles([]), 0);
-    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "b" }]), 2);
-    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "a" }]), 1); // dedup by angle
-    assert.equal(countFreshAngles("nope"), 0);
-  });
-
-  test("excludes carried angles (carriedFromHead marks a reused, not fresh, verdict)", () => {
-    assert.equal(countFreshAngles([{ angle: "a" }, { angle: "b", carriedFromHead: "abc1234" }]), 1);
-    assert.equal(countFreshAngles([{ angle: "a", carriedFromHead: "abc1234" }]), 0);
-  });
-});
-
 describe("countFreshDispatchUnits (AC7 — grouped-dispatch-aware provenance floor)", () => {
-  test("identical to countFreshAngles when no entry declares a group", () => {
+  test("identical to the distinct fresh-angle-name count when no entry declares a group", () => {
     const perAngle = [{ angle: "a" }, { angle: "b" }, { angle: "c" }];
-    assert.equal(countFreshDispatchUnits(perAngle), countFreshAngles(perAngle));
+    assert.equal(countFreshDispatchUnits(perAngle), freshAngleNames(perAngle).length);
     assert.equal(countFreshDispatchUnits(perAngle), 3);
   });
 
@@ -338,7 +323,7 @@ describe("countFreshDispatchUnits (AC7 — grouped-dispatch-aware provenance flo
       { angle: "f", group: "g3" }, { angle: "g", group: "g3" }, { angle: "h", group: "g3" },
       { angle: "i", group: "g4" }, { angle: "j", group: "g4" },
     ];
-    assert.equal(countFreshAngles(perAngle), 10);
+    assert.equal(freshAngleNames(perAngle).length, 10);
     assert.equal(countFreshDispatchUnits(perAngle), 4);
   });
 
@@ -352,14 +337,14 @@ describe("countFreshDispatchUnits (AC7 — grouped-dispatch-aware provenance flo
     );
   });
 
-  test("carried angles are excluded, same as countFreshAngles", () => {
+  test("carried angles are excluded, same as the fresh-angle-name count", () => {
     assert.equal(
       countFreshDispatchUnits([{ angle: "a", group: "g1" }, { angle: "b", group: "g1", carriedFromHead: "abc1234" }]),
       1,
     );
   });
 
-  test("malformed input returns 0, same as countFreshAngles", () => {
+  test("malformed input returns 0, same as the fresh-angle-name count", () => {
     assert.equal(countFreshDispatchUnits(null), 0);
     assert.equal(countFreshDispatchUnits("nope"), 0);
   });

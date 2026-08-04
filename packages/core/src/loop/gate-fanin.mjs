@@ -214,10 +214,9 @@ function* freshEntries(perAngle) {
 
 /**
  * Names of DISTINCT "fresh" angles in a `perAngle` array — see
- * {@link freshEntries}. Shared by {@link countFreshAngles} and callers that
- * need the names themselves (e.g. resolving this round's dispatch groups via
- * `resolveFanoutGroups` for {@link fanoutReviewerPairingError}'s cross-check).
- * Pure.
+ * {@link freshEntries}. Used by callers that need the names themselves (e.g.
+ * resolving this round's dispatch groups via `resolveFanoutGroups` for
+ * {@link fanoutReviewerPairingError}'s cross-check). Pure.
  *
  * @param {unknown} perAngle
  * @returns {string[]}
@@ -229,25 +228,15 @@ export function freshAngleNames(perAngle) {
 }
 
 /**
- * Count DISTINCT "fresh" angles in a `perAngle` array. See
- * {@link freshAngleNames}. Pure.
- *
- * @param {unknown} perAngle
- * @returns {number}
- */
-export function countFreshAngles(perAngle) {
-  return freshAngleNames(perAngle).length;
-}
-
-/**
  * Count distinct FRESH dispatch units in a `perAngle` array: a fresh angle
  * that declares a `group` counts once per DISTINCT group name (its whole
  * group is one reviewer's dispatch), and a fresh angle with no `group`
  * counts as its own dispatch unit (today's one-reviewer-per-angle shape).
- * This is the grouping-aware generalization of {@link countFreshAngles} — for
- * an ungrouped ledger the two are identical; for a grouped ledger this is
- * <= countFreshAngles, since one group of N angles is one dispatch unit, not
- * N. Shared by the write path (write-gate-findings-log.mjs) and the
+ * This is the grouping-aware generalization of counting distinct fresh
+ * angle names via {@link freshAngleNames} — for an ungrouped ledger the two
+ * are identical; for a grouped ledger this is <= the ungrouped count, since
+ * one group of N angles is one dispatch unit, not N. Shared by the write
+ * path (write-gate-findings-log.mjs) and the
  * requireFanoutProvenance read path (detect-checkpoint-evidence.mjs) so the
  * `distinctReviewers` floor scales with what was actually DISPATCHED, not
  * with the angle count a grouped round deliberately dispatches fewer
@@ -270,7 +259,7 @@ export function countFreshDispatchUnits(perAngle) {
  * Validate the one-scoped-reviewer-per-fresh-angle contract (fanout_fanin
  * execution mandates one independent reviewer per resolved angle; #1431): no
  * two FRESH angles (angles without `carriedFromHead` — see
- * {@link countFreshAngles}) may share one reviewer identity (`reviewer`,
+ * {@link freshEntries}) may share one reviewer identity (`reviewer`,
  * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
  * rule), UNLESS every entry sharing that identity declares the SAME `group`
  * name (grouped fan-out dispatch, AC6/AC7 — see resolveFanoutGroups). The

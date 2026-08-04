@@ -22,10 +22,12 @@ Workflow tool. Concretely:
    a structurally-adjacent code bundle (each changed file's 1-hop import in/out-edges)
    with size guards. Because it is a script, the bundle is neutral (it cannot
    editorialize) and deterministic (identical head + diff → identical bundle).
-2. Each per-angle reviewer is an **independent fresh-context Agent** that is **seeded
-   with that identical neutral bundle verbatim** plus its single review angle, and
-   widens only when its angle genuinely needs more. Reviewers never inherit the main
-   (orchestrating) agent's conversation or opinions — that independence is the
+2. Each reviewer is an **independent fresh-context Agent** that is **seeded with that
+   identical neutral bundle verbatim** plus its single review angle (per-angle mode /
+   `gate:full`) or every angle in its resolved dispatch unit (grouped mode, [Phase
+   2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle)), and
+   widens only when a covered angle genuinely needs more. Reviewers never inherit the
+   main (orchestrating) agent's conversation or opinions — that independence is the
    anti-bias requirement.
 3. Fan-in consolidates the per-angle findings unchanged.
 
@@ -332,9 +334,10 @@ not restated here.
 
 <!-- rule: GATE-EXEC-BRIEFING-PREFIX -->
 `GATE-EXEC-BRIEFING-PREFIX`: Every per-angle reviewer briefing MUST be composed as an
-**invariant block** followed by an **angle-specific prompt**, in that order — never
-angle-first. The invariant block MUST be byte-identical across every reviewer of the same
-gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
+**invariant block** followed by the **angle-specific prompt(s)** of its dispatch unit (one
+under per-angle mode / `gate:full`, every angle's under grouped mode), in that order —
+never angle-first. The invariant block MUST be byte-identical across every reviewer of the
+same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
 `write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); and the
 mandatory `verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
@@ -418,8 +421,11 @@ the untouched original.
 **Per-angle scoped variants.** An angle whose configured `scope` (`gates.<gate>.angles[].scope`)
 is `changed-files` or `docs-only` gets an additional companion file,
 `<gate>-<headSha>.briefing-<scope>.txt`, sibling to the invariant prefix: `changed-files`
-carries the full (hunk-collapsed) diff without the adjacent-code bundle; `docs-only`
-narrows further to doc-file hunks only — its surface's own diff slice, explicitly stating
+carries the full (hunk-collapsed) diff without the adjacent-code bundle OR the invariant
+prefix's "Changed files + adjacent-code summary" section — the diff text itself still names
+every changed file, but the file-count/adjacent-file-list summary is not re-rendered into
+this companion; `docs-only` narrows further to doc-file hunks only — its surface's own
+diff slice, explicitly stating
 "(no doc-file hunks in this diff)" when that slice is empty (a round that touched no doc
 files is a truthful zero, not a builder fault). No
 scoped variant drops a mandatory input: both variants MUST carry the PR body, the
@@ -1151,10 +1157,11 @@ recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angl
 not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
 entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
-**One scoped reviewer per fresh angle (always-on write-time floor).** `fanout_fanin`
-execution mandates one independent reviewer per resolved angle — recording an
-internally-consistent `distinctReviewers` count is not enough on its own, because one
-reviewer could still cover two angles without that count ever going inconsistent. The
+**One scoped reviewer per fresh dispatch unit (always-on write-time floor).** `fanout_fanin`
+execution mandates one independent reviewer per resolved dispatch unit — one angle in
+per-angle mode / under `gate:full`, one declared group in grouped mode — because
+recording an internally-consistent `distinctReviewers` count is not enough on its own:
+one reviewer could still cover two angles without that count ever going inconsistent. The
 write path additionally rejects, unconditionally (not gated by `requireFanoutProvenance`),
 any `perAngle` where two **fresh** angles (angles WITHOUT `carriedFromHead`) share one
 reviewer identity, **and** any fresh angle recording no reviewer identity at all (a bare
@@ -1183,7 +1190,7 @@ one-angle-per-unit singletons for `gates.fanout.mode: per-angle` and for a `gate
 round, so passing its output here also rejects ANY shared identity in those modes, with
 no separate mode flag needed. Fresh angles sharing a reviewer under differing or missing
 `group` values still violate the contract above. The shared helper is
-`fanoutReviewerPairingError` (paired with `countFreshAngles`/`countFreshDispatchUnits`) in
+`fanoutReviewerPairingError` (paired with `countFreshDispatchUnits`) in
 `@dev-loops/core/loop/gate-fanin`.
 
 Enforcement of the `distinctReviewers` floor itself is opt-in via

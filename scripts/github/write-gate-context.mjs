@@ -660,6 +660,43 @@ function hasNonTrivialFileHeader(header) {
 }
 
 /**
+ * Decode a path token straight out of a unified diff header line. Git quotes a
+ * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
+ * character, or (under the default `core.quotePath`) a non-ASCII byte, and
+ * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
+ * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
+ * sliced at a fixed offset) still carries the quotes and escapes verbatim,
+ * so a downstream consumer that classifies or displays that string sees the
+ * wrong path. Unquoted tokens (the common case) pass through unchanged.
+ * @param {string} raw
+ * @returns {string}
+ */
+function decodeGitDiffPathToken(raw) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
+  const inner = trimmed.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== "\\") {
+      const code = ch.codePointAt(0);
+      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
+      else bytes.push(code);
+      continue;
+    }
+    const next = inner[i + 1];
+    if (next === "n") { bytes.push(10); i++; continue; }
+    if (next === "t") { bytes.push(9); i++; continue; }
+    if (next === '"') { bytes.push(34); i++; continue; }
+    if (next === "\\") { bytes.push(92); i++; continue; }
+    const octal = inner.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
+    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/**
  * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
  * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
  * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
@@ -689,8 +726,12 @@ function parseDiffFileBlocks(diffOutput) {
   for (const line of lines) {
     if (line.startsWith("diff --git ")) {
       closeBlock();
-      const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
-      current = { path: m ? m[2] : null, headerLines: [line], hunks: [] };
+      // Quoted-or-bare tokens first (handles a git-quoted path); a bare,
+      // unquoted path containing a literal space (git never quotes for a
+      // space alone) falls back to splitting on the literal " b/" separator.
+      const m = /^diff --git (".*"|\S+) (".*"|\S+)$/.exec(line)
+        ?? /^diff --git a\/(.*) (b\/.*)$/.exec(line);
+      current = { path: m ? decodeGitDiffPathToken(m[2]).replace(/^.\//, "") : null, headerLines: [line], hunks: [] };
       continue;
     }
     if (!current) continue; // no leading preamble is expected in a `git diff` output
@@ -704,7 +745,11 @@ function parseDiffFileBlocks(diffOutput) {
       continue;
     }
     if (line.startsWith("+++ ") && !line.includes("/dev/null")) {
-      current.path = line.slice(4).trim().replace(/^b\//, "");
+      // The `+++` line is the authoritative path source (present for every
+      // non-deletion block); its single-letter prefix (`b/`, or a mnemonic
+      // prefix like `w/`/`i/` under `diff.mnemonicPrefix`) is stripped
+      // generically rather than hard-coded to `b/`.
+      current.path = decodeGitDiffPathToken(line.slice(4)).replace(/^.\//, "");
     }
     current.headerLines.push(line);
   }
@@ -759,22 +804,40 @@ function singleTokenDiff(oldLine, newLine) {
  * counts, paired by position — the common shape for a line-level
  * substitution), and every pair must be the SAME single-token substitution.
  * Any other shape (unequal add/remove counts, a multi-token or whitespace
- * change, an inconsistent pair) fails closed to impure.
+ * change, an inconsistent pair) fails closed to impure. A `\ No newline at
+ * end of file` marker is paired with the `+`/`-` line it immediately
+ * follows rather than skipped unconditionally: it stays pure only when BOTH
+ * sides carry the same count of these markers (the file simply has no EOF
+ * newline, unchanged by the edit) — an unpaired marker means one side
+ * gained or lost the trailing newline, a real content change, and fails
+ * closed like any other impure shape.
  * @param {string} hunkText
  * @returns {{ pure: boolean, token: {oldToken: string, newToken: string}|null }}
  */
 function analyzeHunkPurity(hunkText) {
   const removed = [];
   const added = [];
+  let removedNoNewlineMarkers = 0;
+  let addedNoNewlineMarkers = 0;
+  let lastPolarity = null;
   for (const line of hunkText.split("\n")) {
-    if (line.startsWith("@@") || line.startsWith("\\ No newline")) continue;
-    if (line.startsWith("+")) added.push(line.slice(1));
-    else if (line.startsWith("-")) removed.push(line.slice(1));
-    else if (line.startsWith(" ") || line === "") continue;
-    else return { pure: false, token: null }; // unrecognized line shape — fail closed
+    if (line.startsWith("@@")) { lastPolarity = null; continue; }
+    if (line.startsWith("\\ No newline")) {
+      if (lastPolarity === "+") addedNoNewlineMarkers++;
+      else if (lastPolarity === "-") removedNoNewlineMarkers++;
+      else return { pure: false, token: null }; // marker with no preceding +/- line — fail closed
+      continue;
+    }
+    if (line.startsWith("+")) { added.push(line.slice(1)); lastPolarity = "+"; continue; }
+    if (line.startsWith("-")) { removed.push(line.slice(1)); lastPolarity = "-"; continue; }
+    if (line.startsWith(" ") || line === "") { lastPolarity = null; continue; }
+    return { pure: false, token: null }; // unrecognized line shape — fail closed
   }
   if (removed.length === 0 || added.length === 0 || removed.length !== added.length) {
     return { pure: false, token: null };
+  }
+  if (removedNoNewlineMarkers !== addedNoNewlineMarkers) {
+    return { pure: false, token: null }; // EOF-newline status differs between sides — fail closed
   }
   let token = null;
   for (let i = 0; i < removed.length; i++) {
@@ -905,12 +968,16 @@ export function collapsePureSubstitutionRuns(diffOutput) {
  * carries no doc-file changes. AC8 collapsing is NOT re-applied here —
  * callers collapse the assembled slice themselves so a substitution run
  * spanning doc AND non-doc files still collapses within this narrower text.
+ * A block whose path could not be resolved (`path` null/empty — a parse
+ * failure, not a real non-doc file) is INCLUDED rather than dropped: a
+ * `docs-only` reviewer can tolerate an over-included non-doc block, but a
+ * silently omitted doc block would be a false "no doc-file hunks" verdict.
  * @param {string} diffOutput
  * @returns {string}
  */
 function extractDocsOnlyDiff(diffOutput) {
   const blocks = parseDiffFileBlocks(diffOutput).filter(
-    (b) => typeof b.path === "string" && b.path.length > 0 && classifyFile(b.path) === "docs",
+    (b) => !(typeof b.path === "string" && b.path.length > 0) || classifyFile(b.path) === "docs",
   );
   if (blocks.length === 0) return "";
   return blocks.map((b) => [b.header, ...b.hunks].join("\n")).join("\n");
@@ -1106,14 +1173,16 @@ export function renderBriefingPrefix({
 }
 
 /**
- * Render a per-scope briefing companion (AC3, #1572): a narrower slice of the
+ * Render a per-scope briefing companion (AC3): a narrower slice of the
  * same context for an angle whose configured `scope` is not "full" (see
  * GATE_ANGLE_SCOPES). Always carries the PR body, linked-issue body/sections,
  * and the validation-results pointer (a narrow angle still needs its
  * mandatory inputs — AC1) plus a pointer BACK to the full byte-identical
  * prefix so a reviewer can always widen. The diff itself differs by scope:
  * - "changed-files": the full diff (AC8-collapsed), same cap/pointer
- *   behavior as the full prefix, but WITHOUT the adjacent-code bundle.
+ *   behavior as the full prefix, but WITHOUT the adjacent-code bundle or the
+ *   full prefix's "Changed files + adjacent-code summary" section (the diff
+ *   text itself still names every changed file).
  * - "docs-only": only doc-file hunks (classifyFile === "docs"), AC8-collapsed,
  *   always inlined (doc-only slices are bounded by definition).
  * Pure and deterministic, mirroring renderBriefingPrefix's guarantee: same

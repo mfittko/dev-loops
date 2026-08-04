@@ -121,11 +121,12 @@ const RefinementConfig = z.strictObject({
   roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
 });
 
-// Per-angle surface scope (AC3, #1572): how much of the gate-context bundle
-// an angle actually needs. "full" (default) is today's omniscient briefing;
-// "changed-files" drops the adjacent-code bundle (the diff still carries
-// every changed file); "docs-only" narrows further to doc-file hunks only.
-// Resolution (resolveGateAngleScope) fails open to "full" for an
+// Per-angle surface scope: how much of the gate-context bundle an angle
+// actually needs. "full" (default) is today's omniscient briefing;
+// "changed-files" drops the adjacent-code bundle AND the invariant prefix's
+// "Changed files + adjacent-code summary" section (the diff itself still
+// carries every changed file); "docs-only" narrows further to doc-file
+// hunks only. Resolution (resolveGateAngleScope) fails open to "full" for an
 // unknown/missing value — a narrow scope is an opt-in cost saving, never a
 // silently-enforced information cut.
 export const GATE_ANGLE_SCOPES = Object.freeze(["full", "changed-files", "docs-only"]);
@@ -158,7 +159,7 @@ const GateAngleEntry = z.preprocess(
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
-    scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle), or docs-only (doc-file hunks only). Unknown/omitted resolves to full."),
+    scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full."),
   }),
 );
 
