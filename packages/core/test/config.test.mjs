@@ -554,9 +554,10 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(BUILT_IN_DEFAULTS.queue.maxAutoFiledIssues, 10);
   });
 
-  test("gates.postFindingsComments built-in resolves true (#953 AC2)", () => {
-    // Built-in gates is empty; resolver default is post-on.
-    assert.equal(resolveGatePostFindingsComments(BUILT_IN_DEFAULTS), true);
+  test("gates.postFindingsComments built-in resolves false (opt-in second surface)", () => {
+    // Built-in gates is empty; the consolidated findings comment duplicates the
+    // round's verdict review, so it is off until a repo asks for it.
+    assert.equal(resolveGatePostFindingsComments(BUILT_IN_DEFAULTS), false);
   });
 
   test("workflow defaults exist and use required async start with false boolean gates by default", () => {
@@ -1602,9 +1603,10 @@ describe("extension defaults", () => {
       assert.equal(result.config.autonomy.humanMergeOnly, true);
       // PR-first means auto-filing issues is near-zero; keep the cap minimal.
       assert.equal(result.config.queue.maxAutoFiledIssues, 1);
-      // Gate findings live on the PR as evidence, not tracker noise — keep them on.
-      assert.equal(result.config.gates.postFindingsComments, true);
-      assert.equal(resolveGatePostFindingsComments(result.config), true);
+      // Gate findings already live on the PR as the round's verdict review, so
+      // the consolidated second comment stays off.
+      assert.equal(result.config.gates.postFindingsComments, false);
+      assert.equal(resolveGatePostFindingsComments(result.config), false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -4266,24 +4268,25 @@ describe("removed localPlanning key (#1404 — 1.0 hard break)", () => {
 });
 
 describe("gates.postFindingsComments", () => {
-  test("defaults to true (opt-out) and resolveGatePostFindingsComments reflects it", () => {
-    // Default-on: the findings comment is posted unless explicitly disabled. The
-    // `!== false` resolver semantics keep opt-out robust for programmatic config.
-    assert.equal(resolveGatePostFindingsComments({}), true);
-    assert.equal(resolveGatePostFindingsComments({ gates: {} }), true);
-    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: true } }), true);
-    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
-    assert.equal(parsed.success, true);
-    assert.equal(parsed.data.gates.postFindingsComments, true);
-    assert.equal(resolveGatePostFindingsComments(parsed.data), true);
-  });
-
-  test("opt-out: explicit postFindingsComments: false suppresses the comment", () => {
+  test("defaults to false (opt-in) and resolveGatePostFindingsComments reflects it", () => {
+    // Default-off: the comment renders findings the round's verdict review
+    // already carries. The `=== true` resolver semantics keep the opt-in robust
+    // for programmatically-built config that bypasses schema defaulting.
+    assert.equal(resolveGatePostFindingsComments({}), false);
+    assert.equal(resolveGatePostFindingsComments({ gates: {} }), false);
     assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: false } }), false);
-    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: false } });
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
     assert.equal(parsed.success, true);
     assert.equal(parsed.data.gates.postFindingsComments, false);
     assert.equal(resolveGatePostFindingsComments(parsed.data), false);
+  });
+
+  test("opt-in: explicit postFindingsComments: true posts the second surface", () => {
+    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: true } }), true);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: true } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.postFindingsComments, true);
+    assert.equal(resolveGatePostFindingsComments(parsed.data), true);
   });
 
   test("accepts postFindingsComments in full and file schemas", () => {
