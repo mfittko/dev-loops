@@ -154,9 +154,6 @@ function isReviewInScope(review, reviewerLogin) {
     : (typeof review?.author?.login === "string" ? review.author.login : "");
   return login.toLowerCase() === reviewerLogin.toLowerCase();
 }
-function isSubmittedReviewState(state) {
-  return SUBMITTED_REVIEW_STATES.has(state);
-}
 function pickLatestById(items) {
   if (!Array.isArray(items) || items.length === 0) return null;
   return items.filter(Boolean).slice().sort((a, b) => {
@@ -185,7 +182,7 @@ async function fetchReviewState({ repo, pr, reviewerLogin }, deps) {
     scoped.filter((review) => String(review?.state || "").toUpperCase() === "PENDING"),
   );
   const submittedReview = pickLatestById(
-    scoped.filter((review) => isSubmittedReviewState(String(review?.state || "").toUpperCase())),
+    scoped.filter((review) => SUBMITTED_REVIEW_STATES.has(String(review?.state || "").toUpperCase())),
   );
   return {
     draftReviewPosted: Boolean(pendingReview),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { SUBMITTED_REVIEW_STATES, summarizeCopilotReviews } from "../src/github/copilot-helpers.mjs";
@@ -6,10 +7,10 @@ import { summarizeCopilotLoopIterations } from "../src/loop/copilot-loop-iterati
 import { normalizeReviewerSnapshot } from "../src/loop/reviewer-loop-state.mjs";
 
 // The submitted-review-state whitelist has one canonical declaration
-// (copilot-helpers). Both loop modules must consume THAT set, not a copy: a
-// state added to the canonical set becomes observable at each former call
-// site, which a drifted private copy would not show.
-test("the canonical SUBMITTED_REVIEW_STATES drives every former call site", (t) => {
+// (copilot-helpers). The two importing loop modules and copilot-helpers' own
+// summarizer must all consume THAT set: a state added to it becomes observable
+// at each, which a drifted private copy would not show.
+test("the canonical SUBMITTED_REVIEW_STATES drives the three core call sites", (t) => {
   assert.deepEqual([...SUBMITTED_REVIEW_STATES].sort(), ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
   SUBMITTED_REVIEW_STATES.add("AGREEMENT_PROBE");
@@ -37,10 +38,20 @@ test("the canonical SUBMITTED_REVIEW_STATES drives every former call site", (t) 
   });
   assert.equal(summary.completedCopilotReviewRounds, 1);
 
-  // copilot-helpers' own summarizer: the probe state counts as a completed round.
+  // copilot-helpers' summarizer: pins that it keeps consuming the canonical
+  // set rather than growing back a private copy of its own.
   const helperSummary = summarizeCopilotReviews([
     { state: "AGREEMENT_PROBE", submittedAt: "2026-05-01T10:05:00Z", author: { login: "copilot-pull-request-reviewer[bot]" }, commit: { oid: "sha-1" } },
   ], { headSha: "sha-1" });
   assert.equal(helperSummary.completedCopilotReviewRounds, 1);
   assert.equal(helperSummary.hasSubmittedReviewOnCurrentHead, true);
+});
+
+// detect-reviewer-loop-state.mjs consumes the set inside a module-private gh
+// read the probe above cannot reach, so its call site is pinned at the source
+// level: it imports the canonical export and re-declares no state literal.
+test("detect-reviewer-loop-state consumes the canonical set, not a copy", async () => {
+  const source = await readFile(new URL("../../../scripts/loop/detect-reviewer-loop-state.mjs", import.meta.url), "utf8");
+  assert.match(source, /import \{ SUBMITTED_REVIEW_STATES \} from "@dev-loops\/core\/github\/copilot-helpers"/);
+  assert.doesNotMatch(source, /"APPROVED"\s*,/);
 });
