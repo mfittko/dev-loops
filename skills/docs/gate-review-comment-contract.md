@@ -32,7 +32,9 @@ dev-loop skill already documents as a degraded audit-trail artifact.
 vocabularies, and neither may ever claim the other's. The verdict is claimed through the
 gate/head verdict fields and the `dev-loops:gate-findings-review` header; the findings comment
 through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim seam: the marker
-summarizer skips any `dev-loops:gate-findings*` machine-artifact body without a genuine verdict
+summarizer skips exactly the two machine-artifact marker bodies — `dev-loops:gate-findings-review`
+and the findings comment's `dev-loops:gate-findings gate=` marker (an exact-marker match, never a
+prefix: an unknown `gate-findings-<x>` marker is NOT skipped) — without a genuine verdict
 header, so an upsert can never update the other tool's comment in place (the silent
 findings-record overwrite observed live on PR 1513). Neither tool may key its comment identity
 on `gate` alone — that shared keying is what made the collision possible.
