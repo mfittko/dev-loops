@@ -83,11 +83,16 @@ Options:
   --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
                   semantics; kept for existing callers).
 Output (stdout, JSON):
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>", "repoRoot": "<abs invocation cwd>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "gateContextPath": "...", "gateContextPresent": true }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
+  repoRoot (fresh runs only) is the directory the sentinel ran in. With
+  --context-path it is worktree-local (the locality guard proved it); without
+  that flag it is simply the invocation cwd, unvalidated. Reviewer shells
+  reset cwd between commands, so run every git command as
+  \`git -C <repoRoot>\` and read files via absolute paths under it.
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
@@ -367,6 +372,8 @@ async function main(argv = process.argv.slice(2)) {
           // Deprecated mirror of sameHeadRetry, kept while callers migrate.
           prBodyFixRetry: true,
           round: round ?? null,
+          // See the repoRoot note on the first-run payload below.
+          repoRoot: process.cwd(),
           ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
           prefixHash,
         }, true);
@@ -417,6 +424,11 @@ async function main(argv = process.argv.slice(2)) {
     fresh: true,
     sentinelCreated: true,
     round: round ?? null,
+    // The directory this sentinel ran in (worktree-local when the
+    // --context-path locality guard passed): reviewer shells reset cwd
+    // between commands, so every git command must be `git -C <repoRoot>` and
+    // every read an absolute path under it.
+    repoRoot: process.cwd(),
     ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
     ...(prefixHash ? { prefixHash } : {}),
   }, true);

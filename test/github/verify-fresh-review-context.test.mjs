@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -719,6 +719,37 @@ test("--same-head-retry without a prefix hash is a usage error, and the alias em
     const output = JSON.parse(viaAlias.stdout.trim());
     assert.equal(output.sameHeadRetry, true, "the alias resolves to the same generalized retry");
     assert.equal(output.prBodyFixRetry, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context reports the validated repo root on fresh runs only", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-root-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const fresh = runScript(["--scope", "root-probe"], { cwd: tmpDir });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    const output = JSON.parse(fresh.stdout.trim());
+    // Without --context-path the reported root is simply the invocation cwd
+    // (unvalidated) — still the path reviewers must feed `git -C <repoRoot>`
+    // in cwd-resetting shells; the locality-guarded variant is exercised by
+    // the --context-path tests above.
+    assert.equal(output.repoRoot, await realpath(tmpDir));
+    const refused = runScript(["--scope", "root-probe"], { cwd: tmpDir });
+    assert.equal(refused.status, 1);
+    assert.equal(JSON.parse(refused.stdout.trim()).repoRoot, undefined);
+    // The sanctioned same-head retry (matching prefix hash) is also a fresh
+    // run and must carry the root too.
+    const prefixPath = path.join(tmpDir, "prefix.txt");
+    await writeFile(prefixPath, "invariant prefix bytes", "utf8");
+    const seeded = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath], { cwd: tmpDir });
+    assert.equal(seeded.status, 0, seeded.stderr);
+    const retried = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath, "--same-head-retry"], { cwd: tmpDir });
+    assert.equal(retried.status, 0, retried.stderr);
+    const retryOut = JSON.parse(retried.stdout.trim());
+    assert.equal(retryOut.sameHeadRetry, true);
+    assert.equal(retryOut.repoRoot, await realpath(tmpDir));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
