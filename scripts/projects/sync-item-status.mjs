@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
-import { syncBoardStatus } from "@dev-loops/core/loop/queue-board-sync";
+import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> --item <number> --to-column <name>
+const LOGICAL_COLUMNS = Object.values(LOGICAL_COLUMN);
+
+const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> [--item <number>] [--pr <number>]
+                                  (--to-column <name> | --logical-column <name>)
+       --item wins when both targets are given; --pr is the fallback when
+       --item is omitted, empty, or left as a bare flag by a dropped
+       template substitution. At least one target is required.
        (dev-loops project sync-status … is a back-compat alias)
 
 Sync a queued issue/PR's board Status column on a dev-loop transition (e.g.
@@ -14,12 +20,20 @@ and uses local gh auth.
 
 This command is BEST-EFFORT and NON-FATAL: a board that is not configured, an
 item that is not on the board, or any GitHub API failure exits 0 with a JSON
-result describing the skip/failure. It never fails the caller.
+result describing the skip/failure. It never fails the caller except under
+--silent, where a falsy --jq predicate maps to exit 1 by design.
 
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
-  --item <number>         Required. Linked issue/PR number (positive integer).
-  --to-column <name>      Required. Target Status column (e.g. "In Progress", "Done").
+  --item <number>         Linked issue/PR number (positive integer). Required
+                          unless --pr is given; an empty or whitespace-only value counts as omitted.
+  --pr <number>           Move target when --item is omitted (the
+                          PR-is-the-queue-item case, e.g. a post-merge sync).
+  --to-column <name>      Target Status column, verbatim (e.g. "In Progress", "Done").
+  --logical-column <name> Target Status column by logical name (${LOGICAL_COLUMNS.join(", ")}),
+                          resolved through .devloops queue.statusColumns so a
+                          renamed column still converges. Exactly one of
+                          --to-column / --logical-column is required.
   --help, -h              Show this help.
 
 Output (stdout):
@@ -30,7 +44,8 @@ Output (stdout):
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
-  0 — always on a parsed command (best-effort sync; skips/failures are reported in JSON)
+  0 — always on a parsed command without --silent (best-effort sync; skips/failures
+      are reported in JSON); --silent maps a falsy --jq predicate to exit 1
   1 — usage or argument error
   2 — invalid --jq filter
 `.trim();
@@ -45,12 +60,26 @@ function parseCliArgs(argv) {
   };
 
   const args = {};
+  // A dropped `<linked-issue>` template substitution leaves a bare `--item`
+  // directly followed by the next flag (or the end of argv). parseArgs would
+  // bind that flag as --item's value and requireValue would reject it. The
+  // deleted merge hook was only lenient for an EMPTY value or a bare flag at
+  // the end of argv; because the documented invocation now places
+  // `--item <linked-issue>` mid-command, this deliberately goes further and
+  // treats a bare `--item` as omitted in ANY position, so a dropped
+  // substitution can never swallow its neighbouring flag. `--item=<value>`
+  // and a space-separated real value are untouched.
+  const argvList = argv.filter(
+    (arg, i, list) => !(arg === "--item" && (i + 1 >= list.length || list[i + 1].startsWith("-"))),
+  );
   const { tokens } = parseArgs({
-    args: [...argv],
+    args: argvList,
     options: {
       repo: { type: "string" },
       item: { type: "string" },
+      pr: { type: "string" },
       "to-column": { type: "string" },
+      "logical-column": { type: "string" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -77,10 +106,21 @@ function parseCliArgs(argv) {
         args.repo = requireValue(token, "--repo requires a value (owner/name)", "INVALID_REPO");
         break;
       case "item":
+        // An empty/whitespace value (`--item ""` from an unfilled template
+        // substitution) is the documented "the PR is the queue item" case —
+        // leave args.item unset so it falls back to --pr. Bare `--item` forms
+        // never reach here: the argv filter above already dropped them.
+        if (!token.value?.trim()) break;
         args.item = requireValue(token, "--item requires a value (positive integer)", "INVALID_ITEM");
+        break;
+      case "pr":
+        args.pr = requireValue(token, "--pr requires a value (positive integer)", "INVALID_ITEM");
         break;
       case "to-column":
         args.toColumn = requireValue(token, "--to-column requires a value", "INVALID_COLUMN");
+        break;
+      case "logical-column":
+        args.logicalColumn = requireValue(token, "--logical-column requires a value", "INVALID_COLUMN");
         break;
       default: {
         if (matchJqOutputToken(token, args, (t) => requireValue(t, "--jq requires a filter", "INVALID_ARGS"))) break;
@@ -119,28 +159,61 @@ function validateRepo(repo) {
   return repo;
 }
 
-function parseItemNumber(raw) {
+function parseItemNumber(raw, flag = "--item") {
   if (!raw || typeof raw !== "string" || raw.trim().length === 0) {
-    throw Object.assign(new Error("--item is required"), { code: "INVALID_ITEM" });
+    throw Object.assign(new Error(`${flag} is required`), { code: "INVALID_ITEM" });
   }
   const trimmed = raw.trim();
   const asNum = Number(trimmed);
   if (Number.isInteger(asNum) && asNum > 0 && String(asNum) === trimmed) {
     return asNum;
   }
-  throw Object.assign(new Error(`--item must be a positive integer, got "${raw}"`), { code: "INVALID_ITEM" });
+  throw Object.assign(new Error(`${flag} must be a positive integer, got "${raw}"`), { code: "INVALID_ITEM" });
+}
+
+// The move target is --item when given, else --pr (the PR-is-the-queue-item
+// case a post-merge sync uses when no linked issue was passed).
+function resolveItemNumber(args) {
+  if (typeof args.item === "string" && args.item.trim().length > 0) {
+    return parseItemNumber(args.item);
+  }
+  if (args.pr !== undefined) {
+    return parseItemNumber(args.pr, "--pr");
+  }
+  throw Object.assign(new Error("--item is required (or --pr as the move target)"), { code: "INVALID_ITEM" });
+}
+
+// --to-column is the column name verbatim; --logical-column resolves through
+// the .devloops statusColumns mapping, so a board that renamed e.g. Done still
+// converges. Exactly one of the two must be given. On a config read/parse
+// error loadStateColumnMap falls back to the default names and syncBoardStatus
+// surfaces the same error as its own best-effort skip, so no guard is needed.
+function resolveTargetColumn(args, cwd) {
+  const toColumn = (args.toColumn ?? "").trim();
+  const logical = (args.logicalColumn ?? "").trim();
+  if (toColumn && logical) {
+    throw Object.assign(new Error("--to-column and --logical-column are mutually exclusive"), { code: "INVALID_COLUMN" });
+  }
+  if (toColumn) return toColumn;
+  if (!logical) {
+    throw Object.assign(new Error("one of --to-column or --logical-column is required"), { code: "INVALID_COLUMN" });
+  }
+  if (!LOGICAL_COLUMNS.includes(logical)) {
+    throw Object.assign(
+      new Error(`--logical-column must be one of ${LOGICAL_COLUMNS.join(", ")}, got "${logical}"`),
+      { code: "INVALID_COLUMN" },
+    );
+  }
+  return loadStateColumnMap(cwd).columnNames[logical];
 }
 
 // ── Main logic ──────────────────────────────────────────────────────────
 
-async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
+async function main(args, { env = process.env, runChild, cwd = process.cwd(), syncBoardStatus = realSyncBoardStatus } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
-  const item = parseItemNumber(args.item);
-  const toColumn = (args.toColumn ?? "").trim();
-  if (!toColumn) {
-    throw Object.assign(new Error("--to-column is required"), { code: "INVALID_COLUMN" });
-  }
+  const item = resolveItemNumber(args);
+  const toColumn = resolveTargetColumn(args, cwd);
 
   // syncBoardStatus owns the fail-open contract: a not-configured board, an
   // item not on the board, or any gh/API failure resolves to a skipped/failure
@@ -150,7 +223,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd() } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), runChild, syncBoardStatus } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);
@@ -167,13 +240,13 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     return;
   }
 
-  // Argument validation errors (bad --repo / --item / missing --to-column) are
+  // Argument validation errors (bad --repo / --item / no target column) are
   // genuine usage errors → exit 1. Everything past validation is best-effort:
   // syncBoardStatus never throws for board/API conditions, so a parsed command
   // always reports its result on stdout and exits 0.
   let result;
   try {
-    result = await main(args, { env, cwd });
+    result = await main(args, { env, cwd, runChild, syncBoardStatus });
   } catch (err) {
     if (err.code === "INVALID_REPO" || err.code === "INVALID_ITEM" || err.code === "INVALID_COLUMN" || err.code === "INVALID_ARGS") {
       stderr.write(`${formatCliError(err)}\n`);
