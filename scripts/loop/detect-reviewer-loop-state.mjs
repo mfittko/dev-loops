@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   interpretReviewerLoopState,
@@ -154,7 +155,7 @@ function isReviewInScope(review, reviewerLogin) {
   return login.toLowerCase() === reviewerLogin.toLowerCase();
 }
 function isSubmittedReviewState(state) {
-  return ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"].includes(state);
+  return SUBMITTED_REVIEW_STATES.has(state);
 }
 function pickLatestById(items) {
   if (!Array.isArray(items) || items.length === 0) return null;
