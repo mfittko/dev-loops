@@ -106,14 +106,11 @@ function parseCliArgs(argv) {
         args.repo = requireValue(token, "--repo requires a value (owner/name)", "INVALID_REPO");
         break;
       case "item":
-        // A missing or empty value (`--item` alone, or `--item ""` from an
-        // unfilled `<linked-issue>` template substitution) is the documented
-        // "the PR is the queue item" case, not a usage error — leave args.item
-        // unset so it falls back to --pr. A space-separated neighbouring flag
-        // can no longer reach this branch (the argv filter above drops the
-        // bare `--item` first); only the inline `--item=-5` form still hits
-        // requireValue's rejection, as a malformed value.
-        if (token.value === undefined || token.value.trim() === "") break;
+        // An empty/whitespace value (`--item ""` from an unfilled template
+        // substitution) is the documented "the PR is the queue item" case —
+        // leave args.item unset so it falls back to --pr. Bare `--item` forms
+        // never reach here: the argv filter above already dropped them.
+        if (!token.value?.trim()) break;
         args.item = requireValue(token, "--item requires a value (positive integer)", "INVALID_ITEM");
         break;
       case "pr":
