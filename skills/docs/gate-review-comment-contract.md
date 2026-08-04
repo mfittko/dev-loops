@@ -19,8 +19,12 @@ findings — locatable ones as its inline comments, the rest body-filed under th
 No separate verdict issue comment, no separate findings review, and no deferred-summary comment
 is posted. Each finding's text appears exactly once across the round; the body's per-angle
 breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
-review body; a verdict posted as an ISSUE comment by an earlier version still validates and is
-still corrected on its own surface (back-compat read), but new rounds never create one.
+review body; a verdict posted as an ISSUE comment still validates and is still corrected on
+its own surface (back-compat read). The sanctioned poster never creates one. The single
+documented exception is the zero-dep fallback poster
+(`skills/dev-loop/scripts/post-gate-verdict-fallback.mjs`), used only when `@dev-loops/core`
+is absent: it cannot reach the review poster and posts a verdict issue comment, which the
+dev-loop skill already documents as a degraded audit-trail artifact.
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
