@@ -292,7 +292,7 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
   fails closed if the seeded artifact isn't present at the reviewer's cwd).
-- produces a focused findings artifact with verdict (clean/findings_present) and file references
+- produces a focused findings artifact with verdict (clean/findings_present) and file references, stamped with the head SHA it was produced for (`headSha`, the reviewed head from the briefing). <!-- rule: GATE-EXEC-ARTIFACT-HEAD-STAMP --> The stamp is what lets fan-in tell a fresh verdict from a stale copy staged out of an earlier round: `consolidate-fanin --head-sha <sha>` fails closed, naming the angle, when an artifact's stamp differs from the round's head or is missing/malformed (unknown provenance is a failure, not a bypass) — unless the angle is declared carried forward via `--carried-angles`/`--carry-forward-plan`, which keeps the existing carry-forward behavior and leaves the ledger's `carriedFromHead` as the single provenance field.
 - completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
 
 #### Briefing composition: invariant prefix first
