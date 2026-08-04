@@ -4,9 +4,10 @@ import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-sta
 
 // Pins #1385 + #1464: gate-evidence must re-fire when a NEW unresolved thread
 // can appear (review submitted, or a review comment opens a thread) AND when a
-// gate verdict comment is created/edited (verdicts are issue comments, so
-// without that trigger a clean current-head verdict leaves the required status
-// stale-pending forever). Head-staleness (synchronize) and the draft no-op
+// gate verdict is posted or corrected in place — verdicts are PR reviews, with
+// legacy/fallback verdicts still arriving as issue comments, so without those
+// triggers a clean current-head verdict leaves the required status
+// stale-pending forever. Head-staleness (synchronize) and the draft no-op
 // guard must survive unchanged. NOTE: GitHub Actions has NO
 // `pull_request_review_thread` workflow trigger (thread resolve/unresolve is a
 // webhook but not an `on:` event); using it makes the whole workflow file
@@ -21,14 +22,15 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   const triggers = workflow.on;
 
   assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
-  assert.deepEqual(triggers.pull_request_review.types, ["submitted"]);
+  // The verdict surface is a PR review: `submitted` fires for each verdict on a
+  // NEW head, `edited` for the same-head in-place correction (PUT
+  // pulls/{pr}/reviews/{id}) and for the manual lost-run recovery. BOTH types
+  // are load-bearing — without `edited`, a same-head correction leaves the
+  // required status at whatever the pre-verdict run computed.
+  assert.deepEqual(triggers.pull_request_review.types, ["submitted", "edited"]);
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
-  // #1464: verdicts are issue comments. created fires for each verdict on a
-  // NEW head (the upsert creates a fresh comment per head); edited fires for a
-  // same-head verdict UPDATE (the upsert edits the existing comment when the
-  // verdict/summary changes) and for the manual lost-run recovery (edit the
-  // comment by id to re-fire). An identical same-head rerun noops with no
-  // event. BOTH types are load-bearing.
+  // Legacy/fallback verdicts still land as issue comments, with the same
+  // created/edited split. An identical same-head rerun noops with no event.
   assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
