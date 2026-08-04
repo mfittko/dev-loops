@@ -37,6 +37,7 @@ import { parseArgs } from "node:util";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -1172,7 +1173,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // same head is not invalidated by this rebuild), and matched on the
       // trailing full-SHA filename component with startsWith so a legitimately
       // abbreviated --head-sha still detects them.
-      const gateScopePrefix = `checkpoint-context-sentinel-${String(options.gate).replace(/_/g, "-")}-`;
+      const gateScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${String(options.gate).replace(/_/g, "-")}-`;
       const headPrefix = String(options.headSha).trim().toLowerCase();
       const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch(() => []);
       const liveSentinels = tmpDirEntries.filter((e) => {

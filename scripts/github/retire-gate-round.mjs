@@ -64,10 +64,9 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 
 const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
-const GATE_SCOPE_PREFIX = Object.freeze({
-  draft_gate: "draft-gate-",
-  pre_approval_gate: "pre-approval-gate-",
-});
+const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+// Sentinel scopes are the gate name with dashes (draft-gate-<angle>).
+const gateScopePrefix = (gate) => `${gate.replace(/_/g, "-")}-`;
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {
@@ -85,7 +84,7 @@ export function parseRetireGateRoundArgs(argv) {
     return { help: true };
   }
   const gate = resolveFlagValue(argv, "--gate");
-  if (gate === null || gate === "" || !(gate in GATE_SCOPE_PREFIX)) {
+  if (gate === null || gate === "" || !VALID_GATES.has(gate)) {
     throw parseError("Missing or invalid --gate — must be draft_gate or pre_approval_gate (retirement is per gate-round; the other gate's live sentinels at the same head must never be swept)");
   }
   const headShaRaw = resolveFlagValue(argv, "--head-sha");
@@ -119,11 +118,10 @@ export function parseRetireGateRoundArgs(argv) {
 }
 
 export async function retireGateRound({ gate, headSha, reason, findingsDir = null, tmpRoot = "tmp" }) {
-  const scopePrefix = GATE_SCOPE_PREFIX[gate];
-  if (!scopePrefix) {
+  if (!VALID_GATES.has(gate)) {
     throw new Error(`Unknown gate ${JSON.stringify(gate)} — must be draft_gate or pre_approval_gate`);
   }
-  const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${scopePrefix}`;
+  const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(gate)}`;
   const suffix = `-${headSha}.json`;
   let entries = [];
   try {
@@ -179,7 +177,11 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   }
 
   const moved = [];
-  const writeRecord = async () => {
+  let findingsDirRetired = false;
+  // `partial` is an explicit flag, never derived from counts alone: a failed
+  // findings-dir move after every sentinel moved is still a PARTIAL
+  // retirement and must be recorded as one.
+  const writeRecord = async (partial) => {
     const record = {
       gate,
       headSha,
@@ -187,7 +189,8 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       retiredAt: new Date().toISOString(),
       sentinels: moved,
       findingsDir: findingsDirPresent ? findingsDir : null,
-      partial: moved.length < sentinels.length,
+      findingsDirRetired,
+      partial,
     };
     await writeFile(path.join(retirementDir, "retirement.json"), JSON.stringify(record, null, 2) + "\n", "utf8");
   };
@@ -196,18 +199,17 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       await rename(path.join(tmpRoot, name), path.join(retirementDir, name));
       moved.push(name);
     }
-    let findingsDirRetired = false;
     if (findingsDirPresent) {
       await rename(findingsDir, path.join(retirementDir, "findings-artifacts"));
       findingsDirRetired = true;
     }
-    await writeRecord();
+    await writeRecord(false);
     return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false };
   } catch (err) {
     // Partial retirement: report what already moved and where it lives, and
     // still write the audit record with the partial state — an unaudited
     // half-retired round would be worse than the failure itself.
-    await writeRecord().catch(() => {});
+    await writeRecord(true).catch(() => {});
     const error = new Error(`${err instanceof Error ? err.message : String(err)} — partial retirement: ${moved.length}/${sentinels.length} sentinel(s) already moved to ${retirementDir}`);
     error.partiallyRetired = moved;
     error.retirementDir = retirementDir;

@@ -3148,6 +3148,12 @@ test("writeGateContext warns, naming the retirement command, when a rebuild over
     // Same-bytes rewrite never warns (idempotent rerun, no invalidation).
     const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
     assert.equal(idempotent.warning, undefined);
+    // The pre-approval gate's own rebuild warns against ITS sentinel only.
+    const paArgs = baseArgs.map((a) => (a === "draft_gate" ? "pre_approval_gate" : a));
+    await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA body."]), { repoRoot });
+    const paRebuilt = await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA corrected."]), { repoRoot });
+    assert.match(paRebuilt.warning, /retire-gate-round\.mjs --gate pre_approval_gate/);
+    assert.match(paRebuilt.warning, /1 reviewer sentinel/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
   }
