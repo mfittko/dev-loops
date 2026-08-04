@@ -183,7 +183,10 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, missing/empty --findings-dir, unparseable artifact, a per-angle
+  1  Argument error, a malformed --head-sha (not a 7-64 char hex SHA string), a
+     mismatched/missing/malformed artifact "headSha" stamp for a non-blocked,
+     non-carried angle when --head-sha is given,
+     missing/empty --findings-dir, unparseable artifact, a per-angle
      artifact that self-declares "carriedFromHead", schema violation, duplicate angle
      name across artifacts, blocked fan-in (a malformed or blocked per-angle artifact),
      (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
