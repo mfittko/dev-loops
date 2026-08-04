@@ -14,9 +14,14 @@ import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
+import {
+  parseJsonText,
+  sanitizeCopilotSummonTokens,
+  summarizeGateReviewCommentMarkers,
+  summarizeGateReviewComments,
+} from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { flattenPaginatedSlurp, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { flattenPaginatedSlurp, listIssueComments, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
@@ -35,9 +40,7 @@ function isSubmittedReview(r) {
 }
 
 export function normalizePrReviewsPayload(payload) {
-  if (!Array.isArray(payload)) return [];
-  const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
-  return flat
+  return flattenPaginatedSlurp(payload)
     .filter(isSubmittedReview)
     .map((r) => ({
       id: r.id,
@@ -379,11 +382,13 @@ export function assertGhSuccess(result) {
   }
 }
 
+// The one spelling of the reviews endpoint every reader shares (the path is
+// exported separately for callers that also need a REST fallback URL).
+export const prReviewsApiPath = (repo, pr) => `repos/${repo}/pulls/${pr}/reviews?per_page=100`;
+export const prReviewsApiArgs = (repo, pr) => ["api", "--paginate", "--slurp", prReviewsApiPath(repo, pr)];
+
 export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) {
-  const payload = await runGhJson(
-    ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`],
-    { env, ghCommand, runChild },
-  );
+  const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
   // A PENDING (unsubmitted) review must never feed round resolution or
   // fingerprint suppression any more than it may feed verdict evidence.
   return flattenPaginatedSlurp(payload)
@@ -393,6 +398,58 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
       body: r.body,
       author: typeof r?.user?.login === "string" && r.user.login.length > 0 ? r.user.login : null,
     }));
+}
+
+/**
+ * Read every comment-shaped body a gate verdict can live on: the issue-comment
+ * stream (verdicts posted by earlier versions) plus the PR review stream (the
+ * round's single visible surface today). The reviews read is FAIL-OPEN — a
+ * legacy issue-comment verdict still validates on its own — while the
+ * issue-comment read stays fail-closed, exactly as each caller behaved before
+ * this became one function.
+ */
+export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild } = {}) {
+  const comments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
+  try {
+    const reviews = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
+    comments.push(...normalizePrReviewsPayload(reviews));
+  } catch {
+    // Non-fatal: continue on the issue-comment stream alone.
+  }
+  return comments;
+}
+
+/**
+ * Summarize the draft-gate evidence the `gh pr ready` guards decide on, read
+ * from BOTH surfaces. One function so the hook guard (pre-pr-ready-gate.mjs)
+ * and the wrapper that performs the transition (ready-for-review.mjs) can never
+ * disagree about what counts as evidence.
+ */
+export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
+  const comments = await fetchGateEvidenceComments({ repo, pr }, gh);
+  const summary = summarizeGateReviewComments(comments).draft_gate;
+  const marker = summarizeGateReviewCommentMarkers(comments, { headSha }).draft_gate;
+  const draftGate = summary ? { ...summary, visible: true } : { visible: false };
+  const draftGateMarker = marker
+    ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
+    : { visible: false, contractComplete: false };
+  // Marker match: the current head starts with the marker's recorded (often
+  // abbreviated) head SHA.
+  const currentHeadClean = Boolean(
+    draftGateMarker.visible && draftGateMarker.headSha && headSha
+    && headSha.startsWith(draftGateMarker.headSha)
+    && draftGateMarker.verdict === "clean" && draftGateMarker.contractComplete,
+  );
+  // Legacy (non-marker) draft_gate verdict.
+  const cleanEvidenceExists = Boolean(draftGate.visible && draftGate.verdict === "clean" && draftGate.headSha);
+  const legacyHeadMatch = Boolean(!currentHeadClean && cleanEvidenceExists && headSha && headSha.startsWith(draftGate.headSha));
+  return {
+    draftGate,
+    draftGateMarker,
+    currentHeadClean,
+    cleanEvidenceExists,
+    effectiveHeadClean: currentHeadClean || legacyHeadMatch,
+  };
 }
 
 export async function fetchPrFiles({ repo, pr }, { env, ghCommand, runChild }) {

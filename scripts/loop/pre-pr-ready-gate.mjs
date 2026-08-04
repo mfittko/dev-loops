@@ -4,10 +4,9 @@ import {
   formatCliError,
   isDirectCliRun,
   parseJsonText,
-  summarizeGateReviewComments,
-  summarizeGateReviewCommentMarkers,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -16,8 +15,9 @@ const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>
 
 Gate guard for gh pr ready (draft → ready-for-review transition).
-Blocks unless a visible clean draft_gate checkpoint verdict comment exists
-for the PR's current head SHA.
+Blocks unless a visible clean draft_gate checkpoint verdict exists for the
+PR's current head SHA, on either surface it can live on: the round's PR
+review, or a legacy verdict issue comment.
 
 Exit codes:
   0  Draft gate evidence exists — ready transition is allowed
@@ -101,48 +101,12 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   };
 }
 
-async function fetchGateEvidence({ repo, pr, headSha }, { env, ghCommand }) {
-  const r = await runChild(
-    ghCommand,
-    ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`],
-    env,
-  );
-  if (r.code !== 0) throw new Error(`Failed to fetch PR comments`);
-  const raw = parseJsonText(r.stdout);
-  const comments = Array.isArray(raw)
-    ? (raw.every((e) => Array.isArray(e)) ? raw.flat() : raw)
-    : [];
-  const cs = summarizeGateReviewComments(comments);
-  const ms = summarizeGateReviewCommentMarkers(comments, { headSha });
-
-  const dg = cs.draft_gate ? { ...cs.draft_gate, visible: true } : { visible: false };
-  const dm = ms.draft_gate
-    ? { ...ms.draft_gate, visible: true, contractComplete: ms.draft_gate.contractComplete === true }
-    : { visible: false, contractComplete: false };
-
-  // Marker match: current head SHA starts with the marker's recorded head SHA
-  const markerHeadMatch = dm.headSha && headSha && headSha.startsWith(dm.headSha);
-  const currentHeadClean = dm.visible && markerHeadMatch && dm.verdict === "clean" && dm.contractComplete;
-
-  // Legacy comment match (non-marker draft_gate comment)
-  const cleanEvidenceExists = dg.visible && dg.verdict === "clean" && typeof dg.headSha === "string";
-  const legacyHeadMatch = !currentHeadClean && dg.headSha && headSha && headSha.startsWith(dg.headSha) && dg.verdict === "clean";
-
-  return {
-    draftGate: dg,
-    draftGateMarker: dm,
-    currentHeadClean,
-    cleanEvidenceExists,
-    effectiveHeadClean: currentHeadClean || legacyHeadMatch,
-  };
-}
-
 export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh" } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
 
-  const gate = await fetchGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
 
   // When the PR is no longer draft, a visible clean draft_gate comment that
   // exists at all (one-time transition record) is sufficient — don't require
@@ -155,7 +119,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     const shortSha = headSha.slice(0, 7);
     const reason = gate.cleanEvidenceExists
       ? `PR #${options.pr} draft_gate evidence exists but does not match current head ${shortSha}. Re-run draft gate for the current head.`
-      : `No visible clean draft_gate checkpoint verdict comment found on PR #${options.pr} for head ${shortSha}. Run the draft gate review and post a clean verdict before marking ready for review.`;
+      : `No visible clean draft_gate checkpoint verdict found on PR #${options.pr} for head ${shortSha}. Run the draft gate review and post a clean verdict before marking ready for review.`;
     return {
       ok: false,
       error: reason,

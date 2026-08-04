@@ -13,6 +13,7 @@ import {
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
@@ -221,30 +222,19 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 //
 // Queried lazily — only when the raw (un-reset) count has already hit the cap — so
 // the common (under-cap) request path keeps its existing gh-call contract and adds
-// no API round-trip. Uses a single issue-comments fetch (the same source the gate
-// detector uses for the latest clean draft_gate marker), not the full checkpoint-
-// evidence pipeline, to keep the added surface minimal. Best-effort: a fetch failure
-// falls back to the raw count, so the cap is never silently disabled.
+// no API round-trip. Reads the same two verdict surfaces every other gate-evidence
+// reader shares (fetchGateEvidenceComments), not the full checkpoint-evidence
+// pipeline, to keep the added surface minimal. Best-effort: a fetch failure falls
+// back to the raw count, so the cap is never silently disabled.
 async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
   try {
     const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
       ? before.prData.headRefOid.trim()
       : null;
-    const result = await runChild(
-      ghCommand,
-      ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
-      env,
+    const comments = await fetchGateEvidenceComments(
+      { repo: options.repo, pr: options.pr },
+      { env, ghCommand, runChild },
     );
-    if (result.code !== 0) {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
-    let comments;
-    try {
-      const payload = JSON.parse(result.stdout);
-      comments = Array.isArray(payload) ? payload.flat() : [];
-    } catch {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
     const gateSummary = summarizeGateReviewComments(comments);
     const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
     if (draftGateResetAtMs == null) {

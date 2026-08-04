@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, summarizeGateReviewComments, summarizeGateReviewCommentMarkers } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { normalizePrReviewsPayload } from "./_gate-finding-surface.mjs";
+import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
@@ -66,27 +66,6 @@ async function fetchCiStatus({ repo, pr }, { env, ghCommand }) {
   return { status: blocking.length === 0 ? "success" : "blocked", blockingSummary: blocking.length > 0 ? `Blocking: ${blocking.map(c=>c.bucket).join(", ")}` : null };
 }
 
-async function fetchGateEvidence({ repo, pr, headSha }, { env, ghCommand }) {
-  const r = await runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`], env);
-  if (r.code !== 0) throw new Error(`Failed to fetch PR comments`);
-  const raw = parseJsonText(r.stdout), comments = Array.isArray(raw) ? (raw.every(e=>Array.isArray(e)) ? raw.flat() : raw) : [];
-  // The gate round's single visible surface is a PR review, so the verdict may
-  // live in the review stream rather than the issue-comment stream. A reviews
-  // fetch failure is non-fatal: legacy issue-comment verdicts still validate.
-  try {
-    const rv = await runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/reviews?per_page=100`], env);
-    if (rv.code === 0) comments.push(...normalizePrReviewsPayload(parseJsonText(rv.stdout)));
-  } catch {}
-  const cs = summarizeGateReviewComments(comments), ms = summarizeGateReviewCommentMarkers(comments, { headSha });
-  const dg = cs.draft_gate ? { ...cs.draft_gate, visible: true } : { visible: false };
-  const dm = ms.draft_gate ? { ...ms.draft_gate, visible: true, contractComplete: ms.draft_gate.contractComplete === true } : { visible: false, contractComplete: false };
-  const mh = dm.headSha && headSha && headSha.startsWith(dm.headSha);
-  const chc = dm.visible && mh && dm.verdict === "clean" && dm.contractComplete;
-  const cee = dg.visible && dg.verdict === "clean" && dg.headSha;
-  const cphm = !chc && dg.headSha && headSha && headSha.startsWith(dg.headSha) && dg.verdict === "clean";
-  return { draftGate: dg, draftGateMarker: dm, currentHeadClean: chc, cleanEvidenceExists: cee, effectiveHeadClean: chc || cphm };
-}
-
 export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), syncBoardStatus = realSyncBoardStatus } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
@@ -98,7 +77,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const titleMarkers = findBlockingTitleMarkers(prState.title);
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
   if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
-  const gate = await fetchGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
   if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   const readyResult = await runChild(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);

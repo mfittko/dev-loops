@@ -27,7 +27,7 @@ import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, re
 import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshAngles, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { normalizePrReviewsPayload } from "./_gate-finding-surface.mjs";
+import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -707,8 +707,8 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   let prReviews = [];
   try {
     const reviewsRaw = await runGhJson(
-      ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
-      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`, env) },
+      prReviewsApiArgs(options.repo, options.pr),
+      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
   } catch {
