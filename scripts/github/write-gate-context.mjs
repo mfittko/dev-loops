@@ -1175,19 +1175,25 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // abbreviated --head-sha still detects them.
       const gateScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${String(options.gate).replace(/_/g, "-")}-`;
       const headPrefix = String(options.headSha).trim().toLowerCase();
-      // Only a missing tmp/ dir means "no sentinels"; any other scan failure
-      // (EACCES, ENOTDIR, ...) must surface rather than silently suppress the
-      // rebuild warning while live sentinels exist.
+      // Only a missing tmp/ dir means "no sentinels". Any other scan failure
+      // (EACCES, ENOTDIR, ...) must neither be swallowed (it could hide live
+      // sentinels) nor refuse the rebuild (the rebuild is never refused —
+      // GATE-EXEC-ROUND-RETIREMENT): it surfaces AS the warning.
+      let scanError = null;
       const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
         if (err.code === "ENOENT") return [];
-        throw err;
+        scanError = err;
+        return [];
       });
       const liveSentinels = tmpDirEntries.filter((e) => {
         if (!e.isFile() || !e.name.startsWith(gateScopePrefix) || !e.name.endsWith(".json")) return false;
         const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
         return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
       }).length;
-      if (liveSentinels > 0) {
+      if (scanError !== null) {
+        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
+        process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+      } else if (liveSentinels > 0) {
         rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match). Retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
         process.stderr.write(`WARNING: ${rebuildWarning}\n`);
       }

@@ -244,14 +244,14 @@ async function main() {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
-  const jqIdx = process.argv.indexOf("--jq");
-  const jqValue = jqIdx !== -1 ? process.argv[jqIdx + 1] : undefined;
-  if (jqIdx !== -1 && (jqValue === undefined || jqValue.startsWith("-"))) {
+  // Same missing/flag-like handling as every other flag in this file.
+  const jqValue = resolveFlagValue(process.argv, "--jq");
+  if (jqValue === "") {
     process.stderr.write(`${JSON.stringify({ ok: false, error: "--jq requires a filter argument" })}\n`);
     process.exitCode = 2;
     return;
   }
-  const jq = jqValue;
+  const jq = jqValue ?? undefined;
   const silent = process.argv.includes("--silent") || process.argv.includes("-s");
   try {
     const result = await retireGateRound(options);

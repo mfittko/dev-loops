@@ -99,18 +99,28 @@ test("repeated retirements at the same head get distinct audited directories", a
   });
 });
 
-test("retired sentinels are invisible to verify-briefing-prefixes' flat round scan", async () => {
-  await withTmpRoot(async (tmpRoot) => {
-    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), JSON.stringify({ prefixHash: "h1" }), "utf8");
+test("retired sentinels are invisible to the real verify-briefing-prefixes scan", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const verifierPath = path.resolve("scripts/github/verify-briefing-prefixes.mjs");
+  const base = await mkdtemp(path.join(os.tmpdir(), "retire-verifier-"));
+  try {
+    const tmpRoot = path.join(base, "tmp");
+    await mkdir(tmpRoot, { recursive: true });
+    // Two sentinels with DIFFERENT hashes: the real verifier fails closed on
+    // the mixed-hash round before retirement.
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), JSON.stringify({ prefixHash: "a".repeat(64) }), "utf8");
+    await writeFile(path.join(tmpRoot, sentinelName("draft-gate-coverage", HEAD_A)), JSON.stringify({ prefixHash: "b".repeat(64) }), "utf8");
+    const before = spawnSync(process.execPath, [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
+    assert.notEqual(before.status, 0);
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", tmpRoot });
-    assert.equal(result.retired, 1);
-    // verify-briefing-prefixes reads sentinels via a flat readdir of the tmp
-    // root; after retirement nothing sentinel-shaped remains there for that
-    // head, so the old prefix can never mix into a new consolidation.
-    const { readdir } = await import("node:fs/promises");
-    const flat = (await readdir(tmpRoot)).filter((n) => n.includes(HEAD_A) && n.startsWith("checkpoint-context-sentinel-"));
-    assert.deepEqual(flat, []);
-  });
+    assert.equal(result.retired, 2);
+    // After retirement the same verifier invocation sees ZERO sentinels for
+    // the round — the retired prefix can never mix into a new consolidation.
+    const after = spawnSync(process.execPath, [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
+    assert.ok(!(after.stdout + after.stderr).includes(sentinelName("draft-gate-scope", HEAD_A)));
+  } finally {
+    await rm(base, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("retirement is gate-scoped: the other gate's live round at the same head is never swept", async () => {

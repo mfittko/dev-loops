@@ -465,8 +465,8 @@ seeding is a legitimate rebuild), the new briefing-prefix bytes hash differently
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
 the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
---reason "<why>" [--findings-dir <round artifacts dir>]` moves every sentinel of THAT GATE
-keyed by that head
+--reason "<why>" [--findings-dir <round artifacts dir>]` (`--head-sha` is the FULL 40-char
+SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
 (and, when given, the round's findings-artifacts directory) into an audited retirement
 directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
 other gate's live round at the same head is never touched), so a
@@ -474,9 +474,12 @@ FRESH fan-out can run at the same head with every reviewer of the new round agre
 one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
 command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
 never retires as a side effect. Pass `--findings-dir` whenever the retired round wrote
-artifacts: at the same head they would pass the `--head-sha` stamp guard and silently mix
-into the new round's fan-in; retiring them is the explicit discard (recoverable from the
-retirement directory; copying one back is the explicit carry). Retirement never weakens
+artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
+silently mix into the new round's fan-in; retiring them is the explicit discard. The
+retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
+into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
+one-hash-per-round invariant covers only artifacts its own reviewers wrote). Retirement
+never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
 `verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
 never reads, and sentinels of one LIVE round that disagree still fail closed. A head with no
 sentinels retires as a no-op.
