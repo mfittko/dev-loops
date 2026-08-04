@@ -199,12 +199,16 @@ function parseAnglesJson(raw) {
   if (!Array.isArray(parsed)) {
     throw parseError("--angles must be a JSON array");
   }
-  return parsed.map((a, i) => {
+  const trimmed = parsed.map((a, i) => {
     if (typeof a !== "string" || a.trim().length === 0) {
       throw parseError(`--angles[${i}] must be a non-empty string`);
     }
     return a.trim();
   });
+  // Dedupe (first occurrence wins): a duplicated angle would otherwise mint
+  // two dispatch units sharing one name downstream (resolveFanoutGroups),
+  // which race the same reviewer-sentinel scope and per-angle artifact path.
+  return [...new Set(trimmed)];
 }
 
 function parseRationaleJson(raw) {
@@ -687,8 +691,15 @@ function parseDiffFileBlocks(diffOutput) {
 /**
  * Compute the single differing token between two diff lines (prefix strip,
  * blank strip, keeping context/pairing 1:1), or `null` when the lines differ
- * by anything other than one contiguous whitespace-free run. Used to decide
- * whether a removed/added line pair is a pure single-token substitution.
+ * by anything other than one contiguous whitespace-free run SITTING ON A
+ * TOKEN BOUNDARY. Purity is token-level, not character-level: a run whose
+ * neighboring character (in either line, on either side) is a word character
+ * is a fragment of a larger identifier, not a whole token — `grossAmount` ->
+ * `netAmount` and `grossRate` -> `netRate` both reduce to the character-level
+ * run "gross" -> "net", but neither is a whole-token substitution (the "A"/"R"
+ * immediately follows), so both return null here rather than being treated as
+ * the SAME substitution. Used to decide whether a removed/added line pair is a
+ * pure single-token substitution.
  * @param {string} oldLine
  * @param {string} newLine
  * @returns {{ oldToken: string, newToken: string }|null}
@@ -708,6 +719,13 @@ function singleTokenDiff(oldLine, newLine) {
   const newToken = newLine.slice(prefix, newLine.length - suffix);
   if (oldToken.length === 0 || newToken.length === 0) return null;
   if (/\s/.test(oldToken) || /\s/.test(newToken)) return null;
+  const isWordChar = (ch) => typeof ch === "string" && /\w/.test(ch);
+  if (
+    isWordChar(oldLine[prefix - 1]) || isWordChar(oldLine[oldLine.length - suffix]) ||
+    isWordChar(newLine[prefix - 1]) || isWordChar(newLine[newLine.length - suffix])
+  ) {
+    return null;
+  }
   return { oldToken, newToken };
 }
 
@@ -745,63 +763,103 @@ function analyzeHunkPurity(hunkText) {
 }
 
 /**
- * Format the AC8 collapsed-run summary line. `scope.diffPath` names the
- * artifact JSON field where the byte-exact original lives, not a rendered
- * path value — every reviewer's context artifact carries that pointer
- * regardless of which briefing variant they were seeded with.
- * @param {{ hunkCount: number, fileCount: number, oldToken: string, newToken: string }} input
+ * Below this many hunks, a "pure" run stays uncollapsed and renders in full —
+ * a lone semantic one-token change (e.g. a single renamed constant) must keep
+ * its file, line, and real identifiers visible; collapsing exists to absorb
+ * large mechanical runs, not to hide a single hunk's own diff.
+ */
+const MIN_COLLAPSE_RUN_LENGTH = 2;
+
+/** Cap on file paths named in a collapsed-run summary line before "+N more". */
+const COLLAPSED_SUMMARY_MAX_FILES = 8;
+
+/**
+ * Format the AC8 collapsed-run summary line, naming the affected file paths
+ * (capped, with a "+N more" tail) so a reviewer can still tell WHERE the
+ * mechanical run landed without reading the byte-exact diff. `scope.diffPath`
+ * names the artifact JSON field where that byte-exact original lives, not a
+ * rendered path value — every reviewer's context artifact carries that
+ * pointer regardless of which briefing variant they were seeded with.
+ * @param {{ hunkCount: number, filePaths: string[], oldToken: string, newToken: string }} input
  * @returns {string}
  */
-function collapsedHunkSummaryLine({ hunkCount, fileCount, oldToken, newToken }) {
-  return `[collapsed: ${hunkCount} hunks across ${fileCount} files — pure substitution "${oldToken}" → "${newToken}"; byte-exact diff at scope.diffPath]`;
+function collapsedHunkSummaryLine({ hunkCount, filePaths, oldToken, newToken }) {
+  const shown = filePaths.slice(0, COLLAPSED_SUMMARY_MAX_FILES);
+  const overflow = filePaths.length - shown.length;
+  const fileList = shown.join(", ") + (overflow > 0 ? `, +${overflow} more` : "");
+  return `[collapsed: ${hunkCount} hunks across ${filePaths.length} files (${fileList}) — pure substitution "${oldToken}" → "${newToken}"; byte-exact diff at scope.diffPath]`;
 }
 
 /**
  * Collapse every run of consecutive, provably-pure, identical-substitution
- * hunks in a unified diff into one summary line each (AC8). A run may span
- * file boundaries (an intervening file header with no surviving hunks of its
- * own is absorbed into the run it sits inside); a file with at least one
- * hunk that breaks the run keeps its header, emitted once, immediately before
- * that hunk. Non-qualifying diffs round-trip byte-identically. Pure function:
- * same input always yields the same output (prefix-hash determinism).
+ * hunks in a unified diff into one summary line each (AC8), but only when the
+ * run spans at least {@link MIN_COLLAPSE_RUN_LENGTH} hunks — a run of exactly
+ * one hunk renders in full instead, unchanged. A run may span file boundaries
+ * (an intervening file header with no surviving hunks of its own still
+ * flushes/breaks the run — see the write-gate-context tests for the pinned
+ * behavior); a file with at least one hunk that breaks the run keeps its
+ * header, emitted once, immediately before that hunk. Non-qualifying diffs
+ * round-trip byte-identically — including a diff carrying a PREAMBLE before
+ * its first `diff --git ` line (e.g. `git show`/`git format-patch` output,
+ * never the sanctioned `git diff` capture path): parseDiffFileBlocks has no
+ * representation for pre-first-header bytes, so collapsing would silently
+ * drop them; fail open to the untouched input instead. Pure function: same
+ * input always yields the same output (prefix-hash determinism).
  * @param {string} diffOutput
  * @returns {string}
  */
 export function collapsePureSubstitutionRuns(diffOutput) {
   if (typeof diffOutput !== "string" || diffOutput.length === 0) return diffOutput ?? "";
+  const firstLine = diffOutput.split("\n").find((l) => l.length > 0);
+  if (firstLine !== undefined && !firstLine.startsWith("diff --git ")) return diffOutput;
   const blocks = parseDiffFileBlocks(diffOutput);
   if (blocks.length === 0) return diffOutput;
   const out = [];
-  let run = null; // { token, count, files: Set<block> }
+  let run = null; // { token, entries: [{ block, hunkText }] }
+  const headerEmittedFor = new Set(); // blocks whose header is already in `out`
+  const emitHeaderOnce = (block) => {
+    if (headerEmittedFor.has(block)) return;
+    out.push(block.header);
+    headerEmittedFor.add(block);
+  };
   const flush = () => {
     if (!run) return;
-    out.push(collapsedHunkSummaryLine({
-      hunkCount: run.count, fileCount: run.files.size,
-      oldToken: run.token.oldToken, newToken: run.token.newToken,
-    }));
+    if (run.entries.length < MIN_COLLAPSE_RUN_LENGTH) {
+      // Below the collapse floor — render every buffered hunk in full,
+      // byte-identically to a diff that was never collapsed.
+      for (const { block, hunkText } of run.entries) {
+        emitHeaderOnce(block);
+        out.push(hunkText);
+      }
+    } else {
+      const uniqueBlocks = [...new Set(run.entries.map((e) => e.block))];
+      out.push(collapsedHunkSummaryLine({
+        hunkCount: run.entries.length,
+        filePaths: uniqueBlocks.map((b) => b.path).filter((p) => typeof p === "string" && p.length > 0),
+        oldToken: run.token.oldToken, newToken: run.token.newToken,
+      }));
+    }
     run = null;
   };
   for (const block of blocks) {
     if (block.hunks.length === 0) {
       flush();
-      out.push(block.header);
+      emitHeaderOnce(block);
       continue;
     }
-    let headerEmitted = false;
     for (const hunkText of block.hunks) {
       const analysis = analyzeHunkPurity(hunkText);
       if (analysis.pure && run && run.token.oldToken === analysis.token.oldToken && run.token.newToken === analysis.token.newToken) {
-        run.count += 1;
-        run.files.add(block);
+        run.entries.push({ block, hunkText });
         continue;
       }
       if (analysis.pure) {
         flush();
-        run = { token: analysis.token, count: 1, files: new Set([block]) };
+        run = { token: analysis.token, entries: [{ block, hunkText }] };
         continue;
       }
       flush();
-      if (!headerEmitted) { out.push(block.header); headerEmitted = true; }
+      emitHeaderOnce(block);
       out.push(hunkText);
     }
   }
@@ -1037,23 +1095,27 @@ export function renderBriefingPrefix({
  * @param {string} input.gate
  * @param {string} input.headSha
  * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
+ * @param {string|null} [input.contextPath] — the sibling JSON context-artifact path, for the widen-back pointer
  * @param {string|null} [input.prBody]
  * @param {string|null} [input.issueRef]
  * @param {string|null} [input.issueBody]
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (changed-files pointer-mode fallback)
+ * @param {string|null} [input.diffPath] — persisted `.diff` pointer (changed-files pointer-mode fallback), also linked unconditionally in the widen-back paragraph
  * @param {string|null} [input.validationResultsPath]
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
  * @returns {{ text: string }}
  */
 export function renderScopedBriefingVariant(scope, {
-  repo, pr, gate, headSha, briefingPrefixPath,
+  repo, pr, gate, headSha, briefingPrefixPath, contextPath = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
+  if (!GATE_ANGLE_SCOPES.includes(scope) || scope === "full") {
+    throw new Error(`renderScopedBriefingVariant: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
+  }
   const lines = [];
   lines.push(`# Gate Review Briefing — ${scope} scope variant`);
   lines.push("");
@@ -1066,6 +1128,12 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(
     `This is a narrowed companion to the full byte-identical briefing prefix, which always stays available at ${briefingPrefixPath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
   );
+  // GATE-EXEC-BRIEFING-PREFIX: a scoped variant must ALSO link scope.diffPath
+  // and the context artifact, unconditionally — not only in the changed-files
+  // pointer-mode branch below — so a docs-only reviewer can widen straight to
+  // both without first reading the full prefix.
+  lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
+  lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1529,6 +1597,19 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // states real content (the same false-spec risk resolvePrSpecContext
   // exists to prevent).
   const briefingVariants = {};
+  // Normalize angleScopes into a LOCAL COPY, before the --prefix-file branch,
+  // never mutating the caller's own object: a retried write after a transient
+  // variant-write failure below must not inherit a downgrade from a previous
+  // call, and --prefix-file records a normalized angleScopes too even though
+  // it renders no variant files. Trim (matching normalizeAngleEntry's
+  // GATE_ANGLE_SCOPES membership test) and fail open to "full" for any
+  // unrecognized/foreign value.
+  const rawAngleScopes = options.angleScopes && typeof options.angleScopes === "object" ? options.angleScopes : {};
+  const angleScopes = {};
+  for (const [angle, scope] of Object.entries(rawAngleScopes)) {
+    const trimmed = typeof scope === "string" ? scope.trim() : scope;
+    angleScopes[angle] = trimmed !== "full" && !GATE_ANGLE_SCOPES.includes(trimmed) ? "full" : trimmed;
+  }
   if (typeof options.prefixFile === "string" && options.prefixFile.length > 0) {
     try {
       prefixBytes = await readFile(path.resolve(repoRoot, options.prefixFile));
@@ -1564,14 +1645,10 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // AC3: emit one companion file per DISTINCT non-"full" scope actually
     // declared by this round's resolved angles (never every GATE_ANGLE_SCOPES
     // value up front — an angle set that never declares "docs-only" gets no
-    // docs-only file). Fail-open to full: an invalid/foreign scope value, or
-    // any error building a variant, is normalized back to "full" in
-    // angleScopes rather than left dangling — the affected angle then reads
-    // the full prefix already written above.
-    const angleScopes = options.angleScopes && typeof options.angleScopes === "object" ? options.angleScopes : {};
-    for (const [angle, scope] of Object.entries(angleScopes)) {
-      if (scope !== "full" && !GATE_ANGLE_SCOPES.includes(scope)) angleScopes[angle] = "full";
-    }
+    // docs-only file). Fail-open to full: any error building a variant
+    // normalizes the affected angle(s) back to "full" in the local
+    // angleScopes copy rather than leaving them dangling — those angles then
+    // read the full prefix already written above.
     const declaredScopes = [...new Set(Object.values(angleScopes))].filter((s) => s !== "full");
     for (const scope of declaredScopes) {
       try {
@@ -1585,6 +1662,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           gate: options.gate,
           headSha: options.headSha,
           briefingPrefixPath,
+          contextPath,
           prBody: options.prBody ?? null,
           issueRef: options.acceptanceCriteria ?? null,
           issueBody: options.issueBody ?? null,
@@ -1610,7 +1688,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
 
   const fullPath = path.resolve(repoRoot, contextPath);
   const artifact = {
-    ...buildGateContextArtifact({ ...options, prefixMode, briefingVariants }),
+    ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
   // Write ORDER matters: the sibling briefing prefix goes first and the JSON

@@ -565,6 +565,12 @@ async function main() {
     process.stderr.write(`${formatBrokenLinkReport(result.brokenLinks)}\n`);
     process.exitCode = 1;
   } catch (error) {
+    // Deliberately out of formatCliError's scope: this tool's error output is
+    // human-readable TEXT (a message + the full usage body), not the JSON
+    // { ok, error, hint } envelope — AC5's short-error contract targets
+    // JSON-emitting gate CLIs specifically, and forcing this into JSON would
+    // break its plain-text consumers for no token saving (nothing here parses
+    // stderr as JSON).
     if (error instanceof Error && "usage" in error && typeof error.usage === "string") {
       process.stderr.write(`${error.message}\n\n${error.usage}\n`);
       process.exitCode = 2;

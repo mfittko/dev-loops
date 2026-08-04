@@ -246,6 +246,10 @@ if (isDirectCliRun(import.meta.url)) {
   run(process.argv.slice(2), { stdout: process.stdout, stderr: process.stderr }).then(
     (code) => { process.exitCode = typeof code === "number" ? code : 0; },
     (error) => {
+      // Deliberately out of formatCliError's scope (same reasoning as
+      // scripts/docs/validate-links.mjs): this tool's error output is
+      // human-readable text (message + usage body), not the JSON
+      // { ok, error, hint } envelope AC5's short-error contract targets.
       const usage = error instanceof Error && typeof error.usage === "string" ? `\n${error.usage}` : "";
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}${usage}\n`);
       process.exitCode = 2;

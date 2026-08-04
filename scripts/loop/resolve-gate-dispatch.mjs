@@ -8,6 +8,7 @@ import {
 } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { formatCliError } from "../_core-helpers.mjs";
 
 const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>]
 Decide inline vs full fan-out for a gate from lightMode config + PR facts.
@@ -22,8 +23,8 @@ Output (stdout, JSON):
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20 } }
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20 } }
   { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
-Error output (stderr, JSON):
-  { "ok": false, "error": "...", "usage"?: "..." }
+Error output (stderr, JSON, the shared CLI error format — see formatCliError):
+  { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
 
 ${JQ_OUTPUT_USAGE}
 
@@ -83,9 +84,7 @@ export async function run(argv) {
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
-    process.stderr.write(
-      JSON.stringify({ ok: false, error: err.message, usage: USAGE.trim() }) + "\n"
-    );
+    process.stderr.write(`${formatCliError(err, { usage: USAGE })}\n`);
     process.exitCode = 1;
     return;
   }
@@ -115,9 +114,7 @@ export async function run(argv) {
       { jq: opts.jq, silent: opts.silent },
     );
   } catch (err) {
-    process.stderr.write(
-      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + "\n"
-    );
+    process.stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;
   }
 }
@@ -126,9 +123,7 @@ const isDirectRun =
   process.argv[1] && process.argv[1].includes("resolve-gate-dispatch.mjs");
 if (isDirectRun) {
   run(process.argv.slice(2)).catch((err) => {
-    process.stderr.write(
-      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + "\n"
-    );
+    process.stderr.write(`${formatCliError(err)}\n`);
     process.exitCode = 1;
   });
 }

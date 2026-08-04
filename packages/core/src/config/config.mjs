@@ -248,6 +248,31 @@ const FanoutConfig = z.strictObject({
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group resolves as its own singleton group."),
 });
 
+/**
+ * Two `gates.fanout.groups` entries sharing one `name` would resolve to two
+ * dispatch units with the same reviewer-sentinel scope (resolveFanoutGroups
+ * keys the scope by group name) — reject at config-validation time rather
+ * than let it degrade silently at dispatch time. Applied via `.superRefine`
+ * where `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that
+ * already carries a refinement), not on `FanoutConfig` itself.
+ * @param {{ groups?: Array<{ name: string }> }} val
+ * @param {import("zod").RefinementCtx} ctx
+ */
+function rejectDuplicateFanoutGroupNames(val, ctx) {
+  if (!Array.isArray(val.groups)) return;
+  const seen = new Set();
+  for (const [index, group] of val.groups.entries()) {
+    if (seen.has(group.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups", index, "name"],
+        message: `duplicate gates.fanout.groups name "${group.name}"`,
+      });
+    }
+    seen.add(group.name);
+  }
+}
+
 const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
   // `requireCi` is honored on both gates: default true keeps CI a precondition,
@@ -306,7 +331,7 @@ const GatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().default(true),
   // Grouped vs per-angle fan-out dispatch policy + static grouping table
   // (AC6). GLOBAL, not per-gate — see resolveFanoutGroups.
-  fanout: FanoutConfig.optional(),
+  fanout: FanoutConfig.superRefine(rejectDuplicateFanoutGroupNames).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -668,7 +693,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
-  fanout: FanoutConfig.partial().describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
+  fanout: FanoutConfig.partial().superRefine(rejectDuplicateFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
 });
 
 // ============================================================================
@@ -1962,6 +1987,17 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
  * per-angle paths; grouping only changes how many reviewers are dispatched,
  * not the artifact shape (see skills/docs/gate-review-sub-loop-contract.md).
  *
+ * Defensive, independent of zod: `loadDevLoopConfig` returns the raw merged
+ * config even when schema validation fails (on ANY layer, not necessarily
+ * `gates.fanout` itself), so a malformed `gates.fanout.groups` entry can
+ * reach here. A non-object entry, a non-array/blank `angles`, or a
+ * blank/duplicate `name` is dropped (its angles fall through to their own
+ * singleton groups) rather than thrown — mirroring the sibling
+ * `normalizeAngleEntries` convention: this resolver degrades to a smaller
+ * grouping table, never crashes the conductor's Phase 2 planning.
+ * `resolvedAngles` is deduplicated up front so a duplicated entry (e.g. a
+ * hand-built `--angles` list) never mints two dispatch units sharing one name.
+ *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate unused today — fan-out grouping
  *   is a global policy (`gates.fanout`), not per-gate; accepted for symmetry
@@ -1971,17 +2007,32 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
  * @returns {{ name: string, angles: string[] }[]}
  */
 export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = false } = {}) {
-  const angles = Array.isArray(resolvedAngles) ? resolvedAngles : [];
+  const angles = Array.isArray(resolvedAngles)
+    ? [...new Set(resolvedAngles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
+    : [];
   const perAngleGroups = () => angles.map((name) => ({ name, angles: [name] }));
   if (fullLabel) return perAngleGroups();
   const fanout = config?.gates?.fanout ?? {};
   if (fanout.mode === "per-angle") return perAngleGroups();
   const angleSet = new Set(angles);
-  const configuredGroups = Array.isArray(fanout.groups) ? fanout.groups : [];
+  const rawGroups = Array.isArray(fanout.groups) ? fanout.groups : [];
+  const configuredGroups = [];
+  const seenGroupNames = new Set();
+  for (const group of rawGroups) {
+    if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+    const name = typeof group.name === "string" ? group.name.trim() : "";
+    if (name.length === 0 || seenGroupNames.has(name)) continue;
+    const groupAngles = Array.isArray(group.angles)
+      ? [...new Set(group.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
+      : [];
+    if (groupAngles.length === 0) continue;
+    seenGroupNames.add(name);
+    configuredGroups.push({ name, angles: groupAngles });
+  }
   const grouped = new Set();
   const result = [];
   for (const group of configuredGroups) {
-    const members = (group.angles ?? []).filter((a) => angleSet.has(a) && !grouped.has(a));
+    const members = group.angles.filter((a) => angleSet.has(a) && !grouped.has(a));
     if (members.length === 0) continue;
     for (const a of members) grouped.add(a);
     result.push({ name: group.name, angles: members });

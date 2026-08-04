@@ -3346,6 +3346,96 @@ test("resolveFanoutGroups: absent gates.fanout config falls back to the grouped 
   ]);
 });
 
+test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe to one singleton unit", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["docs"] },
+    { name: "scope", angles: ["scope"] },
+  ]);
+});
+
+test("resolveFanoutGroups: an angle named in two configured groups is claimed by the first (first-group-wins dedup)", () => {
+  const config = fanoutConfig([
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["docs", "b"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "a", "b"]);
+  assert.deepEqual(result, [
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["b"] },
+  ]);
+});
+
+test("resolveFanoutGroups: non-array/undefined resolvedAngles resolves to []", () => {
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", undefined), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", "not-an-array"), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", null), []);
+});
+
+test("resolveFanoutGroups: empty resolvedAngles resolves to []", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
+  assert.deepEqual(resolveFanoutGroups(config, "draft", []), []);
+});
+
+test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups entry (never zod-validated — a hand-built config, or the raw merged object loadDevLoopConfig returns on ANY validation failure)", () => {
+  const angles = ["docs", "scope"];
+  // A null entry (e.g. an empty YAML list item) is skipped.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, null] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A missing/blank `name` drops the group; its angles fall through to singletons.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "  ", angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A non-array `groups` resolves as if no groups were configured.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: "not-an-array" } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // Two groups sharing a name: the second is dropped, its angles fall through.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, { name: "g", angles: ["scope"] }] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+});
+
+test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-dup-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: dup",
+        "        angles: [a]",
+        "      - name: dup",
+        "        angles: [b]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.ok(errors.length > 0);
+    assert.match(errors.map((e) => e.message).join("\n"), /duplicate gates\.fanout\.groups name/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ============================================================================
 // AC3 (#1572) — per-angle scoped briefings: gates.<gate>.angles[].scope +
 // resolveGateAngleScope

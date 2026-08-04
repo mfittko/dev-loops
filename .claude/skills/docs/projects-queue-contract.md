@@ -217,9 +217,10 @@ When tooling fails closed, it emits a structured JSON error on stderr:
 ```
 
 The stderr payload follows the repo's standard CLI error format (`formatCliError`):
-`{ ok: false, error }` with an optional `usage` field when available. Remediation hints
-such as `code` keys or suggested commands live in documentation, not in the structured
-stderr output.
+`{ ok: false, error }` with an optional one-line `hint` (e.g. `"run with --help for usage"`)
+when a usage string exists — the full usage text is never inlined into this JSON payload;
+run the tool with `--help` for it. Remediation hints such as `code` keys or suggested
+commands live in documentation, not in the structured stderr output.
 
 ## Column auto-repair
 

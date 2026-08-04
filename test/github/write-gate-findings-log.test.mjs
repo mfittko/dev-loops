@@ -822,7 +822,34 @@ test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async
 });
 
 test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer covers its whole declared group (AC7)", async () => {
-  await withAngleContractRepo(async (repoRoot) => {
+  // A dedicated fixture (not the shared ANGLE_CONTRACT_DEVLOOPS one, which
+  // carries no gates.fanout override and so inherits the shipped default
+  // grouping table — under which "dry" and "pr-checklist-matrix" are NOT
+  // configured together): the write path now cross-checks a claimed `group`
+  // against gates.fanout.groups, so the fixture must actually configure
+  // dry + pr-checklist-matrix into the same group for this to be a genuinely
+  // legitimate grouped-dispatch scenario.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-angle-contract-grouped-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, pr-checklist-matrix]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-"));
     try {
       const result = await writeGateFindingsLog({
@@ -842,6 +869,41 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
         tmpRoot: tmpDir,
       }, { repoRoot });
       assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a grouped-dispatch ledger whose declared group the configured gates.fanout.groups table does not actually place together (fabricated group label)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-fabricated-"));
+    try {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "a/b",
+          pr: 1,
+          gate: "pre_approval_gate",
+          headSha: "abc1234500000000000000000000000000000000",
+          verdict: "clean",
+          findings: "[]",
+          // "dry" and "pr-checklist-matrix" are never grouped together by the
+          // config this fixture inherits (the shipped default "process" group
+          // covers scope/pr-description/gate-evidence/pr-checklist-matrix, not
+          // "dry") — a self-attested shared "group" label alone must not pass.
+          provenance: JSON.stringify({
+            distinctReviewers: 1,
+            perAngle: [
+              { angle: "dry", reviewer: "review-a", group: "process" },
+              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            ],
+          }),
+          tmpRoot: tmpDir,
+        }, { repoRoot }),
+        /does not place all of them in one group/,
+      );
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

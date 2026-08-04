@@ -12,7 +12,9 @@ import {
   provenanceConsistencyError,
   checkFanoutAngleCoverage,
   countFreshAngles,
+  countFreshDispatchUnits,
   fanoutReviewerPairingError,
+  freshAngleNames,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -313,6 +315,66 @@ describe("countFreshAngles (#1431 — one-reviewer-per-angle enforcement)", () =
   });
 });
 
+describe("countFreshDispatchUnits (AC7 — grouped-dispatch-aware provenance floor)", () => {
+  test("identical to countFreshAngles when no entry declares a group", () => {
+    const perAngle = [{ angle: "a" }, { angle: "b" }, { angle: "c" }];
+    assert.equal(countFreshDispatchUnits(perAngle), countFreshAngles(perAngle));
+    assert.equal(countFreshDispatchUnits(perAngle), 3);
+  });
+
+  test("a group of N fresh angles counts as ONE dispatch unit", () => {
+    assert.equal(
+      countFreshDispatchUnits([
+        { angle: "a", group: "g1" }, { angle: "b", group: "g1" }, { angle: "c", group: "g1" },
+      ]),
+      1,
+    );
+  });
+
+  test("10 fresh angles across 4 declared groups count as 4 dispatch units", () => {
+    const perAngle = [
+      { angle: "a", group: "g1" }, { angle: "b", group: "g1" }, { angle: "c", group: "g1" },
+      { angle: "d", group: "g2" }, { angle: "e", group: "g2" },
+      { angle: "f", group: "g3" }, { angle: "g", group: "g3" }, { angle: "h", group: "g3" },
+      { angle: "i", group: "g4" }, { angle: "j", group: "g4" },
+    ];
+    assert.equal(countFreshAngles(perAngle), 10);
+    assert.equal(countFreshDispatchUnits(perAngle), 4);
+  });
+
+  test("a mix of grouped and ungrouped fresh angles: groups + each ungrouped angle count separately", () => {
+    assert.equal(
+      countFreshDispatchUnits([
+        { angle: "a", group: "g1" }, { angle: "b", group: "g1" },
+        { angle: "c" }, { angle: "d" },
+      ]),
+      3, // g1, c, d
+    );
+  });
+
+  test("carried angles are excluded, same as countFreshAngles", () => {
+    assert.equal(
+      countFreshDispatchUnits([{ angle: "a", group: "g1" }, { angle: "b", group: "g1", carriedFromHead: "abc1234" }]),
+      1,
+    );
+  });
+
+  test("malformed input returns 0, same as countFreshAngles", () => {
+    assert.equal(countFreshDispatchUnits(null), 0);
+    assert.equal(countFreshDispatchUnits("nope"), 0);
+  });
+});
+
+describe("freshAngleNames", () => {
+  test("returns distinct fresh angle names, excluding carried ones", () => {
+    assert.deepEqual(
+      freshAngleNames([{ angle: "a" }, { angle: "b" }, { angle: "a" }, { angle: "c", carriedFromHead: "abc1234" }]),
+      ["a", "b"],
+    );
+    assert.deepEqual(freshAngleNames(null), []);
+  });
+});
+
 describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh angle)", () => {
   test("accepts one distinct reviewer identity per fresh angle", () => {
     assert.equal(fanoutReviewerPairingError([]), null);
@@ -414,6 +476,74 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
       { angle: "b", reviewer: "x" },
     ]);
     assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+  });
+
+  describe("resolvedGroups cross-check (closes the self-attested-group loophole)", () => {
+    const RESOLVED_GROUPS = [
+      { name: "docs-surface", angles: ["a", "b"] },
+      { name: "process", angles: ["c", "d"] },
+      { name: "e", angles: ["e"] }, // ungrouped angle resolves to its own singleton
+    ];
+
+    test("without resolvedGroups (omitted), any single shared group label is accepted (today's permissive default)", () => {
+      assert.equal(
+        fanoutReviewerPairingError([
+          { angle: "a", reviewer: "x", group: "anything" },
+          { angle: "c", reviewer: "x", group: "anything" },
+        ]),
+        null,
+      );
+    });
+
+    test("accepts a shared identity whose group is exactly a configured dispatch unit", () => {
+      assert.equal(
+        fanoutReviewerPairingError(
+          [
+            { angle: "a", reviewer: "x", group: "docs-surface" },
+            { angle: "b", reviewer: "x", group: "docs-surface" },
+          ],
+          RESOLVED_GROUPS,
+        ),
+        null,
+      );
+    });
+
+    test("rejects a fabricated group label spanning angles the configured table splits into DIFFERENT groups", () => {
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "everything" },
+          { angle: "c", reviewer: "x", group: "everything" },
+        ],
+        RESOLVED_GROUPS,
+      );
+      assert.match(error, /does not place all of them in one group/);
+    });
+
+    test("rejects a fabricated group label spanning an angle the table never groups at all", () => {
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "everything" },
+          { angle: "e", reviewer: "x", group: "everything" },
+        ],
+        RESOLVED_GROUPS,
+      );
+      assert.match(error, /does not place all of them in one group/);
+    });
+
+    test("per-angle mode / gate:full (resolveFanoutGroups collapses every angle to its own singleton) rejects ANY shared identity, regardless of the declared group label", () => {
+      const perAngleModeGroups = [
+        { name: "a", angles: ["a"] },
+        { name: "b", angles: ["b"] },
+      ];
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "docs-surface" },
+          { angle: "b", reviewer: "x", group: "docs-surface" },
+        ],
+        perAngleModeGroups,
+      );
+      assert.match(error, /does not place all of them in one group/);
+    });
   });
 });
 

@@ -10,6 +10,7 @@ import {
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { formatCliError } from "../_core-helpers.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
 
@@ -104,8 +105,7 @@ if (isDirectCliRun(import.meta.url)) {
   run(process.argv.slice(2)).then(
     (code) => { process.exitCode = typeof code === "number" ? code : 0; },
     (error) => {
-      const usage = error instanceof Error && typeof error.usage === "string" ? error.usage : undefined;
-      process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(usage && { usage }) })}\n`);
+      process.stderr.write(`${formatCliError(error)}\n`);
       process.exitCode = 1;
     },
   );

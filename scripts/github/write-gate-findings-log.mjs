@@ -7,8 +7,8 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
-import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -132,7 +132,7 @@ function resolveFindings(options) {
  * recording is the Pi-harness bridge (subagent tool at child depth). Returns the
  * normalized object.
  */
-export function parseProvenanceJson(raw) {
+export function parseProvenanceJson(raw, resolvedGroups = null) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -191,8 +191,11 @@ export function parseProvenanceJson(raw) {
   // where an internally-consistent distinctReviewers count still let one
   // reviewer cover multiple angles. Carried angles are exempt, and fresh
   // angles sharing a reviewer under the SAME declared `group` are exempt too
-  // (grouped fan-out dispatch — see fanoutReviewerPairingError).
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle);
+  // (grouped fan-out dispatch — see fanoutReviewerPairingError). `resolvedGroups`
+  // (this round's resolveFanoutGroups output, computed by the caller — it
+  // already loads config) additionally rejects a claimed group that the
+  // configured table does not actually place these angles into together.
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
@@ -351,7 +354,26 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const findings = await resolveFindings(options);
-  const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
+  let provenance;
+  if (options.provenance === undefined) {
+    provenance = undefined;
+  } else {
+    // Resolve this round's dispatch groups BEFORE validating pairing, so a
+    // claimed `group` is cross-checked against the gate's actual configured
+    // grouping table (see fanoutReviewerPairingError) — not just accepted as
+    // an internally-consistent self-attested label. Best-effort: a raw-JSON
+    // parse failure here is swallowed and re-surfaces as the real, specific
+    // error inside parseProvenanceJson below.
+    let resolvedGroups = null;
+    try {
+      const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
+      const { config } = await loadDevLoopConfig({ repoRoot });
+      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle));
+    } catch {
+      resolvedGroups = null;
+    }
+    provenance = parseProvenanceJson(options.provenance, resolvedGroups);
+  }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance
   // remains optional and additive (inline_single_agent writes never carry it).

@@ -34,8 +34,16 @@ none of them observe how many reviewer processes produced the artifacts they rea
 provenance write-time floor from 0039 (`fanoutReviewerPairingError`: no two fresh angles may
 share a reviewer identity) is narrowed, not removed: fresh angles sharing one reviewer
 identity are valid exactly when every entry sharing that identity declares the SAME `group`
-name, so a collision across DIFFERENT declared groups (or an undeclared group) still fails
-closed exactly as 0039 requires. `gate:full` (label or `gates.fanout.mode: per-angle`) keeps
+name AND (when the caller supplies the round's resolved dispatch groups — both write and
+read call sites do) every one of those angles is a member of that SAME configured dispatch
+unit, so a collision across DIFFERENT declared groups, an undeclared group, or a fabricated
+group label the config never actually groups those angles into still fails closed exactly as
+0039 requires. The `requireFanoutProvenance` `distinctReviewers` floor (`FANOUT_PROVENANCE_MIN_REVIEWERS`
+scaled up) also had to move from counting fresh ANGLES to counting fresh DISPATCH UNITS
+(`countFreshDispatchUnits`: one unit per declared group, one per ungrouped angle) — the
+floor is the other half of 0039's guarantee, and left angle-scaled it would reject every
+honest grouped round (M reviewers for N grouped angles, M < N) that the pairing exception
+above is designed to accept. `gate:full` (label or `gates.fanout.mode: per-angle`) keeps
 0039's original one-reviewer-per-angle behavior verbatim — a group of one per angle — so a
 reviewer who wants the un-grouped signal, or a PR the operator wants maximally scrutinized,
 opts back in without a config edit beyond the label. Rejected: dynamic/heuristic grouping

@@ -347,8 +347,9 @@ cache matches on a shared PREFIX of the request, so the orchestrator MUST place 
 byte-identical block at the START of every reviewer prompt and the angle-specific suffix
 LAST, never interleaved or reordered per reviewer. This governs prompt LAYOUT only — the
 byte-identity/hash machinery above (`--prefix-hash`/`--prefix-file`,
-`verify-briefing-prefixes.mjs`) is unchanged, and the rendered `<gate>-<headSha>.briefing-
-prefix.txt` file remains the recorded proof of what was byte-identical. Under a harness where
+`verify-briefing-prefixes.mjs`) is unchanged, and the rendered
+`<gate>-<headSha>.briefing-prefix.txt` file remains the recorded proof of what was
+byte-identical. Under a harness where
 the orchestrator seeds each reviewer with a pointer to that file rather than inlining its
 bytes into the prompt (`prefixMode: "file"` below, or any other pointer-based seeding), the
 pointer LINE ITSELF — not just the file it names — MUST be byte-identical across every
@@ -394,24 +395,35 @@ bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-pref
 hash and compare those bytes exactly as before, oblivious to which mode produced them.
 
 **Hunk-collapse.** Inline diff rendering (prefix and scoped variants below) first collapses
-any run of consecutive hunks that is PROVABLY one pure single-token substitution — every
-changed-line pair in every hunk of the run replaces the same old token with the same new
-token, nothing else — into one summary line naming the substitution and the hunk/file
-count, with a pointer back to the byte-exact `scope.diffPath`. Any hunk not provably pure
-(unequal add/remove counts, more than one token changed, an inconsistent pair) renders in
-full — fail-closed. This only changes what gets INLINED; the persisted `.diff` file is
-never touched, so a reviewer can always read the untouched original.
+any run of AT LEAST TWO consecutive hunks that is PROVABLY one pure single-token
+substitution — every changed-line pair in every hunk of the run replaces the SAME old
+token with the SAME new token on a whole token boundary (never a shared substring inside a
+larger identifier — a rename touching `grossAmount`/`netAmount` and a different rename
+touching `grossRate`/`netRate` do NOT collapse together just because both reduce to
+"gross"→"net" at the character level) — into one summary line naming the substitution, the
+hunk/file counts, and the affected file paths (capped, with a "+N more" tail), with a
+pointer back to the byte-exact `scope.diffPath`. A run of exactly one hunk stays below the
+collapse floor and renders in full, unchanged — collapsing exists to absorb large
+mechanical runs, not to hide a single hunk's own diff. Any hunk not provably pure (unequal
+add/remove counts, more than one token changed, an inconsistent pair, or any changed line
+that is not a `+`/`-`/context line) renders in full — fail-closed. This only changes what
+gets INLINED; the persisted `.diff` file is never touched, so a reviewer can always read
+the untouched original.
 
 **Per-angle scoped variants.** An angle whose configured `scope` (`gates.<gate>.angles[].scope`)
 is `changed-files` or `docs-only` gets an additional companion file,
 `<gate>-<headSha>.briefing-<scope>.txt`, sibling to the invariant prefix: `changed-files`
 carries the full (hunk-collapsed) diff without the adjacent-code bundle; `docs-only`
-narrows further to doc-file hunks only — its surface's own diff slice, never zero diff. No
+narrows further to doc-file hunks only — its surface's own diff slice, explicitly stating
+"(no doc-file hunks in this diff)" when that slice is empty (a round that touched no doc
+files is a truthful zero, not a builder fault). No
 scoped variant drops a mandatory input: both variants MUST carry the PR body, the
 acceptance-criteria text (linked-issue body/sections), and the validation-results pointer
 verbatim from the invariant prefix, unabridged. A scoped variant MUST ALSO link the full
-bundle — an explicit pointer back to the invariant-prefix file path AND to `scope.diffPath`
-— so a reviewer whose angle turns out to need more than its slice can always widen to the
+bundle unconditionally — an explicit pointer back to the invariant-prefix file path AND to
+`scope.diffPath` (falling back to an explicit "pointer unavailable" line when
+`scope.diffPath` is null), plus the sibling JSON context-artifact path — so a reviewer
+whose angle turns out to need more than its slice can always widen to the
 full diff and adjacent-code bundle (`GATE-EXEC-BUILD-ONCE-SEED` still applies — a scoped
 variant is an additional narrow seed, never a replacement, and AC1's reviewer-effectiveness
 requirement is exactly this: no angle loses PR body, acceptance criteria, validation
@@ -1148,27 +1160,37 @@ a recorded `--inline-reason`, not a `fanout_fanin` ledger that pairs one reviewe
 angles. **Grouped fan-out dispatch** (`gates.fanout.mode: grouped`, the shipped default —
 see `resolveFanoutGroups` in `@dev-loops/core/config`) is a second sanctioned exception: a
 `perAngle` entry may declare a `group` name, and fresh angles sharing one reviewer identity
-are valid exactly when every entry sharing that identity declares the SAME `group` name.
-The recorded `group` is the audit record of what actually ran — it need not match the
-gate's currently configured `gates.fanout.groups` table. Fresh angles sharing a reviewer
-under differing or missing `group` values still violate the contract above. The shared
-helper is `fanoutReviewerPairingError` (paired with `countFreshAngles`) in
+are valid exactly when every entry sharing that identity declares the SAME `group` name
+**AND** — whenever the caller supplies the round's resolved dispatch groups (both call
+sites do) — every one of those fresh angles is a member of that SAME configured dispatch
+unit per `resolveFanoutGroups`. A self-attested `group` label spanning angles the
+configured table splits apart (or never groups together at all) fails closed even though
+the label itself is internally consistent; `resolveFanoutGroups` already collapses to
+one-angle-per-unit singletons for `gates.fanout.mode: per-angle` and for a `gate:full`
+round, so passing its output here also rejects ANY shared identity in those modes, with
+no separate mode flag needed. Fresh angles sharing a reviewer under differing or missing
+`group` values still violate the contract above. The shared helper is
+`fanoutReviewerPairingError` (paired with `countFreshAngles`/`countFreshDispatchUnits`) in
 `@dev-loops/core/loop/gate-fanin`.
 
 Enforcement of the `distinctReviewers` floor itself is opt-in via
 **`gates.requireFanoutProvenance`** (default **false**). When enabled, it layers ON TOP of
 `requireFanoutEvidence` (it only takes effect while fan-out evidence enforcement is
 active): each required `fanout_fanin` gate's ledger must record internally-consistent
-provenance with `provenance.distinctReviewers >= max(2, <fresh-angle count>)` — a floor of
-**2** is the smallest count that is not a single agent, and the floor SCALES UP with the
-number of fresh (non-carried) angles recorded in `perAngle`, since a compliant ledger
-can never have fewer distinct fresh reviewers than fresh angles. The read path also
-re-validates the per-identity pairing itself (the same `fanoutReviewerPairingError`
-check as the write path, at both the pre-merge enforcement and the cross-checkout
-ledger selector): the ledger is a worktree-local file, so the reader never assumes the
-write-time floor produced it — a hand-crafted padded ledger that meets the cardinality
-floor still fails. When the flag is off,
-behavior is byte-identical to today (no new failures) — the Claude-Code path, which
+provenance with `provenance.distinctReviewers >= max(2, <fresh DISPATCH UNIT count>)` — a
+floor of **2** is the smallest count that is not a single agent, and the floor SCALES UP
+with the number of fresh (non-carried) DISPATCH UNITS recorded in `perAngle`
+(`countFreshDispatchUnits`: one unit per distinct declared `group` name among fresh
+entries, plus one unit per fresh entry with no `group` at all) — NOT with the fresh-angle
+count. For an ungrouped ledger the two counts are identical (today's one-reviewer-per-angle
+shape); for a grouped ledger the unit count is <= the angle count, since one group of N
+angles is one dispatch unit, not N — a compliant ledger can never have fewer distinct fresh
+reviewers than fresh dispatch units. The read path also re-validates the per-identity
+pairing itself (the same `fanoutReviewerPairingError` check as the write path, at both the
+pre-merge enforcement and the cross-checkout ledger selector): the ledger is a
+worktree-local file, so the reader never assumes the write-time floor produced it — a
+hand-crafted padded ledger that meets the cardinality floor still fails. When the flag is
+off, behavior is byte-identical to today (no new failures) — the Claude-Code path, which
 already honors child fan-out, is a validated no-op.
 
 **Honest caveat (this is NOT un-forgeable):** recorded provenance is self-reported — it is

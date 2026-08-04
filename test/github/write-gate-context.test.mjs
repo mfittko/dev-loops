@@ -394,6 +394,15 @@ test("parseWriteGateContextCliArgs parses required args", () => {
   assert.equal(result.tmpRoot, "tmp");
 });
 
+test("parseWriteGateContextCliArgs: --angles dedupes a repeated angle name (first occurrence wins), so resolveFanoutGroups never mints two dispatch units sharing one name from a duplicated --angles list", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef",
+    "--angles", '["scope","docs","scope"]',
+  ]);
+  assert.deepEqual(result.angles, ["scope", "docs"]);
+});
+
 test("parseWriteGateContextCliArgs parses optional scope + rationale", () => {
   const result = parseWriteGateContextCliArgs([
     "--repo", "a/b", "--pr", "3", "--gate", "pre_approval_gate",
@@ -2540,6 +2549,27 @@ test("writeGateContext: --prefix-file records the exact bytes of the supplied fi
   }
 });
 
+test("writeGateContext: --prefix-file still normalizes angleScopes (a foreign value fails open to full) even though no variant is ever rendered", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-anglescopes-"));
+  try {
+    const prefixFile = path.join(repoRoot, "orchestrator-prefix.txt");
+    await writeFile(prefixFile, "# Orchestrator's own briefing\n", "utf8");
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "83", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope", "link-check"]',
+      "--prefix-file", prefixFile,
+    ]);
+    options.angleScopes = { scope: " docs-only ", "link-check": "everything-and-more" };
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.angleScopes.scope, "docs-only", "a valid value is still trimmed and accepted");
+    assert.equal(result.artifact.angleScopes["link-check"], "full", "a foreign value fails open to full");
+    assert.equal(result.artifact.briefingVariants, undefined, "--prefix-file never renders a variant file, regardless of angleScopes");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext: --prefix-file fails closed (throws) on a missing file", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-missing-"));
   try {
@@ -3166,7 +3196,7 @@ test("writeGateContext warns, naming the retirement command, when a rebuild over
 // AC8 (#1572) — prefix hunk-collapse: collapsePureSubstitutionRuns
 // ---------------------------------------------------------------------------
 
-test("collapsePureSubstitutionRuns: a single pure single-token substitution hunk collapses to one summary line (file header absorbed)", () => {
+test("collapsePureSubstitutionRuns: a lone (length-1) pure single-token substitution run stays below the collapse floor and renders in full", () => {
   const diff = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
@@ -3179,13 +3209,11 @@ test("collapsePureSubstitutionRuns: a single pure single-token substitution hunk
     "",
   ].join("\n");
   const collapsed = collapsePureSubstitutionRuns(diff);
-  assert.equal(
-    collapsed,
-    '[collapsed: 1 hunks across 1 files — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
-  );
+  assert.equal(collapsed, diff, "a single hunk never collapses, regardless of purity — MIN_COLLAPSE_RUN_LENGTH is 2");
+  assert.ok(!collapsed.includes("[collapsed:"));
 });
 
-test("collapsePureSubstitutionRuns: a run spanning multiple files collapses to one line naming the hunk and file counts", () => {
+test("collapsePureSubstitutionRuns: a run spanning multiple files collapses to one line naming the hunk/file counts and the affected paths", () => {
   const diff = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
@@ -3215,8 +3243,43 @@ test("collapsePureSubstitutionRuns: a run spanning multiple files collapses to o
   const collapsed = collapsePureSubstitutionRuns(diff);
   assert.equal(
     collapsed,
-    '[collapsed: 3 hunks across 3 files — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+    '[collapsed: 3 hunks across 3 files (a.txt, b.txt, c.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
   );
+});
+
+test("collapsePureSubstitutionRuns (token-boundary purity): grossAmount->netAmount and grossRate->netRate do NOT collapse together despite sharing the character-level run \"gross\"->\"net\"", () => {
+  const diff = [
+    "diff --git a/pay.mjs b/pay.mjs",
+    "index 111..222 100644",
+    "--- a/pay.mjs",
+    "+++ b/pay.mjs",
+    "@@ -1 +1 @@",
+    "-const grossAmount = 1;",
+    "+const netAmount = 1;",
+    "diff --git a/tax.mjs b/tax.mjs",
+    "index 333..444 100644",
+    "--- a/tax.mjs",
+    "+++ b/tax.mjs",
+    "@@ -1 +1 @@",
+    "-const grossRate = 1;",
+    "+const netRate = 1;",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "neither line is a whole-token substitution (the token butts against a word character), so both hunks fail closed to impure and render unchanged");
+  assert.ok(!collapsed.includes("[collapsed:"));
+});
+
+test("collapsePureSubstitutionRuns: a run of more files than the summary cap truncates the file list with a '+N more' tail", () => {
+  const files = Array.from({ length: 10 }, (_, i) => `f${i}.txt`);
+  const diff = files
+    .map((f) => [
+      `diff --git a/${f} b/${f}`, "index 111..222 100644", `--- a/${f}`, `+++ b/${f}`,
+      "@@ -1 +1 @@", "-defer", "+nice-to-have",
+    ].join("\n"))
+    .join("\n") + "\n";
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.match(collapsed, /^\[collapsed: 10 hunks across 10 files \(f0\.txt, f1\.txt, f2\.txt, f3\.txt, f4\.txt, f5\.txt, f6\.txt, f7\.txt, \+2 more\)/);
 });
 
 test("collapsePureSubstitutionRuns: a hunk with a second, different substitution is not provably pure — renders unchanged", () => {
@@ -3253,7 +3316,7 @@ test("collapsePureSubstitutionRuns: an unequal add/remove count (a real content 
   assert.equal(collapsed, diff);
 });
 
-test("collapsePureSubstitutionRuns: a mixed diff collapses only the pure run, leaving the impure hunk rendered in full", () => {
+test("collapsePureSubstitutionRuns: a mixed diff collapses only the qualifying (length >= 2) runs, leaving the impure hunk rendered in full", () => {
   const diff = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
@@ -3263,17 +3326,31 @@ test("collapsePureSubstitutionRuns: a mixed diff collapses only the pure run, le
     "-defer",
     "+nice-to-have",
     "diff --git a/b.txt b/b.txt",
-    "index 333..444 100644",
+    "index 222..333 100644",
     "--- a/b.txt",
     "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/c.txt b/c.txt",
+    "index 333..444 100644",
+    "--- a/c.txt",
+    "+++ b/c.txt",
     "@@ -1,2 +1,3 @@",
     " context",
     "+brand new line",
     "+another new line",
-    "diff --git a/c.txt b/c.txt",
+    "diff --git a/d.txt b/d.txt",
+    "index 444..555 100644",
+    "--- a/d.txt",
+    "+++ b/d.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/e.txt b/e.txt",
     "index 555..666 100644",
-    "--- a/c.txt",
-    "+++ b/c.txt",
+    "--- a/e.txt",
+    "+++ b/e.txt",
     "@@ -1 +1 @@",
     "-defer",
     "+nice-to-have",
@@ -3283,26 +3360,146 @@ test("collapsePureSubstitutionRuns: a mixed diff collapses only the pure run, le
   const lines = collapsed.split("\n");
   assert.equal(
     lines[0],
-    '[collapsed: 1 hunks across 1 files — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+    '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
   );
-  assert.ok(collapsed.includes("diff --git a/b.txt b/b.txt"), "the impure hunk keeps its file header");
+  assert.ok(collapsed.includes("diff --git a/c.txt b/c.txt"), "the impure hunk keeps its file header");
   assert.ok(collapsed.includes("brand new line"));
-  assert.ok(!collapsed.includes("diff --git a/c.txt"), "c.txt's hunk is fully absorbed into its own (length-1) run");
   const summaryCount = (collapsed.match(/\[collapsed:/g) ?? []).length;
-  assert.equal(summaryCount, 2, "two separate runs, broken by the impure b.txt hunk in between");
+  assert.equal(summaryCount, 2, "two separate qualifying runs, broken by the impure c.txt hunk in between");
+  assert.match(lines.at(-1), /\[collapsed: 2 hunks across 2 files \(d\.txt, e\.txt\)/);
 });
 
-test("collapsePureSubstitutionRuns: a diff with no qualifying hunk round-trips byte-identically", () => {
+test("collapsePureSubstitutionRuns: a header-only block (no @@ hunk at all) round-trips byte-identically", () => {
   const diff = "diff --git a/src/a.mjs b/src/a.mjs\n+line\n";
   assert.equal(collapsePureSubstitutionRuns(diff), diff);
 });
 
-test("renderBriefingPrefix (AC8): a pure substitution run collapses in the rendered diff section; twice-rendered bytes are identical (determinism)", () => {
+test("collapsePureSubstitutionRuns: a diff carrying a PREAMBLE before its first 'diff --git ' line (e.g. git show/format-patch output) fails open and round-trips byte-identically", () => {
+  const diff = [
+    "commit deadbeef",
+    "Author: x <x@example.com>",
+    "",
+    "    subject line",
+    "",
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  assert.equal(collapsePureSubstitutionRuns(diff), diff, "the preamble is preserved by not collapsing at all, rather than silently dropped");
+});
+
+test("collapsePureSubstitutionRuns: a zero-hunk block (binary/rename) between two pure runs breaks them into two summaries, preserving its own header", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/r.bin b/r.bin",
+    "Binary files a/r.bin and b/r.bin differ",
+    "diff --git a/c.txt b/c.txt",
+    "index 333..444 100644",
+    "--- a/c.txt",
+    "+++ b/c.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/d.txt b/d.txt",
+    "index 444..555 100644",
+    "--- a/d.txt",
+    "+++ b/d.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.ok(collapsed.includes("diff --git a/r.bin b/r.bin"), "the binary block's own header is preserved");
+  assert.ok(collapsed.includes("Binary files a/r.bin and b/r.bin differ"));
+  const summaryCount = (collapsed.match(/\[collapsed:/g) ?? []).length;
+  assert.equal(summaryCount, 2, "the zero-hunk block breaks the run into two separate summaries rather than merging across it");
+});
+
+test("analyzeHunkPurity (via collapsePureSubstitutionRuns): a hunk line with no +/-/space prefix fails closed to impure — renders unchanged", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    " context",
+    "unrecognized line shape",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "an unrecognized line shape fails the hunk closed to impure, not just the substitution check");
+});
+
+test("renderBriefingPrefix (AC8): a diff over the inline cap raw that collapses under the cap flips prefixMode to inline (measured on the collapsed bytes)", () => {
+  const files = Array.from({ length: 20 }, (_, i) => `f${i}.txt`);
+  const diffOutput = files
+    .map((f) => [
+      `diff --git a/${f} b/${f}`, "index 111..222 100644", `--- a/${f}`, `+++ b/${f}`,
+      "@@ -1 +1 @@", "-defer", "+nice-to-have",
+    ].join("\n"))
+    .join("\n") + "\n";
+  const rawBytes = Buffer.byteLength(diffOutput, "utf8");
+  const collapsedBytes = Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8");
+  assert.ok(collapsedBytes < rawBytes, "collapsing must shrink the diff for this fixture to be meaningful");
+  const capBytes = Math.floor((rawBytes + collapsedBytes) / 2); // strictly between raw and collapsed
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
+    diffOutput, diffPath: "tmp/x.diff", capBytes,
+  };
+  const result = renderBriefingPrefix(input);
+  assert.equal(result.prefixMode, "inline", "the raw diff exceeds capBytes but the collapsed diff does not");
+  assert.equal(result.diffBytes, collapsedBytes, "diffBytes is measured on the collapsed text, not the raw diff");
+});
+
+test("renderBriefingPrefix (AC8): a qualifying (length >= 2) pure substitution run collapses in the rendered diff section; twice-rendered bytes are identical (determinism)", () => {
   const diffOutput = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
     "--- a/a.txt",
     "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
     "@@ -1 +1 @@",
     "-defer",
     "+nice-to-have",
@@ -3317,9 +3514,9 @@ test("renderBriefingPrefix (AC8): a pure substitution run collapses in the rende
   const r2 = renderBriefingPrefix(input);
   assert.equal(r1.text, r2.text, "deterministic across two renders");
   assert.ok(r1.text.includes(
-    '[collapsed: 1 hunks across 1 files — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+    '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
   ));
-  assert.ok(!r1.text.includes("diff --git a/a.txt"), "the collapsed run's file header is absorbed");
+  assert.ok(!r1.text.includes("diff --git a/a.txt"), "the collapsed run's file headers are absorbed");
 });
 
 // ---------------------------------------------------------------------------
@@ -3356,6 +3553,44 @@ test("renderScopedBriefingVariant: docs-only scope with no doc-file hunks in the
   assert.ok(text.includes("(no doc-file hunks in this diff)"));
   assert.ok(text.includes("tmp/x.briefing-prefix.txt"), "links back to the full byte-identical prefix (AC1)");
   assert.ok(!text.includes("src/a.mjs"), "non-doc hunks are excluded from the docs-only variant");
+});
+
+test("renderScopedBriefingVariant: rejects scope \"full\" and any non-GATE_ANGLE_SCOPES value", () => {
+  const base = { repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234", briefingPrefixPath: "tmp/x.txt" };
+  assert.throws(() => renderScopedBriefingVariant("full", base), /non-"full"/);
+  assert.throws(() => renderScopedBriefingVariant("Docs-Only", base), /non-"full"/);
+});
+
+test("renderScopedBriefingVariant (AC1): both docs-only and changed-files variants carry the PR body, the linked-issue acceptance-criteria text, the validation-results pointer, AND unconditional diffPath/context-artifact pointers", () => {
+  const shared = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+    contextPath: "tmp/x.json",
+    prBody: "Real PR description text.",
+    issueRef: "#900",
+    issueSections: [{ label: "#900", body: "- [ ] AC1: real acceptance criteria text" }],
+    diffPath: "tmp/x.diff",
+    validationResultsPath: "tmp/x.validation.json",
+    diffOutput: [
+      "diff --git a/docs/a.md b/docs/a.md",
+      "index 111..222 100644",
+      "--- a/docs/a.md",
+      "+++ b/docs/a.md",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n"),
+  };
+  for (const scope of ["docs-only", "changed-files"]) {
+    const { text } = renderScopedBriefingVariant(scope, shared);
+    assert.ok(text.includes("Real PR description text."), `${scope}: PR body`);
+    assert.ok(text.includes("real acceptance criteria text"), `${scope}: linked-issue acceptance-criteria text`);
+    assert.ok(text.includes("tmp/x.validation.json"), `${scope}: validation-results pointer`);
+    assert.ok(text.includes("tmp/x.diff"), `${scope}: diffPath pointer`);
+    assert.ok(text.includes("tmp/x.json"), `${scope}: context-artifact pointer`);
+    assert.ok(text.includes("tmp/x.briefing-prefix.txt"), `${scope}: full-prefix widen-back pointer`);
+  }
 });
 
 test("renderScopedBriefingVariant is deterministic: same input renders the same bytes", () => {
@@ -3516,6 +3751,38 @@ test("writeGateContext (AC3): an invalid/foreign angleScopes value fails open to
     const result = await writeGateContext(options, { repoRoot });
     assert.equal(result.artifact.angleScopes.scope, "full");
     assert.equal(result.artifact.briefingVariants, undefined, "no variant file for an angle normalized back to full");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext (AC3): a variant write failure fails open to full for its own scope only, and does not disturb the other scope's variant", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-writefail-"));
+  try {
+    // Force the docs-only variant's write to fail (EISDIR) by pre-creating its
+    // target path as a DIRECTORY; the changed-files variant's own path is
+    // untouched and must still succeed.
+    const docsOnlyPath = buildGateBriefingScopePath({
+      repo: "owner/repo", pr: 95, gate: "draft_gate", headSha: "abc1234567890", scope: "docs-only",
+    });
+    await mkdir(path.resolve(repoRoot, docsOnlyPath), { recursive: true });
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "95", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["link-check", "coverage"]',
+    ]);
+    options.angleScopes = { "link-check": "docs-only", coverage: "changed-files" };
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.angleScopes["link-check"], "full", "the failed scope's angle normalizes to full");
+    assert.equal(result.artifact.angleScopes.coverage, "changed-files", "the other scope's angle is untouched");
+    assert.equal(result.artifact.briefingVariants["docs-only"], undefined, "no briefingVariants entry for the failed scope");
+    assert.equal(
+      result.artifact.briefingVariants["changed-files"],
+      buildGateBriefingScopePath({ repo: "owner/repo", pr: 95, gate: "draft_gate", headSha: "abc1234567890", scope: "changed-files" }),
+      "the other scope's variant still lands",
+    );
+    const variantOnDisk = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
+    assert.ok(variantOnDisk.includes("changed-files"));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
