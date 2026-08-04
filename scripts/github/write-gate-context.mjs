@@ -636,6 +636,30 @@ function pickFence(text) {
 // ---------------------------------------------------------------------------
 
 /**
+ * File-header line prefixes AC8 collapse treats as carrying no reviewable
+ * metadata of their own (identity/line-number bookkeeping only). Any header
+ * line NOT matching one of these — `old mode`/`new mode`, `new file
+ * mode`/`deleted file mode`, `similarity index`/`rename from`/`rename to`,
+ * `Binary files ... differ`, etc. — makes the whole block's header
+ * non-trivial (see {@link hasNonTrivialFileHeader}).
+ */
+const TRIVIAL_HEADER_LINE_PREFIXES = ["diff --git ", "index ", "--- ", "+++ "];
+
+/**
+ * A block's header is non-trivial when it carries any line beyond the bare
+ * `diff --git`/`index`/`---`/`+++` identity lines — a mode change, a rename,
+ * a similarity-index line, or a binary marker. Such a block is excluded from
+ * AC8 collapse entirely (fail-closed): its metadata is not itself a hunk, so
+ * hunk-purity analysis alone would never see it, and collapsing its hunks
+ * would silently drop that metadata from the rendered prefix.
+ * @param {string} header
+ * @returns {boolean}
+ */
+function hasNonTrivialFileHeader(header) {
+  return header.split("\n").some((line) => !TRIVIAL_HEADER_LINE_PREFIXES.some((prefix) => line.startsWith(prefix)));
+}
+
+/**
  * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
  * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
  * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
@@ -803,8 +827,13 @@ function collapsedHunkSummaryLine({ hunkCount, filePaths, oldToken, newToken }) 
  * its first `diff --git ` line (e.g. `git show`/`git format-patch` output,
  * never the sanctioned `git diff` capture path): parseDiffFileBlocks has no
  * representation for pre-first-header bytes, so collapsing would silently
- * drop them; fail open to the untouched input instead. Pure function: same
- * input always yields the same output (prefix-hash determinism).
+ * drop them; fail open to the untouched input instead. A block whose header
+ * is non-trivial ({@link hasNonTrivialFileHeader} — a mode change, rename, or
+ * binary marker) never collapses even when every hunk in it is otherwise
+ * pure: collapsing would render only the summary line and drop that
+ * metadata, which no reviewer could then notice from the prefix alone. Pure
+ * function: same input always yields the same output (prefix-hash
+ * determinism).
  * @param {string} diffOutput
  * @returns {string}
  */
@@ -847,13 +876,15 @@ export function collapsePureSubstitutionRuns(diffOutput) {
       emitHeaderOnce(block);
       continue;
     }
+    const blockHeaderIsTrivial = !hasNonTrivialFileHeader(block.header);
     for (const hunkText of block.hunks) {
       const analysis = analyzeHunkPurity(hunkText);
-      if (analysis.pure && run && run.token.oldToken === analysis.token.oldToken && run.token.newToken === analysis.token.newToken) {
+      const pure = analysis.pure && blockHeaderIsTrivial;
+      if (pure && run && run.token.oldToken === analysis.token.oldToken && run.token.newToken === analysis.token.newToken) {
         run.entries.push({ block, hunkText });
         continue;
       }
-      if (analysis.pure) {
+      if (pure) {
         flush();
         run = { token: analysis.token, entries: [{ block, hunkText }] };
         continue;
@@ -960,7 +991,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-angle> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\`. Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   lines.push(

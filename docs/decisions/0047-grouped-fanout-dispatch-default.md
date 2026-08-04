@@ -6,6 +6,11 @@ Accepted — 2026-08-04 ([issue 1572](https://github.com/mfittko/dev-loops/issue
 
 ## Context
 
+This partially amends [0021](./0021-gate-fanout-build-once-seed-many.md), which rejected
+grouped review as "unprovable and biased" and forked one reviewer per resolved angle
+unconditionally — that dispatch-cardinality clause is superseded below; 0021's build-once
+bundle, invariant-prefix, and fail-closed hash-comparison decisions are untouched.
+
 [0039](./0039-one-gate-reviewer-per-fresh-angle.md) fixed a self-approval gap by requiring
 one independent reviewer per fresh angle, unconditionally, at both write and read time. It
 closed the gap it targeted, but its no-grouping stance also means every angle pays the full

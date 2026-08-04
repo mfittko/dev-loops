@@ -2104,12 +2104,12 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("verify-fresh-review-context.mjs"));
   // Reviewer scope is gate-prefixed so each reviewer's sentinel self-identifies
   // its gate; renderInput() defaults to gate: "draft_gate".
-  assert.ok(text.includes("--scope draft-gate-<your-angle>"));
+  assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
 });
 
 test("renderBriefingPrefix: gate scope hyphenation covers ALL underscores, not just the first", () => {
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate" }));
-  assert.ok(text.includes("--scope pre-approval-gate-<your-angle>"));
+  assert.ok(text.includes("--scope pre-approval-gate-<your-dispatch-unit>"));
 });
 
 test("renderBriefingPrefix: deterministic — two renders of identical input produce byte-identical text", () => {
@@ -2492,7 +2492,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
-      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-angle> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt`. Refuse to proceed on contamination or a missing artifact.",
+      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
@@ -3487,7 +3487,7 @@ test("renderBriefingPrefix (AC8): a diff over the inline cap raw that collapses 
   assert.equal(result.diffBytes, collapsedBytes, "diffBytes is measured on the collapsed text, not the raw diff");
 });
 
-test("renderBriefingPrefix (AC8): a qualifying (length >= 2) pure substitution run collapses in the rendered diff section; twice-rendered bytes are identical (determinism)", () => {
+test("renderBriefingPrefix (AC8): a qualifying (length >= 2) pure substitution run over TRIVIAL headers collapses in the rendered diff section, absorbing those headers; twice-rendered bytes are identical (determinism)", () => {
   const diffOutput = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
@@ -3516,7 +3516,37 @@ test("renderBriefingPrefix (AC8): a qualifying (length >= 2) pure substitution r
   assert.ok(r1.text.includes(
     '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
   ));
-  assert.ok(!r1.text.includes("diff --git a/a.txt"), "the collapsed run's file headers are absorbed");
+  assert.ok(!r1.text.includes("diff --git a/a.txt"), "a TRIVIAL header (diff --git/index/---/+++ only) is absorbed into the collapsed run");
+});
+
+test("collapsePureSubstitutionRuns: a block whose header carries a mode change or a rename is excluded from collapse — its header and hunk render in full", () => {
+  const diff = [
+    "diff --git a/scripts/deploy.sh b/scripts/deploy.sh",
+    "old mode 100644",
+    "new mode 100755",
+    "index 111..222 100644",
+    "--- a/scripts/deploy.sh",
+    "+++ b/scripts/deploy.sh",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/old-name.txt b/new-name.txt",
+    "similarity index 100%",
+    "rename from old-name.txt",
+    "rename to new-name.txt",
+    "index 333..333 100644",
+    "--- a/old-name.txt",
+    "+++ b/new-name.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "neither block's header is trivial, so nothing about this diff qualifies for collapse");
+  assert.ok(collapsed.includes("old mode 100644") && collapsed.includes("new mode 100755"), "the mode change survives");
+  assert.ok(collapsed.includes("similarity index 100%") && collapsed.includes("rename from old-name.txt") && collapsed.includes("rename to new-name.txt"), "the rename metadata survives");
+  assert.ok(!collapsed.includes("[collapsed:"), "a non-trivial header blocks collapse even though both hunks are pure single-token substitutions");
 });
 
 // ---------------------------------------------------------------------------

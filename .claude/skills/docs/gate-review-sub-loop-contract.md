@@ -406,7 +406,12 @@ pointer back to the byte-exact `scope.diffPath`. A run of exactly one hunk stays
 collapse floor and renders in full, unchanged — collapsing exists to absorb large
 mechanical runs, not to hide a single hunk's own diff. Any hunk not provably pure (unequal
 add/remove counts, more than one token changed, an inconsistent pair, or any changed line
-that is not a `+`/`-`/context line) renders in full — fail-closed. This only changes what
+that is not a `+`/`-`/context line) renders in full — fail-closed. A file whose own header
+carries anything beyond the bare `diff --git`/`index`/`---`/`+++` identity lines (a mode
+change, a rename, a similarity-index line, a binary marker) is excluded from collapse
+entirely, even when every one of its hunks is otherwise pure: that metadata lives in the
+header, not a hunk, so hunk-purity analysis alone would never see it, and a collapsed
+summary line would silently drop it. This only changes what
 gets INLINED; the persisted `.diff` file is never touched, so a reviewer can always read
 the untouched original.
 
@@ -435,7 +440,12 @@ invariant prefix.
 
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. An orchestrator that briefs reviewers with its OWN
+reviewer's per-scope sentinel. This hash/file is ALWAYS the invariant prefix, never a
+per-angle scoped variant: a reviewer additionally seeded with `briefingVariants[scope]`
+(previous section) still hashes/records the invariant-prefix bytes it was also given, so
+this per-gate record index and the one-hash-per-round check below apply unchanged whether
+or not any reviewer of the round was additionally seeded with a variant — the variant
+carries no hash or record of its own. An orchestrator that briefs reviewers with its OWN
 composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
 record file then carries those exact bytes (`prefixMode: "file"`) instead of the
 tool's self-rendered prefix, so the fan-in verification below agrees with the actual
@@ -1124,7 +1134,8 @@ findings-log ledger can additionally record **fan-out provenance**:
 "provenance": {
   "distinctReviewers": 2,               // count of distinct reviewer agents dispatched (<= distinct identities in perAngle)
   "perAngle": [                          // per-angle dispatch provenance
-    { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…" },
+    { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…", "group": "docs-surface" },
+    { "angle": "docs",    "reviewer": "review-a", "dispatchId": "…", "model": "…", "group": "docs-surface" }, // "group" is REQUIRED whenever fresh angles share one reviewer identity (grouped dispatch, the shipped default) — see the grouped-dispatch exception below
     { "angle": "safety",  "reviewer": "review-b" }
   ]
 }

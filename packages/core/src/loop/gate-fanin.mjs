@@ -187,13 +187,35 @@ export function provenanceConsistencyError(prov) {
 }
 
 /**
- * Names of DISTINCT "fresh" angles in a `perAngle` array — angles reviewed AT
- * THIS head, i.e. entries WITHOUT `carriedFromHead`. A carried angle's clean
- * verdict was reused from a prior head's review (see
- * @dev-loops/core/loop/gate-carry-forward), not freshly reviewed here, so it
- * is exempt from the one-reviewer-per-fresh-angle pairing contract below.
- * Shared by {@link countFreshAngles} and callers that need the names
- * themselves (e.g. resolving this round's dispatch groups via
+ * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle`
+ * array — a valid object entry naming a non-blank `angle` and carrying no
+ * `carriedFromHead` (a carried angle's clean verdict was reused from a prior
+ * head's review, see @dev-loops/core/loop/gate-carry-forward, not freshly
+ * reviewed here). `group` is the entry's normalized, non-blank `group`
+ * string, or `null`. This is the ONE definition of "fresh" and "declared
+ * group" — {@link freshAngleNames}, {@link countFreshDispatchUnits}, and
+ * {@link fanoutReviewerPairingError} all derive from it so the write-time
+ * floor and the pairing check can never silently drift apart on what either
+ * term means. Pure.
+ * @param {unknown} perAngle
+ * @returns {Generator<{ entry: object, angle: string, group: string|null }>}
+ */
+function* freshEntries(perAngle) {
+  if (!Array.isArray(perAngle)) return;
+  for (const entry of perAngle) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if (typeof entry.carriedFromHead === "string" && entry.carriedFromHead.trim().length > 0) continue;
+    const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
+    if (!angle) continue;
+    const group = typeof entry.group === "string" && entry.group.trim().length > 0 ? entry.group.trim() : null;
+    yield { entry, angle, group };
+  }
+}
+
+/**
+ * Names of DISTINCT "fresh" angles in a `perAngle` array — see
+ * {@link freshEntries}. Shared by {@link countFreshAngles} and callers that
+ * need the names themselves (e.g. resolving this round's dispatch groups via
  * `resolveFanoutGroups` for {@link fanoutReviewerPairingError}'s cross-check).
  * Pure.
  *
@@ -201,13 +223,8 @@ export function provenanceConsistencyError(prov) {
  * @returns {string[]}
  */
 export function freshAngleNames(perAngle) {
-  if (!Array.isArray(perAngle)) return [];
   const angles = new Set();
-  for (const e of perAngle) {
-    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
-    if (typeof e.angle === "string" && e.angle.trim().length > 0) angles.add(e.angle.trim());
-  }
+  for (const { angle } of freshEntries(perAngle)) angles.add(angle);
   return [...angles];
 }
 
@@ -240,15 +257,9 @@ export function countFreshAngles(perAngle) {
  * @returns {number}
  */
 export function countFreshDispatchUnits(perAngle) {
-  if (!Array.isArray(perAngle)) return 0;
   const groups = new Set();
   const ungroupedAngles = new Set();
-  for (const e of perAngle) {
-    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
-    const angle = typeof e.angle === "string" ? e.angle.trim() : "";
-    if (!angle) continue;
-    const group = typeof e.group === "string" && e.group.trim().length > 0 ? e.group.trim() : null;
+  for (const { angle, group } of freshEntries(perAngle)) {
     if (group) groups.add(group);
     else ungroupedAngles.add(angle);
   }
@@ -263,8 +274,12 @@ export function countFreshDispatchUnits(perAngle) {
  * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
  * rule), UNLESS every entry sharing that identity declares the SAME `group`
  * name (grouped fan-out dispatch, AC6/AC7 — see resolveFanoutGroups). The
- * recorded `group` is the audit record of what actually ran; it need not
- * match the gate's currently configured `gates.fanout.groups` table. Two
+ * recorded `group` is self-attested at write time; when `resolvedGroups` is
+ * supplied (both call sites always supply it) it is also checked against
+ * the CURRENT `gates.fanout.groups` table, so an edit to that table between
+ * the round and a later read (e.g. a merge-evidence check) can invalidate a
+ * ledger's group claim that was honest when written — see the
+ * `resolvedGroups` paragraph below. Two
  * fresh angles sharing a reviewer with differing or missing `group` values
  * still violate the contract. Carried angles keep their prior reviewer and
  * are exempt. Pure; shared by the write path (write-gate-findings-log.mjs,
@@ -307,18 +322,13 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
   const freshAngles = new Set();
   const anglesByIdentity = new Map();
   const anonymousAngles = [];
-  for (const e of perAngle) {
-    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
-    const angle = typeof e.angle === "string" ? e.angle.trim() : "";
-    if (!angle) continue;
+  for (const { entry, angle, group } of freshEntries(perAngle)) {
     freshAngles.add(angle);
-    const identity = reviewerIdentity(e);
+    const identity = reviewerIdentity(entry);
     if (identity) {
       if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label, groups: new Set() });
       const record = anglesByIdentity.get(identity.id);
       record.angles.add(angle);
-      const group = typeof e.group === "string" && e.group.trim().length > 0 ? e.group.trim() : null;
       record.groups.add(group);
     } else {
       anonymousAngles.push(angle);
