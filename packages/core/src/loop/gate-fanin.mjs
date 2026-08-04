@@ -18,12 +18,14 @@
  *     findings: [{ severity, file?, line?, summary, recommendation? }]
  *   }
  *
- * Severity vocabulary (mirrors write-gate-findings-log.mjs):
+ * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
+ * VALID_SEVERITIES / normalizeSeverity):
  *   "must-fix" | "worth-fixing-now" | "nice-to-have"
  * Severity is the reviewer's advisory weight only. Deferral is a DISPOSITION
- * (what the fix cycle does with an open finding), never a severity — the
- * legacy severity spelling "defer" is accepted on read and normalized to
- * "nice-to-have" (see LEGACY_SEVERITY_ALIASES / normalizeSeverity).
+ * (derived at fan-in for non-blocking findings, finalized per thread by the
+ * fix cycle / gate close), never a severity — the legacy severity spelling
+ * "defer" is accepted on read and normalized to "nice-to-have" (see
+ * LEGACY_SEVERITY_ALIASES / normalizeSeverity).
  */
 
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
@@ -51,6 +53,23 @@ export function normalizeSeverity(severity) {
   return typeof severity === "string" && Object.hasOwn(LEGACY_SEVERITY_ALIASES, severity)
     ? LEGACY_SEVERITY_ALIASES[severity]
     : severity;
+}
+
+/**
+ * Merge a severity→count map's legacy-spelled keys into their canonical keys
+ * (summing counts) so both the CLI parser and direct programmatic callers of
+ * the verdict poster share ONE merge rule. Values pass through unvalidated —
+ * the caller keeps its own integer/shape checks.
+ * @param {Record<string, number>} counts
+ * @returns {Record<string, number>} null-prototype object with canonical keys
+ */
+export function normalizeSeverityCounts(counts) {
+  const normalized = Object.create(null);
+  for (const [key, value] of Object.entries(counts)) {
+    const canonicalKey = /** @type {string} */ (normalizeSeverity(key));
+    normalized[canonicalKey] = (normalized[canonicalKey] ?? 0) + value;
+  }
+  return normalized;
 }
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 

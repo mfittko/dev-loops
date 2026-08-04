@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -506,16 +506,13 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw parseError("--findings-severity-counts must be a JSON object mapping severity to count");
       }
-      const counts = Object.create(null);
       for (const [key, value] of Object.entries(parsed)) {
         if (!Number.isInteger(value) || value < 0) {
           throw parseError(`--findings-severity-counts.${key} must be a non-negative integer`);
         }
-        // Legacy severity spellings merge into their canonical key.
-        const canonicalKey = /** @type {string} */ (normalizeSeverity(key));
-        counts[canonicalKey] = (counts[canonicalKey] ?? 0) + value;
       }
-      options.findingsSeverityCounts = counts;
+      // Legacy severity spellings merge into their canonical key.
+      options.findingsSeverityCounts = normalizeSeverityCounts(parsed);
       continue;
     }
     if (token.name === "execution-mode") {
@@ -1464,12 +1461,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // programmatic caller may pass legacy-keyed counts, and the guard below
   // must compare canonical keys on both sides.
   if (options.findingsSeverityCounts && typeof options.findingsSeverityCounts === "object") {
-    const normalizedCounts = Object.create(null);
-    for (const [key, value] of Object.entries(options.findingsSeverityCounts)) {
-      const canonicalKey = /** @type {string} */ (normalizeSeverity(key));
-      normalizedCounts[canonicalKey] = (normalizedCounts[canonicalKey] ?? 0) + value;
-    }
-    options.findingsSeverityCounts = normalizedCounts;
+    options.findingsSeverityCounts = normalizeSeverityCounts(options.findingsSeverityCounts);
   }
   if (
     options.verdict === "clean"

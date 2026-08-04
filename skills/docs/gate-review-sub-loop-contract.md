@@ -641,7 +641,8 @@ Consolidation:
 
 - collate findings from all review angles
 - classify each finding: `must-fix`, `worth-fixing-now`, `nice-to-have` (severity is the
-  reviewer's advisory weight only; deferral is a DISPOSITION the fix cycle assigns, so no
+  reviewer's advisory weight only; deferral is a DISPOSITION — derived at fan-in for
+  non-blocking findings, finalized per thread by the fix cycle / gate close — so no
   severity is spelled "defer" — the legacy spelling is normalized to `nice-to-have` on read)
 - write the disposition ledger: every finding receives a severity classification and a
   disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged)
