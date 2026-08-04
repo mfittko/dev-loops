@@ -3769,7 +3769,7 @@ test("renderGateReviewCommentBody's Findings summary counts the true totals from
         angle: "correctness",
         verdict: "findings_present",
         // A single marker finding standing in for many real findings.
-        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — in the disposition ledger", disposition: "accepted-for-fix" }],
       },
       { angle: "tests", verdict: "clean", findings: [] },
     ],
@@ -4441,7 +4441,7 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
       {
         angle: "correctness",
         verdict: "findings_present",
-        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — see the disposition ledger", disposition: "accepted-for-fix" }],
+        findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — in the disposition ledger", disposition: "accepted-for-fix" }],
       },
       { angle: "coverage", verdict: "clean", findings: [] },
       // draft_gate's configured mandatory angle: must be present for a
@@ -4560,7 +4560,7 @@ test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present",
-      "--findings-summary", "round withheld: too wide to render even at minimum shape — see the disposition ledger",
+      "--findings-summary", "round withheld: too wide to render even at minimum shape — recorded in the disposition ledger",
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
     assert.equal(result.code, 0, result.stderr);

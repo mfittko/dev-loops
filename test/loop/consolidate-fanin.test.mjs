@@ -1750,7 +1750,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
 // findings, its bare marker} renders cheaper in isolation — not "bare
 // always wins". A single-finding angle with no file/line and a summary at or
 // under the shrink floor renders its real form (62 chars, measured) SHORTER
-// than its own bare "N omitted — in ledger" marker (measured):
+// than its own bare "N omitted — in ledger" marker (22 chars at N=30, measured):
 // angleRenderCost(real) <= angleRenderCost(bareMarker) is true, so this angle
 // is seeded with its real findings directly and is then EXCLUDED from
 // upgradeOrder (it never enters the per-severity upgrade walk the sibling
