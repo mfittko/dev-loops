@@ -6,7 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `dev-loops queue sync-status` gains `--logical-column <name>` (`next_up`, `in_progress`, `ready_for_review`, `done`), which resolves the target Status column through `.devloops` `queue.statusColumns` so a renamed column still converges, and `--pr <number>` as the move target when no `--item` is supplied. `--logical-column` and `--to-column` are mutually exclusive; exactly one is required.
 - `ensure-worktree` now best-effort installs `pre-commit`/`pre-merge-commit`/`pre-push` hooks into the primary checkout's shared common git directory, refusing a commit, merge, or push (including via an explicit refspec) that would land on a guarded branch — the repo's own default (always re-derived from `origin`, independent of any given invocation's `--base`), and, when it differs, an explicit `--base`. Override for a sanctioned release or reconcile with `DEVLOOPS_ALLOW_MAIN=1`. The install is fail-soft and has documented no-op paths (an existing `core.hooksPath`, a foreign pre-existing hook, or an unresolvable default) — see [Default-branch guard](skills/docs/worktree-guidance.md#default-branch-guard).
+
+### Removed
+
+- `scripts/github/post-merge-board-sync.mjs`. It was a second CLI over the same `syncBoardStatus` core with the same best-effort exit contract; the post-merge step now runs `dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true`, which carries both behaviors the hook needed.
 
 ## 1.0.0-rc.4 - 2026-07-30
 
