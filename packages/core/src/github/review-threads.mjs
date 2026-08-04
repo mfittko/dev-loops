@@ -331,10 +331,23 @@ export function parseJsonText(text) {
   }
 }
 
-export function formatCliError(error) {
+// Renders the one shared { ok: false, error, hint? } envelope every
+// JSON-emitting gate CLI's main() catch block prints to stderr. `usage` is
+// accepted only as a PRESENCE check for a fallback usage string (a caller
+// passing its own `USAGE` constant when the error itself might not already
+// carry one) — the fallback's actual TEXT, like `error.usage`'s, is never
+// embedded here. Argument errors (and any error a caller marks with a usage
+// string) used to inline that string's full multi-KB text into this JSON
+// payload, which every calling agent then paid to read back out of its own
+// tool result on every mistyped flag. A one-line `hint` pointing at --help
+// carries the same "usage exists, go look" signal at a fraction of the size;
+// --help itself is unaffected (it prints the full USAGE text directly, never
+// through this function).
+export function formatCliError(error, { usage } = {}) {
   const payload = { ok: false, error: error instanceof Error ? error.message : String(error) };
-  if (error instanceof Error && typeof error.usage === "string") {
-    payload.usage = error.usage;
+  const hasUsage = (error instanceof Error && typeof error.usage === "string") || typeof usage === "string";
+  if (hasUsage) {
+    payload.hint = "run with --help for usage";
   }
   return JSON.stringify(payload);
 }

@@ -292,6 +292,106 @@ test("consolidateGateFanin writes --ledger-out as the flat findings shape (the -
   );
 });
 
+// One-shot fan-in (AC4): a SINGLE consolidateGateFanin call with both --out
+// and --ledger-out must report verdict, severityCounts, AND both artifact
+// paths on its own return value, so a caller never needs a second call just
+// to re-extract a different shape or rediscover a path it already passed in.
+test("consolidateGateFanin echoes verdict, severityCounts, and both written artifact paths from one call", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const outPath = path.join(dir, "out", "findings.json");
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+      assert.equal(result.overallVerdict, "findings_present");
+      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+      assert.equal(result.out, outPath);
+      assert.equal(result.ledgerOut, ledgerPath);
+      // Both echoed paths are real, already-written files — a caller never
+      // has to guess or re-derive them from a second invocation.
+      assert.ok(JSON.parse(await readFile(outPath, "utf8")));
+      assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
+    },
+  );
+});
+
+// Same guarantee through the real CLI entrypoint with --jq: the ONE call that
+// writes --out/--ledger-out to disk also prints just severityCounts on
+// stdout via --jq, proving the shipped procedure (write both artifacts AND
+// extract severityCounts) needs no second invocation.
+test("consolidate-fanin CLI: one invocation with --out/--ledger-out/--jq writes both artifacts and prints severityCounts", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const cliOutDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cli-oneshot-"));
+      try {
+        const outPath = path.join(cliOutDir, "findings.json");
+        const ledgerPath = path.join(cliOutDir, "ledger.json");
+        const cliResult = await runNode(
+          path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+          ["--findings-dir", dir, "--out", outPath, "--ledger-out", ledgerPath, "--jq", ".severityCounts"],
+        );
+        assert.equal(cliResult.code, 0, cliResult.stderr);
+        assert.deepEqual(JSON.parse(cliResult.stdout), { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+        assert.ok(JSON.parse(await readFile(outPath, "utf8")));
+        assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
+      } finally {
+        await rm(cliOutDir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+// A tier-4 (withheld) round never writes --out — "out" must be omitted from
+// the result rather than pointing at a file that was deleted (or never
+// existed), which would send a caller to read stale/missing content.
+test("consolidateGateFanin omits \"out\" from the result when the round is withheld (tier 4)", async () => {
+  // Same structural-floor fixture the withheld-tier tests below use (25
+  // angles x 30 findings each) — far more real angles than even a bare
+  // marker per angle can fit.
+  const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.deepEqual(result.findingsJson, []); // withheld tier
+    // withheld: no --out file on disk, and the result must not claim one.
+    assert.equal("out" in result, false);
+    assert.equal(result.ledgerOut, ledgerPath);
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Short errors (AC5): an argument error's stderr JSON is a one-line error +
+// hint, never the CLI's own (multi-KB) USAGE text — that full text renders
+// only under --help, which is unaffected.
+test("consolidate-fanin CLI: an argument error prints a short hint (not the full USAGE text), exit 1", async () => {
+  const cliResult = await runNode(
+    path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+    [],
+  );
+  assert.equal(cliResult.code, 1);
+  assert.equal(cliResult.stdout, "");
+  const payload = JSON.parse(cliResult.stderr);
+  assert.deepEqual(Object.keys(payload), ["ok", "error", "hint"]);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /Missing required argument: --findings-dir/);
+  assert.equal(payload.hint, "run with --help for usage");
+  assert.equal("usage" in payload, false);
+});
+
+test("consolidate-fanin CLI: --help still prints the full USAGE text on stdout, exit 0", async () => {
+  const cliResult = await runNode(
+    path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+    ["--help"],
+  );
+  assert.equal(cliResult.code, 0);
+  assert.equal(cliResult.stderr, "");
+  assert.match(cliResult.stdout, /^Usage: consolidate-fanin\.mjs/);
+  assert.match(cliResult.stdout, /--findings-dir <dir>/);
+});
+
 // parseConsolidateFaninCliArgs's --out/--ledger-out same-path guard is a
 // STRING comparison over the CLI's own argv, so it protects only callers that
 // go through the parser. consolidateGateFanin is exported and called directly

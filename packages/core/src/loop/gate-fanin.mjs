@@ -208,13 +208,19 @@ export function countFreshAngles(perAngle) {
  * two FRESH angles (angles without `carriedFromHead` — see
  * {@link countFreshAngles}) may share one reviewer identity (`reviewer`,
  * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
- * rule). Carried angles keep their prior reviewer and are exempt. Pure;
- * shared by the write path (write-gate-findings-log.mjs, always-on) and the
- * merge-evidence read path (detect-checkpoint-evidence.mjs, scaling the
- * `requireFanoutProvenance` floor) so both agree.
+ * rule), UNLESS every entry sharing that identity declares the SAME `group`
+ * name (grouped fan-out dispatch, AC6/AC7 — see resolveFanoutGroups). The
+ * recorded `group` is the audit record of what actually ran; it need not
+ * match the gate's currently configured `gates.fanout.groups` table. Two
+ * fresh angles sharing a reviewer with differing or missing `group` values
+ * still violate the contract. Carried angles keep their prior reviewer and
+ * are exempt. Pure; shared by the write path (write-gate-findings-log.mjs,
+ * always-on) and the merge-evidence read path (detect-checkpoint-evidence.mjs,
+ * scaling the `requireFanoutProvenance` floor) so both agree.
  *
  * Returns an actionable error string naming the offending angle(s) when the
- * contract is violated (a reviewer covering >1 fresh angle, or a fresh angle
+ * contract is violated (an ungrouped reviewer covering >1 fresh angle, angles
+ * sharing a reviewer under inconsistent `group` values, or a fresh angle
  * recording no reviewer identity at all — which also silently lowers the
  * distinct-reviewer count below the fresh-angle count), or `null` when it
  * holds (including when `perAngle` has no fresh angles).
@@ -235,8 +241,11 @@ export function fanoutReviewerPairingError(perAngle) {
     freshAngles.add(angle);
     const identity = reviewerIdentity(e);
     if (identity) {
-      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label });
-      anglesByIdentity.get(identity.id).angles.add(angle);
+      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label, groups: new Set() });
+      const record = anglesByIdentity.get(identity.id);
+      record.angles.add(angle);
+      const group = typeof e.group === "string" && e.group.trim().length > 0 ? e.group.trim() : null;
+      record.groups.add(group);
     } else {
       anonymousAngles.push(angle);
     }
@@ -247,8 +256,13 @@ export function fanoutReviewerPairingError(perAngle) {
   // (duplicate-angle entries) can satisfy distinctReviewers >= freshAngleCount
   // while one identity still covers two fresh angles.
   const details = [];
-  for (const [id, { angles, label }] of anglesByIdentity) {
-    if (angles.size > 1) details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
+  for (const [id, { angles, label, groups }] of anglesByIdentity) {
+    // One shared, non-null `group` across every entry for this identity is
+    // the grouped-dispatch exception: a single reviewer legitimately covers
+    // its whole declared group. Differing or missing `group` values fall
+    // back to the one-reviewer-per-angle rule.
+    const sameGroup = groups.size === 1 && [...groups][0] !== null;
+    if (angles.size > 1 && !sameGroup) details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
   }
   if (anonymousAngles.length > 0) {
     details.push(`fresh angle(s) with no recorded reviewer identity: ${anonymousAngles.join(", ")}`);

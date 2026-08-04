@@ -152,7 +152,15 @@ Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
     "severityCounts": { "must-fix", "worth-fixing-now", "nice-to-have" },
-    "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true }
+    "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true,
+    "out"?: "<path>", "ledgerOut"?: "<path>" }
+  "out"/"ledgerOut" echo the --out/--ledger-out path back onto the result ONLY when this call actually
+  wrote a file there — "ledgerOut" whenever --ledger-out was given (that write always completes in
+  full before any later throw in this function), "out" whenever --out was given AND the round did not
+  withhold it (tier 4; see "commentBudgetExceeded" above) — so ONE invocation with --jq, --out, and
+  --ledger-out together (e.g. --jq '.severityCounts') both writes every consumer artifact and reports
+  verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
+  re-extract a different shape or rediscover a path the caller itself just passed in.
   A "carriedFromHead" field appears ONLY on an entry --carried-angles upserted (the prior head SHA it
   was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
   so a consumer can distinguish a carried verdict from a fresh review without reading the ledger's
@@ -1111,6 +1119,15 @@ export async function consolidateGateFanin(options) {
     severityCounts: consolidated.counts.bySeverity,
     overallVerdict: consolidated.verdict,
     ...(wholeRoundFits ? {} : { commentBudgetExceeded: true }),
+    // Echoes every artifact this call actually wrote to disk (never a path
+    // that was only requested — see the "out" omission below) so ONE
+    // invocation with --out/--ledger-out tells the caller both what to read
+    // AND where it already landed, with no second invocation needed to
+    // rediscover the paths it just passed in. "ledgerOut" is safe to include
+    // here unconditionally: reaching this point already means the earlier
+    // --ledger-out write (always-complete, before the render-budget pass)
+    // succeeded — a blocked round throws before either point is reached.
+    ...(options.ledgerOut !== undefined ? { ledgerOut: options.ledgerOut } : {}),
   };
 
   // parseConsolidateFaninCliArgs already rejects an --out/--ledger-out pair
@@ -1143,6 +1160,11 @@ export async function consolidateGateFanin(options) {
     } else {
       await mkdir(path.dirname(options.out), { recursive: true });
       await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
+      // Echoed only when a file actually landed at this path — the tier-4
+      // withheld case above deletes rather than writes it, and a result
+      // claiming "out" then would send a caller to read a file that does
+      // not exist (or is stale from an earlier round).
+      result.out = options.out;
     }
   }
 

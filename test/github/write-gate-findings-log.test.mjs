@@ -720,6 +720,66 @@ test("parseProvenanceJson exempts a carried angle from the pairing floor (same r
   assert.equal(prov.perAngle.length, 2);
 });
 
+// --- Grouped fan-out dispatch provenance (AC7) ---
+
+test("parseProvenanceJson accepts two fresh angles sharing a reviewer under the SAME declared group", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+      { angle: "link-check", reviewer: "review-a", group: "docs-surface" },
+    ],
+  }));
+  assert.equal(prov.perAngle.length, 2);
+  assert.equal(prov.perAngle[0].group, "docs-surface");
+});
+
+test("parseProvenanceJson rejects two fresh angles sharing a reviewer under DIFFERENT declared groups", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [
+        { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+        { angle: "scope", reviewer: "review-a", group: "process" },
+      ],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson rejects two fresh angles sharing a reviewer where only one entry declares a group", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [
+        { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+        { angle: "link-check", reviewer: "review-a" },
+      ],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson still rejects a shared reviewer across two fresh angles with no group at all (legacy shape unchanged)", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-a" }],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson rejects a non-string group value", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "docs", reviewer: "review-a", group: 1 }],
+    })),
+    /perAngle\[0\]\.group must be a non-empty string/,
+  );
+});
+
 test("writeGateFindingsLog rejects a 2-fresh-angle/1-reviewer ledger (write-time floor, always-on)", async () => {
   await assert.rejects(async () => {
     await writeGateFindingsLog({
@@ -751,6 +811,33 @@ test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async
         provenance: JSON.stringify({
           distinctReviewers: 2,
           perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }],
+        }),
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer covers its whole declared group (AC7)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "pre_approval_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "clean",
+        findings: "[]",
+        provenance: JSON.stringify({
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+          ],
         }),
         tmpRoot: tmpDir,
       }, { repoRoot });

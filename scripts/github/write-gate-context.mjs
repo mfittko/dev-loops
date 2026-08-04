@@ -34,7 +34,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleScope, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
@@ -524,6 +525,31 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 }
 
 /**
+ * Build the deterministic path for a per-scope briefing companion file (AC3,
+ * #1572): a narrower slice of the same bundle for angles whose configured
+ * `scope` is not "full" (see GATE_ANGLE_SCOPES). Mirrors
+ * buildGateBriefingPrefixPath, one file per distinct non-full scope actually
+ * declared by this round's resolved angles.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {"changed-files"|"docs-only"} input.scope — a non-"full" GATE_ANGLE_SCOPES value
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative scoped-briefing path
+ */
+export function buildGateBriefingScopePath({ repo, pr, gate, headSha, scope, tmpRoot = "tmp" }) {
+  if (scope === "full" || !GATE_ANGLE_SCOPES.includes(scope)) {
+    throw new Error(`buildGateBriefingScopePath: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
+  }
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.briefing-${scope}.txt`);
+}
+
+/**
  * Build the deterministic path for the shared validation-results artifact
  * (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
  * this round's validation suites, run once and read (not re-run) by every
@@ -594,6 +620,213 @@ function pickFence(text) {
   return "`".repeat(Math.max(3, longest + 1));
 }
 
+// ---------------------------------------------------------------------------
+// AC8 — prefix hunk-collapse: a run of unified-diff hunks that is PROVABLY one
+// pure single-token substitution (every changed-line pair in every hunk of the
+// run replaces the SAME old token with the SAME new token, nothing else)
+// collapses to one summary line. Fail-closed: any hunk not provably pure — an
+// unequal add/remove count, a change that touches more than one token, or a
+// second distinct substitution — renders in full. Operates ONLY on the
+// rendered-prefix text; the persisted `.diff` file (scope.diffPath) is never
+// touched, so a reviewer can always read the byte-exact original.
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
+ * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
+ * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
+ * section's raw text (header line + body), also verbatim. A file with no `@@`
+ * section (binary diff, pure rename) yields `hunks: []`; its whole text is
+ * carried in `header` so callers can still pass it through untouched.
+ * @param {string} diffOutput
+ * @returns {Array<{ path: string|null, header: string, hunks: string[] }>}
+ */
+function parseDiffFileBlocks(diffOutput) {
+  if (typeof diffOutput !== "string" || diffOutput.length === 0) return [];
+  const lines = diffOutput.split("\n");
+  const blocks = [];
+  let current = null;
+  let currentHunkLines = null;
+  const closeHunk = () => {
+    if (current && currentHunkLines) {
+      current.hunks.push(currentHunkLines.join("\n"));
+      currentHunkLines = null;
+    }
+  };
+  const closeBlock = () => {
+    closeHunk();
+    if (current) blocks.push({ path: current.path, header: current.headerLines.join("\n"), hunks: current.hunks });
+    current = null;
+  };
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      closeBlock();
+      const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
+      current = { path: m ? m[2] : null, headerLines: [line], hunks: [] };
+      continue;
+    }
+    if (!current) continue; // no leading preamble is expected in a `git diff` output
+    if (line.startsWith("@@")) {
+      closeHunk();
+      currentHunkLines = [line];
+      continue;
+    }
+    if (currentHunkLines) {
+      currentHunkLines.push(line);
+      continue;
+    }
+    if (line.startsWith("+++ ") && !line.includes("/dev/null")) {
+      current.path = line.slice(4).trim().replace(/^b\//, "");
+    }
+    current.headerLines.push(line);
+  }
+  closeBlock();
+  return blocks;
+}
+
+/**
+ * Compute the single differing token between two diff lines (prefix strip,
+ * blank strip, keeping context/pairing 1:1), or `null` when the lines differ
+ * by anything other than one contiguous whitespace-free run. Used to decide
+ * whether a removed/added line pair is a pure single-token substitution.
+ * @param {string} oldLine
+ * @param {string} newLine
+ * @returns {{ oldToken: string, newToken: string }|null}
+ */
+function singleTokenDiff(oldLine, newLine) {
+  if (oldLine === newLine) return null;
+  const maxPrefix = Math.min(oldLine.length, newLine.length);
+  let prefix = 0;
+  while (prefix < maxPrefix && oldLine[prefix] === newLine[prefix]) prefix++;
+  const maxSuffix = maxPrefix - prefix;
+  let suffix = 0;
+  while (
+    suffix < maxSuffix &&
+    oldLine[oldLine.length - 1 - suffix] === newLine[newLine.length - 1 - suffix]
+  ) suffix++;
+  const oldToken = oldLine.slice(prefix, oldLine.length - suffix);
+  const newToken = newLine.slice(prefix, newLine.length - suffix);
+  if (oldToken.length === 0 || newToken.length === 0) return null;
+  if (/\s/.test(oldToken) || /\s/.test(newToken)) return null;
+  return { oldToken, newToken };
+}
+
+/**
+ * Analyze one hunk's raw text (the `@@ ... @@` line plus body) for AC8
+ * purity: every changed line must belong to a removed/added pair (equal
+ * counts, paired by position — the common shape for a line-level
+ * substitution), and every pair must be the SAME single-token substitution.
+ * Any other shape (unequal add/remove counts, a multi-token or whitespace
+ * change, an inconsistent pair) fails closed to impure.
+ * @param {string} hunkText
+ * @returns {{ pure: boolean, token: {oldToken: string, newToken: string}|null }}
+ */
+function analyzeHunkPurity(hunkText) {
+  const removed = [];
+  const added = [];
+  for (const line of hunkText.split("\n")) {
+    if (line.startsWith("@@") || line.startsWith("\\ No newline")) continue;
+    if (line.startsWith("+")) added.push(line.slice(1));
+    else if (line.startsWith("-")) removed.push(line.slice(1));
+    else if (line.startsWith(" ") || line === "") continue;
+    else return { pure: false, token: null }; // unrecognized line shape — fail closed
+  }
+  if (removed.length === 0 || added.length === 0 || removed.length !== added.length) {
+    return { pure: false, token: null };
+  }
+  let token = null;
+  for (let i = 0; i < removed.length; i++) {
+    const diff = singleTokenDiff(removed[i], added[i]);
+    if (!diff) return { pure: false, token: null };
+    if (token === null) token = diff;
+    else if (diff.oldToken !== token.oldToken || diff.newToken !== token.newToken) return { pure: false, token: null };
+  }
+  return { pure: true, token };
+}
+
+/**
+ * Format the AC8 collapsed-run summary line. `scope.diffPath` names the
+ * artifact JSON field where the byte-exact original lives, not a rendered
+ * path value — every reviewer's context artifact carries that pointer
+ * regardless of which briefing variant they were seeded with.
+ * @param {{ hunkCount: number, fileCount: number, oldToken: string, newToken: string }} input
+ * @returns {string}
+ */
+function collapsedHunkSummaryLine({ hunkCount, fileCount, oldToken, newToken }) {
+  return `[collapsed: ${hunkCount} hunks across ${fileCount} files — pure substitution "${oldToken}" → "${newToken}"; byte-exact diff at scope.diffPath]`;
+}
+
+/**
+ * Collapse every run of consecutive, provably-pure, identical-substitution
+ * hunks in a unified diff into one summary line each (AC8). A run may span
+ * file boundaries (an intervening file header with no surviving hunks of its
+ * own is absorbed into the run it sits inside); a file with at least one
+ * hunk that breaks the run keeps its header, emitted once, immediately before
+ * that hunk. Non-qualifying diffs round-trip byte-identically. Pure function:
+ * same input always yields the same output (prefix-hash determinism).
+ * @param {string} diffOutput
+ * @returns {string}
+ */
+export function collapsePureSubstitutionRuns(diffOutput) {
+  if (typeof diffOutput !== "string" || diffOutput.length === 0) return diffOutput ?? "";
+  const blocks = parseDiffFileBlocks(diffOutput);
+  if (blocks.length === 0) return diffOutput;
+  const out = [];
+  let run = null; // { token, count, files: Set<block> }
+  const flush = () => {
+    if (!run) return;
+    out.push(collapsedHunkSummaryLine({
+      hunkCount: run.count, fileCount: run.files.size,
+      oldToken: run.token.oldToken, newToken: run.token.newToken,
+    }));
+    run = null;
+  };
+  for (const block of blocks) {
+    if (block.hunks.length === 0) {
+      flush();
+      out.push(block.header);
+      continue;
+    }
+    let headerEmitted = false;
+    for (const hunkText of block.hunks) {
+      const analysis = analyzeHunkPurity(hunkText);
+      if (analysis.pure && run && run.token.oldToken === analysis.token.oldToken && run.token.newToken === analysis.token.newToken) {
+        run.count += 1;
+        run.files.add(block);
+        continue;
+      }
+      if (analysis.pure) {
+        flush();
+        run = { token: analysis.token, count: 1, files: new Set([block]) };
+        continue;
+      }
+      flush();
+      if (!headerEmitted) { out.push(block.header); headerEmitted = true; }
+      out.push(hunkText);
+    }
+  }
+  flush();
+  return out.join("\n");
+}
+
+/**
+ * Extract only the doc-file hunks from a unified diff (AC3 `docs-only`
+ * scope): each file block whose path classifies as `docs` (classifyFile),
+ * header + hunks, reassembled in original order. Returns `""` when the diff
+ * carries no doc-file changes. AC8 collapsing is NOT re-applied here —
+ * callers collapse the assembled slice themselves so a substitution run
+ * spanning doc AND non-doc files still collapses within this narrower text.
+ * @param {string} diffOutput
+ * @returns {string}
+ */
+function extractDocsOnlyDiff(diffOutput) {
+  const blocks = parseDiffFileBlocks(diffOutput).filter(
+    (b) => typeof b.path === "string" && b.path.length > 0 && classifyFile(b.path) === "docs",
+  );
+  if (blocks.length === 0) return "";
+  return blocks.map((b) => [b.header, ...b.hunks].join("\n")).join("\n");
+}
+
 /**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
@@ -651,7 +884,11 @@ export function renderBriefingPrefix({
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
-  const diffBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  // AC8: collapse provably-pure hunk runs BEFORE the inline/pointer cap
+  // decision — the collapsed bytes are what actually get inlined, so the cap
+  // and the disclosed byte count must agree with them, not the raw diff.
+  const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
+  const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
   const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
 
   const lines = [];
@@ -723,9 +960,9 @@ export function renderBriefingPrefix({
   if (!hasDiffText) {
     lines.push("(no diff text captured for this bundle)");
   } else if (prefixMode === "inline") {
-    const diffFence = pickFence(diffOutput);
+    const diffFence = pickFence(renderedDiff);
     lines.push(`${diffFence}diff`);
-    lines.push(diffOutput.endsWith("\n") ? diffOutput.slice(0, -1) : diffOutput);
+    lines.push(renderedDiff.endsWith("\n") ? renderedDiff.slice(0, -1) : renderedDiff);
     lines.push(diffFence);
   } else {
     lines.push(
@@ -777,6 +1014,159 @@ export function renderBriefingPrefix({
   }
 
   return { text: lines.join("\n") + "\n", prefixMode, diffBytes };
+}
+
+/**
+ * Render a per-scope briefing companion (AC3, #1572): a narrower slice of the
+ * same context for an angle whose configured `scope` is not "full" (see
+ * GATE_ANGLE_SCOPES). Always carries the PR body, linked-issue body/sections,
+ * and the validation-results pointer (a narrow angle still needs its
+ * mandatory inputs — AC1) plus a pointer BACK to the full byte-identical
+ * prefix so a reviewer can always widen. The diff itself differs by scope:
+ * - "changed-files": the full diff (AC8-collapsed), same cap/pointer
+ *   behavior as the full prefix, but WITHOUT the adjacent-code bundle.
+ * - "docs-only": only doc-file hunks (classifyFile === "docs"), AC8-collapsed,
+ *   always inlined (doc-only slices are bounded by definition).
+ * Pure and deterministic, mirroring renderBriefingPrefix's guarantee: same
+ * input renders the same bytes.
+ *
+ * @param {"changed-files"|"docs-only"} scope
+ * @param {object} input
+ * @param {string} input.repo
+ * @param {number|string} input.pr
+ * @param {string} input.gate
+ * @param {string} input.headSha
+ * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
+ * @param {string|null} [input.prBody]
+ * @param {string|null} [input.issueRef]
+ * @param {string|null} [input.issueBody]
+ * @param {{label: string, body: string}[]|null} [input.issueSections]
+ * @param {string|null} [input.diffOutput] — full diff text, when captured
+ * @param {string|null} [input.diffPath] — persisted `.diff` pointer (changed-files pointer-mode fallback)
+ * @param {string|null} [input.validationResultsPath]
+ * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
+ * @returns {{ text: string }}
+ */
+export function renderScopedBriefingVariant(scope, {
+  repo, pr, gate, headSha, briefingPrefixPath,
+  prBody = null, issueRef = null, issueBody = null, issueSections = null,
+  diffOutput = null, diffPath = null,
+  validationResultsPath = null,
+  capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+}) {
+  const lines = [];
+  lines.push(`# Gate Review Briefing — ${scope} scope variant`);
+  lines.push("");
+  lines.push(`repo: ${repo}`);
+  lines.push(`pr: #${pr}`);
+  lines.push(`gate: ${gate}`);
+  lines.push(`head: ${headSha}`);
+  lines.push(`scope: ${scope}`);
+  lines.push("");
+  lines.push(
+    `This is a narrowed companion to the full byte-identical briefing prefix, which always stays available at ${briefingPrefixPath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
+  );
+  lines.push("");
+  lines.push("## PR body");
+  lines.push("");
+  const trimmedPrBody = typeof prBody === "string" ? prBody.trim() : "";
+  if (trimmedPrBody.length > 0) {
+    const prBodyFence = pickFence(trimmedPrBody);
+    lines.push(prBodyFence);
+    lines.push(trimmedPrBody);
+    lines.push(prBodyFence);
+  } else {
+    lines.push(PR_BODY_ABSENT_SENTINEL);
+  }
+  lines.push("");
+  const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
+  const hasIssueBody = !hasIssueSections && typeof issueBody === "string" && issueBody.trim().length > 0;
+  if (hasIssueSections) {
+    lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
+    lines.push("");
+    for (const section of issueSections) {
+      const label = section?.label;
+      const text = typeof section?.body === "string" && section.body.trim().length > 0
+        ? section.body.trim()
+        : ISSUE_BODY_ABSENT_SENTINEL;
+      const fence = pickFence(text);
+      lines.push(`### ${label}`);
+      lines.push("");
+      lines.push(fence);
+      lines.push(text);
+      lines.push(fence);
+      lines.push("");
+    }
+  } else if (hasIssueBody) {
+    const trimmedIssueBody = issueBody.trim();
+    const issueBodyFence = pickFence(trimmedIssueBody);
+    lines.push(`## Linked issue${issueRef ? ` ${issueRef}` : ""}`);
+    lines.push("");
+    lines.push(issueBodyFence);
+    lines.push(trimmedIssueBody);
+    lines.push(issueBodyFence);
+    lines.push("");
+  }
+
+  const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
+  if (scope === "docs-only") {
+    lines.push("## Diff (doc-file hunks only)");
+    lines.push("");
+    const docsOnlyDiff = hasDiffText ? collapsePureSubstitutionRuns(extractDocsOnlyDiff(diffOutput)) : "";
+    if (docsOnlyDiff.length === 0) {
+      lines.push("(no doc-file hunks in this diff)");
+    } else {
+      const diffFence = pickFence(docsOnlyDiff);
+      lines.push(`${diffFence}diff`);
+      lines.push(docsOnlyDiff.endsWith("\n") ? docsOnlyDiff.slice(0, -1) : docsOnlyDiff);
+      lines.push(diffFence);
+    }
+  } else {
+    // "changed-files": the full diff, AC8-collapsed, same cap/pointer
+    // behavior as the full prefix — this variant's whole point is dropping
+    // the adjacent-code bundle, not the diff itself.
+    lines.push(`## Diff at reviewed head (${headSha})`);
+    lines.push("");
+    const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
+    const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
+    if (!hasDiffText) {
+      lines.push("(no diff text captured for this bundle)");
+    } else if (diffBytes <= capBytes) {
+      const diffFence = pickFence(renderedDiff);
+      lines.push(`${diffFence}diff`);
+      lines.push(renderedDiff.endsWith("\n") ? renderedDiff.slice(0, -1) : renderedDiff);
+      lines.push(diffFence);
+    } else {
+      lines.push(
+        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+      );
+      lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
+    }
+  }
+
+  const trimmedValidationResultsPath = typeof validationResultsPath === "string"
+    ? validationResultsPath.trim()
+    : "";
+  if (trimmedValidationResultsPath.length > 0) {
+    lines.push("");
+    lines.push("## Validation results at this head");
+    lines.push("");
+    lines.push("The gate preamble ran this round's validation suites once and recorded them here:");
+    lines.push(`  ${trimmedValidationResultsPath}`);
+    lines.push("");
+    lines.push(
+      "Read that record for suite status, exit codes, and output tails. Executing a suite it",
+    );
+    lines.push(
+      "already records is outside a read-only angle review's scope. If the record is absent,",
+    );
+    lines.push(
+      `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
+    );
+    lines.push("finding instead of substituting your own run.");
+  }
+
+  return { text: lines.join("\n") + "\n" };
 }
 
 /**
@@ -867,6 +1257,23 @@ export function buildGateContextArtifact(options) {
       validationResultsPath: options.validationResultsPath ?? null,
     },
   };
+  // AC3 (#1572): each resolved angle's declared surface scope (fail-open
+  // default "full" — resolveGateAngleScope). Only present when the caller
+  // actually computed it (buildGateContext/CLI main do, for a non-empty
+  // angle set); a bare buildGateContextArtifact call that never resolved
+  // scopes leaves this out entirely — backward compatible artifact shape.
+  if (options.angleScopes && typeof options.angleScopes === "object" && Object.keys(options.angleScopes).length > 0) {
+    artifact.angleScopes = options.angleScopes;
+  }
+  // AC3: scope name -> emitted companion-briefing-file path, for every
+  // non-"full" scope this round actually resolved (declared by some angle
+  // AND successfully rendered — see writeGateContext). Absent (never an
+  // empty object) when every resolved angle is "full" or every variant
+  // attempt failed, so a consumer can test `artifact.briefingVariants?.[x]`
+  // without an extra emptiness check.
+  if (options.briefingVariants && typeof options.briefingVariants === "object" && Object.keys(options.briefingVariants).length > 0) {
+    artifact.briefingVariants = options.briefingVariants;
+  }
   // How scope.acceptanceCriteria came to be — "provided" (caller flag,
   // regardless of whether an issue body was also fetched); "linked-issue"
   // (resolved from the PR's closing reference(s), and at least one resolved
@@ -1115,6 +1522,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
+  // AC3 (#1572): scope.<name> -> emitted companion-file path. Only built in
+  // self-rendered mode — under --prefix-file the CLI never resolves
+  // prBody/issueBody, so a variant rendered here would carry the
+  // absent-body sentinels even when the orchestrator's OWN recorded prefix
+  // states real content (the same false-spec risk resolvePrSpecContext
+  // exists to prevent).
+  const briefingVariants = {};
   if (typeof options.prefixFile === "string" && options.prefixFile.length > 0) {
     try {
       prefixBytes = await readFile(path.resolve(repoRoot, options.prefixFile));
@@ -1146,11 +1560,57 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     });
     prefixBytes = Buffer.from(rendered.text, "utf8");
     prefixMode = rendered.prefixMode;
+
+    // AC3: emit one companion file per DISTINCT non-"full" scope actually
+    // declared by this round's resolved angles (never every GATE_ANGLE_SCOPES
+    // value up front — an angle set that never declares "docs-only" gets no
+    // docs-only file). Fail-open to full: an invalid/foreign scope value, or
+    // any error building a variant, is normalized back to "full" in
+    // angleScopes rather than left dangling — the affected angle then reads
+    // the full prefix already written above.
+    const angleScopes = options.angleScopes && typeof options.angleScopes === "object" ? options.angleScopes : {};
+    for (const [angle, scope] of Object.entries(angleScopes)) {
+      if (scope !== "full" && !GATE_ANGLE_SCOPES.includes(scope)) angleScopes[angle] = "full";
+    }
+    const declaredScopes = [...new Set(Object.values(angleScopes))].filter((s) => s !== "full");
+    for (const scope of declaredScopes) {
+      try {
+        const scopePath = buildGateBriefingScopePath({
+          repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha,
+          scope, tmpRoot: options.tmpRoot || "tmp",
+        });
+        const variant = renderScopedBriefingVariant(scope, {
+          repo: options.repo,
+          pr: options.pr,
+          gate: options.gate,
+          headSha: options.headSha,
+          briefingPrefixPath,
+          prBody: options.prBody ?? null,
+          issueRef: options.acceptanceCriteria ?? null,
+          issueBody: options.issueBody ?? null,
+          issueSections: options.issueSections ?? null,
+          diffOutput: options.diffOutput ?? null,
+          diffPath: options.diffPath ?? null,
+          validationResultsPath: options.validationResultsPath ?? null,
+        });
+        const fullScopePath = path.resolve(repoRoot, scopePath);
+        await mkdir(path.dirname(fullScopePath), { recursive: true });
+        await writeFile(fullScopePath, variant.text, "utf8");
+        briefingVariants[scope] = scopePath;
+      } catch (err) {
+        process.stderr.write(
+          `[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${err?.message ?? err}\n`,
+        );
+        for (const [angle, s] of Object.entries(angleScopes)) {
+          if (s === scope) angleScopes[angle] = "full";
+        }
+      }
+    }
   }
 
   const fullPath = path.resolve(repoRoot, contextPath);
   const artifact = {
-    ...buildGateContextArtifact({ ...options, prefixMode }),
+    ...buildGateContextArtifact({ ...options, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
   // Write ORDER matters: the sibling briefing prefix goes first and the JSON
@@ -1272,6 +1732,13 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
+  // AC3 (#1572): each resolved angle's declared surface scope, straight from
+  // config (resolveGateAngleScope fails open to "full" for an angle with no
+  // entry/scope/enabled entry).
+  const angleScopes = Object.fromEntries(
+    resolvedAngles.map((name) => [name, resolveGateAngleScope(input.config, configKey, name)]),
+  );
+
   const tmpRoot = input.tmpRoot || "tmp";
 
   // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
@@ -1290,6 +1757,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       headSha: input.headSha,
       angles: resolvedAngles,
       rationale,
+      angleScopes,
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
@@ -1624,6 +2092,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // mandatory floor + diff-selected candidates when a diff is present, and
     // falls back to the static configured pool otherwise. When --angles IS
     // supplied, it is a verbatim override (dynamic resolution bypassed).
+    // AC3 (#1572): captured when the dynamic-resolution branch below loads
+    // config, and reused for angle-scope resolution afterward so an explicit
+    // --angles caller (which never takes that branch) doesn't skip a second,
+    // otherwise-identical load.
+    let loadedConfig = null;
     if (!Array.isArray(options.angles)) {
       // loadDevLoopConfig never throws: it returns { config, warnings, errors }, and
       // on a validation error it still returns `config` with every layer merged (its
@@ -1636,6 +2109,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // boolean-flag default) would replace a partially-valid configured angle set
       // with an EMPTY one, a worse regression than the signal gap this fixes.
       const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+      loadedConfig = config;
       if (Array.isArray(configErrors) && configErrors.length > 0) {
         process.stderr.write(
           `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
@@ -1686,6 +2160,17 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         );
       }
       options.rationale = rationale;
+    }
+    // AC3: resolve each angle's declared scope from local config —
+    // independent of whether the angle set came from dynamic resolution or
+    // an explicit --angles override, and independent of --prefix-file
+    // (config is a local file read, never a GitHub call).
+    if (options.angles.length > 0) {
+      const scopeConfig = loadedConfig ?? (await loadDevLoopConfig({ repoRoot })).config;
+      const scopeConfigKey = mapGateToConfigKey(options.gate);
+      options.angleScopes = Object.fromEntries(
+        options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
+      );
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

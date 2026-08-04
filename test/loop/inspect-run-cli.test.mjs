@@ -1100,7 +1100,7 @@ test("inspect-run CLI: missing --repo → structured stderr, non-zero exit", asy
   const err = JSON.parse(result.stderr);
   assert.equal(err.ok, false);
   assert.ok(typeof err.error === "string" && err.error.length > 0);
-  assert.ok(typeof err.usage === "string");
+  assert.equal(err.hint, "run with --help for usage");
 });
 
 test("inspect-run CLI: missing --pr → structured stderr, non-zero exit", async () => {
@@ -1109,7 +1109,7 @@ test("inspect-run CLI: missing --pr → structured stderr, non-zero exit", async
   const err = JSON.parse(result.stderr);
   assert.equal(err.ok, false);
   assert.ok(typeof err.error === "string");
-  assert.ok(typeof err.usage === "string");
+  assert.equal(err.hint, "run with --help for usage");
 });
 
 test("inspect-run CLI: unknown flag → structured stderr, non-zero exit", async () => {

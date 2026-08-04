@@ -21,10 +21,11 @@ Required:
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
-  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, group? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
+                                 EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -155,7 +156,7 @@ export function parseProvenanceJson(raw) {
       throw parseError(`--provenance.perAngle[${i}].angle is required`);
     }
     const entry = { angle: a.angle.trim() };
-    for (const key of ["reviewer", "dispatchId", "model"]) {
+    for (const key of ["reviewer", "dispatchId", "model", "group"]) {
       if (key in a) {
         if (typeof a[key] !== "string" || a[key].trim().length === 0) {
           throw parseError(`--provenance.perAngle[${i}].${key} must be a non-empty string`);
@@ -188,8 +189,9 @@ export function parseProvenanceJson(raw) {
   // One-scoped-reviewer-per-fresh-angle floor (always-on, #1431): no two fresh
   // (non-carried) angles may share one reviewer identity — closes the gap
   // where an internally-consistent distinctReviewers count still let one
-  // reviewer cover multiple angles. Carried angles are exempt (see
-  // fanoutReviewerPairingError).
+  // reviewer cover multiple angles. Carried angles are exempt, and fresh
+  // angles sharing a reviewer under the SAME declared `group` are exempt too
+  // (grouped fan-out dispatch — see fanoutReviewerPairingError).
   const pairingError = fanoutReviewerPairingError(normalized.perAngle);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);

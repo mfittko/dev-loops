@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-07-19 ([PR 1433](https://github.com/mfittko/dev-loops/pull/1433))
+Superseded by [0047](0047-grouped-fanout-dispatch-default.md) — 2026-08-04 ([issue 1572](https://github.com/mfittko/dev-loops/issues/1572))
 
 ## Context
 

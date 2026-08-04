@@ -131,7 +131,7 @@ test("resolve-tracker-local-spec accepts GitHub issue URLs as input", async () =
   }
 });
 
-test("resolve-tracker-local-spec reports usage errors with usage payload", async () => {
+test("resolve-tracker-local-spec reports usage errors with a short hint (not the full usage text)", async () => {
   const result = await runNode(["--issue-url", "not-a-url"]);
 
   assert.equal(result.code, 1);
@@ -139,7 +139,8 @@ test("resolve-tracker-local-spec reports usage errors with usage payload", async
   const payload = JSON.parse(result.stderr);
   assert.equal(payload.ok, false);
   assert.match(payload.error, /--issue-url must be a valid GitHub issue URL/);
-  assert.match(payload.usage, /resolve-tracker-local-spec\.mjs/);
+  assert.equal(payload.hint, "run with --help for usage");
+  assert.equal("usage" in payload, false);
 });
 
 

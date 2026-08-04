@@ -100,7 +100,7 @@ test("missing scope args fail closed", async () => {
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /exactly one of --paths or --paths-file/i);
-  assert.match(parsed.usage, /run-refinement-audit\.mjs/);
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("unreadable --paths-file input fails closed with usage", async () => {
@@ -111,7 +111,7 @@ test("unreadable --paths-file input fails closed with usage", async () => {
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /Unreadable --paths-file input/i);
-  assert.match(parsed.usage, /run-refinement-audit\.mjs/);
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("untracked-only scope fails closed after expansion", async () => {
@@ -140,7 +140,7 @@ test("repo-root path is rejected to preserve bounded audit scope", async () => {
     const parsed = JSON.parse(result.stderr.trim());
     assert.equal(parsed.ok, false);
     assert.match(parsed.error, /Repo root is not a valid bounded audit path/i);
-    assert.match(parsed.usage, /run-refinement-audit\.mjs/);
+    assert.equal(parsed.hint, "run with --help for usage");
   } finally {
     await cleanupRepo(repoRoot);
   }

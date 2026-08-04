@@ -740,40 +740,35 @@ test("detect-copilot-loop-state rejects malformed arguments deterministically", 
   const missingPrErr = JSON.parse(missingPr.stderr);
   assert.equal(missingPrErr.ok, false);
   assert.equal(missingPrErr.error, "Auto-detect mode requires both --repo <owner/name> and --pr <number>");
-  assert.equal(typeof missingPrErr.usage, "string");
-  assert(missingPrErr.usage.length > 0);
+  assert.equal(missingPrErr.hint, "run with --help for usage");
 
   const zeroPr = await runNode(["--repo", "owner/repo", "--pr", "0"]);
   assert.equal(zeroPr.code, 1);
   const zeroPrErr = JSON.parse(zeroPr.stderr);
   assert.equal(zeroPrErr.ok, false);
   assert.equal(zeroPrErr.error, "--pr must be a positive integer");
-  assert.equal(typeof zeroPrErr.usage, "string");
-  assert(zeroPrErr.usage.length > 0);
+  assert.equal(zeroPrErr.hint, "run with --help for usage");
 
   const noArgs = await runNode([]);
   assert.equal(noArgs.code, 1);
   const noArgsErr = JSON.parse(noArgs.stderr);
   assert.equal(noArgsErr.ok, false);
   assert.equal(noArgsErr.error, "Provide either --input <path> or --repo <owner/name> --pr <number>");
-  assert.equal(typeof noArgsErr.usage, "string");
-  assert(noArgsErr.usage.length > 0);
+  assert.equal(noArgsErr.hint, "run with --help for usage");
 
   const mixedSources = await runNode(["--input", "/tmp/snap.json", "--repo", "owner/repo", "--pr", "17"]);
   assert.equal(mixedSources.code, 1);
   const mixedErr = JSON.parse(mixedSources.stderr);
   assert.equal(mixedErr.ok, false);
   assert.equal(mixedErr.error, "Choose exactly one input source: --input <path> or --repo/--pr auto-detect");
-  assert.equal(typeof mixedErr.usage, "string");
-  assert(mixedErr.usage.length > 0);
+  assert.equal(mixedErr.hint, "run with --help for usage");
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--wat"]);
   assert.equal(unknown.code, 1);
   const unknownErr = JSON.parse(unknown.stderr);
   assert.equal(unknownErr.ok, false);
   assert.equal(unknownErr.error, "Unknown argument: --wat");
-  assert.equal(typeof unknownErr.usage, "string");
-  assert(unknownErr.usage.length > 0);
+  assert.equal(unknownErr.hint, "run with --help for usage");
 
   // --review-request-status removed from CLI; unknown flag now caught as "Unknown argument"
   const badOverride = await runNode(["--repo", "owner/repo", "--pr", "17", "--review-request-status", "bogus"]);
@@ -1315,7 +1310,7 @@ test.skip("detect-copilot-loop-state rejects --input with --steering-state-file 
     const err = JSON.parse(result.stderr);
     assert.equal(err.ok, false);
     assert.match(err.error, /--steering-state-file cannot be combined with --input/);
-    assert.match(err.usage, /detect-copilot-loop-state\.mjs/);
+    assert.equal(err.hint, "run with --help for usage");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

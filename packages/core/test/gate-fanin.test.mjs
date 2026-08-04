@@ -389,6 +389,32 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
       null,
     );
   });
+
+  test("grouped dispatch (AC7): two fresh angles sharing a reviewer under the SAME declared group are exempt", () => {
+    assert.equal(
+      fanoutReviewerPairingError([
+        { angle: "a", reviewer: "x", group: "docs-surface" },
+        { angle: "b", reviewer: "x", group: "docs-surface" },
+      ]),
+      null,
+    );
+  });
+
+  test("grouped dispatch (AC7): two fresh angles sharing a reviewer under DIFFERENT declared groups still collide", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x", group: "docs-surface" },
+      { angle: "b", reviewer: "x", group: "process" },
+    ]);
+    assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+  });
+
+  test("grouped dispatch (AC7): one entry declaring a group and the other not still collides (missing group is its own value)", () => {
+    const error = fanoutReviewerPairingError([
+      { angle: "a", reviewer: "x", group: "docs-surface" },
+      { angle: "b", reviewer: "x" },
+    ]);
+    assert.match(error, /reviewer "x" is recorded for fresh angles: a, b/);
+  });
 });
 
 describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool membership)", () => {

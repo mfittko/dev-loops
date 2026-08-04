@@ -486,8 +486,7 @@ test("request-copilot-review rejects malformed arguments deterministically", asy
   const missingPrErr = JSON.parse(missingPr.stderr);
   assert.equal(missingPrErr.ok, false);
   assert.equal(missingPrErr.error, "Requesting Copilot review requires both --repo <owner/name> and --pr <number>");
-  assert.equal(typeof missingPrErr.usage, "string");
-  assert(missingPrErr.usage.length > 0);
+  assert.equal(missingPrErr.hint, "run with --help for usage");
 
   const zeroPr = await runNode(["--repo", "owner/repo", "--pr", "0"]);
   assert.equal(zeroPr.code, 1);
@@ -495,8 +494,7 @@ test("request-copilot-review rejects malformed arguments deterministically", asy
   const zeroPrErr = JSON.parse(zeroPr.stderr);
   assert.equal(zeroPrErr.ok, false);
   assert.equal(zeroPrErr.error, "--pr must be a positive integer");
-  assert.equal(typeof zeroPrErr.usage, "string");
-  assert(zeroPrErr.usage.length > 0);
+  assert.equal(zeroPrErr.hint, "run with --help for usage");
 
   const badRepo = await runNode(["--repo", " owner / repo ", "--pr", "17"]);
   assert.equal(badRepo.code, 1);
@@ -504,8 +502,7 @@ test("request-copilot-review rejects malformed arguments deterministically", asy
   const badRepoErr = JSON.parse(badRepo.stderr);
   assert.equal(badRepoErr.ok, false);
   assert.equal(badRepoErr.error, "--repo must match <owner/name>");
-  assert.equal(typeof badRepoErr.usage, "string");
-  assert(badRepoErr.usage.length > 0);
+  assert.equal(badRepoErr.hint, "run with --help for usage");
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--wat"]);
   assert.equal(unknown.code, 1);
@@ -513,8 +510,7 @@ test("request-copilot-review rejects malformed arguments deterministically", asy
   const unknownErr = JSON.parse(unknown.stderr);
   assert.equal(unknownErr.ok, false);
   assert.equal(unknownErr.error, "Unknown argument: --wat");
-  assert.equal(typeof unknownErr.usage, "string");
-  assert(unknownErr.usage.length > 0);
+  assert.equal(unknownErr.hint, "run with --help for usage");
 
   const forceWithUnknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review", "--wat"]);
   assert.equal(forceWithUnknown.code, 1);

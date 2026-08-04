@@ -83,7 +83,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const missingParsed = JSON.parse(missing.stderr);
   assert.equal(missingParsed.ok, false);
   assert.match(missingParsed.error, /requires both --repo <owner\/name> and --pr <number>/);
-  assert.match(missingParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(missingParsed.hint, "run with --help for usage");
 
   const conflicting = await runNode(
     ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the contract"],
@@ -94,7 +94,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const conflictingParsed = JSON.parse(conflicting.stderr);
   assert.equal(conflictingParsed.ok, false);
   assert.equal(conflictingParsed.error, "Choose exactly one message source: --message <text> or stdin");
-  assert.match(conflictingParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(conflictingParsed.hint, "run with --help for usage");
 
   const emptyMessage = await runNode(
     ["--repo", "owner/repo", "--pr", "17", "--message", "   "],
@@ -105,7 +105,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const emptyParsed = JSON.parse(emptyMessage.stderr);
   assert.equal(emptyParsed.ok, false);
   assert.equal(emptyParsed.error, "Reply message must contain non-empty text");
-  assert.match(emptyParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(emptyParsed.hint, "run with --help for usage");
 });
 
 test("reply-resolve-review-threads replies to matching unresolved threads without resolving by default", async () => {
