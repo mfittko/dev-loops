@@ -383,8 +383,11 @@ test("detect-reviewer-loop-state counts only canonical submitted-review states",
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/reviews"],
         stdout: JSON.stringify([
-          { id: 300, state: "NOT_A_REVIEW_STATE", user: { login: "pi-reviewer" }, commit_id: "abc123" },
-          { id: 301, state: "COMMENTED", user: { login: "pi-reviewer" }, commit_id: "abc123" },
+          // The non-canonical state gets the higher id: without the whitelist
+          // filter it would win pickLatestById, so this test fails if the
+          // filter is dropped.
+          { id: 300, state: "COMMENTED", user: { login: "pi-reviewer" }, commit_id: "abc123" },
+          { id: 301, state: "NOT_A_REVIEW_STATE", user: { login: "pi-reviewer" }, commit_id: "abc123" },
         ]) + "\n",
       },
     ]);
