@@ -128,5 +128,11 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "overrides": {
+    "brace-expansion": "5.0.7",
+    "@earendil-works/pi-coding-agent": {
+      "brace-expansion": "5.0.7"
+    }
   }
 }
