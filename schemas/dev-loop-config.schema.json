@@ -673,7 +673,7 @@
         },
         "postFindingsComments": {
           "type": "boolean",
-          "description": "Post consolidated gate findings as a marker-tagged PR comment (default true)."
+          "description": "Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false)."
         },
         "anglePool": {
           "type": "array",

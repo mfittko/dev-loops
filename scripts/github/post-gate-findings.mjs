@@ -16,8 +16,9 @@ per gate: there is exactly one comment per gate, updated in place on each run
 (the reviewed head is shown in the body) instead of duplicating it.
 
 The disposition ledger (write-gate-findings-log.mjs) is the durable source of truth and is
-written regardless of this comment. This helper only posts the auditable PR summary, and
-no-ops when gates.postFindingsComments is set to false in config.
+written regardless of this comment, and the round's verdict review already carries every
+finding — this comment is an opt-in SECOND surface. It no-ops unless gates.postFindingsComments
+is set to true in config.
 
 Required:
   --repo <owner/name>
@@ -476,7 +477,7 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
     return {
       ok: true,
       action: "skipped",
-      reason: "gates.postFindingsComments is false",
+      reason: "gates.postFindingsComments is not true",
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,

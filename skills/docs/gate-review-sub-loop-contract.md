@@ -602,29 +602,27 @@ Ledger content and write-before-comment sequencing are owned by
 `GATE-EXEC-DISPOSITION-LEDGER` below.
 
 <!-- rule: GATE-EXEC-POST-BEFORE-FIX -->
-`GATE-EXEC-POST-BEFORE-FIX`: The consolidated findings MUST be posted as a visible,
-marker-tagged PR comment via `post-gate-findings.mjs` (a consolidated comment listing
-each finding grouped by severity, with `file:line` refs) **before** the fix cycle in
-Phase 4 begins, so the findings are auditable and Copilot/humans are aware of them.
-Fixes MUST NOT be applied until the auditable trail exists on the PR. The helper is
-idempotent per gate (exactly one comment per gate, updated in place on each run; the
-reviewed head is shown in the body) and posts a brief "no findings" note when the set
-is empty. This comment
-is governed by `gates.postFindingsComments` (resolved via
-`resolveGatePostFindingsComments(config)`, default true / opt-out): when it is `false`
-the helper no-ops with a `skipped` result and the post step is skipped. The disposition
-ledger is written regardless — the opt-out only suppresses the PR comment, never the
-durable ledger. When the comment is opted out, the `GATE-EXEC-FINDING-THREADS` review
-(threads plus body-filed findings) is the auditable pre-fix trail; posting the same
-findings on a second surface duplicates them for every reader.
+`GATE-EXEC-POST-BEFORE-FIX`: The round's findings MUST be visible on the PR **before** the
+fix cycle in Phase 4 begins, so they are auditable and Copilot/humans are aware of them.
+Fixes MUST NOT be applied until that trail exists. The trail is the round's own verdict
+review (`GATE-COMMENT-SINGLE-SURFACE`): its inline finding comments plus the body-filed
+findings under the verdict fields, posted by `upsert-checkpoint-verdict.mjs --findings-ledger`
+in one call, so the findings and the verdict land together and no separate post step can be
+skipped or reordered. The disposition ledger is written before that post
+(`GATE-EXEC-DISPOSITION-LEDGER`) and regardless of it.
 
-`GATE-EXEC-FINDING-THREADS`'s per-finding review threads occupy the slot right after the
-verdict comment and before the fix cycle begins — the same post-verdict, pre-fix position
-this consolidated comment already occupies relative to Phase 4, so unresolved threads exist
-on the PR before any fix is attempted. On `pre_approval_gate`, an unresolved review thread
-forbids the gate's own next actions, which is why that slot matters there; the same slot is
-kept for `draft_gate` too, for uniformity, even though the draft boundary does not carry that
-specific refusal.
+`post-gate-findings.mjs` renders the same findings a SECOND time, as a consolidated
+marker-tagged PR issue comment grouped by severity. It is governed by
+`gates.postFindingsComments` (resolved via `resolveGatePostFindingsComments(config)`,
+default false / opt-in) and no-ops with a `skipped` result unless a repo explicitly turns
+it on. A repo that does opt in accepts duplicated finding text on a second surface for
+every reader; nothing in the gate flow requires it.
+
+Because the findings ride the verdict review itself, they occupy the same post-verdict,
+pre-fix slot relative to Phase 4 — unresolved threads exist on the PR before any fix is
+attempted. On `pre_approval_gate`, an unresolved review thread forbids the gate's own next
+actions, which is why that slot matters there; the same slot is kept for `draft_gate` too,
+for uniformity, even though the draft boundary does not carry that specific refusal.
 
 ### Phase 4 — Fix
 
@@ -846,8 +844,8 @@ correction rather than dropped.
 After the verdict post, at every gate close, run `close-gate-findings.mjs --ledger <path>` against
 that same ledger, in the post-verdict, pre-fix slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts
 NOTHING of its own — it runs only the thread disposition pass
-(`GATE-EXEC-THREAD-DISPOSITION`). This posting, and the disposition pass, run independently of
-`gates.postFindingsComments`: that toggle governs only the consolidated
+(`GATE-EXEC-THREAD-DISPOSITION`). That pass runs independently of
+`gates.postFindingsComments`: that toggle governs only the opt-in consolidated
 `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's second, prose suppression layer is
 owned by the
 [fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
@@ -934,11 +932,12 @@ honored regardless.
 
 Evidence retention stays uniform: a light-accepted inline verdict **still requires a
 findings-log ledger** for the reviewed head (the single-agent path's
-`write-gate-findings-log.mjs` writes it). Finding-thread posting is likewise uniform: an
-inline close is a gate close, so after the inline verdict is posted, run
-`close-gate-findings.mjs --ledger <path>` against that same findings-log ledger exactly as
+`write-gate-findings-log.mjs` writes it). Finding posting is likewise uniform: the inline
+verdict takes `--findings-ledger <path>` for that same ledger, so the reduced review path
+never reduces what gets threaded, and the close afterwards runs
+`close-gate-findings.mjs --ledger <path>` for the disposition pass exactly as
 [Finding threads and disposition](#finding-threads-and-disposition) requires for a fan-out
-close — the reduced review path never reduces what gets threaded. `requireFanoutProvenance`, when enabled, is
+close. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
 scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inline
 verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is

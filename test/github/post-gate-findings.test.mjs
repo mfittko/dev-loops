@@ -450,13 +450,18 @@ test("sanitizeCodeSpan leaves a bracketed path verbatim inside its code span; sa
 // Idempotent create / update via stubbed gh
 // ---------------------------------------------------------------------------
 
-async function emptyRepoRoot() {
-  return mkdtemp(path.join(os.tmpdir(), "post-gate-findings-repo-"));
+// The consolidated findings comment is a SECOND surface, opt-in via
+// gates.postFindingsComments (default false), so every posting test needs a
+// repo root that has explicitly opted in.
+async function optedInRepoRoot() {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-repo-"));
+  await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  postFindingsComments: true\n", "utf8");
+  return repoRoot;
 }
 
 test("postGateFindings creates a comment when none exists", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     const { env, ghPath } = await writeGhStub(tmpDir, [
       userEntry(),
@@ -486,7 +491,7 @@ test("postGateFindings creates a comment when none exists", async () => {
 
 test("postGateFindings updates the existing marked comment (idempotent, no duplicate)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     // Existing comment carries the marker but stale body → triggers PATCH, not a new create.
     const marker = buildFindingsMarker({ gate: "draft_gate" });
@@ -516,7 +521,7 @@ test("postGateFindings updates the existing marked comment (idempotent, no dupli
 
 test("postGateFindings no-ops when the existing comment body already matches", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     const findings = parseFindings(FINDINGS_JSON);
     const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
@@ -543,7 +548,7 @@ test("postGateFindings no-ops when the existing comment body already matches", a
 
 test("postGateFindings updates the same per-gate comment when re-run with a different head-SHA length (no duplicate)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     // Existing comment was created earlier with a SHORT head prefix; re-running
     // now with the FULL SHA for the same gate must still match the gate-only
@@ -580,7 +585,7 @@ test("postGateFindings updates the same per-gate comment when re-run with a diff
 
 test("postGateFindings is a skipped no-op when gates.postFindingsComments is false", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     await writeFile(
       path.join(repoRoot, ".devloops"),
@@ -604,13 +609,13 @@ test("postGateFindings is a skipped no-op when gates.postFindingsComments is fal
   }
 });
 
-test("postGateFindings falls back to default-on (posts) when the config fails to load/validate", async () => {
+test("postGateFindings falls back to the default (skips) when the config fails to load/validate", async () => {
   // loadDevLoopConfig never throws; a config that fails schema validation yields a
   // non-empty errors array. We must treat that as config-unavailable and fall back to
-  // the default behavior (postFindingsComments default-on => proceed to post), NOT
-  // silently trust the malformed/partial config object.
+  // the default behavior (postFindingsComments default-off => skip the second
+  // surface), NOT silently trust the malformed/partial config object.
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
-  const repoRoot = await emptyRepoRoot();
+  const repoRoot = await optedInRepoRoot();
   try {
     // postFindingsComments must be a boolean; a string value fails validation.
     await writeFile(
@@ -618,26 +623,17 @@ test("postGateFindings falls back to default-on (posts) when the config fails to
       "version: 1\ngates:\n  postFindingsComments: \"yes\"\n",
       "utf8",
     );
-    const { env, ghPath } = await writeGhStub(tmpDir, [
-      userEntry(),
-      {
-        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
-        stdout: "[[]]\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/issues/42/comments", "-f"],
-        assertArgContains: ["dev-loops:gate-findings"],
-        stdout: JSON.stringify({ id: 202, html_url: "https://github.com/owner/repo/pull/42#issuecomment-202" }) + "\n",
-      },
-    ]);
+    // Empty gh stub: any gh call would overflow and fail, proving the fallback
+    // never posts off an unreadable config.
+    const { env, ghPath } = await writeGhStub(tmpDir, []);
     const result = await postGateFindings(
       { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: FINDINGS_JSON },
       { env, ghCommand: ghPath, repoRoot },
     );
-    // Default-on fallback => the comment is created despite the malformed config.
+    // Default-off fallback => no second surface despite the malformed config.
     assert.equal(result.ok, true);
-    assert.equal(result.action, "created");
-    assert.equal(result.commentId, 202);
+    assert.equal(result.action, "skipped");
+    assert.match(result.reason, /postFindingsComments/);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });

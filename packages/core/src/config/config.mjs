@@ -251,12 +251,12 @@ const GatesConfig = z.strictObject({
   // #1462 GATE-EXEC-PRIME is MANDATORY (not a flag): every gate fan-out primes the
   // byte-identical briefing prefix before the reviewers read it — see
   // skills/docs/gate-review-sub-loop-contract.md.
-  // Post the consolidated gate fan-out findings as a visible, marker-tagged PR
-  // comment so they are auditable and Copilot/humans are aware of them. Default
-  // true (opt-out). The disposition ledger is written regardless; this flag only
-  // suppresses the PR comment when explicitly false. See
-  // skills/docs/gate-review-sub-loop-contract.md.
-  postFindingsComments: z.boolean().default(true),
+  // Post the consolidated gate fan-out findings as a SECOND visible,
+  // marker-tagged PR comment. Default false (opt-in): the round's verdict
+  // review already carries every finding (GATE-COMMENT-SINGLE-SURFACE), so this
+  // comment renders each finding's text a second time. The disposition ledger
+  // is written regardless. See skills/docs/gate-review-sub-loop-contract.md.
+  postFindingsComments: z.boolean().default(false),
   // Explicit global lens catalog override for additive angle selection
   // (gates.<gate>.dynamic.additive, #1048). GLOBAL, not per-gate (D1): one
   // repo-wide catalog for additive selection. When absent, resolveAnglePool()
@@ -628,7 +628,7 @@ const FileGatesConfig = z.strictObject({
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
-  postFindingsComments: z.boolean().describe("Post consolidated gate findings as a marker-tagged PR comment (default true).").optional(),
+  postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
 });
@@ -1744,21 +1744,21 @@ export function resolveRejectForeignAngles(config) {
 }
 
 /**
- * Resolve whether the consolidated gate fan-out findings should be posted as a
- * visible, marker-tagged PR comment.
+ * Resolve whether the consolidated gate fan-out findings should ALSO be posted
+ * as a second visible, marker-tagged PR comment.
  *
- * Returns true (post the comment) unless `gates.postFindingsComments` is
- * explicitly set to false. Using a `!== false` test (rather than `=== true`)
- * keeps the opt-out semantics robust for programmatically-built config objects
- * that bypass schema defaulting. The disposition ledger is written regardless;
- * this flag only suppresses the auditable PR comment. See
- * skills/docs/gate-review-sub-loop-contract.md.
+ * Returns false unless `gates.postFindingsComments` is explicitly set to true.
+ * The round's verdict review is already the findings surface
+ * (`GATE-COMMENT-SINGLE-SURFACE`), so this comment is opt-in duplication; the
+ * `=== true` test keeps that opt-in semantics for programmatically-built config
+ * objects that bypass schema defaulting. The disposition ledger is written
+ * regardless. See skills/docs/gate-review-sub-loop-contract.md.
  *
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
 export function resolveGatePostFindingsComments(config) {
-  return config?.gates?.postFindingsComments !== false;
+  return config?.gates?.postFindingsComments === true;
 }
 
 /**
