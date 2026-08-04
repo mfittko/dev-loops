@@ -7,8 +7,11 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const LOGICAL_COLUMNS = Object.values(LOGICAL_COLUMN);
 
-const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> (--item <number> | --pr <number>)
+const USAGE = `Usage: dev-loops queue sync-status --repo <owner/name> [--item <number>] [--pr <number>]
                                   (--to-column <name> | --logical-column <name>)
+       --item wins when both targets are given; --pr is the fallback when
+       --item is omitted, empty, or left as a bare flag by a dropped
+       template substitution. At least one target is required.
        (dev-loops project sync-status … is a back-compat alias)
 
 Sync a queued issue/PR's board Status column on a dev-loop transition (e.g.
@@ -40,7 +43,8 @@ Output (stdout):
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
-  0 — always on a parsed command (best-effort sync; skips/failures are reported in JSON)
+  0 — always on a parsed command without --silent (best-effort sync; skips/failures
+      are reported in JSON); --silent maps a falsy --jq predicate to exit 1
   1 — usage or argument error
   2 — invalid --jq filter
 `.trim();
@@ -55,8 +59,20 @@ function parseCliArgs(argv) {
   };
 
   const args = {};
+  // A dropped `<linked-issue>` template substitution leaves a bare `--item`
+  // directly followed by the next flag (or the end of argv). parseArgs would
+  // bind that flag as --item's value and requireValue would reject it — the
+  // deleted merge hook treated this as "the PR is the queue item", and the
+  // documented invocation relies on that lenience regardless of flag order,
+  // so drop the bare `--item` here before parsing. `--item=<value>` and a
+  // space-separated real value are untouched.
+  const argvList = [...argv];
+  const bareItemIndex = argvList.findIndex(
+    (arg, i) => arg === "--item" && (i + 1 >= argvList.length || argvList[i + 1].startsWith("-")),
+  );
+  if (bareItemIndex !== -1) argvList.splice(bareItemIndex, 1);
   const { tokens } = parseArgs({
-    args: [...argv],
+    args: argvList,
     options: {
       repo: { type: "string" },
       item: { type: "string" },

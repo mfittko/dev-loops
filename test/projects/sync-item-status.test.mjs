@@ -148,8 +148,13 @@ describe("sync-item-status", () => {
       assert.equal(args.pr, "10");
     });
 
-    it("rejects --item swallowing a neighbouring flag as its value", () => {
-      assert.throws(() => parseCliArgs(["--repo", "o/n", "--item", "--to-column", "Done"]), /--item requires a value/);
+    it("a bare --item before another flag is omitted (hook parity), never a swallowed-flag error", () => {
+      // A dropped `<linked-issue>` substitution in the documented flag order
+      // produces exactly this argv; the deleted merge hook treated it as
+      // "the PR is the queue item". The neighbouring flag must still parse.
+      const args = parseCliArgs(["--repo", "o/n", "--item", "--to-column", "Done"]);
+      assert.equal(args.item, undefined);
+      assert.equal(args.toColumn, "Done");
     });
 
     it("rejects a non-numeric --pr", async () => {
@@ -373,4 +378,17 @@ describe("sync-item-status", () => {
       process.exitCode = prevExitCode;
     });
   });
+});
+
+it("a bare --item mid-args (dropped template substitution, documented flag order) falls back to --pr", () => {
+  const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--pr", "10", "--item", "--logical-column", "done"]);
+  assert.equal(args.item, undefined);
+  assert.equal(args.pr, "10");
+  assert.equal(args.logicalColumn, "done");
+});
+
+it("a bare --item at the end of argv still counts as omitted", () => {
+  const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--pr", "10", "--logical-column", "done", "--item"]);
+  assert.equal(args.item, undefined);
+  assert.equal(args.pr, "10");
 });
