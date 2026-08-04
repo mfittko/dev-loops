@@ -73,6 +73,25 @@ describe("consolidateFanin — verdict", () => {
     );
   });
 
+  test("severity gating normalizes legacy blocking-list and finding spellings", () => {
+    // Legacy-spelled blocking list against a canonical finding…
+    assert.equal(
+      consolidateFanin({
+        angleResults: [findingAngle("kiss", "nice-to-have")],
+        blockCleanOnFindingSeverities: ["defer"],
+      }).verdict,
+      "findings_present",
+    );
+    // …and the mirror: canonical blocking list against a legacy finding.
+    assert.equal(
+      consolidateFanin({
+        angleResults: [findingAngle("kiss", "defer")],
+        blockCleanOnFindingSeverities: ["nice-to-have"],
+      }).verdict,
+      "findings_present",
+    );
+  });
+
   test("blocked when any angle result is malformed/missing", () => {
     const cases = [
       [cleanAngle("scope"), null],

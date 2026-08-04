@@ -231,7 +231,7 @@ same fix → reply-with-resolving-commit → resolve path, not a separate one.
 3. classify findings:
    - must-fix: blocks gate; always fixed
    - worth-fixing-now: blocks gate when `blockCleanOnFindingSeverities` includes it; a LOCATABLE finding is also fixed through round 3 of the gate's chain even when not blocking (then deferred), while a NON-LOCATABLE one is deferred immediately (`GATE-EXEC-BLOCKING-ONLY-FIX` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#phase-4--fix))
-   - defer / non-blocking / disagree
+   - nice-to-have / non-blocking / disagree (defer is the fixer's disposition for these, not a severity)
 4. apply only the accepted narrow fixes
 5. run the smallest validation that honestly proves the fix
 6. if files changed, run `node <resolved-skill-scripts>/loop/pre-commit-branch-guard.mjs --expected-branch <headRefName>` immediately before every `git add && git commit` sequence as a required fail-closed guard

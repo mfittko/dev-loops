@@ -131,7 +131,7 @@ const FINDING_MARKER_FP_ONLY_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/
 export function parseFindingMarker(text) {
   const match = typeof text === "string" ? text.match(FINDING_MARKER_RE) : null;
   if (!match) return null;
-  return { fp: match[1], severity: match[2], angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
+  return { fp: match[1], severity: normalizeSeverity(match[2]), angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
 }
 
 // Round is embedded here (an addition beyond the finding marker's own round=,

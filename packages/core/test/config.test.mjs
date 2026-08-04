@@ -2391,7 +2391,33 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "preApproval");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "defer"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "nice-to-have"]);
+    });
+
+    test("resolveGateConfig normalizes and dedupes legacy blockCleanOnFindingSeverities spellings", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "nice-to-have"]);
+    });
+
+    test("FileConfigSchema accepts both nice-to-have and the deprecated defer spelling", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+          },
+        },
+      };
+      assert.equal(FileConfigSchema.safeParse(config).success, true);
     });
 
     test("GateConfig rejects invalid blockCleanOnFindingSeverities tokens", () => {

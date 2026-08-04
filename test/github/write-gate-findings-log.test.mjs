@@ -1024,7 +1024,7 @@ test("a legacy defer-severity finding normalizes to nice-to-have in the written 
       findings: JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]),
       tmpRoot: tmpDir,
     });
-    const parsed = JSON.parse(await readFile(path.join(tmpDir, result.path.replace(/^tmp\//, "")), "utf8").catch(() => readFile(result.path, "utf8")));
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(parsed.findings[0].severity, "nice-to-have");
     assert.equal(parsed.findings[0].disposition, "deferred");
   } finally {

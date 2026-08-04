@@ -841,8 +841,8 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
 `--ledger-out <path>` writes exactly this shape — pass that path straight to
 `--findings-file` on both tools, no hand extraction. A finding with severity
-`defer` and no `disposition` gets `deferred` derived automatically by both
-tools.
+`nice-to-have` (or the legacy `defer` spelling, normalized on read) and no
+`disposition` gets `deferred` derived automatically by both tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional

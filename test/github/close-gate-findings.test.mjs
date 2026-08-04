@@ -487,6 +487,32 @@ test("an unresolved defer-severity thread is replied-to + resolved immediately, 
   ));
 });
 
+// A pre-rename thread stamped severity=defer normalizes on read: the posted
+// deferral reply names the canonical tier, never the retired spelling.
+test("a legacy severity=defer marker posts a reply in the canonical vocabulary", async () => {
+  const legacyBody = `<!-- dev-loops:finding 8888888888888888 severity=defer angle=naming round=1 -->\n**defer** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_LEGACY", path: "src/naming.mjs", line: 4, commentId: 6300, body: legacyBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      getReviewCommentEntry(6300, legacyBody),
+      patchReviewCommentEntry(6300),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
+        assertStdinIncludes: ["severity nice-to-have", "nice-to-have findings are deferred immediately"],
+        assertStdinNotIncludes: ["severity defer,", "defer-severity"],
+        stdout: `${JSON.stringify({ id: 7200, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7200` })}\n`,
+      },
+      resolveThreadEntry("THREAD_LEGACY"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
 // Gate-authored is decided by AUTHOR IDENTITY (the authenticated `gh` viewer's
 // login), never by rendered marker text alone.
 test("marker provenance: a FOREIGN-authored thread past the fix window, carrying a valid finding marker, is never selected for disposition", async () => {

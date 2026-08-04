@@ -1681,8 +1681,11 @@ export function resolveGateConfig(config, gate) {
     requireCi: gateConfig?.requireCi ?? true,
     dynamicAngles: gateConfig?.dynamic?.subtractive ?? false,
     additiveAngles: gateConfig?.dynamic?.additive ?? false,
+    // Normalized + deduped at the resolve boundary so every consumer (envelope,
+    // verdict poster, fan-in, viewer) sees canonical spellings only; a
+    // half-migrated ["must-fix","nice-to-have","defer"] collapses to two entries.
     blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
-      ? [...gateConfig.blockCleanOnFindingSeverities]
+      ? [...new Set(gateConfig.blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)))]
       : ["must-fix"],
     tiers: gateConfig?.tiers ?? [],
   };
