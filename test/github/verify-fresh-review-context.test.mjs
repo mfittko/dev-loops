@@ -731,8 +731,10 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
     const fresh = runScript(["--scope", "root-probe"], { cwd: tmpDir });
     assert.equal(fresh.status, 0, fresh.stderr);
     const output = JSON.parse(fresh.stdout.trim());
-    // The reported root is the cwd the sentinel validated — the authoritative
-    // path for `git -C <repoRoot>` in cwd-resetting reviewer shells.
+    // Without --context-path the reported root is simply the invocation cwd
+    // (unvalidated) — still the path reviewers must feed `git -C <repoRoot>`
+    // in cwd-resetting shells; the locality-guarded variant is exercised by
+    // the --context-path tests above.
     assert.equal(output.repoRoot, await realpath(tmpDir));
     const refused = runScript(["--scope", "root-probe"], { cwd: tmpDir });
     assert.equal(refused.status, 1);

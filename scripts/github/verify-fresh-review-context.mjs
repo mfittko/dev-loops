@@ -83,7 +83,7 @@ Options:
   --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
                   semantics; kept for existing callers).
 Output (stdout, JSON):
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>", "repoRoot": "<abs worktree root>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>", "repoRoot": "<abs invocation cwd>" }
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "gateContextPath": "...", "gateContextPresent": true }
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
