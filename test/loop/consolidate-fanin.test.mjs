@@ -2200,7 +2200,7 @@ test("consolidateGateFanin lets a blocked artifact reach the blocked-verdict pat
     async (dir) => {
       await assert.rejects(
         () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
-        (err) => !/headSha" stamp/.test(err.message),
+        /fan-in is blocked .* re-run that reviewer/,
       );
     },
   );
