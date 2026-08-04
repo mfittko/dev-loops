@@ -737,6 +737,17 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
     const refused = runScript(["--scope", "root-probe"], { cwd: tmpDir });
     assert.equal(refused.status, 1);
     assert.equal(JSON.parse(refused.stdout.trim()).repoRoot, undefined);
+    // The sanctioned same-head retry (matching prefix hash) is also a fresh
+    // run and must carry the root too.
+    const prefixPath = path.join(tmpDir, "prefix.txt");
+    await writeFile(prefixPath, "invariant prefix bytes", "utf8");
+    const seeded = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath], { cwd: tmpDir });
+    assert.equal(seeded.status, 0, seeded.stderr);
+    const retried = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath, "--same-head-retry"], { cwd: tmpDir });
+    assert.equal(retried.status, 0, retried.stderr);
+    const retryOut = JSON.parse(retried.stdout.trim());
+    assert.equal(retryOut.sameHeadRetry, true);
+    assert.equal(retryOut.repoRoot, await realpathOf(tmpDir));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
