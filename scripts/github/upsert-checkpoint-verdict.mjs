@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -511,7 +511,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         if (!Number.isInteger(value) || value < 0) {
           throw parseError(`--findings-severity-counts.${key} must be a non-negative integer`);
         }
-        counts[key] = value;
+        // Legacy severity spellings merge into their canonical key.
+        const canonicalKey = /** @type {string} */ (normalizeSeverity(key));
+        counts[canonicalKey] = (counts[canonicalKey] ?? 0) + value;
       }
       options.findingsSeverityCounts = counts;
       continue;
@@ -637,12 +639,12 @@ function normalizeStructuredFinding(f) {
   return entry;
 }
 // Map a severity to its sort rank. Known severities follow
-// SEVERITY_ORDER (must-fix → worth-fixing-now → defer);
+// SEVERITY_ORDER (must-fix → worth-fixing-now → nice-to-have);
 // unknown/missing severities map to a LARGE rank so they sort LAST, never
 // before must-fix. (indexOf alone would give an unknown severity rank -1,
 // floating it ABOVE must-fix and hiding the highest-priority items below it.)
 function severitySortRank(severity) {
-  const idx = SEVERITY_ORDER.indexOf(severity);
+  const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
   return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
 // Sort findings by severity (must-fix first, unknown/missing last) for
@@ -886,9 +888,11 @@ export function renderAngleVerdictDigest(angles) {
 function buildStructuredFindingsDigest(angles, severityCounts) {
   const angleTotal = angles.reduce((sum, a) => sum + a.findings.length, 0);
   const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
-    ? SEVERITY_ORDER.reduce((sum, sev) => {
-        const n = severityCounts[sev];
-        return sum + (Number.isFinite(n) ? n : 0);
+    ? Object.entries(severityCounts).reduce((sum, [key, n]) => {
+        // Keys normalize through the legacy alias map so a "defer"-keyed count
+        // still sums into the total; unknown/typo'd keys still never inflate it.
+        const sev = /** @type {string} */ (normalizeSeverity(key));
+        return sum + (SEVERITY_ORDER.includes(sev) && Number.isFinite(n) ? n : 0);
       }, 0)
     : null;
   const totalFindings = Math.max(countedTotal ?? 0, angleTotal);
@@ -1447,6 +1451,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(buildGateEntryRefusalError({ options, coordination }));
   }
   const activeGateConfig = options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig;
+  // Legacy config spellings ("defer") compare against the same canonical
+  // vocabulary as the normalized counts keys.
+  if (Array.isArray(activeGateConfig.blockCleanOnFindingSeverities)) {
+    activeGateConfig.blockCleanOnFindingSeverities = activeGateConfig.blockCleanOnFindingSeverities.map(
+      (sev) => /** @type {string} */ (normalizeSeverity(sev)),
+    );
+  }
   if (
     options.verdict === "clean"
     && activeGateConfig.blockCleanOnFindingSeverities
@@ -1454,7 +1465,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   ) {
     if (!options.findingsSeverityCounts) {
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"defer":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
+        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
       );
     }
     const missingBlockingKeys = activeGateConfig.blockCleanOnFindingSeverities.filter(
@@ -1533,7 +1544,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     for (const angle of structuredFindings) {
       for (const f of angle.findings) {
         if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
-        if (Object.hasOwn(observedCounts, f.severity)) observedCounts[f.severity] += 1;
+        const sev = /** @type {string} */ (normalizeSeverity(f.severity));
+        if (Object.hasOwn(observedCounts, sev)) observedCounts[sev] += 1;
       }
     }
     const blockingObserved = activeGateConfig.blockCleanOnFindingSeverities.filter(

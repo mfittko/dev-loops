@@ -57,7 +57,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -151,7 +151,7 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
-    "severityCounts": { "must-fix", "worth-fixing-now", "defer" },
+    "severityCounts": { "must-fix", "worth-fixing-now", "nice-to-have" },
     "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true }
   A "carriedFromHead" field appears ONLY on an entry --carried-angles upserted (the prior head SHA it
   was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
@@ -697,8 +697,8 @@ function validateArtifactShape(raw, sourceLabel) {
   }
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
-      if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(f.severity.trim())) {
-        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected must-fix|worth-fixing-now|defer)`);
+      if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))) {
+        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected must-fix|worth-fixing-now|nice-to-have)`);
       }
     });
   }

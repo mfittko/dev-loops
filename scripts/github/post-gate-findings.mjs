@@ -4,7 +4,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 // Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
-import { SEVERITY_ORDER, VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -41,7 +41,7 @@ Exit codes:
 const SEVERITY_LABELS = {
   "must-fix": "Must fix",
   "worth-fixing-now": "Worth fixing now",
-  "defer": "Defer",
+  "nice-to-have": "Nice to have",
 };
 
 function parseError(message) {
@@ -82,6 +82,7 @@ function validateFindingsArray(parsed, flagLabel) {
     if (!f || typeof f !== "object") {
       throw parseError(`${flagLabel}[${i}] must be an object`);
     }
+    f = { ...f, severity: normalizeSeverity(f.severity) };
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
       throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
     }
@@ -98,10 +99,10 @@ function validateFindingsArray(parsed, flagLabel) {
     };
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
-    } else if (f.severity === "defer") {
+    } else if (f.severity === "nice-to-have") {
       // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
-      // non-blocking defer finding with no explicit disposition defaults to
-      // "deferred" rather than rendering with no disposition suffix.
+      // non-blocking nice-to-have finding with no explicit disposition defaults
+      // to "deferred" rather than rendering with no disposition suffix.
       entry.disposition = "deferred";
     }
     if (Array.isArray(f.files)) {

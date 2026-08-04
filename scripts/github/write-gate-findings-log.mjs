@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -58,9 +58,11 @@ function validateFindingsArray(parsed, flagLabel) {
     if (!f || typeof f !== "object") {
       throw parseError(`${flagLabel}[${i}] must be an object`);
     }
-    if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, defer`);
+    const severity = normalizeSeverity(f.severity);
+    if (!severity || !VALID_SEVERITIES.has(severity)) {
+      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
     }
+    f = { ...f, severity };
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
       throw parseError(`${flagLabel}[${i}].angle is required`);
     }
@@ -81,12 +83,12 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
-    } else if (f.severity === "defer") {
-      // A non-blocking defer finding with no explicit disposition defaults to
-      // "deferred" so a hand-authored (or consolidate-fanin.mjs-produced) array
-      // need not repeat the obvious disposition for every defer-severity entry.
-      // Explicit dispositions (including an explicit "deferred") always keep the
-      // validation above unchanged.
+    } else if (f.severity === "nice-to-have") {
+      // A non-blocking nice-to-have finding with no explicit disposition
+      // defaults to "deferred" so a hand-authored (or consolidate-fanin.mjs-
+      // produced) array need not repeat the obvious disposition for every
+      // lowest-tier entry. Explicit dispositions (including an explicit
+      // "deferred") always keep the validation above unchanged.
       entry.disposition = "deferred";
     }
     if (Array.isArray(f.files)) {

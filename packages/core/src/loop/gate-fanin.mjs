@@ -19,7 +19,11 @@
  *   }
  *
  * Severity vocabulary (mirrors write-gate-findings-log.mjs):
- *   "must-fix" | "worth-fixing-now" | "defer"
+ *   "must-fix" | "worth-fixing-now" | "nice-to-have"
+ * Severity is the reviewer's advisory weight only. Deferral is a DISPOSITION
+ * (what the fix cycle does with an open finding), never a severity — the
+ * legacy severity spelling "defer" is accepted on read and normalized to
+ * "nice-to-have" (see LEGACY_SEVERITY_ALIASES / normalizeSeverity).
  */
 
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
@@ -29,8 +33,25 @@
 // part of the contract here (most blocking first), not just membership, so a
 // consumer that only checked membership against a Set could accept a
 // silently reordered copy.
-export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
+export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
+
+// Pre-rename spelling of the lowest tier. Old ledgers, markers, and configs
+// still carry it; every read boundary normalizes through this map and no
+// writer ever emits it again.
+export const LEGACY_SEVERITY_ALIASES = Object.freeze({ defer: "nice-to-have" });
+
+/**
+ * Map a legacy severity spelling to its canonical name; unknown values pass
+ * through unchanged (the caller's validation still rejects them).
+ * @param {unknown} severity
+ * @returns {unknown}
+ */
+export function normalizeSeverity(severity) {
+  return typeof severity === "string" && Object.hasOwn(LEGACY_SEVERITY_ALIASES, severity)
+    ? LEGACY_SEVERITY_ALIASES[severity]
+    : severity;
+}
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -320,8 +341,8 @@ function validateAngleResult(result) {
       return `angle '${r.angle}' has a non-object finding`;
     }
     const finding = /** @type {Record<string, unknown>} */ (f);
-    if (typeof finding.severity !== "string" || !VALID_SEVERITIES.has(finding.severity)) {
-      return `angle '${r.angle}' has a finding with invalid severity (expected must-fix|worth-fixing-now|defer)`;
+    if (typeof finding.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(finding.severity))) {
+      return `angle '${r.angle}' has a finding with invalid severity (expected must-fix|worth-fixing-now|nice-to-have)`;
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       return `angle '${r.angle}' has a finding without a summary`;
@@ -361,10 +382,13 @@ function validateAngleResult(result) {
  */
 export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities } = {}) {
   const results = Array.isArray(angleResults) ? angleResults : [];
+  // Config values normalize through the same alias map as finding severities,
+  // so a legacy config spelling ("defer") still blocks the renamed tier.
   const blocking = new Set(
-    Array.isArray(blockCleanOnFindingSeverities) && blockCleanOnFindingSeverities.length > 0
+    (Array.isArray(blockCleanOnFindingSeverities) && blockCleanOnFindingSeverities.length > 0
       ? blockCleanOnFindingSeverities
-      : ["must-fix"],
+      : ["must-fix"]
+    ).map((s) => normalizeSeverity(s)),
   );
 
   const malformed = [];
@@ -382,11 +406,12 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     for (const r of results) {
       const angle = r.angle.trim();
       for (const f of r.findings) {
-        const isBlocking = blocking.has(f.severity);
+        const severity = /** @type {string} */ (normalizeSeverity(f.severity));
+        const isBlocking = blocking.has(severity);
         if (isBlocking) blockingCount += 1;
-        bySeverity[f.severity] += 1;
+        bySeverity[severity] += 1;
         const entry = {
-          severity: f.severity,
+          severity,
           angle,
           summary: String(f.summary).trim(),
           // Blocking findings default to accepted-for-fix; non-blocking default

@@ -237,14 +237,14 @@ test("closeGateFindings rejects a missing --ledger file", async () => {
 });
 
 test("closeGateFindings rejects a finding whose files[] entry is blank", async () => {
-  const ledger = makeLedger({ findings: [{ severity: "defer", angle: "naming", summary: "x", files: ["   "] }] });
+  const ledger = makeLedger({ findings: [{ severity: "nice-to-have", angle: "naming", summary: "x", files: ["   "] }] });
   await withLedgerFile(ledger, async (ledgerPath) => {
     await assert.rejects(() => closeGateFindings({ ledgerPath }), /findings\[0\]\.files\[0\] must be a non-empty string/);
   });
 });
 
 test("closeGateFindings rejects a finding whose files[] entry is not a string", async () => {
-  const ledger = makeLedger({ findings: [{ severity: "defer", angle: "naming", summary: "x", files: [42] }] });
+  const ledger = makeLedger({ findings: [{ severity: "nice-to-have", angle: "naming", summary: "x", files: [42] }] });
   await withLedgerFile(ledger, async (ledgerPath) => {
     await assert.rejects(() => closeGateFindings({ ledgerPath }), /findings\[0\]\.files\[0\] must be a non-empty string/);
   });
@@ -469,7 +469,7 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
 });
 
 test("an unresolved defer-severity thread is replied-to + resolved immediately, at round 1", async () => {
-  const deferBody = `${buildFindingMarker({ fp: "7777777777777777", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): casing nit`;
+  const deferBody = `${buildFindingMarker({ fp: "7777777777777777", severity: "nice-to-have", angle: "naming", round: 1 })}\n**defer** (\`naming\`): casing nit`;
   const thread = threadNode({ id: "THREAD_DEFER", path: "src/naming.mjs", line: 4, commentId: 6200, body: deferBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
@@ -564,7 +564,7 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
 // commentId is validated BEFORE it is ever interpolated into a
 // `pulls/comments/{commentId}` API path.
 test("a gate-authored thread selected for deferral with no resolvable comment id fails closed, named by threadId", async () => {
-  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "defer", angle: "naming", round: 1 })}\n**defer** (\`naming\`): short body`;
+  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "nice-to-have", angle: "naming", round: 1 })}\n**defer** (\`naming\`): short body`;
   const thread = threadNode({ id: "THREAD_NO_COMMENT_ID", path: "src/naming.mjs", line: 3, commentId: null, body: shortBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),

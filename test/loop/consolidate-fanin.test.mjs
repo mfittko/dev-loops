@@ -203,7 +203,7 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
           { angle: "scope", verdict: "clean", findingCount: 0 },
         ],
       );
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "defer": 0 });
+      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "nice-to-have": 0 });
       assert.equal(result.findings.length, 2);
       for (const finding of result.findings) {
         assert.ok(typeof finding.angle === "string" && finding.angle.length > 0);
@@ -251,7 +251,7 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
           findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
         }],
         findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
-        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, defer: 0 },
+        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 },
         overallVerdict: "findings_present",
       });
     },
@@ -991,13 +991,13 @@ test("consolidateGateFanin derives a deferred disposition for defer-severity fin
       "naming.json": {
         angle: "naming",
         verdict: "findings_present",
-        findings: [{ severity: "defer", summary: "style nit" }],
+        findings: [{ severity: "nice-to-have", summary: "style nit" }],
       },
     },
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
       assert.equal(result.findings.length, 1);
-      assert.equal(result.findings[0].severity, "defer");
+      assert.equal(result.findings[0].severity, "nice-to-have");
       assert.equal(result.findings[0].disposition, "deferred");
     },
   );
@@ -1568,7 +1568,7 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     }));
     if (angle === MIXED_ANGLE) {
       findings[1] = { ...findings[1], severity: "must-fix" };
-      findings[2] = { ...findings[2], severity: "defer" };
+      findings[2] = { ...findings[2], severity: "nice-to-have" };
     }
     files[`angle${i}.json`] = { angle, verdict: "findings_present", findings };
   }
@@ -1592,7 +1592,7 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // just a count) for a specific finding.
     const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
     assert.equal(result.findings.length, totalFindings);
-    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, defer: 1 });
+    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, "nice-to-have": 1 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
     assert.deepEqual(writtenLedger, result.findings);
     assert.equal(writtenLedger.length, totalFindings);
@@ -1626,13 +1626,13 @@ test("a fan-in too large to render at minimum summary length still writes a comp
         // ["must-fix"]).
         assert.match(marker, /must-fix: 1/);
         assert.match(marker, /worth-fixing-now: 28/);
-        assert.match(marker, /defer: 1/);
+        assert.match(marker, /nice-to-have: 1/);
         assert.equal(section.findings[0].severity, "must-fix");
         assert.equal(section.findings[0].disposition, "accepted-for-fix");
       } else {
         assert.match(marker, /must-fix: 0/);
         assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
-        assert.match(marker, /defer: 0/);
+        assert.match(marker, /nice-to-have: 0/);
         assert.equal(section.findings[0].severity, "worth-fixing-now");
         assert.equal(section.findings[0].disposition, "deferred");
       }
@@ -1710,7 +1710,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
       angle: "style",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1770,7 +1770,7 @@ test("a narrow angle whose real findings render cheaper than its own bare marker
       angle: "wide",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1814,7 +1814,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
       angle: "wide",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1911,7 +1911,7 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
 
 // Budget-allocation-by-severity regression: when not every angle can afford
 // the verbose marker, the scarce budget must go to the must-fix-carrying
-// angle first, regardless of filename/artifact-index order. All 13 "defer"
+// angle first, regardless of filename/artifact-index order. All 13 "nice-to-have"
 // angles sort alphabetically BEFORE the one must-fix-carrying angle
 // ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
 // reverted behavior) would spend the verbose budget on defer-only angles and
@@ -1926,7 +1926,7 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
       angle: `defer-angle-${i}`,
       verdict: "findings_present",
       findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `finding ${i}-${j} ${"z".repeat(150)}`,
         file: `src/f${i}.mjs`,
         line: j + 1,

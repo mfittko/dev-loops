@@ -321,7 +321,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
     "--gate", "draft_gate",
     "--head-sha", "ABC1234000000000000000000000000000000000",
     "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
     "--findings-summary", "no issues found",
     "--next-action", "mark ready for review",
     "--inline-reason", "tiny docs change",
@@ -335,7 +335,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
       "--gate", "draft_gate",
       "--head-sha", "not-a-sha",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ]),
@@ -463,7 +463,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
         gate: "draft_gate",
         headSha: "abc1234000000000000000000000000000000000",
         verdict: "clean",
-        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
       }, { env, repoRoot: tempDir }),
@@ -822,7 +822,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1008,7 +1008,7 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
       gate: "draft_gate",
       headSha: "abc1234000000000000000000000000000000000",
       verdict: "findings_present",
-      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
       findingsFile: findingsPath,
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
@@ -1078,7 +1078,7 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
       "--findings-summary", "all clear, no issues",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review",
     ], { env });
 
@@ -1138,7 +1138,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
       "--gate", "pre_approval_gate",
       "--head-sha", "def56789abcdef00000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "await final human approval",
     ], { env });
@@ -1186,7 +1186,7 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
       "--gate", "pre_approval_gate",
       "--head-sha", "f7a611b7234af479000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "await final human approval",
     ], { env });
@@ -1277,7 +1277,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       "--gate", "pre_approval_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "await final human approval",
     ], { env });
@@ -1359,7 +1359,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       "--gate", "pre_approval_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", [
         "Validation: verbose local logs follow",
         "> npm test",
@@ -1452,7 +1452,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1490,7 +1490,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
     gate: "draft_gate",
     headSha,
     verdict: "clean",
-    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
     findingsSummary: "no issues found",
     nextAction: "mark ready for review",
     executionMode: "inline_single_agent",
@@ -1605,7 +1605,7 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1685,7 +1685,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1754,7 +1754,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1847,7 +1847,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       "--gate", "draft_gate",
       "--head-sha", "ABC1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "fixed the marker for the current head",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1941,7 +1941,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "corrected the newer malformed marker",
       "--next-action", "mark ready for review",
     ], { env });
@@ -1975,7 +1975,7 @@ test("upsert-checkpoint-verdict fails closed on an abbreviated --head-sha (no mo
     "--gate", "draft_gate",
     "--head-sha", "ABCDEF1",
     "--verdict", "clean",
-    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
     "--findings-summary", "no issues found",
     "--next-action", "mark ready for review",
   ]);
@@ -2019,7 +2019,7 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -2084,7 +2084,7 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
       "--gate", "draft_gate",
       "--head-sha", "def5678000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -2149,7 +2149,7 @@ test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-
       "--gate", "draft_gate",
       "--head-sha", "def56789abcdef00000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
@@ -2185,7 +2185,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
       "--verdict", "clean",
       "--findings-summary", "reviewed: 2 must-fix, 1 worth-fixing-now",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":2,"worth-fixing-now":1,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":2,"worth-fixing-now":1,"nice-to-have":0}',
     ], { env });
 
     assert.equal(result.code, 1);
@@ -2228,7 +2228,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
       "--next-action", "mark ready for review",
       // draft_gate blocks on must-fix only: a non-zero worth-fixing-now count
       // (like the non-zero defer count) must not block a clean verdict.
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"defer":1}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":1,"nice-to-have":1}',
     ], { env });
 
     assert.equal(result.code, 0);
@@ -2269,7 +2269,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2311,7 +2311,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2335,7 +2335,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
     await writeFile(
       findingsPath,
       JSON.stringify([
-        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "defer", summary: "nice-to-have cleanup" }] },
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "nice-to-have cleanup" }] },
         { angle: "pr-description", verdict: "clean", findings: [] },
       ]),
       "utf8",
@@ -2355,7 +2355,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":1}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":1}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2405,7 +2405,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2448,7 +2448,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2486,7 +2486,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -2555,7 +2555,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--next-action", "mark ready",
       // draft_gate blocks on must-fix only, so omitting must-fix (not
       // worth-fixing-now) is what exercises "missing a blocking key" here.
-      "--findings-severity-counts", '{"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"worth-fixing-now":0,"nice-to-have":0}',
     ], { env });
 
     assert.equal(result.code, 1);
@@ -2607,7 +2607,7 @@ test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when al
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
     ], { env });
 
     assert.equal(result.code, 0);
@@ -2648,7 +2648,7 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
         gate: "draft_gate",
         headSha: "abc1234000000000000000000000000000000000",
         verdict: "clean",
-        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
         executionMode: "fanout_fanin",
@@ -2759,7 +2759,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       gate: "draft_gate",
       headSha,
       verdict: "clean",
-      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
       findingsSummary: "no issues found",
       nextAction: "mark ready for review",
       executionMode: "fanout_fanin",
@@ -2869,7 +2869,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
         gate: "draft_gate",
         headSha,
         verdict: "clean",
-        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
         executionMode: "fanout_fanin",
@@ -2988,7 +2988,7 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
       "--gate", "draft_gate",
       "--head-sha", headSha,
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
       "--execution-mode", "inline_single_agent",
@@ -3052,7 +3052,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode fr
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -3105,7 +3105,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when
       "--verdict", "clean",
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--execution-mode", "fanout_fanin",
     ], { env });
 
@@ -3166,7 +3166,7 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
       "--gate", "pre_approval_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "await final human approval",
     ], { env });
@@ -3231,7 +3231,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
       "--gate", "draft_gate",
       "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean",
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], {
@@ -3796,7 +3796,7 @@ test("renderGateReviewCommentBody's Findings summary keeps the real count when f
     executionMode: "fanout_fanin",
     structuredFindings: [
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "off-by-one" }] },
-      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "naming nit" }] },
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "naming nit" }] },
     ],
     findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, defer: 0 },
   });
@@ -3812,9 +3812,9 @@ test("renderGateReviewCommentBody's Findings summary keeps the real count when f
     nextAction: "fix",
     executionMode: "fanout_fanin",
     structuredFindings: [
-      { angle: "tests", verdict: "findings_present", findings: [{ severity: "defer", summary: "a" }, { severity: "defer", summary: "b" }] },
+      { angle: "tests", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "a" }, { severity: "nice-to-have", summary: "b" }] },
     ],
-    // Documented two-key example from --help; carries no "defer" key at all.
+    // Documented two-key example from --help; carries no "nice-to-have" key at all.
     findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
   });
   assert.match(body, /\*\*Findings summary:\*\* 1 angle reviewed; 2 findings \(see per-angle breakdown below\)\./);
@@ -3853,7 +3853,7 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
     structuredFindings: [
       { severity: "must-fix", angle: "correctness", summary: "off-by-one", files: ["src/loop.mjs"], disposition: "accepted-for-fix" },
       { severity: "worth-fixing-now", angle: "correctness", summary: "missing guard" },
-      { severity: "defer", angle: "style", summary: "naming nit" },
+      { severity: "nice-to-have", angle: "style", summary: "naming nit" },
       // A finding without an angle must still be rendered (grouped under "general").
       { severity: "must-fix", summary: "no-angle finding" },
     ],
@@ -3863,7 +3863,7 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
   assert.match(body, /\n {2}- \[`must-fix`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
   assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing guard\n/);
   assert.match(body, /\n- `style` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`defer`\] naming nit\n/);
+  assert.match(body, /\n {2}- \[`nice-to-have`\] naming nit\n/);
   assert.match(body, /\n- `general` → `findings_present`\n/);
   assert.match(body, /\n {2}- \[`must-fix`\] no-angle finding\n/);
   // 3 angles (correctness, style, general), 4 findings total — none dropped.
@@ -4130,7 +4130,7 @@ test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-json", findingsPath,
-      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
@@ -4194,7 +4194,7 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
     ]);
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
-      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-json", findingsPath,
       "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
     ], { env, cwd: tempDir });
@@ -4505,7 +4505,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     ]);
     const inline = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
-      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found", "--next-action", "mark ready for review",
       "--execution-mode", "inline_single_agent", "--inline-reason", "manual single-agent run",
     ], { env });
@@ -4525,7 +4525,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     ]);
     const fanout = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
-      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+      "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
       "--findings-summary", "no issues found", "--next-action", "mark ready for review",
       "--execution-mode", "fanout_fanin",
     ], { env: env2 });
@@ -4578,7 +4578,7 @@ test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inlin
   // (FIX B). runNodeHelper is used directly so no inline reason is auto-appended.
   const args = [
     "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
-    "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"defer":0}',
+    "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
     "--findings-summary", "no issues found", "--next-action", "mark ready for review",
   ];
   const result = await runNodeHelper(scriptPath, args, {
@@ -4644,7 +4644,7 @@ function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], revie
 }
 
 const LOCATABLE_FINDING = { severity: "must-fix", angle: "correctness", summary: "SQL injection in the query builder", files: ["src/db.mjs"], line: 2, recommendation: "parameterize it" };
-const BODY_FILED_FINDING = { severity: "defer", angle: "coverage", summary: "inconsistent casing in constants" };
+const BODY_FILED_FINDING = { severity: "nice-to-have", angle: "coverage", summary: "inconsistent casing in constants" };
 
 // AC1 + AC2: one review carries the verdict fields, the reduced per-angle
 // digest, the body-filed finding, and the locatable finding as an INLINE
@@ -4658,7 +4658,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "defer", summary: BODY_FILED_FINDING.summary }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: BODY_FILED_FINDING.summary }] },
     ]), "utf8");
 
     let postedPayload = null;

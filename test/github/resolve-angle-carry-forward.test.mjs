@@ -440,7 +440,7 @@ test("an angle named by a prior finding never carries, even from a clean log", (
     log: {
       headSha: "aaaaaaa",
       verdict: "clean",
-      findings: [{ angle: "coverage", severity: "defer", summary: "open nit" }],
+      findings: [{ angle: "coverage", severity: "nice-to-have", summary: "open nit" }],
       provenance: {
         distinctReviewers: 2,
         perAngle: [
@@ -466,7 +466,7 @@ test("a prior finding on a delta-suffixed re-review entry still forces its BASE 
     log: {
       headSha: "aaaaaaa",
       verdict: "clean",
-      findings: [{ angle: "coverage-delta-at-deadbeef", severity: "defer", summary: "still open" }],
+      findings: [{ angle: "coverage-delta-at-deadbeef", severity: "nice-to-have", summary: "still open" }],
       provenance: {
         distinctReviewers: 2,
         perAngle: [
@@ -486,7 +486,7 @@ test("a prior finding attributes to its angle case-insensitively", () => {
     log: {
       headSha: "aaaaaaa",
       verdict: "clean",
-      findings: [{ angle: "Coverage", severity: "defer", summary: "still open" }],
+      findings: [{ angle: "Coverage", severity: "nice-to-have", summary: "still open" }],
       provenance: {
         distinctReviewers: 2,
         perAngle: [
@@ -520,7 +520,7 @@ for (const [label, perAngle] of [
       log: {
         headSha: "aaaaaaa",
         verdict: "clean",
-        findings: [{ angle: "coverage", severity: "defer", summary: "still open" }],
+        findings: [{ angle: "coverage", severity: "nice-to-have", summary: "still open" }],
         provenance: {
           distinctReviewers: 3,
           perAngle: [{ angle: "correctness", reviewer: "review-a" }, ...perAngle],
@@ -540,7 +540,7 @@ test("a prior finding on a base angle forces every case-drifted row sharing it t
     log: {
       headSha: "aaaaaaa",
       verdict: "clean",
-      findings: [{ angle: "coverage", severity: "defer", summary: "still open" }],
+      findings: [{ angle: "coverage", severity: "nice-to-have", summary: "still open" }],
       provenance: {
         distinctReviewers: 3,
         perAngle: [
@@ -564,7 +564,7 @@ test("buildCarryForwardPlan fails closed when a prior finding's angle matches no
       log: {
         headSha: "aaaaaaa",
         verdict: "clean",
-        findings: [{ angle: "typo-ed-angle", severity: "defer", summary: "open nit" }],
+        findings: [{ angle: "typo-ed-angle", severity: "nice-to-have", summary: "open nit" }],
         provenance: {
           distinctReviewers: 1,
           perAngle: [{ angle: "correctness", reviewer: "review-a" }],

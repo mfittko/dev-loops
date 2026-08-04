@@ -273,7 +273,7 @@ test("writeGateFindingsLog includes disposition when present", async () => {
       findings: JSON.stringify([
         { severity: "must-fix", angle: "scope", summary: "Must fix", disposition: "accepted-for-fix" },
         { severity: "worth-fixing-now", angle: "dry", summary: "DRY", disposition: "deferred" },
-        { severity: "defer", angle: "naming", summary: "Style", disposition: "disputed" },
+        { severity: "nice-to-have", angle: "naming", summary: "Style", disposition: "disputed" },
       ]),
       tmpRoot: tmpDir,
     });
@@ -580,7 +580,7 @@ test("writeGateFindingsLog derives a deferred disposition for a defer-severity f
       gate: "draft_gate",
       headSha: "eeeeeeeeeeeeeeeeeeee00000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit" }]),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-5", "draft_gate-eeeeeeeeeeeeeeeeeeee00000000000000000000.json");
@@ -600,7 +600,7 @@ test("writeGateFindingsLog keeps an explicit disposition on a defer-severity fin
       gate: "draft_gate",
       headSha: "ffffffffffffffffffff0000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "disputed" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "disputed" }]),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-6", "draft_gate-ffffffffffffffffffff0000000000000000000.json");
@@ -616,7 +616,7 @@ test("writeGateFindingsLog keeps an explicit disposition on a defer-severity fin
       gate: "draft_gate",
       headSha: "abc1234500000000000000000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
+      findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
     });
   }, /disposition must be one of/);
 });

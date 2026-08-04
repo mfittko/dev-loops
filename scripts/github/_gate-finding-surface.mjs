@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -86,7 +86,7 @@ function slugForMarker(value) {
 
 // True when a finding at `severity`, reconciled against the CURRENT round, is
 // disposed as deferred: must-fix never defers; worth-fixing-now defers only
-// once the chain is past the in-gate fix window; defer always defers
+// once the chain is past the in-gate fix window; nice-to-have always defers
 // immediately. Governs the THREAD disposition pass ONLY — a locatable
 // finding's round-gated fix window, decided through its own resolvable review
 // thread. Body-filed finding rendering (renderNonLocatableBlock) deliberately
@@ -94,9 +94,10 @@ function slugForMarker(value) {
 // so it is stamped deferred unconditionally at render time, regardless of round
 // (see that function's own comment).
 export function isDeferredAtRound(severity, round) {
-  if (severity === "must-fix") return false;
-  if (severity === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
-  return true; // "defer"
+  const sev = normalizeSeverity(severity);
+  if (sev === "must-fix") return false;
+  if (sev === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
+  return true; // "nice-to-have" (and any legacy spelling of it)
 }
 
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
@@ -335,6 +336,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     throw fail(`Gate findings ledger "${ledgerPath}" "findings" must be an array`);
   }
   findings.forEach((f, i) => {
+    if (f && typeof f === "object") f.severity = normalizeSeverity(f.severity);
     if (!f || typeof f !== "object" || !VALID_SEVERITIES.has(f.severity) || typeof f.angle !== "string" || typeof f.summary !== "string") {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}] is malformed (expected {severity, angle, summary})`);
     }

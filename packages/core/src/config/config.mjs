@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { normalizeSeverity } from "../loop/gate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -204,10 +205,10 @@ const GateConfig = z.strictObject({
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
   blockCleanOnFindingSeverities: z
-    .array(z.enum(["must-fix", "worth-fixing-now", "defer"]))
+    .array(z.enum(["must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
     .min(1)
     .default(["must-fix"])
-    .describe("Finding severities that block a clean gate verdict."),
+    .describe("Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply, so a gate that never sets this key keeps
   // today's dynamic-subtractive/additive/full-pool resolution unchanged.
@@ -1869,8 +1870,10 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
     return { mode: "full_fanout", reason: "over_threshold", threshold };
   }
   if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
-    const blocking = new Set(resolveGateConfig(config, gate).blockCleanOnFindingSeverities);
-    if (inlineFindingSeverities.some((s) => blocking.has(s))) {
+    // Both sides normalize legacy spellings so a "defer" finding still
+    // compares against a "nice-to-have" blocking entry and vice versa.
+    const blocking = new Set(resolveGateConfig(config, gate).blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)));
+    if (inlineFindingSeverities.some((s) => blocking.has(normalizeSeverity(s)))) {
       return { mode: "full_fanout", reason: "escalated", threshold };
     }
   }

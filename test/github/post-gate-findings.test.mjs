@@ -32,7 +32,7 @@ function userEntry({ login = AUTHENTICATED_LOGIN } = {}) {
 const FINDINGS_JSON = JSON.stringify([
   { severity: "must-fix", angle: "scope", summary: "Scope too broad", disposition: "accepted-for-fix", files: ["src/a.mjs:12"] },
   { severity: "worth-fixing-now", angle: "dry", summary: "DRY violation", disposition: "deferred" },
-  { severity: "defer", angle: "naming", summary: "Style nit" },
+  { severity: "nice-to-have", angle: "naming", summary: "Style nit" },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -169,13 +169,13 @@ test("parseFindings rejects missing summary", () => {
 });
 
 test("parseFindings derives a deferred disposition for a defer-severity finding with no explicit disposition", () => {
-  const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "naming", summary: "Style nit" }]));
+  const findings = parseFindings(JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit" }]));
   assert.equal(findings[0].disposition, "deferred");
 });
 
 test("parseFindings keeps an explicit disposition on a defer-severity finding", () => {
   const findings = parseFindings(JSON.stringify([
-    { severity: "defer", angle: "naming", summary: "Style nit", disposition: "disputed" },
+    { severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "disputed" },
   ]));
   assert.equal(findings[0].disposition, "disputed");
 });
@@ -287,7 +287,7 @@ test("renderFindingsCommentBody groups by severity and renders file refs", () =>
   // Severity group headings, most-blocking first.
   const mustIdx = body.indexOf("Must fix (1)");
   const worthIdx = body.indexOf("Worth fixing now (1)");
-  const deferIdx = body.indexOf("Defer (1)");
+  const deferIdx = body.indexOf("Nice to have (1)");
   assert.ok(mustIdx >= 0 && worthIdx >= 0 && deferIdx >= 0);
   assert.ok(mustIdx < worthIdx && worthIdx < deferIdx);
   // Angle as code literal, summary as prose, disposition rendered.

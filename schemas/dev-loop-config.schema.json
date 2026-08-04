@@ -246,7 +246,7 @@
               "default": [
                 "must-fix"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -254,6 +254,7 @@
                 "enum": [
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
@@ -412,7 +413,7 @@
               "default": [
                 "must-fix"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -420,6 +421,7 @@
                 "enum": [
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
@@ -578,7 +580,7 @@
               "default": [
                 "must-fix"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -586,6 +588,7 @@
                 "enum": [
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
