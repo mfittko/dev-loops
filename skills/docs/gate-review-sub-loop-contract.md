@@ -884,8 +884,9 @@ when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
 `GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in exactly two places, never a
-third summary comment: the resolving reply on its own thread, and the durable findings-log ledger
-under `tmp/gate-findings/...`. Both carry the finding marker's optional `disposition=deferred`
+third summary comment: the finding's own posted surface — the resolving reply on its thread for a
+locatable finding, or its body-filed entry on the round's review for a non-locatable one — and the
+durable findings-log ledger under `tmp/gate-findings/...`. Both carry the finding marker's optional `disposition=deferred`
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass

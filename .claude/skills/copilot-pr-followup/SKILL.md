@@ -433,7 +433,7 @@ node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs \
   --pr <number>
 ```
 
-This helper is always-on: it uses `gh api` to fetch visible PR issue comments and fails closed unless both required gate comments exist: a clean `draft_gate` comment for the one-time draft boundary and a clean current-head `pre_approval_gate` comment. Do not run `gh pr merge` if this command exits non-zero. There is no opt-out flag. Resolved threads, green CI, clean Copilot rereview, or local notes do not substitute for this successful helper output. If a final approval or merge boundary sees `gh pr merge` without a same-boundary successful check, treat that as a workflow violation and stop.
+This helper is always-on: it uses `gh api` to read both verdict surfaces — the PR review stream (primary, per `GATE-COMMENT-SINGLE-SURFACE`) and visible PR issue comments (back-compat, for legacy and fallback-posted verdicts) — and fails closed unless both required gate verdicts are visible on either surface: a clean `draft_gate` verdict for the one-time draft boundary and a clean current-head `pre_approval_gate` verdict. Do not run `gh pr merge` if this command exits non-zero. There is no opt-out flag. Resolved threads, green CI, clean Copilot rereview, or local notes do not substitute for this successful helper output. If a final approval or merge boundary sees `gh pr merge` without a same-boundary successful check, treat that as a workflow violation and stop.
 
 ### Stale runner-coordination lock held by a completed run
 
