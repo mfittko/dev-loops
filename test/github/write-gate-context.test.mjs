@@ -3122,3 +3122,28 @@ test("renderBriefingPrefix carries the worktree root and the git -C cwd-independ
   assert.ok(text.indexOf("Shell cwd is NOT trustworthy") < text.indexOf("## PR body"));
   assert.ok(text.includes("repoRoot"));
 });
+
+test("writeGateContext warns, naming the retirement command, when a rebuild overwrites a differing prefix at a head with live sentinels", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-warn-"));
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]',
+      "--acceptance-criteria", "#9",
+    ];
+    const first = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    assert.equal(first.warning, undefined);
+    // A live sentinel for that head exists when the rebuild happens.
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    await writeFile(path.resolve(repoRoot, "tmp", "checkpoint-context-sentinel-draft-gate-scope-abc1234567890def.json"), "{}\n", "utf8");
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    assert.match(rebuilt.warning, /retire-gate-round\.mjs/);
+    assert.match(rebuilt.warning, /1 reviewer sentinel/);
+    // Same-bytes rewrite never warns (idempotent rerun, no invalidation).
+    const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    assert.equal(idempotent.warning, undefined);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});

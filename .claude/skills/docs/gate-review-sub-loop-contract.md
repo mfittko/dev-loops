@@ -456,6 +456,29 @@ prefix's now-stale inlined copy, since the point of that retry is to re-check th
 just-edited description. See `verify-fresh-review-context.mjs --help` for the flag's exact
 semantics and exit codes.
 
+**Sanctioned rebuild-and-retire.**
+
+<!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
+`GATE-EXEC-ROUND-RETIREMENT`: When the gate-context bundle is legitimately REBUILT at the
+same head (the builder now resolves PR/issue inputs itself, and correcting bad or stale
+seeding is a legitimate rebuild), the new briefing-prefix bytes hash differently, so every
+existing sentinel of that round fails closed forever — including under `--same-head-retry`,
+whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
+the round explicitly: `node scripts/github/retire-gate-round.mjs --head-sha <sha> --reason
+"<why>" [--findings-dir <round artifacts dir>]` moves every sentinel keyed by that head
+(and, when given, the round's findings-artifacts directory) into an audited retirement
+directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record), so a
+FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
+one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
+command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
+never retires as a side effect. Pass `--findings-dir` whenever the retired round wrote
+artifacts: at the same head they would pass the `--head-sha` stamp guard and silently mix
+into the new round's fan-in; retiring them is the explicit discard (recoverable from the
+retirement directory; copying one back is the explicit carry). Retirement never weakens
+`verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
+never reads, and sentinels of one LIVE round that disagree still fail closed. A head with no
+sentinels retires as a no-op.
+
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
 Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`

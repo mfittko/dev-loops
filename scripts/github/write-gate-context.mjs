@@ -30,7 +30,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -1159,13 +1159,35 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
+  // Rebuild detection: overwriting a DIFFERENT prefix at a head that already
+  // has reviewer sentinels invalidates every one of them (their recorded hash
+  // can never match the new bytes), stranding the round. The rebuild itself is
+  // legitimate — warn and name the sanctioned retirement command instead of
+  // refusing or silently invalidating (GATE-EXEC-ROUND-RETIREMENT).
+  let rebuildWarning = null;
+  try {
+    const existingBytes = await readFile(fullPrefixPath);
+    if (!existingBytes.equals(prefixBytes)) {
+      const sentinelSuffix = `-${String(options.headSha).trim().toLowerCase()}.json`;
+      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch(() => []);
+      const liveSentinels = tmpDirEntries.filter(
+        (e) => e.isFile() && e.name.startsWith("checkpoint-context-sentinel-") && e.name.endsWith(sentinelSuffix),
+      ).length;
+      if (liveSentinels > 0) {
+        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match). Retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --head-sha ${options.headSha} --reason "<why>" [--findings-dir <round artifacts dir>]`;
+        process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+      }
+    }
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
 
-  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode };
+  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode, ...(rebuildWarning ? { warning: rebuildWarning } : {}) };
 }
 
 /**
