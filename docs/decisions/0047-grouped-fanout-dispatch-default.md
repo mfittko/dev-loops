@@ -35,8 +35,9 @@ provenance write-time floor from 0039 (`fanoutReviewerPairingError`: no two fres
 share a reviewer identity) is narrowed, not removed: fresh angles sharing one reviewer
 identity are valid exactly when every entry sharing that identity declares the SAME `group`
 name AND (when the caller supplies the round's resolved dispatch groups — both write and
-read call sites do) every one of those angles is a member of that SAME configured dispatch
-unit, so a collision across DIFFERENT declared groups, an undeclared group, or a fabricated
+read call sites do, each threading a `fullLabel`/`--full-label` signal into `resolveFanoutGroups`
+so a gate:full round resolves the same per-angle singletons on both sides) every one of those
+angles is a member of that SAME configured dispatch unit, so a collision across DIFFERENT declared groups, an undeclared group, or a fabricated
 group label the config never actually groups those angles into still fails closed exactly as
 0039 requires. The `requireFanoutProvenance` `distinctReviewers` floor (`FANOUT_PROVENANCE_MIN_REVIEWERS`
 scaled up) also had to move from counting fresh ANGLES to counting fresh DISPATCH UNITS

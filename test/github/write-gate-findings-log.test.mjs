@@ -62,6 +62,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     verdict: "findings_present",
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
     findingsFile: undefined,
+    fullLabel: false,
     tmpRoot: "tmp",
   });
 });
@@ -869,6 +870,66 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
         tmpRoot: tmpDir,
       }, { repoRoot });
       assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a grouped-provenance ledger under --full-label (per-angle singletons resolved, shared identity across angles fails)", async () => {
+  // Same fixture + provenance as the "accepts a grouped-dispatch ledger" test
+  // above, EXCEPT fullLabel: true is threaded through. resolveFanoutGroups
+  // returns per-angle singleton groups under gate:full (AC6 precedence #1),
+  // regardless of the configured "process" group — so the SAME provenance
+  // that a tiered round accepts must fail closed on a gate:full round
+  // (the write path must resolve the SAME grouping the read/enforcement path
+  // resolves for gate:full, or a grouped ledger the write path accepts would
+  // be rejected at pre-merge enforcement).
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, pr-checklist-matrix]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-out-"));
+    try {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "a/b",
+          pr: 1,
+          gate: "pre_approval_gate",
+          headSha: "abc1234500000000000000000000000000000000",
+          verdict: "clean",
+          findings: "[]",
+          provenance: JSON.stringify({
+            distinctReviewers: 1,
+            perAngle: [
+              { angle: "dry", reviewer: "review-a", group: "process" },
+              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            ],
+          }),
+          fullLabel: true,
+          tmpRoot: tmpDir,
+        }, { repoRoot }),
+        /does not place all of them in one group/,
+      );
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

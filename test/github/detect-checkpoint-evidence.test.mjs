@@ -1539,6 +1539,75 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
   }
 });
 
+test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME legitimately-grouped ledger FAILS under hasFullLabel: true (gate:full resolves per-angle singletons, so the shared group is no longer valid)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-full-label-grouped-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, kiss]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "c".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-23");
+    await mkdir(ledgerDir, { recursive: true });
+    // The exact ledger the earlier "PASSES requireFanoutProvenance" test above
+    // records — legitimately grouped under gates.fanout.groups for a tiered
+    // round.
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "kiss", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 23, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: true,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(gate.provenance, "falls back to the non-satisfying provenance for diagnostics");
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.failures.some((f) => f.includes("does not place all of them in one group")),
+      JSON.stringify(result.failures),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("buildPreMergeGateCheck with requireProvenance OFF (default) adds NO new failure even when provenance is absent (Claude-Code non-regression)", () => {
   // requireProvenance falsy => today's behavior exactly: fanout_fanin + ledger present passes.
   const off = buildPreMergeGateCheck(cleanEvidence(), 0, null, {

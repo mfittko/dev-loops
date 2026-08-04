@@ -1162,8 +1162,10 @@ see `resolveFanoutGroups` in `@dev-loops/core/config`) is a second sanctioned ex
 `perAngle` entry may declare a `group` name, and fresh angles sharing one reviewer identity
 are valid exactly when every entry sharing that identity declares the SAME `group` name
 **AND** — whenever the caller supplies the round's resolved dispatch groups (both call
-sites do) — every one of those fresh angles is a member of that SAME configured dispatch
-unit per `resolveFanoutGroups`. A self-attested `group` label spanning angles the
+sites do, `write-gate-findings-log.mjs` via its own `--full-label` flag threaded into
+`resolveFanoutGroups` just like `write-gate-context.mjs`'s) — every one of those fresh
+angles is a member of that SAME configured dispatch unit per `resolveFanoutGroups`. A
+self-attested `group` label spanning angles the
 configured table splits apart (or never groups together at all) fails closed even though
 the label itself is internally consistent; `resolveFanoutGroups` already collapses to
 one-angle-per-unit singletons for `gates.fanout.mode: per-angle` and for a `gate:full`

@@ -26,6 +26,7 @@ Optional:
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
+  --full-label                   The PR carries the gate:full label: resolvedGroups (the cross-check for a claimed "group") is computed for the untriered gate:full grouping table instead of the tiered default (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -250,6 +251,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       findings: { type: "string" },
       "findings-file": { type: "string" },
       provenance: { type: "string" },
+      "full-label": { type: "boolean" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -265,6 +267,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     verdict: undefined,
     findings: undefined,
     findingsFile: undefined,
+    fullLabel: false,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -319,6 +322,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.provenance = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "full-label") {
+      options.fullLabel = true;
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -368,7 +375,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     try {
       const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
       const { config } = await loadDevLoopConfig({ repoRoot });
-      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle));
+      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }
