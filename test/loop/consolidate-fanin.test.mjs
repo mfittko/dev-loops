@@ -2205,3 +2205,17 @@ test("consolidateGateFanin lets a blocked artifact reach the blocked-verdict pat
     },
   );
 });
+
+test("consolidateGateFanin rejects a non-string programmatic headSha (no coercion)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      for (const bad of [123, ["a1".repeat(20)], { sha: HEAD_A }]) {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: bad }),
+          /--head-sha must be a 7-64 char hex SHA string/,
+        );
+      }
+    },
+  );
+});
