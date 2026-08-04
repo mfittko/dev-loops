@@ -798,9 +798,14 @@ export async function consolidateGateFanin(options) {
     // actionable re-run message. A missing or malformed stamp on any other
     // artifact is UNKNOWN provenance and fails closed the same way as a
     // mismatch, so omitting the field never bypasses the guard.
+    // Carried membership matched by baseAngleName + lowercase — the same rule
+    // the carried-upsert block below and resolve-angle-carry-forward.mjs use —
+    // so a "Coverage" declaration or a -delta-at-<sha> sibling is exempted
+    // consistently, not only an exact-name match.
+    const carriedKeys = new Set((options.carriedAngles ?? []).map((a) => baseAngleName(String(a).trim()).toLowerCase()));
     if (options.headSha !== undefined
         && parsed.verdict.trim() !== "blocked"
-        && !(options.carriedAngles ?? []).includes(angle)) {
+        && !carriedKeys.has(baseAngleName(angle).toLowerCase())) {
       const stamp = typeof parsed.headSha === "string" ? parsed.headSha.trim().toLowerCase() : null;
       if (stamp === null || !CARRIED_FROM_HEAD_RE.test(stamp)) {
         throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);

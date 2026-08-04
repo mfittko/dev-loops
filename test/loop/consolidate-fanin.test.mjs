@@ -2219,3 +2219,22 @@ test("consolidateGateFanin rejects a non-string programmatic headSha (no coercio
     },
   );
 });
+
+test("consolidateGateFanin exempts a carried angle by base name + case, matching the upsert rule", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "coverage.json": { angle: "coverage-delta-at-abc1234", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["Coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["Coverage"], { carriedFromHead: HEAD_B })).carried,
+        });
+        assert.equal(result.ok, true);
+      },
+    );
+  });
+});
