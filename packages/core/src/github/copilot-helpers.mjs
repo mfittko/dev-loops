@@ -57,7 +57,11 @@ export function matchGateReviewCommentHeader(body) {
 // marker candidate (its "Gate fan-out findings:"/"Reviewed head:" lines yield
 // gate+headSha) and the verdict upsert claims and overwrites it in place — the
 // silent findings-record loss observed live on PR 1513 (#1514).
-const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings(?:-review)?|deferred-summary)\b/mu;
+// The alternation is exact-marker, not prefix: `gate-findings-review\b` (the
+// per-round review header) or `gate-findings\s` (the findings COMMENT marker,
+// always followed by its ` gate=` attribute) — a bare `gate-findings\b` would
+// also swallow any future `gate-findings-<x>` marker silently.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review\b|gate-findings\s|deferred-summary\b)/mu;
 
 export function isGateMachineArtifactBody(body) {
   if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {

@@ -26,6 +26,17 @@ documented exception is the zero-dep fallback poster
 is absent: it cannot reach the review poster and posts a verdict issue comment, which the
 dev-loop skill already documents as a degraded audit-trail artifact.
 
+<!-- rule: GATE-COMMENT-IDENTITY-DISJOINT -->
+`GATE-COMMENT-IDENTITY-DISJOINT`: The verdict surface and the opt-in findings comment
+(`gates.postFindingsComments`, `post-gate-findings.mjs`) identify "their" comment by DISJOINT
+vocabularies, and neither may ever claim the other's. The verdict is claimed through the
+gate/head verdict fields and the `dev-loops:gate-findings-review` header; the findings comment
+through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim seam: the marker
+summarizer skips any `dev-loops:gate-findings*` machine-artifact body without a genuine verdict
+header, so an upsert can never update the other tool's comment in place (the silent
+findings-record overwrite observed live on PR 1513). Neither tool may key its comment identity
+on `gate` alone — that shared keying is what made the collision possible.
+
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
 `GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
 It does not restate the full PR follow-up procedure; that
