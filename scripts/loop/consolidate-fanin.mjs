@@ -710,9 +710,9 @@ export async function consolidateGateFanin(options) {
   // correctly-stamped artifact — same parser-bypass hardening the
   // carried-angles proof below already gets.
   if (options.headSha !== undefined) {
-    const headSha = String(options.headSha).trim().toLowerCase();
-    if (!CARRIED_FROM_HEAD_RE.test(headSha)) {
-      throw new Error(`--head-sha must be a 7-64 char hex SHA, got ${JSON.stringify(options.headSha)}`);
+    const headSha = typeof options.headSha === "string" ? options.headSha.trim().toLowerCase() : null;
+    if (headSha === null || !CARRIED_FROM_HEAD_RE.test(headSha)) {
+      throw new Error(`--head-sha must be a 7-64 char hex SHA string, got ${JSON.stringify(options.headSha)}`);
     }
     options = { ...options, headSha };
   }
