@@ -20,6 +20,7 @@ export {
   isCopilotLogin,
   isGateMachineArtifactBody,
   normalizeTimestamp,
+  normalizeVerdictSurface,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,

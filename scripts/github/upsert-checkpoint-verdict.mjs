@@ -18,7 +18,6 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
-import { GATE_REVIEW_COMMENT_HEADER_RE, matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import {
   buildCommentableLineSet,
   buildReviewHeaderMarker,
@@ -1020,13 +1019,16 @@ function selectGateEvidence(evidence, gate) {
     marker: evidence.preApprovalGateMarker,
   };
 }
+// `surface` arrives already coerced by core's normalizeVerdictSurface (via
+// detectCheckpointEvidence's normalizeGateSummary/normalizeGateMarkerSummary);
+// pass it through rather than restating the vocabulary a second time here.
 function summarizeExistingComment({ strict, marker, headSha }) {
   const strictSameHead = strict?.visible === true && strict.headSha === headSha ? strict : null;
   const markerSameHead = marker?.visible === true && marker.headSha === headSha ? marker : null;
   if (markerSameHead && (!strictSameHead || markerSameHead.commentId !== strictSameHead.commentId)) {
     return {
       kind: "marker",
-      surface: markerSameHead.surface === "review" ? "review" : "issue_comment",
+      surface: markerSameHead.surface,
       commentId: markerSameHead.commentId,
       commentUrl: markerSameHead.commentUrl,
       verdict: markerSameHead.verdict,
@@ -1040,7 +1042,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
   if (strictSameHead) {
     return {
       kind: "strict",
-      surface: strictSameHead.surface === "review" ? "review" : "issue_comment",
+      surface: strictSameHead.surface,
       commentId: strictSameHead.commentId,
       commentUrl: strictSameHead.commentUrl,
       verdict: strictSameHead.verdict,
@@ -1054,7 +1056,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
   if (markerSameHead) {
     return {
       kind: "marker",
-      surface: markerSameHead.surface === "review" ? "review" : "issue_comment",
+      surface: markerSameHead.surface,
       commentId: markerSameHead.commentId,
       commentUrl: markerSameHead.commentUrl,
       verdict: markerSameHead.verdict,

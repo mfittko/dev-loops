@@ -444,6 +444,18 @@ export function parseGateReviewCommentMarkerBody(body) {
   };
 }
 
+// Which GitHub surface carries a gate verdict. The poster needs it to pick the
+// right in-place correction endpoint on a same-head rerun (a PR review is PUT
+// to pulls/{pr}/reviews/{id}; a legacy verdict issue comment is PATCHed to
+// issues/comments/{id}). Anything that is not the review surface — including a
+// raw issue-comment payload with no `surface` field — is issue_comment, so the
+// historical shape survives untouched. SINGLE definition: a restatement that
+// misses a future third surface would silently route its body to the
+// issue-comment endpoint, where it does not live.
+export function normalizeVerdictSurface(value) {
+  return value === "review" ? "review" : "issue_comment";
+}
+
 export function summarizeGateReviewComments(comments) {
   const summary = {
     draft_gate: null,
@@ -472,12 +484,7 @@ export function summarizeGateReviewComments(comments) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
-      // Which GitHub surface carries this verdict. The poster needs it to pick
-      // the right in-place correction endpoint on a same-head rerun (a PR
-      // review PATCHes pulls/reviews/{id}; a legacy verdict issue comment
-      // PATCHes issues/comments/{id}). Defaults to issue_comment so a raw
-      // issue-comment payload (no `surface` field) keeps its historical shape.
-      surface: comment?.surface === "review" ? "review" : "issue_comment",
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"
@@ -532,8 +539,7 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
       contractComplete: parsed.contractComplete,
-      // See summarizeGateReviewComments above.
-      surface: comment?.surface === "review" ? "review" : "issue_comment",
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"

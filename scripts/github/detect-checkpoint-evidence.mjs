@@ -5,6 +5,7 @@ import {
   formatCliError,
   isDirectCliRun,
   parseJsonText,
+  normalizeVerdictSurface,
   parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
@@ -241,7 +242,7 @@ function normalizeGateSummary(summary) {
   }
   return {
     visible: true,
-    surface: summary.surface ?? "issue_comment",
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -273,7 +274,7 @@ function normalizeGateMarkerSummary(summary) {
   }
   return {
     visible: true,
-    surface: summary.surface ?? "issue_comment",
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -701,9 +702,11 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
-  // Also scan PR reviews for gate comments posted via the review API.
-  // This prevents duplicates when an escape-hatch path posted a gate verdict
-  // as a PR review rather than an issue comment (root cause 3 from issue #692).
+  // The PR review stream is the PRIMARY verdict surface: the poster renders the
+  // round's single visible surface as a review. The issue-comment scan above is
+  // the back-compat read that still sees legacy verdicts and the zero-dep
+  // fallback poster's output. Both feed the same summarizers, so a verdict is
+  // counted once wherever it lives.
   let prReviews = [];
   try {
     const reviewsRaw = await runGhJson(
