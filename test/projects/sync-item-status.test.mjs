@@ -241,7 +241,7 @@ describe("sync-item-status", () => {
         const parsed = JSON.parse(stdout.text());
         assert.equal(parsed.ok, true);
         assert.equal(parsed.skipped, true);
-        assert.match(parsed.reason, /./);
+        assert.match(parsed.reason, /gh api graphql failed|authentication required/);
       });
       process.exitCode = prevExitCode;
     });
