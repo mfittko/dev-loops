@@ -12,6 +12,14 @@ const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
+// The draft-gate round reset reads BOTH surfaces a verdict can live on: the
+// issue-comment stream first, then the PR review stream (the round's single
+// visible surface). Every at-cap stub sequence answers the second read too.
+const EMPTY_REVIEW_STREAM_ENTRY = {
+  assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+  stdout: "[[]]\n",
+};
+
 // In-process run: replay the same gh entries via makeGhMock and call the exported
 // entry fn directly, so the CLI logic runs without a node subprocess per gh call.
 // GH_SEQUENCE_PATH is set by default to preserve the production skip of the
@@ -764,6 +772,7 @@ const SILENT_NON_REQUESTED_CASES = {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: "[[]]\n",
       },
+      EMPTY_REVIEW_STREAM_ENTRY,
     ],
   },
   suppressed_draft: {
@@ -1211,6 +1220,7 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: "[[]]\n",
       },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         // AC2 convergence carry-forward: delta since the last reviewed head (sha5)
         // touches Copilot's review surface (a code file), so it re-opens the round.
@@ -1257,6 +1267,7 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: "[[]]\n",
       },
+      EMPTY_REVIEW_STREAM_ENTRY,
     ]);
 
   assert.deepEqual(result, {
@@ -1271,6 +1282,35 @@ test("request-copilot-review --force-rerequest-review refuses when cap reached a
     });
 });
 
+test("the draft-gate round reset sees a clean verdict that lives only in the review stream", async () => {
+  // The round's verdict is a PR review, not an issue comment. Reading only the
+  // issue-comment stream would miss the reset and refuse as cap-reached.
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"bbb2222","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"aaa1111"},"submittedAt":"2026-06-01T00:00:00Z"},{"id":"r-2","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"aaa1111"},"submittedAt":"2026-06-02T00:00:00Z"}]}\n',
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: JSON.stringify([[{
+          id: 4001,
+          state: "COMMENTED",
+          submitted_at: "2026-06-03T00:00:00Z",
+          body: "Gate review: draft_gate\nReviewed head SHA: aaa1111\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
+        }]]) + "\n",
+      },
+      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"headRefOid":"bbb2222","reviews":[]}\n' },
+    ]);
+
+  // Every counted review predates the review-stream draft-gate verdict, so the
+  // reset drops the count below the cap and the request is placed.
+  assert.equal(result.status, "requested");
+});
+
 // AC2 (#1326): at the round cap, a post-convergence head bump whose delta since the
 // last Copilot-reviewed head is a PROVABLE pure doc/prose bump must NOT force a fresh
 // blocking Copilot round — even under --force-rerequest-review with new commits.
@@ -1282,6 +1322,7 @@ test("request-copilot-review --force-rerequest-review suppresses a pure doc/pros
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         // Delta since the last reviewed head (sha5) is docs-only → provably outside
         // Copilot's review surface → carry forward, no fresh round.
@@ -1302,6 +1343,7 @@ test("request-copilot-review --force-rerequest-review re-opens the round when a 
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         // Mixed delta: a code file alongside a doc file → touches Copilot's surface → re-open.
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
@@ -1328,6 +1370,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: threeHundredDocs }) + "\n",
@@ -1347,6 +1390,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/x.md", status: "renamed" }] }) + "\n",
@@ -1366,6 +1410,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stderr: "gh: Not Found\n",
@@ -1384,6 +1429,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
       {
         // History was rewritten (rebase/amend): base is not a strict ancestor →
         // status "diverged" → destination-path list is untrustworthy → fail closed → re-open.

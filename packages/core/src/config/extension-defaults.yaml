@@ -143,9 +143,9 @@ gates:
     #     - name: docs-only
     #       match: { kinds: [docs] }
     #       angles: [pr-description, link-check, gate-evidence]
-  # Gate findings comments live ON the PR (the local-first spec-of-record /
-  # human-review surface), so they are evidence, not tracker noise — keep them on.
-  postFindingsComments: true
+  # The gate round's verdict review already carries every finding, so the
+  # consolidated findings comment is opt-in duplication — keep it off.
+  postFindingsComments: false
   preApproval:
     angles:
       - name: dry

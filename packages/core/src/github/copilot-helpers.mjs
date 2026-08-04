@@ -15,35 +15,55 @@ const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 
+// The literal header line the gate review body always emits first
+// (upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody, re-exported
+// from there). Owned here so the machine-artifact filter below and every
+// consumer that needs to recognize "is this a real gate verdict surface" read
+// the same producer-owned literal instead of restating it. Line-start anchored
+// (`m`) so a quoted header in a reply/blockquote can't match.
+export const GATE_REVIEW_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
+
+/** Returns the matched gate name when `body` carries a genuine gate verdict header, else null. */
+export function matchGateReviewCommentHeader(body) {
+  if (typeof body !== "string") return null;
+  const match = body.match(GATE_REVIEW_COMMENT_HEADER_RE);
+  return match ? match[1] : null;
+}
+
 // Machine-authored gate artifacts that must never win the newest-gate-marker
 // tie-break in summarizeGateReviewComments/summarizeGateReviewCommentMarkers:
-// close-gate-findings.mjs's posted findings review always embeds this gate's
-// name in its header line and can quote the current head sha inside a
-// finding's own free text (the lenient gate-name+hex-token fallback in
+// a historical standalone findings review always embedded this gate's name in
+// its header line and could quote the current head sha inside a finding's own
+// free text (the lenient gate-name+hex-token fallback in
 // parseGateReviewCommentFields would otherwise happily match that), and the
-// deferred-summary PR comment quotes a gate name plus a sha-shaped id in its
-// table rows the same way. Both are excluded HERE, inside the two shared
-// summarizers, because this module is the true merge point: every consumer
-// (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs, ready-for-review.mjs,
-// request-copilot-review.mjs) calls summarizeGateReviewComments/
-// summarizeGateReviewCommentMarkers to turn a raw comment/review list into a
-// gate verdict, so filtering here — rather than per-caller — covers all of
-// them by construction. close-gate-findings.mjs's round counting does not
-// read through here; it matches upsert-checkpoint-verdict.mjs's own
-// producer-owned header literal via the exported matchGateReviewCommentHeader
-// and needs no exclusion.
+// historical deferred-summary PR comment quoted a gate name plus a sha-shaped
+// id in its table rows the same way. Both are excluded HERE, inside the two
+// shared summarizers, because this module is the true merge point: every
+// consumer (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs,
+// ready-for-review.mjs, request-copilot-review.mjs) calls
+// summarizeGateReviewComments/summarizeGateReviewCommentMarkers to turn a raw
+// comment/review list into a gate verdict, so filtering here — rather than
+// per-caller — covers all of them by construction.
 //
 // Anchored to the start of a line (`^` with `m`) so only a marker rendered as
 // the first character of its own line is excluded — a genuine verdict
 // comment whose findings summary merely QUOTES the marker text mid-line (for
 // example, describing this very mechanism) still counts as evidence. Both
-// producers render their marker at column 0 (close-gate-findings.mjs's
-// review-header marker and the deferred-summary comment's leading marker
-// line), so the anchor costs nothing against genuine artifacts.
+// producers render their marker at column 0, so the anchor costs nothing
+// against genuine artifacts.
 const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|deferred-summary)\b/mu;
 
 export function isGateMachineArtifactBody(body) {
-  return typeof body === "string" && GATE_MACHINE_ARTIFACT_MARKER_RE.test(body);
+  if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {
+    return false;
+  }
+  // A gate round now posts ONE PR review carrying BOTH the verdict header and
+  // the gate-findings-review marker (the findings it files live on that same
+  // surface). Such a body IS the verdict, not a separate machine artifact, so
+  // the producer-owned verdict header wins over the artifact marker. Only a
+  // marker-bearing body with NO genuine verdict header (a historical standalone
+  // findings review or deferred-summary comment) stays excluded.
+  return matchGateReviewCommentHeader(body) === null;
 }
 
 export function isCopilotLogin(login) {
@@ -424,6 +444,18 @@ export function parseGateReviewCommentMarkerBody(body) {
   };
 }
 
+// Which GitHub surface carries a gate verdict. The poster needs it to pick the
+// right in-place correction endpoint on a same-head rerun (a PR review is PUT
+// to pulls/{pr}/reviews/{id}; a legacy verdict issue comment is PATCHed to
+// issues/comments/{id}). Anything that is not the review surface — including a
+// raw issue-comment payload with no `surface` field — is issue_comment, so the
+// historical shape survives untouched. SINGLE definition: a restatement that
+// misses a future third surface would silently route its body to the
+// issue-comment endpoint, where it does not live.
+export function normalizeVerdictSurface(value) {
+  return value === "review" ? "review" : "issue_comment";
+}
+
 export function summarizeGateReviewComments(comments) {
   const summary = {
     draft_gate: null,
@@ -452,6 +484,7 @@ export function summarizeGateReviewComments(comments) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"
@@ -506,6 +539,7 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
       contractComplete: parsed.contractComplete,
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"

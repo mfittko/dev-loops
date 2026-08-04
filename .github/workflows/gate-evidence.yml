@@ -33,23 +33,28 @@ name: Gate evidence
 # unresolved thread appears, which is the stale-green direction that matters
 # here.
 #
-# The stale-PENDING direction was the remaining gap: gate verdicts are posted
-# as ISSUE COMMENTS (upsert-checkpoint-verdict.mjs), so a clean current-head
-# pre_approval_gate verdict never re-fired this workflow and the required
-# status stayed at whatever the pre-verdict run computed — an unmergeable PR
-# with satisfied evidence. Closed by the issue_comment trigger below, guarded
-# to PR comments that START with the gate-comment marker ("### Gate review:")
-# AND come from a trusted author (OWNER/MEMBER/COLLABORATOR — the verdict
-# posters run under operator auth), so ordinary discussion comments (the noise
-# this trigger was originally omitted to avoid) and untrusted marker-shaped
-# comments never start a run. issue_comment events carry
-# no pull_request payload object, so the Resolve-PR-facts step below fetches
-# number/draft/head SHA once and every later step reads those outputs.
+# The stale-PENDING direction was the remaining gap: a clean current-head
+# gate verdict never re-fired this workflow and the required status stayed at
+# whatever the pre-verdict run computed — an unmergeable PR with satisfied
+# evidence. Gate verdicts are posted as a PR REVIEW
+# (upsert-checkpoint-verdict.mjs, the round's single visible surface), so a
+# NEW verdict re-fires via pull_request_review [submitted], and a same-head
+# in-place correction (PUT pulls/{pr}/reviews/{id}) re-fires via
+# pull_request_review [edited]. The issue_comment trigger below covers only
+# the LEGACY/fallback issue-comment verdicts (old PRs; the zero-dep fallback
+# poster), guarded to PR comments that START with the gate-comment marker
+# ("### Gate review:") AND come from a trusted author
+# (OWNER/MEMBER/COLLABORATOR — the verdict posters run under operator auth),
+# so ordinary discussion comments and untrusted marker-shaped comments never
+# start a run. issue_comment events carry no pull_request payload object, so
+# the Resolve-PR-facts step below fetches number/draft/head SHA once and
+# every later step reads those outputs.
 #
 # `gh run rerun` is NOT a recovery path for a stale status: it replays the
 # original event payload (an older head / pre-verdict comment set), so the
-# fresh evaluation still misses the current state. Post (or edit) the gate
-# verdict comment instead — that re-fires this workflow with fresh context.
+# fresh evaluation still misses the current state. Post (or correct in place)
+# the gate verdict review instead — that re-fires this workflow with fresh
+# context.
 #
 # (GitHub Actions has no `pull_request_review_thread` workflow trigger —
 # thread resolve/unresolve is a webhook but not an `on:` event — so it is not
@@ -81,7 +86,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
-    types: [submitted]
+    types: [submitted, edited]
   pull_request_review_comment:
     types: [created]
   issue_comment:

@@ -3,6 +3,8 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
+// Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
+import { SEVERITY_ORDER, VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -14,8 +16,9 @@ per gate: there is exactly one comment per gate, updated in place on each run
 (the reviewed head is shown in the body) instead of duplicating it.
 
 The disposition ledger (write-gate-findings-log.mjs) is the durable source of truth and is
-written regardless of this comment. This helper only posts the auditable PR summary, and
-no-ops when gates.postFindingsComments is set to false in config.
+written regardless of this comment, and the round's verdict review already carries every
+finding — this comment is an opt-in SECOND surface. It no-ops unless gates.postFindingsComments
+is set to true in config.
 
 Required:
   --repo <owner/name>
@@ -35,9 +38,6 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
-// Severity ordering for grouped rendering (most-blocking first).
-const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
 const SEVERITY_LABELS = {
   "must-fix": "Must fix",
   "worth-fixing-now": "Worth fixing now",
@@ -361,8 +361,8 @@ export function flattenPaginatedSlurp(payload) {
 // call site), and parse its stdout as JSON. Exported so sibling GitHub
 // scripts that only ever need a stdin-less `gh` call (no `--input -` payload)
 // can reuse this instead of re-implementing the same exit-code check.
-export async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
+export async function runGhJson(args, { env, ghCommand, runChild: run = runChild }) {
+  const result = await run(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);
@@ -370,17 +370,16 @@ export async function runGhJson(args, { env, ghCommand }) {
   return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
 }
 
-export async function listIssueComments({ repo, pr }, { env, ghCommand }) {
+export async function listIssueComments({ repo, pr }, { env, ghCommand, runChild: run }) {
   const payload = await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/issues/${pr}/comments?per_page=100`],
-    { env, ghCommand },
+    { env, ghCommand, runChild: run },
   );
   return flattenPaginatedSlurp(payload);
 }
 
-// Line-start anchored: every marker this module's own producers (and
-// close-gate-findings.mjs's deferred-summary marker) render is always the
-// FIRST character of its own line — never rendered mid-line. Matching on
+// Line-start anchored: every marker this module's own producers render is
+// always the FIRST character of its own line — never rendered mid-line. Matching on
 // `body.includes(marker)` alone would also honor a marker merely QUOTED
 // inside a comment's free text (a reply that pastes a prior comment's marker
 // as an example, or a hostile comment crafted to forge one), and this
@@ -420,10 +419,10 @@ export function findMarkedComment(comments, marker, { author } = {}) {
 // to (never rendered marker text alone, which a foreign comment could forge
 // just as easily as this repo's own producers render it). Shared by every
 // caller that needs to scope a marker read/write to its own comments —
-// currently this module's own idempotent upsert and
-// close-gate-findings.mjs's disposition/suppression/deferred-summary passes.
-export async function resolveAuthenticatedLogin({ env, ghCommand }) {
-  const payload = await runGhJson(["api", "user"], { env, ghCommand });
+// currently this module's own idempotent upsert, the gate verdict poster's
+// finding-surface suppression, and close-gate-findings.mjs's disposition pass.
+export async function resolveAuthenticatedLogin({ env, ghCommand, runChild: run }) {
+  const payload = await runGhJson(["api", "user"], { env, ghCommand, runChild: run });
   const login = typeof payload?.login === "string" ? payload.login.trim() : "";
   if (login.length === 0) {
     throw new Error("gh api user returned no login; cannot verify gate-authored marker provenance — fail closed.");
@@ -450,7 +449,7 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
   return parseCommentMutationResponse(payload);
 }
 
-export async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
+async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
     { env, ghCommand },
@@ -478,7 +477,7 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
     return {
       ok: true,
       action: "skipped",
-      reason: "gates.postFindingsComments is false",
+      reason: "gates.postFindingsComments is not true",
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,

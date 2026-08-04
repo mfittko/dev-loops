@@ -153,7 +153,7 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `strategy` | `local-first` | The shipped default posture (decision #7) |
 | `autonomy.humanMergeOnly` | `true` | Local-first never auto-merges; a human always merges |
 | `queue.maxAutoFiledIssues` | `1` | Local-first is PR-first, so auto-filing issues is near-zero; a low cap keeps tracker noise minimal |
-| `gates.postFindingsComments` | `true` | Gate findings live on the PR (the spec-of-record and human-review surface) as evidence |
+| `gates.postFindingsComments` | `false` | Gate findings already live on the PR as the round's verdict review; a second consolidated comment would only duplicate them |
 
 These values come from the existing config-merge layering, so no new resolver is involved: `BUILT_IN_DEFAULTS` keeps the tracker-first posture (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`), and the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
 

@@ -16,8 +16,24 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-import { sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
+import {
+  buildCommentableLineSet,
+  buildReviewHeaderMarker,
+  collectSuppressedFingerprints,
+  createGateReview,
+  fetchPrFiles,
+  fingerprintFinding,
+  isLocatableFinding,
+  listPrReviews,
+  readGateFindingsLedger,
+  renderInlineCommentBody,
+  renderNonLocatableBlock,
+  resolveGateRound,
+  updateGateReview,
+} from "./_gate-finding-surface.mjs";
+import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -28,12 +44,17 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>] [--findings-ledger <path>]
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
-Create or update the visible checkpoint verdict comment for a gate/head pair.
+Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
+body carries the checkpoint verdict fields and, with --findings-ledger, the
+round's body-filed findings, while every locatable finding becomes one of that
+review's inline comments. A finding's text appears exactly ONCE across the round.
 Same-head reruns are idempotent: if a visible marker already exists for the same
-\`gate + headSha\`, this helper updates it in place when correction is needed and
-suppresses duplicate reposts when the existing visible comment already matches.
+\`gate + headSha\`, this helper updates its body in place when correction is needed
+and suppresses duplicate reposts when the existing visible surface already matches.
+A legacy verdict ISSUE comment for the same gate+head is still read and corrected
+in place (back-compat); new rounds always post a review.
 The gate (draft_gate or pre_approval_gate) is auto-resolved from the PR gate
 coordination state when --gate is not provided. Explicit --gate is still accepted
 but must match the coordination state's allowed next actions.
@@ -83,6 +104,24 @@ Required:
                                             still trips this check.
   --next-action <text>
 Optional:
+  --findings-ledger <path>                  Path to this round's
+                                            write-gate-findings-log.mjs ledger
+                                            ({ repo, pr, gate, headSha, verdict,
+                                            findings[] }). Turns the posted review
+                                            into the round's single finding
+                                            surface: an in-diff file:line finding
+                                            becomes an inline review comment, every
+                                            other finding is body-filed, and the
+                                            per-angle breakdown degrades to
+                                            \`angle → verdict (+ count)\` one-liners
+                                            so no finding's text is rendered twice.
+                                            A candidate already covered by an
+                                            OWN-AUTHORED review body or review
+                                            thread (fingerprint match, resolved
+                                            threads included) is dropped before
+                                            posting. Omit it and the body keeps the
+                                            full per-angle breakdown, with no
+                                            inline comments.
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
@@ -127,9 +166,17 @@ Output (stdout, JSON):
     "gate": "draft_gate",
     "headSha": "abc1234",
     "currentHeadSha": "abc1234",
+    "surface": "review",
     "commentId": 101,
-    "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101"
+    "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
+    "round": 1,
+    "inlineComments": 2,
+    "bodyFiled": 1,
+    "suppressed": 0
   }
+  \`commentId\`/\`commentUrl\` identify the posted PR review (a legacy verdict issue
+  comment when \`surface\` is "issue_comment"). \`round\`/\`inlineComments\`/
+  \`bodyFiled\`/\`suppressed\` are present only for a --findings-ledger round.
 A \`warning\` field is included when a gate comment for the same gate already
 exists on a different head SHA (the old comment is stale for the current head).
 Error output (stderr, JSON):
@@ -335,6 +382,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-summary": { type: "string" },
       "findings-file": { type: "string" },
       "findings-json": { type: "string" },
+      "findings-ledger": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
@@ -356,6 +404,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsSummary: undefined,
     findingsFile: undefined,
     findingsJson: undefined,
+    findingsLedger: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
     executionMode: undefined,
@@ -432,6 +481,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         throw parseError("--findings-json must be a non-empty path");
       }
       options.findingsJson = rawPath;
+      continue;
+    }
+    if (token.name === "findings-ledger") {
+      const rawPath = requireTokenValue(token, parseError).trim();
+      if (rawPath.length === 0) {
+        throw parseError("--findings-ledger must be a non-empty path");
+      }
+      options.findingsLedger = rawPath;
       continue;
     }
     if (token.name === "next-action") {
@@ -788,6 +845,21 @@ export function renderStructuredFindings(angles) {
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
+// The reduced per-angle breakdown for a round that carries its own finding
+// surface: angle, per-angle verdict, and the finding COUNT — never a finding's
+// text, which lives exactly once on this same review (an inline comment, or the
+// body-filed block). Unbounded by construction: one short line per angle, and
+// the angle pool is config-bounded, so this can never approach the posted-body
+// budget the way a full breakdown can.
+export function renderAngleVerdictDigest(angles) {
+  return angles
+    .map(({ angle, verdict, findings }) => {
+      const count = findings.length;
+      const suffix = count === 0 ? "" : ` (${count} finding${count === 1 ? "" : "s"})`;
+      return `- \`${sanitizeStructuredCodeSpan(angle)}\` → \`${sanitizeStructuredCodeSpan(verdict)}\`${suffix}`;
+    })
+    .join("\n");
+}
 // Build the single-line digest shown on the `**Findings summary:**` line when a
 // structured per-angle block is rendered. The marker/parse contract requires this
 // line to carry non-empty, single-line content (parseGateReviewCommentFields
@@ -837,30 +909,24 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-// The literal header line renderGateReviewCommentBody always emits first —
-// exported so any consumer that needs to recognize "is this comment a real
-// gate verdict comment" (close-gate-findings.mjs's round-source (A) count)
-// reads the SAME producer-owned literal rather than restating it, so the two
-// can never drift when the label wording changes. Line-start anchored (`m`)
-// so a quoted header in a reply/blockquote can't match.
-export const GATE_REVIEW_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
-
-// Returns the matched gate name ("draft_gate" | "pre_approval_gate") when
-// `body` opens with a genuine gate verdict comment header, else null.
-export function matchGateReviewCommentHeader(body) {
-  if (typeof body !== "string") return null;
-  const match = body.match(GATE_REVIEW_COMMENT_HEADER_RE);
-  return match ? match[1] : null;
-}
-
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote }) {
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
+  ];
+  // The gate-findings-review marker records WHICH round this single surface is,
+  // scoped to this gate, so the round cross-check can be computed from review
+  // bodies alone. Rendered only for a round that actually carries the finding
+  // surface (a `--findings-ledger` round); a bare verdict post keeps the exact
+  // body shape it has always had.
+  if (Number.isInteger(round)) {
+    lines.push(buildReviewHeaderMarker({ gate, headSha, round }));
+  }
+  lines.push(
     "",
     `**Reviewed head SHA:** \`${headSha}\``,
     `**Verdict:** ${verdict}`,
     renderExecutionModeLine(executionMode, inlineReason),
-  ];
+  );
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
@@ -871,18 +937,36 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
   // one line) keeps round-tripping; the structured breakdown is nested below it
   // with newlines preserved (NOT collapsed to a run-on line).
   const angles = normalizeStructuredFindings(structuredFindings);
+  // A round that carries its own finding surface (this review's inline comments
+  // plus the body-filed block below) renders each finding's TEXT exactly once,
+  // on that surface. The per-angle breakdown then degrades to `angle → verdict
+  // (+ finding count)` one-liners: repeating each summary here would put the
+  // same text twice on the SAME visible surface. A bare verdict post (no
+  // findings ledger, so no finding surface at all) keeps the full breakdown —
+  // it is the only place those findings would otherwise appear.
+  const hasFindingSurface = Array.isArray(nonLocatableFindings);
   if (angles) {
     lines.push(
       "",
       `**Findings summary:** ${buildStructuredFindingsDigest(angles, findingsSeverityCounts)}`,
       "",
-      renderStructuredFindings(angles),
+      hasFindingSurface ? renderAngleVerdictDigest(angles) : renderStructuredFindings(angles),
     );
   } else {
     lines.push(
       "",
       `**Findings summary:** ${findingsSummary}`,
     );
+  }
+  if (hasFindingSurface) {
+    lines.push("", "**Body-filed findings** (no in-diff location):");
+    if (nonLocatableFindings.length === 0) {
+      lines.push("", "> None — every finding this round is an inline comment on this review.");
+    } else {
+      for (const finding of nonLocatableFindings) {
+        lines.push("", renderNonLocatableBlock(finding, { round }));
+      }
+    }
   }
   // The gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
   // renders as its own labeled line — never spliced with `;` into the findings
@@ -935,12 +1019,16 @@ function selectGateEvidence(evidence, gate) {
     marker: evidence.preApprovalGateMarker,
   };
 }
+// `surface` arrives already coerced by core's normalizeVerdictSurface (via
+// detectCheckpointEvidence's normalizeGateSummary/normalizeGateMarkerSummary);
+// pass it through rather than restating the vocabulary a second time here.
 function summarizeExistingComment({ strict, marker, headSha }) {
   const strictSameHead = strict?.visible === true && strict.headSha === headSha ? strict : null;
   const markerSameHead = marker?.visible === true && marker.headSha === headSha ? marker : null;
   if (markerSameHead && (!strictSameHead || markerSameHead.commentId !== strictSameHead.commentId)) {
     return {
       kind: "marker",
+      surface: markerSameHead.surface,
       commentId: markerSameHead.commentId,
       commentUrl: markerSameHead.commentUrl,
       verdict: markerSameHead.verdict,
@@ -954,6 +1042,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
   if (strictSameHead) {
     return {
       kind: "strict",
+      surface: strictSameHead.surface,
       commentId: strictSameHead.commentId,
       commentUrl: strictSameHead.commentUrl,
       verdict: strictSameHead.verdict,
@@ -967,6 +1056,7 @@ function summarizeExistingComment({ strict, marker, headSha }) {
   if (markerSameHead) {
     return {
       kind: "marker",
+      surface: markerSameHead.surface,
       commentId: markerSameHead.commentId,
       commentUrl: markerSameHead.commentUrl,
       verdict: markerSameHead.verdict,
@@ -1003,18 +1093,23 @@ function parseCommentMutationResponse(payload) {
   }
   return { commentId, commentUrl };
 }
-async function createComment({ repo, pr, body }, { env, ghCommand, runChild = defaultRunChild }) {
-  const payload = await runGhJson(["api", "repos/" + repo + "/issues/" + pr + "/comments", "-f", `body=${body}`], { env, ghCommand, runChild });
-  return parseCommentMutationResponse(payload);
-}
+// Legacy in-place correction path: a verdict posted as an ISSUE comment by an
+// older run (or by the fallback poster) is still corrected on its own surface
+// rather than duplicated as a new review.
 async function updateComment({ repo, commentId, body }, { env, ghCommand, runChild = defaultRunChild }) {
   const payload = await runGhJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`], { env, ghCommand, runChild });
   return parseCommentMutationResponse(payload);
 }
 
-async function verifyComment({ repo, commentId }, { env, ghCommand, runChild = defaultRunChild }) {
+// Read-back confirmation that the just-created/updated surface is retrievable.
+// A PR review and an issue comment live on different endpoints, so the check
+// follows the surface it wrote.
+async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCommand, runChild = defaultRunChild }) {
+  const route = surface === "review"
+    ? `repos/${repo}/pulls/${pr}/reviews/${commentId}`
+    : `repos/${repo}/issues/comments/${commentId}`;
   try {
-    const payload = await runGhJson(["api", `repos/${repo}/issues/comments/${commentId}`], { env, ghCommand, runChild });
+    const payload = await runGhJson(["api", route], { env, ghCommand, runChild });
     return payload?.id != null;
   } catch {
     return false;
@@ -1140,6 +1235,66 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
   };
+}
+
+/**
+ * Resolve this round's finding surface from `--findings-ledger`: the round
+ * number, the fingerprint-suppressed candidate set, and its split into inline
+ * (locatable, in-diff) and body-filed findings. Returns null when no ledger was
+ * supplied — that round posts a plain verdict body with no finding surface.
+ *
+ * `isUpdate` collapses the split: an already-submitted review can only have its
+ * BODY corrected (GitHub exposes no endpoint to add inline comments to it), so
+ * a same-head correction body-files every still-unposted finding rather than
+ * silently dropping the locatable ones.
+ */
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate }, gh) {
+  if (!options.findingsLedger) {
+    return null;
+  }
+  const ledger = await readGateFindingsLedger(options.findingsLedger);
+  if (ledger.repo !== options.repo || ledger.pr !== options.pr || ledger.gate !== options.gate || ledger.headSha !== headSha) {
+    throw new Error(
+      `--findings-ledger "${options.findingsLedger}" is for ${ledger.repo}#${ledger.pr} ${ledger.gate} @ ${ledger.headSha}, `
+      + `but this verdict is for ${options.repo}#${options.pr} ${options.gate} @ ${headSha}; refuse to post another round's findings.`,
+    );
+  }
+  const login = await resolveAuthenticatedLogin(gh);
+  const reviews = await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
+  const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
+  // The cheap thread LISTING is enough for fingerprint suppression: a finding
+  // thread's first comment opens with its finding marker, and that marker is
+  // bounded well under list-review-threads.mjs's 200-char listing excerpt (a
+  // 16-hex fingerprint plus two 40-char slugged fields, a round, and an
+  // optional disposition), so the fingerprint always survives the excerpt.
+  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, gh);
+  const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
+  const round = await resolveGateRound({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha,
+    reviews,
+    issueComments,
+    repoRoot,
+  });
+  const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
+  const surface = {
+    round,
+    suppressedCount: ledger.findings.length - candidates.length,
+    locatable: [],
+    nonLocatable: candidates,
+  };
+  if (isUpdate || candidates.length === 0) {
+    return surface;
+  }
+  const commentableSet = buildCommentableLineSet(await fetchPrFiles({ repo: options.repo, pr: options.pr }, gh));
+  surface.locatable = [];
+  surface.nonLocatable = [];
+  for (const finding of candidates) {
+    (isLocatableFinding(finding, commentableSet) ? surface.locatable : surface.nonLocatable).push(finding);
+  }
+  return surface;
 }
 
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
@@ -1470,6 +1625,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const effectiveFindingsSummary = structuredFindings
     ? buildStructuredFindingsDigest(structuredFindings, options.findingsSeverityCounts)
     : options.findingsSummary;
+  const gateEvidence = selectGateEvidence(evidence, options.gate);
+  const existing = summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
+  const warning = detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // The round's finding surface (this same review): resolved BEFORE the body is
+  // rendered, since the body carries the round number, the body-filed findings,
+  // and the reduced per-angle digest that depends on them.
+  const findingSurface = await resolveFindingSurface(
+    { options, headSha: canonicalHeadSha, repoRoot, isUpdate: existing !== null },
+    gh,
+  );
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,
@@ -1477,10 +1642,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable } : {}),
   });
-  const gateEvidence = selectGateEvidence(evidence, options.gate);
-  const existing = summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
-  const warning = detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  const findingSurfaceFields = findingSurface
+    ? {
+        round: findingSurface.round,
+        inlineComments: findingSurface.locatable.length,
+        bodyFiled: findingSurface.nonLocatable.length,
+        suppressed: findingSurface.suppressedCount,
+      }
+    : {};
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   // inlineReason is only meaningful for inline mode and is dropped for
   // fanout_fanin at parse time, so normalize both sides to null when the
@@ -1493,6 +1664,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const existingInlineReason = (existing?.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent"
     ? (existing?.inlineReason ?? null)
     : null;
+  // The finding surface is part of what a same-head rerun would post, and the
+  // structured digest collapses findings to severity counts — so a ledger whose
+  // findings changed at unchanged counts renders an identical digest. Compare
+  // the surface itself: every candidate the fingerprint pass did NOT suppress is
+  // still unposted, so a round carrying one is never a noop, whatever the fields
+  // say. A rerun of the same ledger suppresses all of its findings against the
+  // posted review/threads and reaches zero here.
+  const unpostedFindings = findingSurface
+    ? findingSurface.locatable.length + findingSurface.nonLocatable.length
+    : 0;
   if (
     existing
     && existing.contractComplete
@@ -1501,6 +1682,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && existing.nextAction === options.nextAction
     && (existing.executionMode ?? DEFAULT_EXECUTION_MODE) === desiredExecutionMode
     && existingInlineReason === desiredInlineReason
+    && unpostedFindings === 0
   ) {
     return {
       ok: true,
@@ -1510,27 +1692,39 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       gate: options.gate,
       headSha: canonicalHeadSha,
       currentHeadSha: evidence.currentHeadSha,
+      surface: existing.surface,
       commentId: existing.commentId,
       commentUrl: existing.commentUrl,
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
       executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      ...findingSurfaceFields,
       ...(existingInlineReason ? { inlineReason: existingInlineReason } : {}),
       ...(warning ? { warning } : {}),
     };
   }
   if (existing) {
-    const updated = await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, gh);
-    // Post-update verification: verify the updated comment is visible via direct API fetch by comment ID.
-    // A run id is set (production context) — DEVLOOPS_RUN_ID.
+    // In-place correction on the surface the existing verdict actually lives
+    // on: a PR review body via the review endpoint, a legacy verdict issue
+    // comment via the issue-comment endpoint. Inline comments are never
+    // re-posted here — GitHub has no endpoint to add them to a submitted
+    // review, which is why resolveFindingSurface body-files everything on this
+    // path.
+    const updated = existing.surface === "review"
+      ? await updateGateReview({ repo: options.repo, pr: options.pr, reviewId: existing.commentId, body: desiredBody }, gh)
+        .then((r) => ({ commentId: r.reviewId, commentUrl: r.reviewUrl ?? existing.commentUrl }))
+      : await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, gh);
+    // Post-update verification: verify the updated surface is retrievable via a
+    // direct API fetch by id. A run id is set (production context) — DEVLOOPS_RUN_ID.
     let updateVerificationWarning = null;
     if (envRunId) {
-      let verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, gh);
+      const verifyTarget = { repo: options.repo, pr: options.pr, surface: existing.surface, commentId: updated.commentId };
+      let verified = await verifyPostedSurface(verifyTarget, gh);
       if (!verified) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        verified = await verifyComment({ repo: options.repo, commentId: updated.commentId }, gh);
+        verified = await verifyPostedSurface(verifyTarget, gh);
       }
       updateVerificationWarning = !verified
-        ? `Post-update verification failed: comment ${updated.commentId} not retrievable after retry.`
+        ? `Post-update verification failed: ${existing.surface === "review" ? "review" : "comment"} ${updated.commentId} not retrievable after retry.`
         : null;
     }
     return {
@@ -1541,33 +1735,48 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       gate: options.gate,
       headSha: canonicalHeadSha,
       currentHeadSha: evidence.currentHeadSha,
+      surface: existing.surface,
       commentId: updated.commentId,
       commentUrl: updated.commentUrl,
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
       executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      ...findingSurfaceFields,
       ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
     };
   }
-  const created = await createComment({ repo: options.repo, pr: options.pr, body: desiredBody }, gh);
-  // Post-creation verification: verify the comment is retrievable before returning.
+  const createdReview = await createGateReview({
+    repo: options.repo,
+    pr: options.pr,
+    headSha: canonicalHeadSha,
+    body: desiredBody,
+    comments: (findingSurface?.locatable ?? []).map((finding) => ({
+      path: finding.files[0],
+      line: finding.line,
+      side: "RIGHT",
+      body: renderInlineCommentBody(finding, { round: findingSurface.round }),
+    })),
+  }, gh);
+  const created = { commentId: createdReview.reviewId, commentUrl: createdReview.reviewUrl };
+  // Post-creation verification: verify the review is retrievable before returning.
   // GitHub API can have brief eventual-consistency windows where a just-posted
-  // comment is not yet returned by paginated list endpoints. A direct fetch
-  // by comment ID confirms the comment is persisted, preventing the evidence
-  // checker from falsely reporting "missing" and triggering a duplicate post.
+  // surface is not yet returned by paginated list endpoints. A direct fetch by
+  // id confirms it is persisted, preventing the evidence checker from falsely
+  // reporting "missing" and triggering a duplicate post.
   // Only active when a run id is set (production context) — DEVLOOPS_RUN_ID.
   let verified = true;
   let verificationWarning = null;
   if (envRunId) {
-    verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, gh);
+    const verifyTarget = { repo: options.repo, pr: options.pr, surface: "review", commentId: created.commentId };
+    verified = await verifyPostedSurface(verifyTarget, gh);
     if (!verified) {
       // Brief wait then retry — eventual consistency should resolve within ~2s.
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      verified = await verifyComment({ repo: options.repo, commentId: created.commentId }, gh);
+      verified = await verifyPostedSurface(verifyTarget, gh);
     }
     verificationWarning = !verified
-      ? `Post-creation verification failed: comment ${created.commentId} not retrievable after retry. The comment was created (API confirmed) but may not appear in list endpoints immediately.`
+      ? `Post-creation verification failed: review ${created.commentId} not retrievable after retry. The review was created (API confirmed) but may not appear in list endpoints immediately.`
       : null;
   }
   return {
@@ -1578,10 +1787,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     gate: options.gate,
     headSha: canonicalHeadSha,
     currentHeadSha: evidence.currentHeadSha,
+    surface: "review",
     commentId: created.commentId,
     commentUrl: created.commentUrl,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+    ...findingSurfaceFields,
     ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),

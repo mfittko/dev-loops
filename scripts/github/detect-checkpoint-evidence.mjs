@@ -5,12 +5,13 @@ import {
   formatCliError,
   isDirectCliRun,
   parseJsonText,
+  normalizeVerdictSurface,
   parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
-// Machine-authored gate artifacts (close-gate-findings.mjs's posted findings
-// review, the deferred-summary comment) are excluded from evidence at the
+// Historical machine-authored gate artifacts (a standalone findings review, a
+// deferred-summary comment) are excluded from evidence at the
 // true merge point — inside summarizeGateReviewComments/
 // summarizeGateReviewCommentMarkers in packages/core/src/github/
 // copilot-helpers.mjs, re-exported here — so every caller of those two
@@ -27,6 +28,7 @@ import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, re
 import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshAngles, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -60,45 +62,49 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     "currentHeadSha": "abc1234",
     "draftGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "contractComplete": true,
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateSatisfied": true,
     "preApprovalGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preApprovalGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "contractComplete": true,
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preMergeGateCheck": {
@@ -107,6 +113,9 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     },
     "evidenceState": "satisfied"
   }
+  (surface is "review"|"issue_comment" (null when not visible): which GitHub
+  surface carries that verdict — new rounds always post a PR review,
+  "issue_comment" is a legacy verdict comment still read for back-compat.)
   (evidenceState is "satisfied"|"not_established"|"violation": "not_established"
   means evidence for the current head simply doesn't exist yet (draft,
   mid-Copilot-loop, pre-approval not yet re-run after a fix commit); "violation"
@@ -214,22 +223,10 @@ function normalizeIssueCommentsPayload(payload) {
   }
   return payload;
 }
-function normalizePrReviewsPayload(payload) {
-  if (!Array.isArray(payload)) return [];
-  const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
-  return flat
-    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
-    .map((r) => ({
-      id: r.id,
-      body: r.body,
-      html_url: typeof r.html_url === "string" ? r.html_url : null,
-      created_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-      updated_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-    }));
-}
 function emptyGateSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
@@ -245,6 +242,7 @@ function normalizeGateSummary(summary) {
   }
   return {
     visible: true,
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -257,6 +255,7 @@ function normalizeGateSummary(summary) {
 function emptyGateMarkerSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
@@ -275,6 +274,7 @@ function normalizeGateMarkerSummary(summary) {
   }
   return {
     visible: true,
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -702,14 +702,16 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
-  // Also scan PR reviews for gate comments posted via the review API.
-  // This prevents duplicates when an escape-hatch path posted a gate verdict
-  // as a PR review rather than an issue comment (root cause 3 from issue #692).
+  // The PR review stream is the PRIMARY verdict surface: the poster renders the
+  // round's single visible surface as a review. The issue-comment scan above is
+  // the back-compat read that still sees legacy verdicts and the zero-dep
+  // fallback poster's output. Both feed the same summarizers, so a verdict is
+  // counted once wherever it lives.
   let prReviews = [];
   try {
     const reviewsRaw = await runGhJson(
-      ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
-      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`, env) },
+      prReviewsApiArgs(options.repo, options.pr),
+      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
   } catch {

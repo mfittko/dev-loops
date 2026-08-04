@@ -351,9 +351,9 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
         stdout: "src/index.ts\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`", "CI optional by config"],
-        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-301"}\n',
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "CI optional by config"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
       },
       {
         assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
@@ -373,7 +373,7 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
       headSha: "abc123456789",
       currentHeadSha: "abc123456789",
       commentId: 301,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-301",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-301",
     });
     assert.equal(await readGhCallCount(tempDir), 14);
   } finally {
@@ -437,10 +437,10 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
         stdout: "src/index.ts\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: ["body=### Gate review: `draft_gate`"],
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`"],
         assertArgNotContains: ["convertPullRequestToDraft"],
-        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-201"}\n',
+        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n',
       },
       {
         assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
@@ -460,7 +460,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
       headSha: "abc123456789",
       currentHeadSha: "abc123456789",
       commentId: 201,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-201",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-201",
     });
     assert.equal(await readGhCallCount(tempDir), 14);
   } finally {
@@ -524,7 +524,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
         stdout: "src/index.ts\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         stderr: 'boom\n',
         exitCode: 1,
       },
@@ -602,7 +602,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
         stdout: "src/index.ts\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         stderr: 'boom\n',
         exitCode: 1,
       },
@@ -684,14 +684,14 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
         stdout: "src/index.ts\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "-f"],
-        assertArgContains: [
-          "body=### Gate review: `draft_gate`",
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `draft_gate`",
           "**Reviewed head SHA:** `abc123456789`",
           "**Findings summary:** Reconciled non-draft PR — draft gate auto-reconciled (CI green).",
           "**Next action:** Mark ready for review (auto-reconciled).",
         ],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
       {
         assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
@@ -711,7 +711,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
       headSha: "abc123456789",
       currentHeadSha: "abc123456789",
       commentId: 101,
-      commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
     });
     assert.equal(await readGhCallCount(tempDir), 15);
   } finally {

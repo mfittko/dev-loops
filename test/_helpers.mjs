@@ -54,6 +54,13 @@ export function makeGhMock(entries = [], {
         }
       }
     }
+    if (entry.assertStdinNotIncludes) {
+      for (const forbidden of entry.assertStdinNotIncludes) {
+        if (String(stdinText).includes(forbidden)) {
+          return { code: 95, stdout: "", stderr: `unexpected stdin text: ${forbidden}\n` };
+        }
+      }
+    }
     if (entry.assertArgContains) {
       for (const expected of entry.assertArgContains) {
         if (!args.some((a) => a.includes(expected))) {
@@ -225,6 +232,13 @@ function buildGhStubScript() {
     '    for (const expected of entry.assertStdinIncludes) {',
     '      if (!stdin.includes(expected)) {',
     '        fail(96, `missing expected stdin text: ${expected}`);',
+    '      }',
+    '    }',
+    '  }',
+    '  if (entry.assertStdinNotIncludes) {',
+    '    for (const forbidden of entry.assertStdinNotIncludes) {',
+    '      if (stdin.includes(forbidden)) {',
+    '        fail(95, `unexpected stdin text: ${forbidden}`);',
     '      }',
     '    }',
     '  }',

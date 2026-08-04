@@ -132,6 +132,49 @@ test("gate passes: draft PR with clean draft_gate comment for current head", asy
   assert.equal(parsed.draftGateSatisfied, true);
 });
 
+test("gate passes: clean draft verdict lives only in the review stream (single-surface round)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: "[]" }, // issue comments: no verdict on the legacy surface
+    {
+      stdout: JSON.stringify([
+        {
+          ...makeDraftGateComment(HEAD_SHA_SHORT),
+          state: "COMMENTED",
+          submitted_at: "2026-06-07T00:00:00Z",
+          html_url: "https://github.com/owner/repo/pull/42#pullrequestreview-100",
+        },
+      ]),
+    },
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.draftGateSatisfied, true);
+});
+
+test("gate passes off a legacy issue-comment verdict when the reviews fetch fails (fail-open)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: "", code: 1, stderr: "HTTP 500" }, // reviews fetch fails
+  ], { repeatLastOnOverflow: false });
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  assert.equal(JSON.parse(result.stdout).draftGateSatisfied, true);
+});
+
 test("gate blocks: draft PR without draft_gate evidence", async (t) => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));

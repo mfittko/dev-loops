@@ -8,9 +8,6 @@ refinement:
   maxCopilotRounds: 2
 
 gates:
-  # The finding-threads review is the single findings surface; the consolidated
-  # findings comment would duplicate it (owned by GATE-EXEC-POST-BEFORE-FIX).
-  postFindingsComments: false
   # Fail-closed enforcement that gate verdicts were produced by the
   # fan-out/fan-in review sub-loop (executionMode fanout_fanin + a findings-log
   # ledger), not an inline single-agent run. This repo runs enforcement on its
@@ -83,8 +80,9 @@ gates:
     # finding, so a light-dispatched draft PR whose inline pass surfaces only
     # worth-fixing-now stays inline instead of escalating.
     #
-    # A deferred finding is rolled into the single summary comment posted
-    # when pre-approval finally closes clean (GATE-EXEC-DEFERRED-SUMMARY).
+    # A deferred finding is recorded on its own thread's resolving reply and in
+    # the durable findings-log ledger (GATE-EXEC-DEFERRAL-RECORD), never in a
+    # separate summary comment.
     blockCleanOnFindingSeverities:
       - must-fix
   preApproval:
@@ -126,7 +124,7 @@ gates:
     # Unlike the draft gate, this IS a relaxation below the shipped default's
     # intent: pre-approval is the last bar before merge. See the draft-gate
     # entry above for how a LOCATABLE vs NON-LOCATABLE finding is disposed
-    # (owned by GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRED-SUMMARY,
+    # (owned by GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRAL-RECORD,
     # GATE-EXEC-FINDING-THREADS) — it applies here unchanged.
     blockCleanOnFindingSeverities:
       - must-fix

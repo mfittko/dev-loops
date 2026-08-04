@@ -72,19 +72,26 @@ practice:
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, a standalone review comment, and a created/edited PR issue
-  comment that starts with the gate-comment marker (`### Gate review:`) from a
-  trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`) — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned
-  green stale on the thread axis, and posting a gate verdict itself
-  re-evaluates the check instead of leaving a stale pre-verdict
-  `pending`/`failure` blocking a satisfied PR (`created` for each verdict on a
-  new head — the upsert creates a fresh comment per head; `edited` for a
-  same-head verdict update or a manual recovery edit). Evaluation always runs the DEFAULT BRANCH's
+  a submitted or edited review, a standalone review comment, and a
+  created/edited PR issue comment that starts with the gate-comment marker
+  (`### Gate review:`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`)
+  — so a newly-opened unresolved thread re-evaluates the check instead of
+  leaving a SHA-pinned green stale on the thread axis, and posting a gate
+  verdict itself re-evaluates the check instead of leaving a stale
+  pre-verdict `pending`/`failure` blocking a satisfied PR. The verdict is a PR
+  REVIEW (`GATE-COMMENT-SINGLE-SURFACE`): a new round's review fires
+  `pull_request_review [submitted]`, and a same-head verdict correction (the
+  upsert's in-place `PUT`) fires `pull_request_review [edited]`; the
+  issue-comment arm covers only legacy verdicts and the zero-dep fallback
+  poster. Evaluation always runs the DEFAULT BRANCH's
   detector (trusted code; the resolved PR head SHA is only the status target).
-  Recovery for a lost/failed run when the verdict comment already exists: edit
-  that comment by its id (`scripts/github/edit-comment.mjs --comment-id <id>`)
-  — the `edited` event re-fires the check. `gh run rerun` is NOT a recovery
+  Recovery for a lost/failed run when the verdict already exists and is
+  correct: re-run the round's verdict post with a corrected field (the upsert
+  PUTs the review in place and `edited` re-fires the check), post the next
+  round's verdict review, or — where the full toolchain is unavailable — the
+  zero-dep fallback poster's issue comment re-fires via the issue_comment
+  arm. An identical same-head rerun is a deliberate no-op and does not
+  re-fire. `gh run rerun` is NOT a recovery
   path (it replays the stale original event payload). (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
