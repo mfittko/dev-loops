@@ -168,12 +168,12 @@ test("parseFindings rejects missing summary", () => {
   assert.throws(() => parseFindings(JSON.stringify([{ severity: "must-fix", angle: "scope" }])), /summary/);
 });
 
-test("parseFindings derives a deferred disposition for a defer-severity finding with no explicit disposition", () => {
+test("parseFindings derives a deferred disposition for a nice-to-have finding with no explicit disposition", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit" }]));
   assert.equal(findings[0].disposition, "deferred");
 });
 
-test("parseFindings keeps an explicit disposition on a defer-severity finding", () => {
+test("parseFindings keeps an explicit disposition on a nice-to-have finding", () => {
   const findings = parseFindings(JSON.stringify([
     { severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "disputed" },
   ]));

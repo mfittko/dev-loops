@@ -985,7 +985,7 @@ test("e2e: a legitimately carried, non-mandatory angle fills a gate's pool cover
 // defer -> deferred disposition derivation
 // ---------------------------------------------------------------------------
 
-test("consolidateGateFanin derives a deferred disposition for defer-severity findings", async () => {
+test("consolidateGateFanin derives a deferred disposition for nice-to-have findings", async () => {
   await withFindingsDir(
     {
       "naming.json": {

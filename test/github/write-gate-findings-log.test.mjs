@@ -571,7 +571,7 @@ test("writeGateFindingsLog rejects a missing --findings-file", async () => {
   }, /Cannot read --findings-file/);
 });
 
-test("writeGateFindingsLog derives a deferred disposition for a defer-severity finding with no explicit disposition", async () => {
+test("writeGateFindingsLog derives a deferred disposition for a nice-to-have finding with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-"));
   try {
     await writeGateFindingsLog({
@@ -591,7 +591,7 @@ test("writeGateFindingsLog derives a deferred disposition for a defer-severity f
   }
 });
 
-test("writeGateFindingsLog keeps an explicit disposition on a defer-severity finding (still validated against the enum)", async () => {
+test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have finding (still validated against the enum)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-explicit-"));
   try {
     await writeGateFindingsLog({
