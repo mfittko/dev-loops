@@ -1,6 +1,7 @@
 /**
  * Deterministic state machine and bounded planning/merge contracts for reviewer-side PR loops.
  */
+import { SUBMITTED_REVIEW_STATES } from "../github/copilot-helpers.mjs";
 
 export const REVIEWER_STATE = Object.freeze({
   WAITING_FOR_REVIEW_REQUEST: "waiting_for_review_request",
@@ -105,7 +106,6 @@ const VALID_LOCAL_RUN_STATUSES = new Set(["none", "running", "completed", "faile
 const VALID_LOCAL_MERGE_STATUSES = new Set(["none", "ready", "failed"]);
 const VALID_DRAFT_NOTIFICATION_STATUSES = new Set(["none", "notified"]);
 const VALID_SUBMISSION_STATUSES = new Set(["none", "submitted", "failed"]);
-const VALID_SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
 const SUPPORTED_REVIEW_ANGLES = Object.freeze([
   "correctness",
@@ -143,7 +143,7 @@ function normalizeSubmittedReviewState(value) {
   }
 
   const normalized = value.trim().toUpperCase();
-  return VALID_SUBMITTED_REVIEW_STATES.has(normalized) ? normalized : null;
+  return SUBMITTED_REVIEW_STATES.has(normalized) ? normalized : null;
 }
 
 /**

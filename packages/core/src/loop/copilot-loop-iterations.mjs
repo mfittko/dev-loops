@@ -1,7 +1,6 @@
-import { isCopilotLogin, normalizeTimestamp } from "../github/copilot-helpers.mjs";
+import { SUBMITTED_REVIEW_STATES, isCopilotLogin, normalizeTimestamp } from "../github/copilot-helpers.mjs";
 
 const ACTIVE_COPILOT_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requested"]);
-const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
 function normalizeReviewRequestEvents(events) {
   if (!Array.isArray(events)) {
