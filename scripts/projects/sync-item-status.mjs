@@ -22,7 +22,7 @@ result describing the skip/failure. It never fails the caller.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --item <number>         Linked issue/PR number (positive integer). Required
-                          unless --pr is given; an empty value counts as omitted.
+                          unless --pr is given; an empty or whitespace-only value counts as omitted.
   --pr <number>           Move target when --item is omitted (the
                           PR-is-the-queue-item case, e.g. a post-merge sync).
   --to-column <name>      Target Status column, verbatim (e.g. "In Progress", "Done").
@@ -94,7 +94,7 @@ function parseCliArgs(argv) {
         // "the PR is the queue item" case, not a usage error — leave args.item
         // unset so it falls back to --pr. A value starting with "-" is still an
         // error: that is a swallowed neighbouring flag, not an empty value.
-        if (token.value === undefined || token.value === "") break;
+        if (token.value === undefined || token.value.trim() === "") break;
         args.item = requireValue(token, "--item requires a value (positive integer)", "INVALID_ITEM");
         break;
       case "pr":

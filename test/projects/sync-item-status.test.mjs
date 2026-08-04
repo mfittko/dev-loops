@@ -221,6 +221,31 @@ describe("sync-item-status", () => {
       );
     });
 
+    it("a whitespace-only --item counts as omitted at parse time (documented lenience, falls back to --pr)", () => {
+      const args = parseCliArgs(["--repo", "mfittko/dev-loops", "--item", "   ", "--pr", "10", "--logical-column", "done"]);
+      assert.equal(args.item, undefined);
+      assert.equal(args.pr, "10");
+    });
+
+    it("runCli exits 0 with the stdout skip record and empty stderr when gh itself fails (best-effort contract end to end)", async () => {
+      const prevExitCode = process.exitCode;
+      await withBoardConfig(async (tempDir) => {
+        const stdout = collectingStream();
+        const stderr = collectingStream();
+        await runCli(
+          ["--repo", "mfittko/dev-loops", "--pr", "10", "--logical-column", "done"],
+          { stdout, stderr, env: {}, cwd: tempDir, runChild: failingRunChild() },
+        );
+        assert.equal(process.exitCode, 0);
+        assert.equal(stderr.text(), "");
+        const parsed = JSON.parse(stdout.text());
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.skipped, true);
+        assert.match(parsed.reason, /./);
+      });
+      process.exitCode = prevExitCode;
+    });
+
     it("runCli reports a successful move on stdout with exit 0", async () => {
       const prevExitCode = process.exitCode;
       await withBoardConfig(async (tempDir) => {
