@@ -363,6 +363,49 @@ test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_in
   }
 });
 
+test("detect-reviewer-loop-state counts only canonical submitted-review states", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-states-"));
+
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "abc123" }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/reviews"],
+        stdout: JSON.stringify([
+          { id: 300, state: "NOT_A_REVIEW_STATE", user: { login: "pi-reviewer" }, commit_id: "abc123" },
+          { id: 301, state: "COMMENTED", user: { login: "pi-reviewer" }, commit_id: "abc123" },
+        ]) + "\n",
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo",
+      "owner/repo",
+      "--pr",
+      "17",
+    ], { env });
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    // The whitelisted review counts as the submitted one; the unknown state never does.
+    assert.equal(output.snapshot.submittedReviewPresent, true);
+    assert.equal(output.snapshot.submittedReviewState, "COMMENTED");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-reviewer-loop-state auto-detect fails when gh stub call budget is exceeded", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-budget-"));
 

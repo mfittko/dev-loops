@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { SUBMITTED_REVIEW_STATES, summarizeCopilotReviews } from "../src/github/copilot-helpers.mjs";
@@ -47,11 +46,6 @@ test("the canonical SUBMITTED_REVIEW_STATES drives the three core call sites", (
   assert.equal(helperSummary.hasSubmittedReviewOnCurrentHead, true);
 });
 
-// detect-reviewer-loop-state.mjs consumes the set inside a module-private gh
-// read the probe above cannot reach, so its call site is pinned at the source
-// level: it imports the canonical export and re-declares no state literal.
-test("detect-reviewer-loop-state consumes the canonical set, not a copy", async () => {
-  const source = await readFile(new URL("../../../scripts/loop/detect-reviewer-loop-state.mjs", import.meta.url), "utf8");
-  assert.match(source, /import \{ SUBMITTED_REVIEW_STATES \} from "@dev-loops\/core\/github\/copilot-helpers"/);
-  assert.doesNotMatch(source, /"APPROVED"\s*,/);
-});
+// The fourth consumer, scripts/loop/detect-reviewer-loop-state.mjs, is pinned
+// behaviorally in its own suite (test/loop/detect-reviewer-loop-state.test.mjs:
+// "counts only canonical submitted-review states").
