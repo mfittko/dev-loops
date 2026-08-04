@@ -1168,6 +1168,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let rebuildWarning = null;
   let existingBytes = null;
   let readError = null;
+  // ONE copy of the operator-facing recovery command: the three warning
+  // branches below differ only in what went wrong, never in the remedy.
+  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
+  const warn = (text) => {
+    rebuildWarning = text;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  };
   try {
     existingBytes = await readFile(fullPrefixPath);
   } catch (err) {
@@ -1177,8 +1184,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     if (err.code !== "ENOENT") readError = err;
   }
   if (readError !== null) {
-    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
-    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+    warn(retireHint(`Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
   } else if (existingBytes !== null) {
     if (!existingBytes.equals(prefixBytes)) {
       // Scoped to THIS gate's sentinels (the other gate's live round at the
@@ -1203,11 +1209,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
       }).length;
       if (scanError !== null) {
-        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
-        process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
       } else if (liveSentinels > 0) {
-        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match). Retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
-        process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match)`));
       }
     }
   }

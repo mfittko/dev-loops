@@ -173,7 +173,9 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     prefix, a same-head rebuild after a live description edit yields different prefix bytes,
     which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
     the context while reviewers for that head are still running. This does not affect the
-    frozen artifact of an already-completed gate pass.
+    frozen artifact of an already-completed gate pass. Round retirement
+    (`GATE-EXEC-ROUND-RETIREMENT`) does not relax this: it recovers a round AFTER a rebuild
+    stranded it, and never licenses rebuilding mid-flight.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -418,7 +420,10 @@ manual chore:
   UNCHANGED briefing, and explicit round retirement under `GATE-EXEC-ROUND-RETIREMENT` for
   a REBUILT briefing.)
 - The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
-  **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
+  **MUST NOT** clear the sentinels of carried-forward clean angles — the one exception is
+  a round retirement (`GATE-EXEC-ROUND-RETIREMENT`), whose audited sweep moves EVERY
+  sentinel of the retired gate+head because the fresh fan-out re-reviews every angle
+  (Phase 5's re-fan
   re-invokes the surface-touched angles, every angle that produced `findings_present`, and
   every mandatory / always-run angle; carried-forward clean angles are not re-invoked. Every
   re-invoked angle gets a distinct new-head key, so no cleanup is required).
@@ -465,7 +470,9 @@ semantics and exit codes.
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
 `GATE-EXEC-ROUND-RETIREMENT`: When the gate-context bundle is legitimately REBUILT at the
 same head (the builder resolves PR/issue inputs itself, and correcting bad or stale
-seeding is a legitimate rebuild), the new briefing-prefix bytes hash differently, so every
+seeding is a legitimate rebuild; rebuilding while reviewers are still running remains
+forbidden — see the conductor rule in Phase 1), the new briefing-prefix bytes hash
+differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
 the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
@@ -482,7 +489,10 @@ round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-
 silently mix into the new round's fan-in; retiring them is the explicit discard. The
 retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
 into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
-one-hash-per-round invariant covers only artifacts its own reviewers wrote). Retirement
+one-hash-per-round invariant covers only artifacts its own reviewers wrote). The
+carry-forward channel is closed the same way: `resolve-angle-carry-forward.mjs` fails
+closed when `--prev-head` equals `--head-sha`, so a retired round's verdict can never
+re-seed the fresh fan-out at the same head via `GATE-EXEC-ANGLE-CARRY-FORWARD` either. Retirement
 never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
 `verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
 never reads, and sentinels of one LIVE round that disagree still fail closed. A gate+head

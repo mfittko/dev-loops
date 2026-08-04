@@ -78,7 +78,10 @@ Options:
                   safety argument. A hash MISMATCH (the context-builder WAS
                   re-run) or an existing sentinel with no recorded prefix hash
                   still fails closed — never a general bypass of the
-                  contamination guard. See "Sentinel lifecycle" in
+                  contamination guard. The mismatch refusal is not a dead end:
+                  retire the round explicitly (retire-gate-round.mjs,
+                  GATE-EXEC-ROUND-RETIREMENT) and re-fan fresh at the same
+                  head. See "Sentinel lifecycle" in
                   skills/docs/gate-review-sub-loop-contract.md.
   --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
                   semantics; kept for existing callers).

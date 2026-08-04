@@ -683,3 +683,13 @@ test("CLI's worktree guard and delta are pinned to repoRoot, not an inherited GI
     await rm(otherRepo, { recursive: true, force: true });
   }
 });
+
+test("parseResolveAngleCarryForwardCliArgs fails closed on a same-head carry", () => {
+  const sha = "c3".repeat(20);
+  assert.throws(
+    () => parseResolveAngleCarryForwardCliArgs([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", sha, "--head-sha", sha,
+    ]),
+    /same-head carry-forward/,
+  );
+});
