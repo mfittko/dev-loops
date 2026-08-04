@@ -3125,7 +3125,11 @@ test("renderBriefingPrefix carries the worktree root and the git -C cwd-independ
 
 test("writeGateContext warns, naming the retirement command, when a rebuild overwrites a differing prefix at a head with live sentinels", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-warn-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
   try {
+    // --head-sha may legitimately be abbreviated; the sentinel filename always
+    // embeds the FULL sha, and the warning must still fire (matched on the
+    // trailing full-SHA component with startsWith).
     const baseArgs = [
       "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate",
       "--head-sha", "abc1234567890def",
@@ -3134,11 +3138,12 @@ test("writeGateContext warns, naming the retirement command, when a rebuild over
     ];
     const first = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
     assert.equal(first.warning, undefined);
-    // A live sentinel for that head exists when the rebuild happens.
     await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
-    await writeFile(path.resolve(repoRoot, "tmp", "checkpoint-context-sentinel-draft-gate-scope-abc1234567890def.json"), "{}\n", "utf8");
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+    // The OTHER gate's sentinel at the same head must not count.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-pre-approval-gate-yagni-${fullSha}.json`), "{}\n", "utf8");
     const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
-    assert.match(rebuilt.warning, /retire-gate-round\.mjs/);
+    assert.match(rebuilt.warning, /retire-gate-round\.mjs --gate draft_gate/);
     assert.match(rebuilt.warning, /1 reviewer sentinel/);
     // Same-bytes rewrite never warns (idempotent rerun, no invalidation).
     const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });

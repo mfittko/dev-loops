@@ -164,10 +164,16 @@ function resolveHeadRound(cwd = process.cwd()) {
     return null; // not a git repo / git unavailable
   }
 }
+// The live-sentinel filename prefix, owned here by the sentinel producer and
+// imported by every consumer that globs sentinels (verify-briefing-prefixes,
+// retire-gate-round, write-gate-context's rebuild warning) so the vocabulary
+// cannot drift.
+export const CHECKPOINT_SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 function sentinelRelative(scope, round) {
   const scopeSuffix = scope ? `-${scope}` : "";
   const roundSuffix = round ? `-${round}` : "";
-  return path.join("tmp", `checkpoint-context-sentinel${scopeSuffix}${roundSuffix}.json`);
+  return path.join("tmp", `${CHECKPOINT_SENTINEL_PREFIX.slice(0, -1)}${scopeSuffix}${roundSuffix}.json`);
 }
 function legacySentinelRelative(scope) {
   const suffix = scope ? `-${scope}` : "";

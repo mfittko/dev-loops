@@ -1168,13 +1168,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   try {
     const existingBytes = await readFile(fullPrefixPath);
     if (!existingBytes.equals(prefixBytes)) {
-      const sentinelSuffix = `-${String(options.headSha).trim().toLowerCase()}.json`;
+      // Scoped to THIS gate's sentinels (the other gate's live round at the
+      // same head is not invalidated by this rebuild), and matched on the
+      // trailing full-SHA filename component with startsWith so a legitimately
+      // abbreviated --head-sha still detects them.
+      const gateScopePrefix = `checkpoint-context-sentinel-${String(options.gate).replace(/_/g, "-")}-`;
+      const headPrefix = String(options.headSha).trim().toLowerCase();
       const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch(() => []);
-      const liveSentinels = tmpDirEntries.filter(
-        (e) => e.isFile() && e.name.startsWith("checkpoint-context-sentinel-") && e.name.endsWith(sentinelSuffix),
-      ).length;
+      const liveSentinels = tmpDirEntries.filter((e) => {
+        if (!e.isFile() || !e.name.startsWith(gateScopePrefix) || !e.name.endsWith(".json")) return false;
+        const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
+        return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
+      }).length;
       if (liveSentinels > 0) {
-        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match). Retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --head-sha ${options.headSha} --reason "<why>" [--findings-dir <round artifacts dir>]`;
+        rebuildWarning = `Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match). Retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
         process.stderr.write(`WARNING: ${rebuildWarning}\n`);
       }
     }

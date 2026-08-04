@@ -5,6 +5,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "./_gate-names.mjs";
+import { CHECKPOINT_SENTINEL_PREFIX as SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
 Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (skills/docs/gate-review-sub-loop-contract.md):
@@ -65,7 +66,7 @@ Never manually clear sentinels.`.trim();
 // vacuous pass — fail closed on anything shorter instead.
 const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {

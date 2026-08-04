@@ -464,10 +464,12 @@ same head (the builder now resolves PR/issue inputs itself, and correcting bad o
 seeding is a legitimate rebuild), the new briefing-prefix bytes hash differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
-the round explicitly: `node scripts/github/retire-gate-round.mjs --head-sha <sha> --reason
-"<why>" [--findings-dir <round artifacts dir>]` moves every sentinel keyed by that head
+the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
+--reason "<why>" [--findings-dir <round artifacts dir>]` moves every sentinel of THAT GATE
+keyed by that head
 (and, when given, the round's findings-artifacts directory) into an audited retirement
-directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record), so a
+directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
+other gate's live round at the same head is never touched), so a
 FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
 one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
 command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
