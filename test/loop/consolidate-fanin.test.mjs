@@ -2220,10 +2220,11 @@ test("consolidateGateFanin rejects a non-string programmatic headSha (no coercio
   );
 });
 
-test("consolidateGateFanin exempts a carried angle by base name + case, matching the upsert rule", async () => {
+test("consolidateGateFanin exempts a carried angle case-insensitively but never a delta-sibling by base name", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
+    // Case-insensitive exact-name match: "Coverage" exempts a "coverage" artifact.
     await withFindingsDir(
-      { "coverage.json": { angle: "coverage-delta-at-abc1234", verdict: "clean", findings: [], headSha: HEAD_B } },
+      { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B } },
       async (dir) => {
         const result = await consolidateGateFanin({
           findingsDir: dir,
@@ -2234,6 +2235,24 @@ test("consolidateGateFanin exempts a carried angle by base name + case, matching
           carryForwardPlan: JSON.parse(carryForwardPlanJson(["Coverage"], { carriedFromHead: HEAD_B })).carried,
         });
         assert.equal(result.ok, true);
+      },
+    );
+    // No baseAngleName collapse: a fresh -delta-at-<sha> sibling is NOT exempted
+    // by its base being carried — its stale stamp still fails closed.
+    await withFindingsDir(
+      { "coverage-delta.json": { angle: "coverage-delta-at-abc1234", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            headSha: HEAD_A,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["coverage"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"], { carriedFromHead: HEAD_B })).carried,
+          }),
+          /coverage-delta-at-abc1234.*stamped for head/,
+        );
       },
     );
   });
