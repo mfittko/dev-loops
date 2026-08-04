@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { listIssueComments, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
   WORTH_FIXING_NOW_FIX_WINDOW,
-  assertGhSuccess,
   fetchThreadsWithFullBodies,
   isDeferredAtRound,
   listPrReviews,
   parseFindingMarker,
   readGateFindingsLedger,
   resolveGateRound,
-  runChildPlain,
 } from "./_gate-finding-surface.mjs";
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 
@@ -128,13 +126,7 @@ function selectDispositionTargets(threads, round, login) {
 // recommendation happens to quote that literal token must never be mistaken
 // for an already-stamped marker.
 async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand }) {
-  const current = await runChildPlain(
-    ghCommand,
-    ["api", `repos/${repo}/pulls/comments/${commentId}`],
-    env,
-  );
-  assertGhSuccess(current);
-  const payload = parseJsonText(current.stdout, { label: "gh api pulls comments (GET)" });
+  const payload = await runGhJson(["api", `repos/${repo}/pulls/comments/${commentId}`], { env, ghCommand });
   // Trimmed to match parseReviewThreads' normalizeBody, which is what
   // selectDispositionTargets parsed thread.body through to select this exact
   // comment as a deferral target: two differently normalized copies of one
@@ -147,12 +139,10 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
   }
   if (marker.disposition === "deferred") return;
   const stamped = body.replace(FINDING_MARKER_RE, (m) => m.replace(/\s*-->$/, " disposition=deferred -->"));
-  const patched = await runChildPlain(
-    ghCommand,
+  await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "-f", `body=${stamped}`],
-    env,
+    { env, ghCommand },
   );
-  assertGhSuccess(patched);
 }
 
 // `snapshot` is the full-body review-thread snapshot the caller already

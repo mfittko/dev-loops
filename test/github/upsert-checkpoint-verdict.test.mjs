@@ -9,8 +9,6 @@ import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub
 import {
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
-  GATE_REVIEW_COMMENT_HEADER_RE,
-  matchGateReviewCommentHeader,
   parseUpsertCheckpointVerdictCliArgs,
   renderGateReviewCommentBody,
   summarizeCheckpointVerdictText,
@@ -18,7 +16,10 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
-import { isGateMachineArtifactBody, parseGateReviewCommentBody, summarizeGateReviewComments } from "@dev-loops/core/github/copilot-helpers";
+// The header literal and its matcher are OWNED by packages/core: the shared
+// summarizers' machine-artifact filter has to recognize the same line the
+// producer renders.
+import { GATE_REVIEW_COMMENT_HEADER_RE, isGateMachineArtifactBody, matchGateReviewCommentHeader, parseGateReviewCommentBody, summarizeGateReviewComments } from "@dev-loops/core/github/copilot-helpers";
 import { buildFindingMarker, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");

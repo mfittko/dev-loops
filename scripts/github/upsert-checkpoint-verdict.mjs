@@ -910,13 +910,6 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-// The literal header line renderGateReviewCommentBody always emits first. It
-// is OWNED by packages/core (copilot-helpers.mjs) — the shared summarizers'
-// machine-artifact filter has to recognize it too — and re-exported here so
-// existing consumers of the producer-side name keep working and the two can
-// never drift when the label wording changes.
-export { GATE_REVIEW_COMMENT_HEADER_RE, matchGateReviewCommentHeader };
-
 export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,

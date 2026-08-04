@@ -13,6 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
+import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -55,7 +56,6 @@ export function normalizePrReviewsPayload(payload) {
     }));
 }
 
-export const VALID_FINDING_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
 const VALID_LEDGER_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
 
@@ -335,7 +335,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     throw fail(`Gate findings ledger "${ledgerPath}" "findings" must be an array`);
   }
   findings.forEach((f, i) => {
-    if (!f || typeof f !== "object" || !VALID_FINDING_SEVERITIES.has(f.severity) || typeof f.angle !== "string" || typeof f.summary !== "string") {
+    if (!f || typeof f !== "object" || !VALID_SEVERITIES.has(f.severity) || typeof f.angle !== "string" || typeof f.summary !== "string") {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}] is malformed (expected {severity, angle, summary})`);
     }
     if ("line" in f && f.line !== undefined && (!Number.isInteger(f.line) || f.line < 1)) {
@@ -369,13 +369,8 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
 // gh plumbing
 // ---------------------------------------------------------------------------
 
-/** Run a gh call with no stdin through the (injectable) child runner. */
-export function runChildPlain(command, args, env, runChild = defaultRunChild) {
-  return runChild(command, args, env);
-}
-
 /** One assertion for every gh invocation in the gate finding-surface paths. */
-export function assertGhSuccess(result) {
+function assertGhSuccess(result) {
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw new Error(`gh command failed: ${detail}`);

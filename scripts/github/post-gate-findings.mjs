@@ -3,6 +3,8 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
+// Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
+import { SEVERITY_ORDER, VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -35,9 +37,6 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 
-const VALID_SEVERITIES = new Set(["must-fix", "worth-fixing-now", "defer"]);
-// Severity ordering for grouped rendering (most-blocking first).
-const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "defer"];
 const SEVERITY_LABELS = {
   "must-fix": "Must fix",
   "worth-fixing-now": "Worth fixing now",
@@ -449,10 +448,10 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
   return parseCommentMutationResponse(payload);
 }
 
-export async function updateComment({ repo, commentId, body }, { env, ghCommand, runChild: run }) {
+async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
-    { env, ghCommand, runChild: run },
+    { env, ghCommand },
   );
   return parseCommentMutationResponse(payload);
 }
