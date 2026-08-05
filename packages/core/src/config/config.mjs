@@ -200,8 +200,10 @@ const GateDynamicConfig = z.strictObject({
   // install narrows the angle pool to what the diff-classifier recommends.
   // mandatory:true angles stay a hard always-run floor; fallbackToAll fires
   // when classification is ambiguous, degrading to the full static pool. Set
-  // subtractive:false (or the gate:full label) to restore full static fan-out.
-  subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static fan-out escape hatch). Was gates.<gate>.dynamicAngles."),
+  // subtractive:false to restore the full static angle pool (the gate:full label
+  // only forces per-angle dispatch of the still-pruned set, not the full pool —
+  // combine both for the original full static fan-out).
+  subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
   // Additive counterpart to the subtractive path (#1048): when true, the
   // context-builder may also ADD catalog angles — from resolveAnglePool()
   // (gates.anglePool, or else the union of the persona registry and this

@@ -87,8 +87,10 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   naming just that entry — no need to copy-paste/maintain the whole shipped `angles`
   array. When `dynamic.subtractive` is off (the opt-out escape hatch, or when no diff is
   available), the configured static pool is used unchanged — set
-  `dynamic.subtractive: false` and/or apply the `gate:full` label to restore the full
-  static fan-out (one reviewer per angle) for a full-audit round. Symmetrically, when `gates.<gate>.dynamic.additive` is
+  `dynamic.subtractive: false` (full pool) AND apply the `gate:full` label or
+  `gates.fanout.mode: per-angle` (per-angle dispatch) to restore the original full
+  static fan-out; the `gate:full` label alone only forces per-angle dispatch of the
+  still-pruned pool, not the full pool. Symmetrically, when `gates.<gate>.dynamic.additive` is
   enabled (default **off**), the resolver may also ADD catalog angles that
   change-category heuristics recommend but that are not already in the gate's
   configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`

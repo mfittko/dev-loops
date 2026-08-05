@@ -4208,8 +4208,21 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
     assert.deepEqual(result.skippedAngles, []);
   });
-});
 
+  test("#1579 default config + no diff falls back to the full static pool (graceful degradation)", async () => {
+    // No explicit dynamic key (default ON), but no diff available — the
+    // resolver must not prune and must return the full configured pool.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft");
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.fallbackToAll, false);
+  });
+});
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
   function draftConfigWithTiers(tiers) {
     return {

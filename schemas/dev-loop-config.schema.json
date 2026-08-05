@@ -230,7 +230,7 @@
               "properties": {
                 "subtractive": {
                   "default": true,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static fan-out escape hatch). Was gates.<gate>.dynamicAngles.",
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
@@ -406,7 +406,7 @@
               "properties": {
                 "subtractive": {
                   "default": true,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static fan-out escape hatch). Was gates.<gate>.dynamicAngles.",
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
@@ -582,7 +582,7 @@
               "properties": {
                 "subtractive": {
                   "default": true,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static fan-out escape hatch). Was gates.<gate>.dynamicAngles.",
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
