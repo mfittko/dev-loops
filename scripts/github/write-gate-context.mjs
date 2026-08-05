@@ -995,12 +995,12 @@ function extractDocsOnlyDiff(diffOutput) {
  * @returns {string}
  */
 function renderTokenDisciplineSection(contextPath) {
-  const contextPathDisplay = contextPath ?? "(context artifact path unavailable)";
+  const contextPathDisplay = contextPath ?? "<gate-context artifact path>";
   return [
     "## Reviewer token discipline",
     "",
-    "- Read dev-loops tool/artifact JSON via `--jq`/`--silent` (e.g. `jq '<filter>' <path>` on an on-disk artifact) — never `cat`/`head` it.",
-    `- Read the gate-context artifact the same way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\` — never \`cat\`/\`head\` it either.`,
+    "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
+    `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
     "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",

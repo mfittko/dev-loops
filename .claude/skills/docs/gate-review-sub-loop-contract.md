@@ -368,7 +368,7 @@ reviewer), PR body, linked-issue body (when present), the full diff at the revie
 and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `##
 Validation results at this head`, present only when a validation-results artifact was
 threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the six fixed sections are
-the whole prefix, byte-identical to before the conditional section existed. The PR body and
+the whole prefix: the conditional section appends after the fixed sections without reordering or changing them. The PR body and
 each linked-issue body are
 author-controlled GitHub text (PR author or linked-issue author), so each is carried in
 its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
