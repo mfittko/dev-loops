@@ -2754,6 +2754,12 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     ], { matchMode: "claims", logCalls: true });
     const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
 
+    // draft_gate configures a mandatory angle (pr-description); a fanout_fanin
+    // verdict now requires coverage proof rather than a bare findingsSummary —
+    // this test is about the draft-transition self-heal mechanism, not angle
+    // coverage, so findingsJson is the minimal covering shape.
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -2761,7 +2767,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       headSha,
       verdict: "clean",
       findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
-      findingsSummary: "no issues found",
+      findingsJson: findingsPath,
       nextAction: "mark ready for review",
       executionMode: "fanout_fanin",
     }, { env, repoRoot: tempDir });
@@ -4232,6 +4238,69 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
   }
 });
 
+// --- Withheld-tier coverage: proven from --findings-ledger's provenance,
+// not from the comment (which cannot carry per-angle data at this tier) ---
+
+test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance is missing the gate's mandatory angle", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-missing-"));
+  try {
+    const ledgerPath = path.join(tempDir, "ledger.json");
+    // Recorded provenance covers "scope" but not draft_gate's mandatory
+    // "pr-description" angle.
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: [],
+      provenance: { distinctReviewers: 1, perAngle: [{ angle: "scope", reviewer: "agent-a" }] },
+    }), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-summary", "round too large to render per-angle; see ledger",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /findings-ledger's provenance is missing mandatory angle\(s\): pr-description/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict whose --findings-ledger carries no provenance", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-no-provenance-"));
+  try {
+    const ledgerPath = path.join(tempDir, "ledger.json");
+    // No `provenance` key at all — nothing to prove coverage against.
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: [],
+    }), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-summary", "round too large to render per-angle; see ledger",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /it is invalid \(provenance must be an object\)/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {
@@ -4524,10 +4593,16 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
         stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
+    // draft_gate configures a mandatory angle (pr-description); a fanout_fanin
+    // verdict now requires coverage proof (--findings-json here) rather than a
+    // bare --findings-summary — this test is about executionMode recording,
+    // not angle coverage, so --findings-json is the minimal covering shape.
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
     const fanout = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
-      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--findings-json", findingsPath, "--next-action", "mark ready for review",
       "--execution-mode", "fanout_fanin",
     ], { env: env2 });
     assert.equal(fanout.code, 0, fanout.stderr);
@@ -4541,22 +4616,17 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 // The documented tier-4 (withheld) posting path: a fanout_fanin round consolidate-fanin
 // could not render even at minimum shape has neither --out nor --findings-json available
 // (see the sub-loop contract's "Execution mode and fan-out evidence enforcement"), so the
-// caller posts with --findings-summary only — no --findings-json, and therefore no
-// --findings-severity-counts either. This test's verdict is "findings_present", so it
-// does not exercise --findings-severity-counts' actual requirement (scoped to
-// `verdict === "clean" && blockCleanOnFindingSeverities.length > 0`, independent of
-// structuredFindings/executionMode) — a clean tier-4 round would still need it. This
-// must succeed, or the sole escape hatch for a withheld round closes.
-test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via --findings-summary alone, with neither --findings-json nor --findings-severity-counts", async () => {
+// caller posts with --findings-summary only — no --findings-json. draft_gate configures a
+// mandatory angle (pr-description) by default, and this call carries neither --findings-json
+// nor --findings-ledger — i.e. no coverage proof at all — so it is now REFUSED fail-closed
+// (this used to be the exact reachable bypass: enforcement was a policy obligation on the
+// agent, not a mechanism). See the sibling --findings-ledger tests below for the covered
+// and refused-for-missing-angle withheld shapes that DO carry proof.
+test("upsert-checkpoint-verdict refuses a withheld (tier-4) fanout_fanin round via --findings-summary alone when the gate has a mandatory angle and neither --findings-json nor --findings-ledger is supplied", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-findings-summary-"));
   try {
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
-      {
-        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
-        assertStdinIncludes: ["**Execution mode:** fanout_fanin"],
-        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
-      },
     ]);
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
@@ -4564,10 +4634,8 @@ test("upsert-checkpoint-verdict posts a withheld (tier-4) fanout_fanin round via
       "--findings-summary", "round withheld: too wide to render even at minimum shape — recorded in the disposition ledger",
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env });
-    assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.ok, true);
-    assert.equal(payload.executionMode, "fanout_fanin");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /requires coverage proof via --findings-json or --findings-ledger/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -4964,6 +5032,49 @@ test("upsert-checkpoint-verdict rejects a --findings-ledger written for a differ
       }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir }),
       /refuse to post another round's findings/,
     );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Withheld tier (no --findings-json), but --findings-ledger's provenance
+// fully covers the gate's mandatory angles: the round posts exactly as a
+// covered round would.
+test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --findings-ledger's provenance fully covers the gate's mandatory angles", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-covered-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING], {
+      provenance: {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "pr-description", reviewer: "agent-a" },
+          { angle: "coverage", reviewer: "agent-b" },
+        ],
+      },
+    });
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":702,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-702"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "round too large to render per-angle; see ledger",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.bodyFiled, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -364,7 +364,13 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   const normalizedFindings = findings.map((f) => (
     Array.isArray(f.files) ? { ...f, files: f.files.map((entry) => entry.trim()) } : f
   ));
-  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings };
+  // `provenance` is passed through UNVALIDATED (write-gate-findings-log.mjs
+  // already validates it at write time via provenanceConsistencyError); a
+  // reader that needs to trust it (e.g. upsert-checkpoint-verdict.mjs's
+  // withheld-tier mandatory-angle check) re-validates with the same function
+  // rather than assuming a hand-edited or shadow ledger is honest.
+  const provenance = parsed.provenance !== undefined ? parsed.provenance : null;
+  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance };
 }
 
 // ---------------------------------------------------------------------------
