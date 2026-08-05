@@ -1001,7 +1001,7 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+    "- This briefing already carries the diff it scopes (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
   ].join("\n");
@@ -1077,8 +1077,8 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * @param {string|null} [input.validationResultsPath] — absolute path to the
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
  *   When non-empty, ONE additional `## Validation results at this head` section is
- *   appended LAST, after the changed-files summary. Omitted entirely when absent
- *   (byte-identical to the pre-AC3 prefix).
+ *   appended LAST, after the changed-files summary, without reordering or
+ *   changing the fixed sections. Omitted entirely when absent.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
