@@ -1035,9 +1035,10 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
 /**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
- * instruction), PR body, linked-issue body (when present), the full diff at the
- * reviewed head (inlined up to `capBytes`, else a pointer to `diffPath`), and a
- * changed-files/adjacent-code summary — in that fixed order. Pure and
+ * instruction), reviewer token discipline, PR body, linked-issue body (when
+ * present), the full diff at the reviewed head (inlined up to `capBytes`, else
+ * a pointer to `diffPath`), and a changed-files/adjacent-code summary — in that
+ * fixed order. Pure and
  * deterministic: identical input always renders identical bytes, so two builds
  * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
  * requirement).
