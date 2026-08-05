@@ -984,6 +984,50 @@ function extractDocsOnlyDiff(diffOutput) {
 }
 
 /**
+ * Render the "## Reviewer token discipline" section: the per-reviewer
+ * token-waste rules that no structural briefing lever (grouping, scoping,
+ * hunk-collapse) can remove because they happen inside the reviewer's own
+ * tool use. Extracted into one function so the full prefix and every scoped
+ * variant render this passage byte-identically.
+ * @returns {string}
+ */
+function renderTokenDisciplineSection() {
+  return [
+    "## Reviewer token discipline",
+    "",
+    "- Read dev-loops tool/artifact JSON via `--jq`/`--silent` (e.g. `jq '<filter>' <path>` on an on-disk artifact) — never `cat`/`head` it.",
+    "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+    "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
+    "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+  ].join("\n");
+}
+
+/**
+ * Render the "## Validation results at this head" section appended to a
+ * rendered briefing (full prefix or scoped variant) when a validation-results
+ * path was threaded in. Extracted so both renderers emit byte-identical text
+ * — mirrors {@link renderTokenDisciplineSection}.
+ * @param {string} validationResultsPath — non-empty, already-trimmed
+ * @param {string} headSha
+ * @returns {string[]} lines to push (the caller pushes its own leading blank line)
+ */
+function renderValidationResultsSection(validationResultsPath, headSha) {
+  return [
+    "## Validation results at this head",
+    "",
+    "The gate preamble ran this round's validation suites once and recorded them here:",
+    `  ${validationResultsPath}`,
+    "",
+    `Read a field directly (never \`cat\`/\`head\` the whole file): \`jq '.allPassed' ${validationResultsPath}\`.`,
+    "",
+    "Read that record for suite status, exit codes, and output tails. Executing a suite it",
+    "already records is outside a read-only angle review's scope. If the record is absent,",
+    `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
+    "finding instead of substituting your own run.",
+  ];
+}
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), PR body, linked-issue body (when present), the full diff at the
@@ -1064,6 +1108,8 @@ export function renderBriefingPrefix({
   lines.push(
     `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
+  lines.push("");
+  lines.push(renderTokenDisciplineSection());
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1150,23 +1196,7 @@ export function renderBriefingPrefix({
     : "";
   if (trimmedValidationResultsPath.length > 0) {
     lines.push("");
-    lines.push("## Validation results at this head");
-    lines.push("");
-    lines.push(
-      "The gate preamble ran this round's validation suites once and recorded them here:",
-    );
-    lines.push(`  ${trimmedValidationResultsPath}`);
-    lines.push("");
-    lines.push(
-      "Read that record for suite status, exit codes, and output tails. Executing a suite it",
-    );
-    lines.push(
-      "already records is outside a read-only angle review's scope. If the record is absent,",
-    );
-    lines.push(
-      `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
-    );
-    lines.push("finding instead of substituting your own run.");
+    for (const line of renderValidationResultsSection(trimmedValidationResultsPath, headSha)) lines.push(line);
   }
 
   return { text: lines.join("\n") + "\n", prefixMode, diffBytes };
@@ -1234,6 +1264,8 @@ export function renderScopedBriefingVariant(scope, {
   // both without first reading the full prefix.
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
+  lines.push("");
+  lines.push(renderTokenDisciplineSection());
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1317,21 +1349,7 @@ export function renderScopedBriefingVariant(scope, {
     : "";
   if (trimmedValidationResultsPath.length > 0) {
     lines.push("");
-    lines.push("## Validation results at this head");
-    lines.push("");
-    lines.push("The gate preamble ran this round's validation suites once and recorded them here:");
-    lines.push(`  ${trimmedValidationResultsPath}`);
-    lines.push("");
-    lines.push(
-      "Read that record for suite status, exit codes, and output tails. Executing a suite it",
-    );
-    lines.push(
-      "already records is outside a read-only angle review's scope. If the record is absent,",
-    );
-    lines.push(
-      `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
-    );
-    lines.push("finding instead of substituting your own run.");
+    for (const line of renderValidationResultsSection(trimmedValidationResultsPath, headSha)) lines.push(line);
   }
 
   return { text: lines.join("\n") + "\n" };

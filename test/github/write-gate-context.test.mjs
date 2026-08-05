@@ -2118,6 +2118,42 @@ test("renderBriefingPrefix: deterministic — two renders of identical input pro
   assert.equal(a.text, b.text);
 });
 
+// ---------------------------------------------------------------------------
+// "## Reviewer token discipline" section
+// ---------------------------------------------------------------------------
+
+test("renderBriefingPrefix: carries the Reviewer token discipline section, before the PR body, naming --jq/--silent, hunk-widen, grep-width-cap, and contextWidened rules", () => {
+  const { text } = renderBriefingPrefix(renderInput());
+  const disciplineIdx = text.indexOf("## Reviewer token discipline");
+  const prBodyIdx = text.indexOf("## PR body");
+  assert.ok(disciplineIdx >= 0 && disciplineIdx < prBodyIdx);
+  assert.match(text, /`--jq`\/`--silent`/);
+  assert.match(text, /never `cat`\/`head`/);
+  assert.match(text, /widen PAST a hunk's edges/);
+  assert.match(text, /cut -c1-200/);
+  assert.match(text, /`contextWidened`/);
+  assert.match(text, /absence means "not consulted", never "consulted and clean"/);
+  assert.match(text, /skills\/docs\/gate-review-sub-loop-contract\.md/);
+});
+
+test("renderBriefingPrefix and renderScopedBriefingVariant: the Reviewer token discipline section is byte-identical across the full prefix and every scoped variant", () => {
+  const { text: fullText } = renderBriefingPrefix(renderInput());
+  const extractSection = (text) => {
+    const start = text.indexOf("## Reviewer token discipline");
+    const end = text.indexOf("## PR body", start);
+    return text.slice(start, end);
+  };
+  const fullSection = extractSection(fullText);
+  for (const scope of ["docs-only", "changed-files"]) {
+    const { text } = renderScopedBriefingVariant(scope, {
+      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+      briefingPrefixPath: "tmp/x.txt",
+      diffOutput: "diff --git a/docs/a.md b/docs/a.md\nindex 111..222 100644\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n",
+    });
+    assert.equal(extractSection(text), fullSection, `${scope}: section text matches the full prefix`);
+  }
+});
+
 test("renderBriefingPrefix: over-cap diff falls back to pointer mode, discloses the pointer, and does NOT inline the diff body", () => {
   const bigDiff = "+" + "x".repeat(100);
   const { text, prefixMode, diffBytes } = renderBriefingPrefix(renderInput({ diffOutput: bigDiff, capBytes: 10 }));
@@ -2496,6 +2532,13 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
+      "## Reviewer token discipline",
+      "",
+      "- Read dev-loops tool/artifact JSON via `--jq`/`--silent` (e.g. `jq '<filter>' <path>` on an on-disk artifact) — never `cat`/`head` it.",
+      "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+      "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
+      "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+      "",
       "## PR body",
       "",
       "```",
@@ -2637,6 +2680,8 @@ test("renderBriefingPrefix: validationResultsPath present appends the section LA
     "",
     "The gate preamble ran this round's validation suites once and recorded them here:",
     "  /abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json",
+    "",
+    "Read a field directly (never `cat`/`head` the whole file): `jq '.allPassed' /abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json`.",
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
     "already records is outside a read-only angle review's scope. If the record is absent,",
