@@ -301,7 +301,7 @@ the overflow runs in sequential batches (planned by `planFanoutBatches` from
 reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
+- is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (per-angle mode / `gate:full`) or to every angle in its resolved group (grouped mode) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
@@ -363,11 +363,12 @@ even though the referenced file's bytes are still shared.
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
-PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `## Validation
-results at this head`, present only when a validation-results artifact was threaded
-(`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the five fixed sections are the
-whole prefix, byte-identical to before the conditional section existed. The PR body and
+`## Reviewer token discipline` (the per-reviewer token-waste rules, identical for every
+reviewer), PR body, linked-issue body (when present), the full diff at the reviewed head,
+and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `##
+Validation results at this head`, present only when a validation-results artifact was
+threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the six fixed sections are
+the whole prefix: the conditional section appends after the fixed sections without reordering or changing them. The PR body and
 each linked-issue body are
 author-controlled GitHub text (PR author or linked-issue author), so each is carried in
 its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal

@@ -34,7 +34,7 @@ This agent has two modes. The default mode is the full-PR review described in th
 Its full execution shape is owned elsewhere — read those owners before reviewing and do not re-derive their rules here:
 
 - The build-once neutral bundle seeding, fresh-context guard (`verify-fresh-review-context.mjs`), no-worktree-isolation prohibition (#1135), read-only scope (single-angle or, for a group, every angle named in your dispatch), and briefing composition are owned by the [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md) (`GATE-EXEC-BUILD-ONCE-SEED`, `GATE-EXEC-BRIEFING-PREFIX`) — you receive only the neutral artifact + your angle(s), never the orchestrating agent's conversation, opinions, or state.
-- The adversarial reviewing behavior is owned by `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING` in the [Copilot PR Follow-up Skill](../skills/copilot-pr-followup/SKILL.md): read the FULL diff (from `scope.diffPath`, or reconstruct it with `git diff` against the change base when `scope.diffPath` is null/missing — never a hunk-only review) plus the bundled adjacent code rather than re-deriving them, then hunt concrete `file:line` defects (edge cases, input validation, numeric coercion incl. NaN/Infinity/floats/negatives, null/undefined, boundary conditions, mismatched caller/callee contracts, dedup/identity bugs) over process nits, recording any scope-widening in the optional `contextWidened` field on your findings artifact.
+- The adversarial reviewing behavior is owned by `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING` in the [Copilot PR Follow-up Skill](../skills/copilot-pr-followup/SKILL.md): read the FULL diff (from `scope.diffPath`, or reconstruct it with `git diff` against the change base when `scope.diffPath` is null/missing — never a hunk-only review) plus the bundled adjacent code rather than re-deriving them, then hunt concrete `file:line` defects (edge cases, input validation, numeric coercion incl. NaN/Infinity/floats/negatives, null/undefined, boundary conditions, mismatched caller/callee contracts, dedup/identity bugs) over process nits, recording in the optional `contextWidened` field only the widening that moved your judgment (see the field definition below).
 
 Follow those owners, then return your findings via the structured artifact below (this agent's canonical output contract).
 
@@ -50,13 +50,13 @@ Follow those owners, then return your findings via the structured artifact below
     "findings": [
       { "severity": "must-fix" | "worth-fixing-now" | "nice-to-have", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
-    "contextWidened": ["<adjacent-path-consulted>", "..."]
+    "contextWidened": ["<path-that-moved-judgment>", "..."]
   }
   ```
 
   The `headSha` stamp is REQUIRED: it is the exact head SHA the briefing names, and fan-in (`consolidate-fanin --head-sha`) fails closed on a missing or mismatched stamp (`GATE-EXEC-ARTIFACT-HEAD-STAMP`).
 
-  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `nice-to-have`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list the adjacent files/modules you opened beyond the briefing to judge this angle (omit or leave empty if you reviewed only `changedFiles`).
+  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `nice-to-have`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list only the adjacent files/modules that actually moved your judgment on this angle, never every file you opened (omit or leave empty when nothing you opened moved your judgment, including when you reviewed only `changedFiles`) — absence means "not consulted", never "consulted and clean" (see the [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)).
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 
