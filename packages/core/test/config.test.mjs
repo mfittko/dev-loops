@@ -2182,7 +2182,7 @@ describe("role resolution", () => {
         mandatoryAngles: [],
         required: true,
         requireCi: true,
-        dynamicAngles: false,
+        dynamicAngles: true,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
         tiers: [],
@@ -2202,7 +2202,7 @@ describe("role resolution", () => {
         mandatoryAngles: [],
         required: false,
         requireCi: false,
-        dynamicAngles: false,
+        dynamicAngles: true,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
         tiers: [],
@@ -4107,6 +4107,9 @@ describe("resolveGateAnglesDynamic", () => {
       gates: {
         draft: {
           angles: ["docs", "link-check", "correctness", { name: "pr-description", mandatory: true }],
+          // Pin dynamic OFF so these tier-isolation tests are unaffected by the
+          // #1579 default flip (they assert static-pool behavior, not dynamic).
+          dynamic: { subtractive: false },
           ...(tiers ? { tiers } : {}),
         },
       },
@@ -4150,6 +4153,61 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check", "correctness"]);
   });
 
+
+  // ── #1579: grouped dynamic angles are the default ──────────────────────────
+
+  test("#1579 dynamic subtractive is ON by default (no dynamic key) — a diff narrows the pool", async () => {
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
+    assert.ok(result.recommendedAngles.length < 5, "pool narrowed from the full 5");
+    assert.ok(result.skippedAngles.includes("coverage"), "non-docs angle pruned by default");
+    assert.equal(result.fallbackToAll, false);
+  });
+
+  test("#1579 mandatory angle survives dynamic pruning under the default config (no dynamic key)", async () => {
+    // coverage is NOT recommended for a docs-only diff, so the classifier
+    // WOULD prune it — mandatory:true must keep it on the always-run floor.
+    const config = {
+      version: 1,
+      gates: {
+        draft: { angles: ["docs", { name: "coverage", mandatory: true }, "kiss"] },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("coverage"), "mandatory angle survives pruning");
+    assert.ok(!result.skippedAngles.includes("coverage"), "mandatory angle never skipped");
+    // kiss is non-mandatory and not docs-relevant → pruned (proves the floor
+    // is selective, not a blanket keep-all).
+    assert.ok(result.skippedAngles.includes("kiss"));
+  });
+
+  test("#1579 opt-out: dynamic.subtractive:false restores the full static pool even with a diff", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs", "deep", "kiss"],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+  });
 });
 
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {

@@ -71,21 +71,24 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   this phase writes (#1135). Reviewers run in the PR's actual worktree/head — the same
   checkout the preamble ran in.
 - the preamble resolves the gate's review angle set: it starts from the configured
-  angle pool (`gates.<gate>.angles` — an array of angle names/objects, D3/D4) and, when
-  `gates.<gate>.dynamic.subtractive` is enabled, narrows it to the angles relevant to
-  the change at hand (configured pool → resolved set). Optional code-review lenses not
+  angle pool (`gates.<gate>.angles` — an array of angle names/objects, D3/D4) and,
+  when `gates.<gate>.dynamic.subtractive` is enabled (ON by default since #1579),
+  narrows it to the angles relevant to the change at hand (configured pool → resolved set). Optional code-review lenses not
   triggered by the change (for example most code lenses for a docs-only change) are
   dropped, and the reason each angle was dropped is recorded as rationale. Angle entries
   with `mandatory: true` form a floor and are always included after dynamic selection
-  (filtered only by entries with `enabled: false`); they are never dropped. Adding a
+  (filtered only by entries with `enabled: false`); they are never dropped — a mandatory angle runs even when the diff-classifier
+  would otherwise prune it. Adding a
   plain (non-mandatory) angle entry is additive but not mandatory — a duplicate name is
   deduplicated by the set union (appears exactly once, never errors, and keeps that
   angle's existing mandatory/prunable status); an entry with `enabled: false` is removed
   like any other angle. Because `gates.<gate>.angles` merges BY NAME across config
   layers (D3), a consumer can add a new angle, or disable/override an existing one, by
   naming just that entry — no need to copy-paste/maintain the whole shipped `angles`
-  array. When `dynamic.subtractive` is off (or no diff is available), the configured
-  static pool is used unchanged. Symmetrically, when `gates.<gate>.dynamic.additive` is
+  array. When `dynamic.subtractive` is off (the opt-out escape hatch, or when no diff is
+  available), the configured static pool is used unchanged — set
+  `dynamic.subtractive: false` and/or apply the `gate:full` label to restore the full
+  static fan-out (one reviewer per angle) for a full-audit round. Symmetrically, when `gates.<gate>.dynamic.additive` is
   enabled (default **off**), the resolver may also ADD catalog angles that
   change-category heuristics recommend but that are not already in the gate's
   configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
