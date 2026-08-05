@@ -988,14 +988,19 @@ function extractDocsOnlyDiff(diffOutput) {
  * token-waste rules that no structural briefing lever (grouping, scoping,
  * hunk-collapse) can remove because they happen inside the reviewer's own
  * tool use. Extracted into one function so the full prefix and every scoped
- * variant render this passage byte-identically.
+ * variant render this passage byte-identically — every caller of this round
+ * passes the same `contextPath`, so threading it in does not break that
+ * byte-identity.
+ * @param {string|null} contextPath — the round's gate-context JSON artifact path
  * @returns {string}
  */
-function renderTokenDisciplineSection() {
+function renderTokenDisciplineSection(contextPath) {
+  const contextPathDisplay = contextPath ?? "(context artifact path unavailable)";
   return [
     "## Reviewer token discipline",
     "",
     "- Read dev-loops tool/artifact JSON via `--jq`/`--silent` (e.g. `jq '<filter>' <path>` on an on-disk artifact) — never `cat`/`head` it.",
+    `- Read the gate-context artifact the same way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\` — never \`cat\`/\`head\` it either.`,
     "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
@@ -1018,7 +1023,7 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
     "The gate preamble ran this round's validation suites once and recorded them here:",
     `  ${validationResultsPath}`,
     "",
-    `Read a field directly (never \`cat\`/\`head\` the whole file): \`jq '.allPassed' ${validationResultsPath}\`.`,
+    `Read a field directly (never \`cat\`/\`head\` the whole file): \`jq '.allPassed' "${validationResultsPath}"\`.`,
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
     "already records is outside a read-only angle review's scope. If the record is absent,",
@@ -1109,7 +1114,7 @@ export function renderBriefingPrefix({
     `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
   lines.push("");
-  lines.push(renderTokenDisciplineSection());
+  lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1265,7 +1270,7 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   lines.push("");
-  lines.push(renderTokenDisciplineSection());
+  lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push("## PR body");
   lines.push("");

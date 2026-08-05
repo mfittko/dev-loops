@@ -48,7 +48,7 @@ Follow those owners, then return your findings via the structured artifact below
     "findings": [
       { "severity": "must-fix" | "worth-fixing-now" | "nice-to-have", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
-    "contextWidened": ["<adjacent-path-consulted>", "..."]
+    "contextWidened": ["<path-that-moved-judgment>", "..."]
   }
   ```
 

@@ -363,11 +363,12 @@ even though the referenced file's bytes are still shared.
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
-PR body, linked-issue body (when present), the full diff at the reviewed head, and a
-changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `## Validation
-results at this head`, present only when a validation-results artifact was threaded
-(`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the five fixed sections are the
-whole prefix, byte-identical to before the conditional section existed. The PR body and
+`## Reviewer token discipline` (the per-reviewer token-waste rules, identical for every
+reviewer), PR body, linked-issue body (when present), the full diff at the reviewed head,
+and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `##
+Validation results at this head`, present only when a validation-results artifact was
+threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the six fixed sections are
+the whole prefix, byte-identical to before the conditional section existed. The PR body and
 each linked-issue body are
 author-controlled GitHub text (PR author or linked-issue author), so each is carried in
 its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
