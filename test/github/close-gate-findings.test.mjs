@@ -751,3 +751,117 @@ test("close-gate-findings.mjs: an invalid --jq filter fails closed: stderr + exi
     assert.match(stderr, /--jq/);
   }));
 });
+
+
+// ---------------------------------------------------------------------------
+// #1581: per-gate worth-fixing-now fix window + must-fix-if-present default
+// ---------------------------------------------------------------------------
+
+// A must-fix thread fixture (must-fix never defers, so it forces per-gate
+// continuation until the gate round cap escalates).
+const mustFixBody = (fp, round = 1) => `${buildFindingMarker({ fp, severity: "must-fix", angle: "security", round })}\n**must-fix** (\`security\`): SQL injection`;
+
+function openMustFixThread({ commentId, fp = "2222222222222222", id = "THREAD_MUST", author = AUTHENTICATED_LOGIN } = {}) {
+  return threadNode({ id, isResolved: false, path: "src/db.mjs", line: 2, commentId, body: mustFixBody(fp), author });
+}
+
+// Write a .devloops.json override into the gh-stub repoRoot so loadDevLoopConfig
+// resolves a per-gate worthFixingNowFixWindow for the disposition pass.
+async function withGhStubAndConfig(entries, config, fn) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-cfg-"));
+  try {
+    await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config), "utf8");
+    const { env, ghPath } = await writeGhStub(tmpDir, entries);
+    return await fn({ env, ghCommand: ghPath, repoRoot: tmpDir });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+// (a) per-gate window honored: a draft gate configured with window=2 defers an
+// open worth-fixing-now thread at round 3 (3 > 2), where the default window 3
+// would have kept it open.
+test("#1581 (a): a per-gate worthFixingNowFixWindow is honored by the disposition pass", async () => {
+  const thread = openWfnThread({ commentId: 7100 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
+      getReviewCommentEntry(7100, wfnBody("1111111111111111")),
+      patchReviewCommentEntry(7100),
+      postReplyEntry(7100, { id: 8100 }),
+      resolveThreadEntry("THREAD_D"),
+    ],
+    { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 3);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// (a cont.) the SAME gate at round 2 with window 2 keeps the WFN thread open —
+// the window boundary is inclusive (round <= window stays open).
+test("#1581 (a): a WFN thread stays open at round == window (boundary is inclusive)", async () => {
+  const thread = openWfnThread({ commentId: 7101 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 2);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+// (b) cross-gate isolation: a high draft_gate round count does NOT deplete
+// pre_approval_gate's window. pre_approval_gate at its own round 2 keeps a WFN
+// thread open, even though draft_gate has already run 9 rounds.
+test("#1581 (b): draft_gate rounds do not consume pre_approval_gate's worth-fixing-now window", async () => {
+  const thread = openWfnThread({ commentId: 7200 });
+  await withLedgerFile(makeLedger({ gate: "pre_approval_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({
+      issueComments: [...roundHistory("draft_gate", 9), ...roundHistory("pre_approval_gate", 2)],
+      threads: [thread],
+    }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 2);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+// (c) must-fix-if-present continuation: an open must-fix finding forces another
+// fix round — it is NEVER deferred, even past the worth-fixing-now window.
+test("#1581 (c): an open must-fix finding forces continuation (never deferred past the WFN window)", async () => {
+  const thread = openMustFixThread({ commentId: 7300 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No GET/PATCH/reply/resolve entries: a regression that deferred this
+    // must-fix thread would overflow the stub and fail the run.
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+// (d) must-fix escalates (not defers) at round-cap exhaustion: even at a very
+// high round (10, past any configured window) a must-fix thread is still NOT
+// deferred — it would escalate via the gate round cap, never defer.
+test("#1581 (d): must-fix escalates (not defers) at round-cap exhaustion", async () => {
+  const thread = openMustFixThread({ commentId: 7400 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
+    // No disposition entries: must-fix must not be deferred even at round 10.
+    roundEntries({ issueComments: roundHistory("draft_gate", 10), threads: [thread] }),
+    { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 10);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});

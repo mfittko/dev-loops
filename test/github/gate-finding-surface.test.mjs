@@ -109,6 +109,27 @@ test("isDeferredAtRound: must-fix never defers, worth-fixing-now defers from rou
   assert.equal(isDeferredAtRound("nice-to-have", 1), true);
 });
 
+// #1581: the per-gate worth-fixing-now fix window overrides the built-in
+// constant. A consumer raising the window to 5 keeps a round-4 WFN finding open;
+// lowering it to 1 defers a round-2 WFN finding. must-fix is always exempt.
+test("isDeferredAtRound: a per-gate window parameter overrides the built-in constant (#1581)", () => {
+  // Default (no third arg) still uses the built-in WORTH_FIXING_NOW_FIX_WINDOW (3).
+  assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
+  assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
+  // A raised per-gate window (5): round 4 now stays open; round 6 defers.
+  assert.equal(isDeferredAtRound("worth-fixing-now", 4, 5), false);
+  assert.equal(isDeferredAtRound("worth-fixing-now", 5, 5), false);
+  assert.equal(isDeferredAtRound("worth-fixing-now", 6, 5), true);
+  // A lowered per-gate window (1): round 2 defers; round 1 stays open.
+  assert.equal(isDeferredAtRound("worth-fixing-now", 1, 1), false);
+  assert.equal(isDeferredAtRound("worth-fixing-now", 2, 1), true);
+  // must-fix never defers, regardless of the per-gate window or round.
+  assert.equal(isDeferredAtRound("must-fix", 99, 1), false);
+  assert.equal(isDeferredAtRound("must-fix", 99, 5), false);
+  // nice-to-have always defers immediately, regardless of the window.
+  assert.equal(isDeferredAtRound("nice-to-have", 1, 5), true);
+});
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
