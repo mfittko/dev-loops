@@ -74,7 +74,7 @@ function parseError(message) {
 // nice-to-have finding that is never fix-windowed at all.
 function windowReason(severity, worthFixingNowFixWindow) {
   if (severity === "worth-fixing-now") {
-    return `stayed open past this gate chain's round-${worthFixingNowFixWindow} worth-fixing-now fix window`;
+    return `stayed open past this gate's round-${worthFixingNowFixWindow} worth-fixing-now fix window`;
   }
   return "nice-to-have findings are deferred immediately, at the round they are first posted";
 }
@@ -246,12 +246,17 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
 
   // 3. Resolve this gate's per-gate worth-fixing-now fix window (#1581): the
   // disposition pass honors the configured window instead of the hardcoded
-  // constant. loadDevLoopConfig never throws — it returns defaults (window 3,
-  // the built-in WORTH_FIXING_NOW_FIX_WINDOW fallback) on any load failure, so
-  // an unconfigured or unloadable config fails open to the historic behavior.
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  // constant. loadDevLoopConfig never throws; on schema-validation failure it
+  // returns the merged (possibly unvalidated) config with a non-empty errors
+  // array. When that happens, fall back to the built-in WORTH_FIXING_NOW_FIX_WINDOW
+  // (window 3) so an unloadable/broken config fails open to the historic behavior
+  // rather than trusting an unvalidated value.
+  const { config, errors } = await loadDevLoopConfig({ repoRoot });
   const gateConfigKey = GATE_CONFIG_KEY[gate] ?? gate;
-  const worthFixingNowFixWindow = resolveGateConfig(config, gateConfigKey).worthFixingNowFixWindow;
+  const worthFixingNowFixWindow =
+    errors.length > 0
+      ? WORTH_FIXING_NOW_FIX_WINDOW
+      : resolveGateConfig(config, gateConfigKey).worthFixingNowFixWindow;
 
   // 4. Thread snapshot for the disposition pass. A carried-open thread from an
   // earlier round must be reconciled against THIS round regardless of whether
