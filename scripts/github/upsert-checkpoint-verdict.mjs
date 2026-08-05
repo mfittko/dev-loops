@@ -1620,7 +1620,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     });
     if (missingMandatory.length > 0) {
       throw new Error(
-        `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; add a per-angle entry for each before posting a fanout_fanin verdict)`,
+        `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; add a per-angle entry for each before posting a fanout_fanin verdict)`,
       );
     }
     if (foreignAngles.length > 0) {
@@ -1658,7 +1658,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (mandatoryAngles.length > 0) {
       if (!options.findingsLedger) {
         throw new Error(
-          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, configured in gates.${gateKey}.mandatoryAngles) requires coverage proof via --findings-json or --findings-ledger.`,
+          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, derived from gates.${gateKey}.angles entries with mandatory: true) requires coverage proof via --findings-json or --findings-ledger.`,
         );
       }
       preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
@@ -1685,7 +1685,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
       if (missingMandatory.length > 0) {
         throw new Error(
-          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; the ledger's --provenance must record a per-angle entry for each).`,
+          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; the ledger's --provenance must record a per-angle entry for each).`,
         );
       }
       if (foreignAngles.length > 0) {

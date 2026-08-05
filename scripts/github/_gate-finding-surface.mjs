@@ -365,7 +365,8 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     Array.isArray(f.files) ? { ...f, files: f.files.map((entry) => entry.trim()) } : f
   ));
   // `provenance` is passed through UNVALIDATED (write-gate-findings-log.mjs
-  // already validates it at write time via provenanceConsistencyError); a
+  // validates it at write time via provenanceConsistencyError only when the
+  // ledger was written with --provenance); a
   // reader that needs to trust it (e.g. upsert-checkpoint-verdict.mjs's
   // withheld-tier mandatory-angle check) re-validates with the same function
   // rather than assuming a hand-edited or shadow ledger is honest.
