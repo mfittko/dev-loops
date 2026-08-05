@@ -2185,6 +2185,7 @@ describe("role resolution", () => {
         dynamicAngles: true,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
+        worthFixingNowFixWindow: 3,
         tiers: [],
       });
     });
@@ -2205,6 +2206,7 @@ describe("role resolution", () => {
         dynamicAngles: true,
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["must-fix"],
+        worthFixingNowFixWindow: 3,
         tiers: [],
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);

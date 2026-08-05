@@ -795,10 +795,12 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - commit and push fixes on the branch
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers every finding whose severity is in the gate's
-  `blockCleanOnFindingSeverities` set. Through round 3 of the gate's chain, it also covers
+  `blockCleanOnFindingSeverities` set. Through this gate's configured worth-fixing-now fix
+  window (default 3, `gates.<gate>.worthFixingNowFixWindow`; #1581) of the gate's chain, it also covers
   every open LOCATABLE worth-fixing-now finding — one anchored to an in-diff `file:line` and
   tracked through its own resolvable review thread per `GATE-EXEC-FINDING-THREADS` — fixed the
-  same way even though that severity is not in the blocking set. From round 4 on, an open
+  same way even though that severity is not in the blocking set. From the next round on (round 4
+  under the default window), an open
   locatable worth-fixing-now finding is no longer fixed inside the gate: it is deferred per
   `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
   no code location, so it never gets a thread to fix through) is outside this round window
@@ -1020,8 +1022,14 @@ findings post.
 `GATE-EXEC-THREAD-DISPOSITION`: A gate-authored thread's severity decides how it closes. A
 must-fix thread stays unresolved until the standard fix, reply-with-resolving-commit, resolve
 loop (Step 7 of [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)) closes it — no other
-exit exists. A worth-fixing-now thread stays unresolved and goes through that SAME loop through
-round 3 of this gate's chain; from round 4 on, an open worth-fixing-now thread is instead
+exit exists. Must-fix-if-present is the per-gate continuation default: an open must-fix finding
+forces another fix round for that gate, and an unfixable must-fix escalates to the operator via
+the existing gate round cap (`roundCapReached` in `packages/core/src/loop/pr-gate-coordination.mjs`)
+plus the "Maximum retry cycles exhausted → escalate to operator" rule — never deferred (must-fix
+is exempt from the worth-fixing-now window). A worth-fixing-now thread stays unresolved and goes
+through that SAME loop through this gate's configured worth-fixing-now fix window (default 3,
+`gates.<gate>.worthFixingNowFixWindow`; #1581) of this gate's chain; from the next round on (round 4
+under the default window), an open worth-fixing-now thread is instead
 replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferral record
 (`GATE-EXEC-DEFERRAL-RECORD`) tells a deferred thread apart from one the fix loop genuinely
@@ -1052,7 +1060,8 @@ durable findings-log ledger under `tmp/gate-findings/...`. Both carry the findin
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
-defers it (a worth-fixing-now thread past round 3, or a nice-to-have thread immediately). A
+defers it (a worth-fixing-now thread past the gate's configured worth-fixing-now fix window
+(default 3, round 4 under the default; #1581), or a nice-to-have thread immediately). A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
 severity other than `must-fix`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a

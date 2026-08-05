@@ -229,6 +229,13 @@ const GateConfig = z.strictObject({
     .min(1)
     .default(["must-fix"])
     .describe("Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it."),
+  // Per-gate worth-fixing-now fix window (#1581): an open worth-fixing-now
+  // finding stays in the in-gate fix loop through this many rounds of THIS
+  // gate's chain and is deferred (replied-to + resolved) from the next round
+  // on. Defaults to 3 (the built-in WORTH_FIXING_NOW_FIX_WINDOW fallback in
+  // scripts/github/_gate-finding-surface.mjs). must-fix is exempt: it never
+  // defers and forces per-gate continuation until the gate round cap escalates.
+  worthFixingNowFixWindow: z.number().int().nonnegative().default(3).describe("Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply, so a gate that never sets this key keeps
   // today's dynamic-subtractive/additive/full-pool resolution unchanged.
@@ -1782,6 +1789,7 @@ export function resolveGateConfig(config, gate) {
     blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
       ? [...new Set(gateConfig.blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)))]
       : ["must-fix"],
+    worthFixingNowFixWindow: gateConfig?.worthFixingNowFixWindow ?? 3,
     tiers: gateConfig?.tiers ?? [],
   };
 }

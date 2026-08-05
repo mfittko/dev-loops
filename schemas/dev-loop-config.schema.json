@@ -268,6 +268,12 @@
                 ]
               }
             },
+            "worthFixingNowFixWindow": {
+              "default": 3,
+              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -444,6 +450,12 @@
                 ]
               }
             },
+            "worthFixingNowFixWindow": {
+              "default": 3,
+              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -619,6 +631,12 @@
                   "defer"
                 ]
               }
+            },
+            "worthFixingNowFixWindow": {
+              "default": 3,
+              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
             },
             "tiers": {
               "minItems": 1,

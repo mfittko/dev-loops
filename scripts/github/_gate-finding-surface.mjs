@@ -93,10 +93,10 @@ function slugForMarker(value) {
 // does NOT call this: a body-filed finding never gets a thread to fix through,
 // so it is stamped deferred unconditionally at render time, regardless of round
 // (see that function's own comment).
-export function isDeferredAtRound(severity, round) {
+export function isDeferredAtRound(severity, round, worthFixingNowFixWindow = WORTH_FIXING_NOW_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
   if (sev === "must-fix") return false;
-  if (sev === "worth-fixing-now") return round > WORTH_FIXING_NOW_FIX_WINDOW;
+  if (sev === "worth-fixing-now") return round > worthFixingNowFixWindow;
   return true; // "nice-to-have" (and any legacy spelling of it)
 }
 

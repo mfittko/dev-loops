@@ -135,6 +135,10 @@ gates:
         prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a worth-fixing-now finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a worth-fixing-now finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
     required: true
     requireCi: true
+    # Per-gate worth-fixing-now fix window (#1581, default 3): an open
+    # worth-fixing-now finding stays in the in-gate fix loop through this many
+    # rounds of this gate's chain before deferral. must-fix never defers.
+    worthFixingNowFixWindow: 3
     # Diff-class angle tiers (opt-in, ordered, first match wins). A matching tier
     # replaces this gate's resolved angle set with its own for that round's
     # fan-out (mandatory angles are always kept); it never changes execution
@@ -228,6 +232,10 @@ gates:
       - correctness-final
       - ui-validation
     required: true
+    # Per-gate worth-fixing-now fix window (#1581, default 3): an open
+    # worth-fixing-now finding stays in the in-gate fix loop through this many
+    # rounds of this gate's chain before deferral. must-fix never defers.
+    worthFixingNowFixWindow: 3
   # Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
   # not production code, so it is intentionally lighter than the production
   # draft -> pre-approval -> Copilot set: a small docs-first angle set, not a
