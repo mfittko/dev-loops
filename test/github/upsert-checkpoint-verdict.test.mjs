@@ -4272,6 +4272,38 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
   }
 });
 
+test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance carries an angle-less entry", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-angleless-"));
+  try {
+    const ledgerPath = path.join(tempDir, "ledger.json");
+    // provenanceConsistencyError accepts this shape (identity present), but
+    // the entry attributes its review to no angle; the guard must name that
+    // instead of reporting a confusing missing-mandatory-angle error.
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: [],
+      provenance: { distinctReviewers: 1, perAngle: [{ reviewer: "agent-a" }] },
+    }), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-summary", "round too large to render per-angle; see ledger",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /1 entry lack a non-empty \.angle/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict whose --findings-ledger carries no provenance", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-no-provenance-"));
   try {
@@ -4661,6 +4693,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findin
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Execution mode:** fanout_fanin"],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
@@ -4671,6 +4704,9 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findin
       "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.executionMode, "fanout_fanin");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
