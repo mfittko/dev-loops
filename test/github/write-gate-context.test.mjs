@@ -2557,7 +2557,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
       "- Read the gate-context artifact that way, e.g. `jq '{resolvedAngles, scope}' \"tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\"`.",
-      "- This prefix already carries the full diff (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+      "- This briefing already carries the diff it scopes (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
       "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
       "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
       "",
