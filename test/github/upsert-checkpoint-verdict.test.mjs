@@ -4641,6 +4641,41 @@ test("upsert-checkpoint-verdict refuses a withheld (tier-4) fanout_fanin round v
   }
 });
 
+test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findings-summary alone when the gate has NO mandatory angle configured", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-no-mandatory-"));
+  try {
+    // draft_gate's only mandatory angle (pr-description) disabled via a D3
+    // merge-by-name override, so mandatoryAngles resolves empty and the
+    // coverage guard never engages — pinning the escape hatch every
+    // no-mandatory-angle consumer repo relies on.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  draft:",
+      "    angles:",
+      "      - name: pr-description",
+      "        enabled: false",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present",
+      "--findings-summary", "round withheld: too wide to render even at minimum shape — recorded in the disposition ledger",
+      "--next-action", "fix must-fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inline-reason", async () => {
   // End-to-end argument-error path: a complete call that resolves to the default
   // inline mode but omits --inline-reason exits 1 with a clear argument error
@@ -5043,6 +5078,22 @@ test("upsert-checkpoint-verdict rejects a --findings-ledger written for a differ
 test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --findings-ledger's provenance fully covers the gate's mandatory angles", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-covered-"));
   try {
+    // Pin draft_gate's mandatory angle explicitly rather than relying on the
+    // packaged extension-defaults layer for this empty temp root: this test
+    // (unlike its negative siblings above, which resolve config from the
+    // worktree's own .devloops via runNode) passes repoRoot: tempDir directly,
+    // so without this file a future default change could silently empty
+    // mandatoryAngles and this positive assertion would keep passing green
+    // while proving nothing.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  draft:",
+      "    angles:",
+      "      - name: pr-description",
+      "        mandatory: true",
+      "",
+    ].join("\n"), "utf8");
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING], {
       provenance: {
         distinctReviewers: 2,

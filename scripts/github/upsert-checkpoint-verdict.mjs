@@ -130,7 +130,11 @@ Optional:
                                             mandatoryAngles and the post is refused
                                             (naming the missing angle(s)) when it
                                             does not cover them, or when the ledger
-                                            records no valid provenance.
+                                            records no valid provenance. A
+                                            fanout_fanin verdict WITHOUT
+                                            --findings-json on a gate with
+                                            mandatoryAngles configured REQUIRES
+                                            this flag; omitting both is refused.
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
@@ -1277,8 +1281,12 @@ async function loadMatchingFindingsLedger(options, headSha) {
   }
   return ledger;
 }
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate }, gh) {
-  const ledger = await loadMatchingFindingsLedger(options, headSha);
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger }, gh) {
+  // The withheld-tier coverage check above already loaded and validated this
+  // same --findings-ledger file for this same round; reuse it instead of
+  // reading it a second time (undefined means it was never preloaded, e.g. a
+  // structured or inline round, so load it fresh here as before).
+  const ledger = preloadedLedger !== undefined ? preloadedLedger : await loadMatchingFindingsLedger(options, headSha);
   if (!ledger) {
     return null;
   }
@@ -1582,6 +1590,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
+  // Populated by the withheld-tier branch below when it loads --findings-ledger
+  // to prove angle coverage, and reused by resolveFindingSurface further down
+  // so the same ledger file is never read from disk twice for one round.
+  let preloadedFindingsLedger;
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
   // structured per-angle results must cover every configured mandatory angle,
   // and (default) must not name an angle outside the gate's configured pool.
@@ -1624,41 +1636,69 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
     }
   } else if (!structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
-    // Withheld tier (consolidate-fanin's tier 4): --findings-json was never
-    // supplied, or was withheld/removed because even the cheapest per-angle
-    // shape did not fit the comment budget — so the mandatory-angle check
-    // above never ran, and this comment structurally cannot carry per-angle
-    // data to check instead. Per skills/docs/gate-review-sub-loop-contract.md,
-    // prove coverage from the round's disposition ledger — the
-    // write-gate-findings-log.mjs ledger's `provenance.perAngle`, written
-    // before this comment and unbudgeted — rather than from the comment.
-    // Reuses checkFanoutAngleCoverage, the SAME coverage function the
-    // structured branch above and detect-checkpoint-evidence.mjs's read-time
-    // re-validation both use, so write-time refusal and read-time enforcement
-    // can never silently define "covered" differently. Fail-closed, not a
-    // policy obligation: a caller that supplies NEITHER --findings-json NOR
-    // --findings-ledger carries no coverage proof at all and is refused too
-    // (below), the same as one whose ledger lacks it.
+    // No --findings-json: either genuinely withheld (consolidate-fanin's tier
+    // 4 — even the cheapest per-angle shape did not fit the comment budget) or
+    // simply omitted, so the mandatory-angle check above never ran and this
+    // comment carries no per-angle data to check instead. Per
+    // skills/docs/gate-review-sub-loop-contract.md, prove coverage from the
+    // round's disposition ledger — the write-gate-findings-log.mjs ledger's
+    // `provenance.perAngle`, written before this comment and unbudgeted —
+    // rather than from the comment. Reuses checkFanoutAngleCoverage, the SAME
+    // coverage function the structured branch above and
+    // detect-checkpoint-evidence.mjs's read-time re-validation both use, so
+    // write-time refusal and read-time enforcement can never silently define
+    // "covered" differently — for BOTH the mandatory-angle and foreign-angle
+    // checks, mirroring the structured branch's `pool`/`foreignAngles`
+    // handling above. Fail-closed, not a policy obligation: a caller that
+    // supplies NEITHER --findings-json NOR --findings-ledger carries no
+    // coverage proof at all and is refused too (below), the same as one whose
+    // ledger lacks it.
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
-    const { mandatoryAngles } = resolveGateAngleContract(config, gateKey);
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
     if (mandatoryAngles.length > 0) {
       if (!options.findingsLedger) {
         throw new Error(
-          `Cannot post a withheld fanout_fanin verdict for ${options.gate}: mandatory angle coverage (${mandatoryAngles.join(", ")}) is configured, so this comment (which cannot carry per-angle data at this tier) requires coverage proof via --findings-json or --findings-ledger (configured in gates.${gateKey}.mandatoryAngles).`,
+          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, configured in gates.${gateKey}.mandatoryAngles) requires coverage proof via --findings-json or --findings-ledger.`,
         );
       }
-      const ledger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
-      const consistencyErr = provenanceConsistencyError(ledger?.provenance ?? null);
+      preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+      const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
       if (consistencyErr) {
         throw new Error(
-          `Cannot post a withheld fanout_fanin verdict for ${options.gate}: --findings-json was omitted, so mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
+          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
         );
       }
-      const { missingMandatory } = checkFanoutAngleCoverage(ledger.provenance.perAngle, { mandatoryAngles });
+      // Same angle-less guard as the --findings-json branch above: a
+      // provenance.perAngle entry missing a non-empty .angle would otherwise
+      // be silently dropped by checkFanoutAngleCoverage's own filtering — it
+      // can then only ever fail to satisfy an angle, never satisfy one, but
+      // this fails closed with the real problem instead of a confusing
+      // missing-angle error.
+      const angleless = (preloadedFindingsLedger.provenance.perAngle ?? []).filter(
+        (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
+      ).length;
+      if (angleless > 0) {
+        throw new Error(
+          `--findings-ledger's provenance for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — every provenance.perAngle entry must attribute its review to an angle.`,
+        );
+      }
+      const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
       if (missingMandatory.length > 0) {
         throw new Error(
-          `Cannot post a withheld fanout_fanin verdict for ${options.gate}: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; the ledger's --provenance must record a per-angle entry for each before a withheld round can post).`,
+          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (configured in gates.${gateKey}.mandatoryAngles; the ledger's --provenance must record a per-angle entry for each).`,
         );
+      }
+      if (foreignAngles.length > 0) {
+        const message = `--findings-ledger's provenance for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+        if (resolveRejectForeignAngles(config)) {
+          throw new Error(
+            `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
+          );
+        }
+        // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
+        if (!options.silent) {
+          process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
+        }
       }
     }
   }
@@ -1707,7 +1747,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
   const findingSurface = await resolveFindingSurface(
-    { options, headSha: canonicalHeadSha, repoRoot, isUpdate: existing !== null },
+    { options, headSha: canonicalHeadSha, repoRoot, isUpdate: existing !== null, preloadedLedger: preloadedFindingsLedger },
     gh,
   );
   const desiredBody = renderGateReviewCommentBody({
