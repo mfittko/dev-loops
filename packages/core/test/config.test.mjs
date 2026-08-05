@@ -4222,6 +4222,42 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.skippedAngles, []);
     assert.equal(result.fallbackToAll, false);
   });
+
+  test("#1579 gate:full label alone does NOT restore the full pool (only per-angle dispatch of the pruned set)", async () => {
+    // gate:full bypasses TIER resolution but NOT dynamic pruning: under the
+    // default subtractive:true + a diff, hasFullLabel still yields a pruned set
+    // (dispatched per-angle via resolveFanoutGroups), not the full static pool.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+      hasFullLabel: true,
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
+    assert.ok(result.recommendedAngles.length < 5, "pool still pruned — gate:full does not restore the full pool");
+    assert.ok(result.skippedAngles.length > 0, "non-docs angles still pruned under gate:full");
+    assert.equal(result.fallbackToAll, false);
+  });
+
+  test("#1579 default config + ambiguous diff → fallbackToAll restores the full pool (graceful degradation)", async () => {
+    // The CHANGELOG pins this as the graceful-degradation route for the new
+    // default: an unclassifiable (ambiguous) diff falls back to the full static
+    // pool with fallbackToAll:true, dynamicAnglesActive:true.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.equal(result.fallbackToAll, true);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+  });
 });
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
   function draftConfigWithTiers(tiers) {
