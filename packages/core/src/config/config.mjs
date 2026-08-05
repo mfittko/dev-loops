@@ -196,7 +196,14 @@ const GateTier = z.strictObject({
 });
 
 const GateDynamicConfig = z.strictObject({
-  subtractive: z.boolean().default(false).describe("Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles)."),
+  // Diff-driven dynamic angle selection is ON by default (#1579): a fresh
+  // install narrows the angle pool to what the diff-classifier recommends.
+  // mandatory:true angles stay a hard always-run floor; fallbackToAll fires
+  // when classification is ambiguous, degrading to the full static pool. Set
+  // subtractive:false to restore the full static angle pool (the gate:full label
+  // only forces per-angle dispatch of the still-pruned set, not the full pool —
+  // combine both for the original full static fan-out).
+  subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
   // Additive counterpart to the subtractive path (#1048): when true, the
   // context-builder may also ADD catalog angles — from resolveAnglePool()
   // (gates.anglePool, or else the union of the persona registry and this
@@ -1767,7 +1774,7 @@ export function resolveGateConfig(config, gate) {
     mandatoryAngles: entries.filter((e) => e.enabled !== false && e.mandatory === true).map((e) => e.name),
     required: gateConfig?.required ?? true,
     requireCi: gateConfig?.requireCi ?? true,
-    dynamicAngles: gateConfig?.dynamic?.subtractive ?? false,
+    dynamicAngles: gateConfig?.dynamic?.subtractive ?? true,
     additiveAngles: gateConfig?.dynamic?.additive ?? false,
     // Normalized + deduped at the resolve boundary so every consumer (envelope,
     // verdict poster, fan-in, viewer) sees canonical spellings only; a
@@ -2205,8 +2212,9 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * Uses diff analysis helpers (from ../analysis/*) to filter the
  * configured angle list down to only angles relevant to the change set.
  *
- * When `dynamicAngles` is disabled (default), returns the full configured
- * angle list (same as `resolveGateAngles`).
+ * When `dynamicAngles` is disabled (opt-out via `dynamic.subtractive: false`,
+ * see #1579), returns the full configured angle list (same as
+ * `resolveGateAngles`); no diff also falls back to the full static pool.
  *
  * When `additiveAngles` is also enabled (default off, see #1048), catalog
  * angles from `resolveAnglePool()` (`gates.anglePool`, or else the union of
