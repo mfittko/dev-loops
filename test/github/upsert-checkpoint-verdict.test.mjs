@@ -4333,6 +4333,49 @@ test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict 
   }
 });
 
+test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance names a foreign angle on a gate with a pool but no mandatory angle", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-pool-only-foreign-"));
+  try {
+    // draft_gate's only mandatory angle (pr-description) disabled via a D3
+    // merge-by-name override, so mandatoryAngles resolves empty while the
+    // pool (scope, coverage, ...) stays non-empty — pinning that the
+    // foreign-angle check still runs for a pool-only, no-mandatory gate
+    // instead of being skipped along with the mandatory-angle check.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  draft:",
+      "    angles:",
+      "      - name: pr-description",
+      "        enabled: false",
+      "",
+    ].join("\n"), "utf8");
+    const ledgerPath = path.join(tempDir, "ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: [],
+      provenance: { distinctReviewers: 1, perAngle: [{ angle: "totally-made-up", reviewer: "agent-a" }] },
+    }), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-summary", "round too large to render per-angle; see ledger",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "fix then re-gate", "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /--findings-ledger's provenance for draft_gate names angle\(s\) outside the configured pool: totally-made-up/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
   try {

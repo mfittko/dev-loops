@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -132,9 +132,11 @@ Optional:
                                             does not cover them, or when the ledger
                                             records no valid provenance. A
                                             fanout_fanin verdict WITHOUT
-                                            --findings-json on a gate with
-                                            mandatoryAngles configured REQUIRES
-                                            this flag; omitting both is refused.
+                                            --findings-json on a gate that
+                                            configures mandatory angles
+                                            (gates.<gate>.angles entries with
+                                            mandatory: true) REQUIRES this
+                                            flag; omitting both is refused.
   --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
@@ -1264,6 +1266,24 @@ export function buildCoordinationEvaluatorInput({
  * a same-head correction body-files every still-unposted finding rather than
  * silently dropping the locatable ones.
  */
+// Shared fanout foreign-angle policy for both the --findings-json and the
+// --findings-ledger's-provenance coverage checks: refuse (fail-closed) unless
+// gates.rejectForeignAngles is false, in which case warn instead of failing.
+function enforceForeignAngles(foreignAngles, { sourceLabel, gate, gateKey, config, silent }) {
+  if (foreignAngles.length === 0) {
+    return;
+  }
+  const message = `${sourceLabel} for ${gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
+  if (resolveRejectForeignAngles(config)) {
+    throw new Error(
+      `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
+    );
+  }
+  // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
+  if (!silent) {
+    process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
+  }
+}
 // Read `--findings-ledger` and confirm it is THIS round's ledger (same
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
 // resolver below and the withheld-tier mandatory-angle-coverage check, so
@@ -1595,109 +1615,90 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // so the same ledger file is never read from disk twice for one round.
   let preloadedFindingsLedger;
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
-  // structured per-angle results must cover every configured mandatory angle,
-  // and (default) must not name an angle outside the gate's configured pool.
-  // Only applies when structured per-angle results were actually supplied —
-  // a free-text --findings-summary fanout_fanin verdict carries no per-angle
-  // data to validate.
-  if (structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
-    // Angle-less entries would be bucketed under the synthetic `general` label
-    // by normalization and then surface as a CONFUSING foreign-angle error.
-    // Fail first with a dedicated message naming the real problem instead.
-    const angleless = (rawFindingsInput ?? []).filter(
-      (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
-    ).length;
-    if (angleless > 0) {
-      throw new Error(
-        `--findings-json for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — a fanout_fanin verdict must attribute every per-angle entry/finding to its review angle (use the nested [{ angle, verdict, findings }] shape, or add .angle to each flat finding)`,
-      );
-    }
-    const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
+  // per-angle results (structured, or the withheld branch's ledger provenance)
+  // must cover every configured mandatory angle, and (default) must not name
+  // an angle outside the gate's configured pool. gateKey/mandatoryAngles/pool
+  // are the same lookup either branch below needs, so resolve them once.
+  if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
+    const gateKey = GATE_CONFIG_KEY[options.gate];
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
-    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {
-      mandatoryAngles,
-      pool,
-    });
-    if (missingMandatory.length > 0) {
-      throw new Error(
-        `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; add a per-angle entry for each before posting a fanout_fanin verdict)`,
-      );
-    }
-    if (foreignAngles.length > 0) {
-      const message = `--findings-json for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
-      if (resolveRejectForeignAngles(config)) {
-        throw new Error(
-          `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
-        );
-      }
-      // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
-      if (!options.silent) {
-        process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
-      }
-    }
-  } else if (!structuredFindings && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
-    // No --findings-json: either genuinely withheld (consolidate-fanin's tier
-    // 4 — even the cheapest per-angle shape did not fit the comment budget) or
-    // simply omitted, so the mandatory-angle check above never ran and this
-    // comment carries no per-angle data to check instead. Per
-    // skills/docs/gate-review-sub-loop-contract.md, prove coverage from the
-    // round's disposition ledger — the write-gate-findings-log.mjs ledger's
-    // `provenance.perAngle`, written before this comment and unbudgeted —
-    // rather than from the comment. Reuses checkFanoutAngleCoverage, the SAME
-    // coverage function the structured branch above and
-    // detect-checkpoint-evidence.mjs's read-time re-validation both use, so
-    // write-time refusal and read-time enforcement can never silently define
-    // "covered" differently — for BOTH the mandatory-angle and foreign-angle
-    // checks, mirroring the structured branch's `pool`/`foreignAngles`
-    // handling above. Fail-closed, not a policy obligation: a caller that
-    // supplies NEITHER --findings-json NOR --findings-ledger carries no
-    // coverage proof at all and is refused too (below), the same as one whose
-    // ledger lacks it.
-    const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
-    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
-    if (mandatoryAngles.length > 0) {
-      if (!options.findingsLedger) {
-        throw new Error(
-          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, derived from gates.${gateKey}.angles entries with mandatory: true) requires coverage proof via --findings-json or --findings-ledger.`,
-        );
-      }
-      preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
-      const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
-      if (consistencyErr) {
-        throw new Error(
-          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
-        );
-      }
-      // Same angle-less guard as the --findings-json branch above: a
-      // provenance.perAngle entry missing a non-empty .angle would otherwise
-      // be silently dropped by checkFanoutAngleCoverage's own filtering — it
-      // can then only ever fail to satisfy an angle, never satisfy one, but
-      // this fails closed with the real problem instead of a confusing
-      // missing-angle error.
-      const angleless = (preloadedFindingsLedger.provenance.perAngle ?? []).filter(
+    if (structuredFindings) {
+      // Angle-less entries would be bucketed under the synthetic `general` label
+      // by normalization and then surface as a CONFUSING foreign-angle error.
+      // Fail first with a dedicated message naming the real problem instead.
+      const angleless = (rawFindingsInput ?? []).filter(
         (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
       ).length;
       if (angleless > 0) {
         throw new Error(
-          `--findings-ledger's provenance for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — every provenance.perAngle entry must attribute its review to an angle.`,
+          `--findings-json for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — a fanout_fanin verdict must attribute every per-angle entry/finding to its review angle (use the nested [{ angle, verdict, findings }] shape, or add .angle to each flat finding)`,
         );
       }
-      const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
+      const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(structuredFindings, {
+        mandatoryAngles,
+        pool,
+      });
       if (missingMandatory.length > 0) {
         throw new Error(
-          `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; the ledger's --provenance must record a per-angle entry for each).`,
+          `--findings-json for ${options.gate} is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; add a per-angle entry for each before posting a fanout_fanin verdict)`,
         );
       }
-      if (foreignAngles.length > 0) {
-        const message = `--findings-ledger's provenance for ${options.gate} names angle(s) outside the configured pool: ${foreignAngles.join(", ")}`;
-        if (resolveRejectForeignAngles(config)) {
-          throw new Error(
-            `${message} (add them to gates.${gateKey}.angles, or set gates.rejectForeignAngles: false to warn instead of fail)`,
-          );
-        }
-        // rejectForeignAngles: false is WARNING mode, not silence — one line per call.
-        if (!options.silent) {
-          process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
+      enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-json", gate: options.gate, gateKey, config, silent: options.silent });
+    } else {
+      // No --findings-json: either genuinely withheld (consolidate-fanin's tier
+      // 4 — even the cheapest per-angle shape did not fit the comment budget) or
+      // simply omitted, so the mandatory-angle check above never ran and this
+      // comment carries no per-angle data to check instead. Per
+      // skills/docs/gate-review-sub-loop-contract.md, prove coverage from the
+      // round's disposition ledger — the write-gate-findings-log.mjs ledger's
+      // `provenance.perAngle`, written before this comment and unbudgeted —
+      // rather than from the comment. Reuses checkFanoutAngleCoverage, the SAME
+      // coverage function the structured branch above and
+      // detect-checkpoint-evidence.mjs's read-time re-validation both use, so
+      // write-time refusal and read-time enforcement can never silently define
+      // "covered" differently — for BOTH the mandatory-angle and foreign-angle
+      // checks, mirroring the structured branch's `pool`/`foreignAngles`
+      // handling above. Runs whenever the gate contract defines a mandatory
+      // angle OR a pool (same trigger as the structured branch, which always
+      // runs); the neither-artifact refusal below stays keyed on mandatory
+      // angles only — a pool with no mandatory angle carries no proof
+      // obligation for a caller that supplies neither artifact at all.
+      if (mandatoryAngles.length > 0 || (Array.isArray(pool) && pool.length > 0)) {
+        if (!options.findingsLedger) {
+          if (mandatoryAngles.length > 0) {
+            throw new Error(
+              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, derived from gates.${gateKey}.angles entries with mandatory: true) requires coverage proof via --findings-json or --findings-ledger.`,
+            );
+          }
+        } else {
+          preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+          const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
+          if (consistencyErr) {
+            throw new Error(
+              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
+            );
+          }
+          // Same angle-less guard as the --findings-json branch above: a
+          // provenance.perAngle entry missing a non-empty .angle would otherwise
+          // be silently dropped by checkFanoutAngleCoverage's own filtering — it
+          // can then only ever fail to satisfy an angle, never satisfy one, but
+          // this fails closed with the real problem instead of a confusing
+          // missing-angle error.
+          const angleless = (preloadedFindingsLedger.provenance.perAngle ?? []).filter(
+            (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
+          ).length;
+          if (angleless > 0) {
+            throw new Error(
+              `--findings-ledger's provenance for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — every provenance.perAngle entry must attribute its review to an angle.`,
+            );
+          }
+          const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
+          if (missingMandatory.length > 0) {
+            throw new Error(
+              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; the ledger's --provenance must record a per-angle entry for each).`,
+            );
+          }
+          enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-ledger's provenance", gate: options.gate, gateKey, config, silent: options.silent });
         }
       }
     }
