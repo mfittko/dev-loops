@@ -4333,6 +4333,50 @@ test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict 
   }
 });
 
+test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --findings-ledger carries NO valid provenance on a gate with a pool but no mandatory angle", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-pool-only-vacuous-"));
+  try {
+    // Same pool-only/no-mandatory config as the foreign-angle refusal below,
+    // but the ledger records no provenance at all: with nothing to prove,
+    // invalid provenance blocks nothing (vacuous coverage), so the post
+    // succeeds instead of demanding proof the gate never obliged.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  draft:",
+      "    angles:",
+      "      - name: pr-description",
+      "        enabled: false",
+      "",
+    ].join("\n"), "utf8");
+    // Same ledger shape as the covered-provenance positive test below, but
+    // with NO provenance key at all — the vacuous-coverage case under test.
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "round too large to render per-angle; see ledger",
+      findingsLedger: ledgerPath,
+      nextAction: "fix then re-gate",
+      executionMode: "fanout_fanin",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance names a foreign angle on a gate with a pool but no mandatory angle", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-pool-only-foreign-"));
   try {

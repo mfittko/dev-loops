@@ -1673,11 +1673,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         } else {
           preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
           const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
-          if (consistencyErr) {
+          if (consistencyErr && mandatoryAngles.length > 0) {
             throw new Error(
               `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
             );
           }
+          // A gate with no mandatory angle carries no coverage-proof
+          // obligation: a ledger without valid provenance proves nothing but
+          // blocks nothing either (vacuously covered). Only a ledger that DOES
+          // record valid provenance gets the angle-less and foreign-angle
+          // passes below.
+          if (!consistencyErr) {
           // Same angle-less guard as the --findings-json branch above: a
           // provenance.perAngle entry missing a non-empty .angle would otherwise
           // be silently dropped by checkFanoutAngleCoverage's own filtering — it
@@ -1699,6 +1705,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
             );
           }
           enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-ledger's provenance", gate: options.gate, gateKey, config, silent: options.silent });
+          }
         }
       }
     }
