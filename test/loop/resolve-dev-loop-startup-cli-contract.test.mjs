@@ -507,8 +507,8 @@ test("resolve-dev-loop-startup malformed args keep documented stderr JSON shape"
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
   const parsed = JSON.parse(result.stderr);
-  assert.deepEqual(Object.keys(parsed), ["ok", "error", "usage"]);
+  assert.deepEqual(Object.keys(parsed), ["ok", "error", "hint"]);
   assert.equal(parsed.ok, false);
   assert.equal(parsed.error, "Unknown argument: --bogus");
-  assert.match(parsed.usage, /Usage:\n  resolve-dev-loop-startup\.mjs --issue <number>/);
+  assert.equal(parsed.hint, "run with --help for usage");
 });

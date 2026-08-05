@@ -7,8 +7,8 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
-import { loadDevLoopConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -21,10 +21,12 @@ Required:
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
-  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead? }] }
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, group? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
+                                 EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
+  --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -37,7 +39,6 @@ function normalizeGate(value) {
   const normalized = String(value).trim().toLowerCase();
   return gates.has(normalized) ? normalized : null;
 }
-const GATE_CONFIG_KEY = { draft_gate: "draft", pre_approval_gate: "preApproval" };
 function normalizeVerdict(value) {
   const verdicts = new Set(["clean", "findings_present", "blocked"]);
   const normalized = String(value).trim().toLowerCase();
@@ -131,7 +132,7 @@ function resolveFindings(options) {
  * recording is the Pi-harness bridge (subagent tool at child depth). Returns the
  * normalized object.
  */
-export function parseProvenanceJson(raw) {
+export function parseProvenanceJson(raw, resolvedGroups = null) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -155,7 +156,7 @@ export function parseProvenanceJson(raw) {
       throw parseError(`--provenance.perAngle[${i}].angle is required`);
     }
     const entry = { angle: a.angle.trim() };
-    for (const key of ["reviewer", "dispatchId", "model"]) {
+    for (const key of ["reviewer", "dispatchId", "model", "group"]) {
       if (key in a) {
         if (typeof a[key] !== "string" || a[key].trim().length === 0) {
           throw parseError(`--provenance.perAngle[${i}].${key} must be a non-empty string`);
@@ -188,9 +189,13 @@ export function parseProvenanceJson(raw) {
   // One-scoped-reviewer-per-fresh-angle floor (always-on, #1431): no two fresh
   // (non-carried) angles may share one reviewer identity — closes the gap
   // where an internally-consistent distinctReviewers count still let one
-  // reviewer cover multiple angles. Carried angles are exempt (see
-  // fanoutReviewerPairingError).
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle);
+  // reviewer cover multiple angles. Carried angles are exempt, and fresh
+  // angles sharing a reviewer under the SAME declared `group` are exempt too
+  // (grouped fan-out dispatch — see fanoutReviewerPairingError). `resolvedGroups`
+  // (this round's resolveFanoutGroups output, computed by the caller — it
+  // already loads config) additionally rejects a claimed group that the
+  // configured table does not actually place these angles into together.
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
@@ -245,6 +250,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       findings: { type: "string" },
       "findings-file": { type: "string" },
       provenance: { type: "string" },
+      "full-label": { type: "boolean" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -260,6 +266,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     verdict: undefined,
     findings: undefined,
     findingsFile: undefined,
+    fullLabel: false,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -314,6 +321,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.provenance = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "full-label") {
+      options.fullLabel = true;
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -349,7 +360,26 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const findings = await resolveFindings(options);
-  const provenance = options.provenance === undefined ? undefined : parseProvenanceJson(options.provenance);
+  let provenance;
+  if (options.provenance === undefined) {
+    provenance = undefined;
+  } else {
+    // Resolve this round's dispatch groups BEFORE validating pairing, so a
+    // claimed `group` is cross-checked against the gate's actual configured
+    // grouping table (see fanoutReviewerPairingError) — not just accepted as
+    // an internally-consistent self-attested label. Best-effort: a raw-JSON
+    // parse failure here is swallowed and re-surfaces as the real, specific
+    // error inside parseProvenanceJson below.
+    let resolvedGroups = null;
+    try {
+      const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
+      const { config } = await loadDevLoopConfig({ repoRoot });
+      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
+    } catch {
+      resolvedGroups = null;
+    }
+    provenance = parseProvenanceJson(options.provenance, resolvedGroups);
+  }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance
   // remains optional and additive (inline_single_agent writes never carry it).

@@ -146,6 +146,22 @@ gates:
   # The gate round's verdict review already carries every finding, so the
   # consolidated findings comment is opt-in duplication — keep it off.
   postFindingsComments: false
+  # Grouped fan-out dispatch (AC6, default mode — see resolveFanoutGroups):
+  # angles that read the same surface batch onto one reviewer. Angles not
+  # named below each resolve as their own singleton group, so bug-hunting
+  # angles that benefit from independent judgment stay one-reviewer-per-angle
+  # by omission. Set `mode: per-angle` to restore full one-reviewer-per-angle
+  # fan-out repo-wide; `gate:full` always escalates to per-angle regardless.
+  fanout:
+    groups:
+      - name: docs-surface
+        angles: [docs, link-check, config-drift, contract-surface]
+      - name: process
+        angles: [scope, pr-description, gate-evidence, pr-checklist-matrix]
+      - name: correctness-input
+        angles: [correctness, input-validation]
+      - name: determinism-state
+        angles: [determinism, state-concurrency]
   preApproval:
     angles:
       - name: dry

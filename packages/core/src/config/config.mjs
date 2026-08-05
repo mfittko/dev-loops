@@ -121,12 +121,24 @@ const RefinementConfig = z.strictObject({
   roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
 });
 
+// Per-angle surface scope: how much of the gate-context bundle an angle
+// actually needs. "full" (default) is today's omniscient briefing;
+// "changed-files" drops the adjacent-code bundle AND the invariant prefix's
+// "Changed files + adjacent-code summary" section (the diff itself still
+// carries every changed file); "docs-only" narrows further to doc-file
+// hunks only. Resolution (resolveGateAngleScope) fails open to "full" for an
+// unknown/missing value — a narrow scope is an opt-in cost saving, never a
+// silently-enforced information cut.
+export const GATE_ANGLE_SCOPES = Object.freeze(["full", "changed-files", "docs-only"]);
+
 // One review angle: a bare string is sugar for `{ name }`. An object may also
 // set `mandatory` (always runs, survives dynamic pruning — was
 // gates.<gate>.mandatoryAngles), `enabled: false` (drops it from the resolved
-// list — was gates.<gate>.excludeAngles, D3), and `persona`/`prompt`/`model`/
+// list — was gates.<gate>.excludeAngles, D3), `persona`/`prompt`/`model`/
 // `tier` (was the top-level `personas` map + angle-keyed
-// `models.roles`/`models.roleTiers`, D4: model > tier > built-in precedence).
+// `models.roles`/`models.roleTiers`, D4: model > tier > built-in precedence),
+// and `scope` (AC3: the surface briefing variant this angle needs — see
+// GATE_ANGLE_SCOPES).
 // This is the ONE identity for a gate-review angle (was five separate places
 // — see the config-schema RFC). `mergeConfigLayers` merges these arrays BY
 // `name` across config layers (D3), so a later layer can add or disable a
@@ -147,6 +159,7 @@ const GateAngleEntry = z.preprocess(
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
+    scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full."),
   }),
 );
 
@@ -215,6 +228,52 @@ const GateConfig = z.strictObject({
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
 });
 
+// One named group of angles dispatched together onto a single reviewer under
+// grouped fan-out (AC6). `name` is recorded as the shared reviewer's
+// provenance `group` (see resolveFanoutGroups / fanoutReviewerPairingError).
+const FanoutGroup = z.strictObject({
+  name: z.string().trim().min(1).describe("Group name; recorded as the shared reviewer's provenance `group` when this group dispatches."),
+  angles: z.array(z.string().trim().min(1)).min(1).describe("Angle names batched onto one reviewer when this group resolves."),
+});
+
+// Angle-dispatch fan-out policy (AC6). `grouped` (default) batches related
+// angles from a static table onto one reviewer per group, cutting the fixed
+// per-reviewer briefing cost when several angles read the same surface;
+// `per-angle` keeps the original one-reviewer-per-angle fan-out. The
+// `gate:full` label always escalates to per-angle regardless of this setting
+// (see resolveFanoutGroups). An angle resolved for a round but not named in
+// any configured group forms its own implicit singleton group — `groups`
+// need only list the angles worth batching.
+const FanoutConfig = z.strictObject({
+  mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle."),
+  groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group resolves as its own singleton group."),
+});
+
+/**
+ * Two `gates.fanout.groups` entries sharing one `name` would resolve to two
+ * dispatch units with the same reviewer-sentinel scope (resolveFanoutGroups
+ * keys the scope by group name) — reject at config-validation time rather
+ * than let it degrade silently at dispatch time. Applied via `.superRefine`
+ * where `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that
+ * already carries a refinement), not on `FanoutConfig` itself.
+ * @param {{ groups?: Array<{ name: string }> }} val
+ * @param {import("zod").RefinementCtx} ctx
+ */
+function rejectDuplicateFanoutGroupNames(val, ctx) {
+  if (!Array.isArray(val.groups)) return;
+  const seen = new Set();
+  for (const [index, group] of val.groups.entries()) {
+    if (seen.has(group.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups", index, "name"],
+        message: `duplicate gates.fanout.groups name "${group.name}"`,
+      });
+    }
+    seen.add(group.name);
+  }
+}
+
 const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
   // `requireCi` is honored on both gates: default true keeps CI a precondition,
@@ -271,6 +330,9 @@ const GatesConfig = z.strictObject({
   // (reject); set false to warn instead of fail. See resolveRejectForeignAngles
   // / skills/docs/gate-review-sub-loop-contract.md.
   rejectForeignAngles: z.boolean().default(true),
+  // Grouped vs per-angle fan-out dispatch policy + static grouping table
+  // (AC6). GLOBAL, not per-gate — see resolveFanoutGroups.
+  fanout: FanoutConfig.superRefine(rejectDuplicateFanoutGroupNames).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -632,6 +694,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
+  fanout: FanoutConfig.partial().superRefine(rejectDuplicateFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
 });
 
 // ============================================================================
@@ -801,10 +864,13 @@ const DEFAULT_REVIEWER_PERSONA = "default-reviewer";
 /**
  * Normalize one raw `gates.<gate>.angles[]` entry (string sugar or object,
  * possibly hand-built and never zod-validated — e.g. a test config object) to
- * `{ name, mandatory?, enabled?, persona?, prompt?, model?, tier? }`. Returns
- * null for a malformed/empty entry so callers can filter it out.
+ * `{ name, mandatory?, enabled?, persona?, prompt?, model?, tier?, scope? }`.
+ * Returns null for a malformed/empty entry so callers can filter it out. An
+ * invalid `scope` (not one of GATE_ANGLE_SCOPES) is dropped rather than
+ * kept verbatim — resolveGateAngleScope's fail-open default only ever needs
+ * to handle an ABSENT field, never a foreign value.
  * @param {unknown} a
- * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
+ * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string}|null}
  */
 function normalizeAngleEntry(a) {
   if (typeof a === "string") {
@@ -821,6 +887,7 @@ function normalizeAngleEntry(a) {
     if (typeof a.prompt === "string" && a.prompt.length > 0) entry.prompt = a.prompt;
     if (typeof a.model === "string" && a.model.trim().length > 0) entry.model = a.model.trim();
     if (typeof a.tier === "string" && a.tier.trim().length > 0) entry.tier = a.tier.trim();
+    if (typeof a.scope === "string" && GATE_ANGLE_SCOPES.includes(a.scope.trim())) entry.scope = a.scope.trim();
     return entry;
   }
   return null;
@@ -830,7 +897,7 @@ function normalizeAngleEntry(a) {
  * Normalize a raw `gates.<gate>.angles` array into full entry objects,
  * dropping malformed entries.
  * @param {unknown} raw
- * @returns {Array<{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}>}
+ * @returns {Array<{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string}>}
  */
 function normalizeAngleEntries(raw) {
   if (!Array.isArray(raw)) return [];
@@ -874,6 +941,27 @@ function findAngleEntry(config, name) {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Resolve a gate angle's declared surface scope (AC3, #1572): "full"
+ * (default), "changed-files", or "docs-only" — see GATE_ANGLE_SCOPES. Unlike
+ * {@link findAngleEntry} (which searches every gate in a fixed priority
+ * order because persona/prompt resolution has no gate context), this looks up
+ * the entry within the ONE named gate — an angle's scope is meaningful only
+ * for the specific gate pass building its briefing. Fails open to "full" for
+ * an angle with no configured entry, a disabled entry, or an
+ * unknown/malformed `scope` value: a narrow scope is an opt-in cost saving,
+ * never a silently-enforced information cut.
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate
+ * @param {string} name
+ * @returns {"full"|"changed-files"|"docs-only"}
+ */
+export function resolveGateAngleScope(config, gate, name) {
+  const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
+  const found = entries.find((e) => e.name === name && e.enabled !== false);
+  return found?.scope ?? "full";
 }
 
 /**
@@ -1881,6 +1969,86 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
     }
   }
   return { mode: "inline", reason: "under_threshold", threshold };
+}
+
+/**
+ * Resolve grouped fan-out dispatch (AC6): map a round's resolved review
+ * angles onto the reviewer groups it actually dispatches.
+ *
+ * Precedence (first match wins):
+ *   1. `options.fullLabel` (`gate:full`)   → per-angle (one group per angle)
+ *   2. `gates.fanout.mode === "per-angle"` → per-angle
+ *   3. otherwise (default `grouped`)       → `resolvedAngles` map onto
+ *      `gates.fanout.groups`; an angle absent from every configured group
+ *      forms its own implicit singleton group.
+ *
+ * A configured group is included only when at least one of its angles is in
+ * `resolvedAngles` this round — an unmatched group is dropped, never emitted
+ * empty. Each reviewer still writes ONE artifact per angle at the existing
+ * per-angle paths; grouping only changes how many reviewers are dispatched,
+ * not the artifact shape (see skills/docs/gate-review-sub-loop-contract.md).
+ *
+ * Defensive, independent of zod: `loadDevLoopConfig` returns the raw merged
+ * config even when schema validation fails (on ANY layer, not necessarily
+ * `gates.fanout` itself), so a malformed `gates.fanout.groups` entry can
+ * reach here. A non-object entry, a non-array/blank `angles`, or a
+ * blank/duplicate `name` is dropped (its angles fall through to their own
+ * singleton groups) rather than thrown — mirroring the sibling
+ * `normalizeAngleEntries` convention: this resolver degrades to a smaller
+ * grouping table, never crashes the conductor's Phase 2 planning.
+ * `resolvedAngles` is deduplicated up front so a duplicated entry (e.g. a
+ * hand-built `--angles` list) never mints two dispatch units sharing one name.
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate unused today — fan-out grouping
+ *   is a global policy (`gates.fanout`), not per-gate; accepted for symmetry
+ *   with the other `resolveGate*(config, gate, ...)` resolvers.
+ * @param {string[]} resolvedAngles this round's resolved angle names
+ * @param {{ fullLabel?: boolean }} [options]
+ * @returns {{ name: string, angles: string[] }[]}
+ */
+export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = false } = {}) {
+  const angles = Array.isArray(resolvedAngles)
+    ? [...new Set(resolvedAngles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
+    : [];
+  const perAngleGroups = () => angles.map((name) => ({ name, angles: [name] }));
+  if (fullLabel) return perAngleGroups();
+  const fanout = config?.gates?.fanout ?? {};
+  if (fanout.mode === "per-angle") return perAngleGroups();
+  const angleSet = new Set(angles);
+  const rawGroups = Array.isArray(fanout.groups) ? fanout.groups : [];
+  const configuredGroups = [];
+  const seenGroupNames = new Set();
+  for (const group of rawGroups) {
+    if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+    const name = typeof group.name === "string" ? group.name.trim() : "";
+    if (name.length === 0 || seenGroupNames.has(name)) continue;
+    const groupAngles = Array.isArray(group.angles)
+      ? [...new Set(group.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
+      : [];
+    if (groupAngles.length === 0) continue;
+    seenGroupNames.add(name);
+    configuredGroups.push({ name, angles: groupAngles });
+  }
+  const grouped = new Set();
+  const result = [];
+  for (const group of configuredGroups) {
+    const members = group.angles.filter((a) => angleSet.has(a) && !grouped.has(a));
+    if (members.length === 0) continue;
+    for (const a of members) grouped.add(a);
+    result.push({ name: group.name, angles: members });
+  }
+  // Dispatch-unit names key reviewer-sentinel scopes and batching, so they
+  // must be unique. An ungrouped angle whose name collides with an emitted
+  // group's name gets a disambiguated singleton unit name.
+  const usedNames = new Set(result.map((g) => g.name));
+  for (const name of angles) {
+    if (grouped.has(name)) continue;
+    const unitName = usedNames.has(name) ? `angle:${name}` : name;
+    usedNames.add(unitName);
+    result.push({ name: unitName, angles: [name] });
+  }
+  return result;
 }
 
 /**

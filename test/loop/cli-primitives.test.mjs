@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildParseError } from "../../scripts/_core-helpers.mjs";
+import { buildParseError, formatCliError } from "../../scripts/_core-helpers.mjs";
 import {
   parseCliTokens,
   parseIssueNumber,
@@ -20,6 +20,41 @@ test("buildParseError attaches usage to returned errors", () => {
 
   assert.equal(error.message, "bad flag");
   assert.equal(error.usage, "usage text");
+});
+
+// formatCliError (issue #548 shared helper, short-error contract): an
+// argument error's stderr JSON carries a one-line `hint`, never the full
+// (potentially multi-KB) usage text a parseError()/buildParseError() error
+// carries on its own `.usage` property. `--help` is unaffected — every
+// caller prints `USAGE` directly, never through this function.
+test("formatCliError renders a short hint (not the full usage text) for an error carrying .usage", () => {
+  const error = buildParseError("Usage: some-script.mjs --very --long --usage --block".repeat(50))("Missing required argument: --repo");
+  const payload = JSON.parse(formatCliError(error));
+
+  assert.deepEqual(Object.keys(payload), ["ok", "error", "hint"]);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error, "Missing required argument: --repo");
+  assert.equal(payload.hint, "run with --help for usage");
+  assert.equal("usage" in payload, false);
+});
+
+test("formatCliError omits \"hint\" for a plain runtime error with no usage", () => {
+  const payload = JSON.parse(formatCliError(new Error("Network error")));
+
+  assert.deepEqual(payload, { ok: false, error: "Network error" });
+  assert.equal("hint" in payload, false);
+});
+
+test("formatCliError falls back to the { usage } option's PRESENCE (never its text) when the error itself carries none", () => {
+  const payload = JSON.parse(formatCliError(new Error("bad flag"), { usage: "Usage: some-script.mjs ..." }));
+
+  assert.deepEqual(payload, { ok: false, error: "bad flag", hint: "run with --help for usage" });
+});
+
+test("formatCliError stringifies a non-Error thrown value without a hint", () => {
+  const payload = JSON.parse(formatCliError("plain string error"));
+
+  assert.deepEqual(payload, { ok: false, error: "plain string error" });
 });
 
 test("requireOptionValue returns next value", () => {

@@ -31,6 +31,8 @@ import {
   resolveLightMode,
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
+  resolveFanoutGroups,
+  resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
@@ -630,6 +632,18 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.equal(result.config.workflow.requireRetrospective, false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1b2: a plain consumer (no .devloops) ships grouped fan-out dispatch with a default grouping table (AC6)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-default-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.gates.fanout.mode, "grouped");
+      assert.ok(Array.isArray(result.config.gates.fanout.groups) && result.config.gates.fanout.groups.length > 0);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -3269,6 +3283,224 @@ test("resolveGateDispatchMode: draft gate under threshold + must-fix inline find
 
 test("GATE_FULL_LABEL is gate:full", () => {
   assert.equal(GATE_FULL_LABEL, "gate:full");
+});
+
+// ── Grouped fan-out dispatch (AC6) ────────────────────────────────────────
+
+function fanoutConfig(groups) {
+  return { version: 1, gates: { fanout: { mode: "grouped", groups } } };
+}
+
+test("resolveFanoutGroups: grouped default batches resolved angles onto their configured group", () => {
+  const config = fanoutConfig([
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check", "correctness"]);
+  assert.deepEqual(result, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "correctness", angles: ["correctness"] },
+  ]);
+});
+
+test("resolveFanoutGroups: an ungrouped angle colliding with an emitted group name gets a disambiguated unit name", () => {
+  const config = fanoutConfig([{ name: "docs", angles: ["link-check"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["link-check", "docs"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["link-check"] },
+    { name: "angle:docs", angles: ["docs"] },
+  ]);
+  assert.equal(new Set(result.map((g) => g.name)).size, result.length);
+});
+
+test("resolveFanoutGroups: an angle not covered by any group forms an implicit singleton group", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["scope"]);
+  assert.deepEqual(result, [{ name: "scope", angles: ["scope"] }]);
+});
+
+test("resolveFanoutGroups: a configured group with none of its angles resolved is dropped", () => {
+  const config = fanoutConfig([
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "process", angles: ["scope", "pr-description"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["scope"]);
+  assert.deepEqual(result, [{ name: "process", angles: ["scope"] }]);
+});
+
+test("resolveFanoutGroups: mode per-angle opts into one group per angle regardless of the grouping table", () => {
+  const config = {
+    version: 1,
+    gates: { fanout: { mode: "per-angle", groups: [{ name: "docs-surface", angles: ["docs", "link-check"] }] } },
+  };
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["docs"] },
+    { name: "link-check", angles: ["link-check"] },
+  ]);
+});
+
+test("resolveFanoutGroups: gate:full label escalates to per-angle even under grouped config", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs", "link-check"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check"], { fullLabel: true });
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["docs"] },
+    { name: "link-check", angles: ["link-check"] },
+  ]);
+});
+
+test("resolveFanoutGroups: absent gates.fanout config falls back to the grouped default with no configured groups (every angle a singleton)", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["scope", "docs"]);
+  assert.deepEqual(result, [
+    { name: "scope", angles: ["scope"] },
+    { name: "docs", angles: ["docs"] },
+  ]);
+});
+
+test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe to one singleton unit", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["docs"] },
+    { name: "scope", angles: ["scope"] },
+  ]);
+});
+
+test("resolveFanoutGroups: an angle named in two configured groups is claimed by the first (first-group-wins dedup)", () => {
+  const config = fanoutConfig([
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["docs", "b"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "a", "b"]);
+  assert.deepEqual(result, [
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["b"] },
+  ]);
+});
+
+test("resolveFanoutGroups: non-array/undefined resolvedAngles resolves to []", () => {
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", undefined), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", "not-an-array"), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", null), []);
+});
+
+test("resolveFanoutGroups: empty resolvedAngles resolves to []", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
+  assert.deepEqual(resolveFanoutGroups(config, "draft", []), []);
+});
+
+test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups entry (never zod-validated — a hand-built config, or the raw merged object loadDevLoopConfig returns on ANY validation failure)", () => {
+  const angles = ["docs", "scope"];
+  // A null entry (e.g. an empty YAML list item) is skipped.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, null] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A missing/blank `name` drops the group; its angles fall through to singletons.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "  ", angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A non-array `groups` resolves as if no groups were configured.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: "not-an-array" } } }, "draft", angles),
+    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // Two groups sharing a name: the second is dropped, its angles fall through.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, { name: "g", angles: ["scope"] }] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+});
+
+test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-dup-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: dup",
+        "        angles: [a]",
+        "      - name: dup",
+        "        angles: [b]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.ok(errors.length > 0);
+    assert.match(errors.map((e) => e.message).join("\n"), /duplicate gates\.fanout\.groups name/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// AC3 (#1572) — per-angle scoped briefings: gates.<gate>.angles[].scope +
+// resolveGateAngleScope
+// ============================================================================
+
+test("GateAngleEntry schema accepts a valid scope value on an angle entry", () => {
+  const result = DevLoopConfigSchema.safeParse({
+    version: 1,
+    gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }] } },
+  });
+  assert.equal(result.success, true);
+});
+
+test("GateAngleEntry schema rejects an unknown scope value", () => {
+  const result = DevLoopConfigSchema.safeParse({
+    version: 1,
+    gates: { draft: { angles: [{ name: "docs", scope: "everything" }] } },
+  });
+  assert.equal(result.success, false);
+});
+
+test("resolveGateAngleScope: a configured angle scope resolves verbatim", () => {
+  const config = { gates: { draft: { angles: [{ name: "link-check", scope: "docs-only" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "link-check"), "docs-only");
+});
+
+test("resolveGateAngleScope: an angle with no scope field defaults to full", () => {
+  const config = { gates: { draft: { angles: [{ name: "scope" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "scope"), "full");
+});
+
+test("resolveGateAngleScope: an angle absent from the gate's configured angles fails open to full", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "unconfigured-angle"), "full");
+});
+
+test("resolveGateAngleScope: an unknown/malformed scope value is dropped at normalization and fails open to full (hand-built, never-zod-validated config)", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "everything" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+});
+
+test("resolveGateAngleScope: a disabled entry's scope is never returned (mirrors findAngleEntry's enabled:false exclusion)", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only", enabled: false }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+});
+
+test("resolveGateAngleScope: scope is looked up on the NAMED gate only, unlike findAngleEntry's cross-gate search", () => {
+  const config = {
+    gates: {
+      draft: { angles: [{ name: "docs" }] },
+      preApproval: { angles: [{ name: "docs", scope: "docs-only" }] },
+    },
+  };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+  assert.equal(resolveGateAngleScope(config, "preApproval", "docs"), "docs-only");
 });
 
 // ── Light mode eligibility ───────────────────────────────────────────────

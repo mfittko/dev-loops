@@ -496,7 +496,7 @@ test("create-pr rejects --ready without invoking gh", async () => {
     assert.equal(result.stdout, "");
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /rejects --ready/i);
-    assert.match(stderrPayload.usage, /Usage: create-pr\.mjs/i);
+    assert.equal(stderrPayload.hint, "run with --help for usage");
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {

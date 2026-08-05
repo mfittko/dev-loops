@@ -144,7 +144,7 @@ test("build-handoff-envelope exits 1 without --input", async () => {
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /--input.*is required/i);
-  assert.ok(typeof parsed.usage === "string" && parsed.usage.length > 0, "should include usage");
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("build-handoff-envelope exits 1 for unknown flag", async () => {
@@ -269,8 +269,7 @@ test("build-handoff-envelope emits flag-specific error for malformed --gate-stat
     assert.equal(parsed.ok, false);
     assert.match(parsed.error, /--gate-state/,
       `error should mention --gate-state, got: ${parsed.error}`);
-    assert.ok(typeof parsed.usage === "string" && parsed.usage.length > 0,
-      "should include usage field for flag-specific parse error");
+    assert.equal(parsed.hint, "run with --help for usage");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -291,8 +290,7 @@ test("build-handoff-envelope emits flag-specific error for malformed --overrides
     assert.equal(parsed.ok, false);
     assert.match(parsed.error, /--overrides/,
       `error should mention --overrides, got: ${parsed.error}`);
-    assert.ok(typeof parsed.usage === "string" && parsed.usage.length > 0,
-      "should include usage field for flag-specific parse error");
+    assert.equal(parsed.hint, "run with --help for usage");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -315,8 +313,7 @@ test("build-handoff-envelope emits actionable error when auto-detected repo slug
     assert.equal(parsed.ok, false);
     assert.match(parsed.error, /--repo|origin|slug|resolver/i,
       `error should mention --repo or origin, got: ${parsed.error}`);
-    assert.ok(typeof parsed.usage === "string" && parsed.usage.length > 0,
-      "should include usage field for repo slug parse error");
+    assert.equal(parsed.hint, "run with --help for usage");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

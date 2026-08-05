@@ -99,7 +99,7 @@ test("branch guard exits non-zero with usage when --expected-branch is missing",
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.ok(/required/i.test(parsed.error));
-  assert.ok(typeof parsed.usage === "string" && parsed.usage.includes("--expected-branch"));
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("parseBranchGuardCliArgs --help returns help flag", () => {

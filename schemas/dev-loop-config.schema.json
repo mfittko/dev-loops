@@ -205,6 +205,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -372,6 +381,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -539,6 +557,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -689,6 +716,50 @@
         "rejectForeignAngles": {
           "type": "boolean",
           "description": "Reject fan-out provenance naming angles outside the gate's configured pool (default true)."
+        },
+        "fanout": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "default": "grouped",
+              "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle.",
+              "type": "string",
+              "enum": [
+                "grouped",
+                "per-angle"
+              ]
+            },
+            "groups": {
+              "description": "Static named angle groups consulted in grouped mode. An angle absent from every group resolves as its own singleton group.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Group name; recorded as the shared reviewer's provenance `group` when this group dispatches."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle names batched onto one reviewer when this group resolves."
+                  }
+                },
+                "required": [
+                  "name",
+                  "angles"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate)."
         }
       },
       "additionalProperties": false,

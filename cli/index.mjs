@@ -711,11 +711,23 @@ export async function runCli({
       // Retry on usage/flag errors: parse usage for valid flags, retry once (#483).
       // Reached only once core is confirmed resolvable above, so this dynamic
       // import (not a top-level one) never throws ERR_MODULE_NOT_FOUND itself.
-      const { isUsageError, buildCorrectedArgs } = result.status !== 0
+      const { isUsageError, buildCorrectedArgs, extractUsageText } = result.status !== 0
         ? await import("@dev-loops/core/cli/retry-wrapper")
         : {};
       if (result.status !== 0 && isUsageError(result.stderr)) {
-        const correctedArgs = buildCorrectedArgs(scriptArgs, result.stderr);
+        // An argument error's stderr JSON now carries a short `hint`, not the
+        // full usage text (short-error contract), so `buildCorrectedArgs`
+        // usually has nothing to extract valid flags from. `--help` still
+        // prints the full usage unchanged — fetch it there instead so the
+        // auto-correct retry keeps working.
+        let usageSource = result.stderr;
+        if (!extractUsageText(usageSource)) {
+          const helpResult = spawnSync("node", [fromTop.scriptPath, "--help"], {
+            cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+          });
+          if (helpResult.stdout) usageSource = helpResult.stdout;
+        }
+        const correctedArgs = buildCorrectedArgs(scriptArgs, usageSource);
         if (correctedArgs && correctedArgs.length > 0) {
           const retryResult = spawnSync("node", [fromTop.scriptPath, ...correctedArgs], {
             cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

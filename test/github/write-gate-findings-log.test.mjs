@@ -62,6 +62,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     verdict: "findings_present",
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
     findingsFile: undefined,
+    fullLabel: false,
     tmpRoot: "tmp",
   });
 });
@@ -720,6 +721,66 @@ test("parseProvenanceJson exempts a carried angle from the pairing floor (same r
   assert.equal(prov.perAngle.length, 2);
 });
 
+// --- Grouped fan-out dispatch provenance (AC7) ---
+
+test("parseProvenanceJson accepts two fresh angles sharing a reviewer under the SAME declared group", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+      { angle: "link-check", reviewer: "review-a", group: "docs-surface" },
+    ],
+  }));
+  assert.equal(prov.perAngle.length, 2);
+  assert.equal(prov.perAngle[0].group, "docs-surface");
+});
+
+test("parseProvenanceJson rejects two fresh angles sharing a reviewer under DIFFERENT declared groups", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [
+        { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+        { angle: "scope", reviewer: "review-a", group: "process" },
+      ],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson rejects two fresh angles sharing a reviewer where only one entry declares a group", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [
+        { angle: "docs", reviewer: "review-a", group: "docs-surface" },
+        { angle: "link-check", reviewer: "review-a" },
+      ],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson still rejects a shared reviewer across two fresh angles with no group at all (legacy shape unchanged)", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "scope", reviewer: "review-a" }, { angle: "safety", reviewer: "review-a" }],
+    })),
+    /--provenance\.perAngle fan-out provenance violates the one-scoped-reviewer-per-angle contract/,
+  );
+});
+
+test("parseProvenanceJson rejects a non-string group value", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "docs", reviewer: "review-a", group: 1 }],
+    })),
+    /perAngle\[0\]\.group must be a non-empty string/,
+  );
+});
+
 test("writeGateFindingsLog rejects a 2-fresh-angle/1-reviewer ledger (write-time floor, always-on)", async () => {
   await assert.rejects(async () => {
     await writeGateFindingsLog({
@@ -755,6 +816,155 @@ test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async
         tmpRoot: tmpDir,
       }, { repoRoot });
       assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer covers its whole declared group (AC7)", async () => {
+  // A dedicated fixture (not the shared ANGLE_CONTRACT_DEVLOOPS one, which
+  // carries no gates.fanout override and so inherits the shipped default
+  // grouping table — under which "dry" and "pr-checklist-matrix" are NOT
+  // configured together): the write path now cross-checks a claimed `group`
+  // against gates.fanout.groups, so the fixture must actually configure
+  // dry + pr-checklist-matrix into the same group for this to be a genuinely
+  // legitimate grouped-dispatch scenario.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-angle-contract-grouped-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, pr-checklist-matrix]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "pre_approval_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "clean",
+        findings: "[]",
+        provenance: JSON.stringify({
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+          ],
+        }),
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a grouped-provenance ledger under --full-label (per-angle singletons resolved, shared identity across angles fails)", async () => {
+  // Same fixture + provenance as the "accepts a grouped-dispatch ledger" test
+  // above, EXCEPT fullLabel: true is threaded through. resolveFanoutGroups
+  // returns per-angle singleton groups under gate:full (AC6 precedence #1),
+  // regardless of the configured "process" group — so the SAME provenance
+  // that a tiered round accepts must fail closed on a gate:full round
+  // (the write path must resolve the SAME grouping the read/enforcement path
+  // resolves for gate:full, or a grouped ledger the write path accepts would
+  // be rejected at pre-merge enforcement).
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, pr-checklist-matrix]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-out-"));
+    try {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "a/b",
+          pr: 1,
+          gate: "pre_approval_gate",
+          headSha: "abc1234500000000000000000000000000000000",
+          verdict: "clean",
+          findings: "[]",
+          provenance: JSON.stringify({
+            distinctReviewers: 1,
+            perAngle: [
+              { angle: "dry", reviewer: "review-a", group: "process" },
+              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            ],
+          }),
+          fullLabel: true,
+          tmpRoot: tmpDir,
+        }, { repoRoot }),
+        /does not place all of them in one group/,
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a grouped-dispatch ledger whose declared group the configured gates.fanout.groups table does not actually place together (fabricated group label)", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-fabricated-"));
+    try {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "a/b",
+          pr: 1,
+          gate: "pre_approval_gate",
+          headSha: "abc1234500000000000000000000000000000000",
+          verdict: "clean",
+          findings: "[]",
+          // "dry" and "pr-checklist-matrix" are never grouped together by the
+          // config this fixture inherits (the shipped default "process" group
+          // covers scope/pr-description/gate-evidence/pr-checklist-matrix, not
+          // "dry") — a self-attested shared "group" label alone must not pass.
+          provenance: JSON.stringify({
+            distinctReviewers: 1,
+            perAngle: [
+              { angle: "dry", reviewer: "review-a", group: "process" },
+              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            ],
+          }),
+          tmpRoot: tmpDir,
+        }, { repoRoot }),
+        /does not place all of them in one group/,
+      );
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

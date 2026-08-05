@@ -36,6 +36,11 @@
 // consumer that only checked membership against a Set could accept a
 // silently reordered copy.
 export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
+
+// Marker gate name → gates.<key> config key. Owned here so every caller of
+// resolveFanoutGroups maps the same way; passing the marker name verbatim
+// resolves no groups and silently downgrades pairing enforcement.
+export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 
 // Pre-rename spelling of the lowest tier. Old ledgers, markers, and configs
@@ -182,61 +187,138 @@ export function provenanceConsistencyError(prov) {
 }
 
 /**
- * Count DISTINCT "fresh" angles in a `perAngle` array — angles reviewed AT
- * THIS head, i.e. entries WITHOUT `carriedFromHead`. A carried angle's clean
- * verdict was reused from a prior head's review (see
- * @dev-loops/core/loop/gate-carry-forward), not freshly reviewed here, so it
- * is exempt from the one-reviewer-per-fresh-angle pairing contract below. Pure.
+ * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle`
+ * array — a valid object entry naming a non-blank `angle` and carrying no
+ * `carriedFromHead` (a carried angle's clean verdict was reused from a prior
+ * head's review, see @dev-loops/core/loop/gate-carry-forward, not freshly
+ * reviewed here). `group` is the entry's normalized, non-blank `group`
+ * string, or `null`. This is the ONE definition of "fresh" and "declared
+ * group" — {@link freshAngleNames}, {@link countFreshDispatchUnits}, and
+ * {@link fanoutReviewerPairingError} all derive from it so the write-time
+ * floor and the pairing check can never silently drift apart on what either
+ * term means. Pure.
+ * @param {unknown} perAngle
+ * @returns {Generator<{ entry: object, angle: string, group: string|null }>}
+ */
+function* freshEntries(perAngle) {
+  if (!Array.isArray(perAngle)) return;
+  for (const entry of perAngle) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if (typeof entry.carriedFromHead === "string" && entry.carriedFromHead.trim().length > 0) continue;
+    const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
+    if (!angle) continue;
+    const group = typeof entry.group === "string" && entry.group.trim().length > 0 ? entry.group.trim() : null;
+    yield { entry, angle, group };
+  }
+}
+
+/**
+ * Names of DISTINCT "fresh" angles in a `perAngle` array — see
+ * {@link freshEntries}. Used by callers that need the names themselves (e.g.
+ * resolving this round's dispatch groups via `resolveFanoutGroups` for
+ * {@link fanoutReviewerPairingError}'s cross-check). Pure.
+ *
+ * @param {unknown} perAngle
+ * @returns {string[]}
+ */
+export function freshAngleNames(perAngle) {
+  const angles = new Set();
+  for (const { angle } of freshEntries(perAngle)) angles.add(angle);
+  return [...angles];
+}
+
+/**
+ * Count distinct FRESH dispatch units in a `perAngle` array: a fresh angle
+ * that declares a `group` counts once per DISTINCT group name (its whole
+ * group is one reviewer's dispatch), and a fresh angle with no `group`
+ * counts as its own dispatch unit (today's one-reviewer-per-angle shape).
+ * This is the grouping-aware generalization of counting distinct fresh
+ * angle names via {@link freshAngleNames} — for an ungrouped ledger the two
+ * are identical; for a grouped ledger this is <= the ungrouped count, since
+ * one group of N angles is one dispatch unit, not N. Shared by the write
+ * path (write-gate-findings-log.mjs) and the
+ * requireFanoutProvenance read path (detect-checkpoint-evidence.mjs) so the
+ * `distinctReviewers` floor scales with what was actually DISPATCHED, not
+ * with the angle count a grouped round deliberately dispatches fewer
+ * reviewers than. Pure.
  *
  * @param {unknown} perAngle
  * @returns {number}
  */
-export function countFreshAngles(perAngle) {
-  if (!Array.isArray(perAngle)) return 0;
-  const angles = new Set();
-  for (const e of perAngle) {
-    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
-    if (typeof e.angle === "string" && e.angle.trim().length > 0) angles.add(e.angle.trim());
+export function countFreshDispatchUnits(perAngle) {
+  const groups = new Set();
+  const ungroupedAngles = new Set();
+  for (const { angle, group } of freshEntries(perAngle)) {
+    if (group) groups.add(group);
+    else ungroupedAngles.add(angle);
   }
-  return angles.size;
+  return groups.size + ungroupedAngles.size;
 }
 
 /**
  * Validate the one-scoped-reviewer-per-fresh-angle contract (fanout_fanin
  * execution mandates one independent reviewer per resolved angle; #1431): no
  * two FRESH angles (angles without `carriedFromHead` — see
- * {@link countFreshAngles}) may share one reviewer identity (`reviewer`,
+ * {@link freshEntries}) may share one reviewer identity (`reviewer`,
  * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
- * rule). Carried angles keep their prior reviewer and are exempt. Pure;
- * shared by the write path (write-gate-findings-log.mjs, always-on) and the
- * merge-evidence read path (detect-checkpoint-evidence.mjs, scaling the
- * `requireFanoutProvenance` floor) so both agree.
+ * rule), UNLESS every entry sharing that identity declares the SAME `group`
+ * name (grouped fan-out dispatch, AC6/AC7 — see resolveFanoutGroups). The
+ * recorded `group` is self-attested at write time; when `resolvedGroups` is
+ * supplied (both call sites always supply it) it is also checked against
+ * the CURRENT `gates.fanout.groups` table, so an edit to that table between
+ * the round and a later read (e.g. a merge-evidence check) can invalidate a
+ * ledger's group claim that was honest when written — see the
+ * `resolvedGroups` paragraph below. Two
+ * fresh angles sharing a reviewer with differing or missing `group` values
+ * still violate the contract. Carried angles keep their prior reviewer and
+ * are exempt. Pure; shared by the write path (write-gate-findings-log.mjs,
+ * always-on) and the merge-evidence read path (detect-checkpoint-evidence.mjs,
+ * scaling the `requireFanoutProvenance` floor) so both agree.
  *
  * Returns an actionable error string naming the offending angle(s) when the
- * contract is violated (a reviewer covering >1 fresh angle, or a fresh angle
+ * contract is violated (an ungrouped reviewer covering >1 fresh angle, angles
+ * sharing a reviewer under inconsistent `group` values, or a fresh angle
  * recording no reviewer identity at all — which also silently lowers the
  * distinct-reviewer count below the fresh-angle count), or `null` when it
  * holds (including when `perAngle` has no fresh angles).
  *
+ * The recorded `group` is self-attested (any non-empty string the writer
+ * chooses), so the grouped exception above is only as strong as the caller
+ * lets it be. An optional `resolvedGroups` (the round's `resolveFanoutGroups`
+ * output, `{ name, angles }[]`) closes that: a shared identity is only
+ * honored when every fresh angle it covers is a member of the SAME
+ * configured dispatch unit — a fabricated `group` label spanning angles the
+ * table splits apart (or never groups at all) no longer passes.
+ * `resolveFanoutGroups` itself already collapses to one-angle-per-unit
+ * singletons for `gates.fanout.mode: per-angle` and for a `gate:full` round
+ * (`fullLabel: true`), so passing its output here also rejects ANY shared
+ * identity in those modes — no separate mode flag needed. Omitting
+ * `resolvedGroups` entirely keeps today's fully permissive behavior (any one
+ * shared non-null `group` value is accepted, unchecked against config) — both
+ * call sites already load config, so they should always supply it; this
+ * default only preserves callers (and old ledgers) that don't.
+ *
  * @param {unknown} perAngle
+ * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]
  * @returns {string|null}
  */
-export function fanoutReviewerPairingError(perAngle) {
+export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
   if (!Array.isArray(perAngle)) return null;
+  const configuredGroupOf = new Map();
+  for (const g of Array.isArray(resolvedGroups) ? resolvedGroups : []) {
+    for (const a of Array.isArray(g?.angles) ? g.angles : []) configuredGroupOf.set(a, g.name);
+  }
   const freshAngles = new Set();
   const anglesByIdentity = new Map();
   const anonymousAngles = [];
-  for (const e of perAngle) {
-    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
-    if (typeof e.carriedFromHead === "string" && e.carriedFromHead.trim().length > 0) continue;
-    const angle = typeof e.angle === "string" ? e.angle.trim() : "";
-    if (!angle) continue;
+  for (const { entry, angle, group } of freshEntries(perAngle)) {
     freshAngles.add(angle);
-    const identity = reviewerIdentity(e);
+    const identity = reviewerIdentity(entry);
     if (identity) {
-      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label });
-      anglesByIdentity.get(identity.id).angles.add(angle);
+      if (!anglesByIdentity.has(identity.id)) anglesByIdentity.set(identity.id, { angles: new Set(), label: identity.label, groups: new Set() });
+      const record = anglesByIdentity.get(identity.id);
+      record.angles.add(angle);
+      record.groups.add(group);
     } else {
       anonymousAngles.push(angle);
     }
@@ -247,8 +329,27 @@ export function fanoutReviewerPairingError(perAngle) {
   // (duplicate-angle entries) can satisfy distinctReviewers >= freshAngleCount
   // while one identity still covers two fresh angles.
   const details = [];
-  for (const [id, { angles, label }] of anglesByIdentity) {
-    if (angles.size > 1) details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
+  for (const [id, { angles, label, groups }] of anglesByIdentity) {
+    if (angles.size <= 1) continue;
+    // One shared, non-null `group` across every entry for this identity is
+    // the grouped-dispatch exception: a single reviewer legitimately covers
+    // its whole declared group. Differing or missing `group` values fall
+    // back to the one-reviewer-per-angle rule.
+    const sameGroup = groups.size === 1 && [...groups][0] !== null;
+    if (!sameGroup) {
+      details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
+      continue;
+    }
+    // resolvedGroups supplied: the claimed group is only honest when every
+    // angle it covers is a member of the SAME configured group — a claimed
+    // group spanning angles the table splits apart (or never groups) fails
+    // closed even though the audit record itself is internally consistent.
+    if (configuredGroupOf.size > 0) {
+      const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
+      if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
+        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the configured gates.fanout.groups table does not place all of them in one group`);
+      }
+    }
   }
   if (anonymousAngles.length > 0) {
     details.push(`fresh angle(s) with no recorded reviewer identity: ${anonymousAngles.join(", ")}`);

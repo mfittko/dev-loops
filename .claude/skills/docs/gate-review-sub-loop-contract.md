@@ -22,10 +22,12 @@ Workflow tool. Concretely:
    a structurally-adjacent code bundle (each changed file's 1-hop import in/out-edges)
    with size guards. Because it is a script, the bundle is neutral (it cannot
    editorialize) and deterministic (identical head + diff → identical bundle).
-2. Each per-angle reviewer is an **independent fresh-context Agent** that is **seeded
-   with that identical neutral bundle verbatim** plus its single review angle, and
-   widens only when its angle genuinely needs more. Reviewers never inherit the main
-   (orchestrating) agent's conversation or opinions — that independence is the
+2. Each reviewer is an **independent fresh-context Agent** that is **seeded with that
+   identical neutral bundle verbatim** plus its single review angle (per-angle mode /
+   `gate:full`) or every angle in its resolved dispatch unit (grouped mode, [Phase
+   2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle)), and
+   widens only when a covered angle genuinely needs more. Reviewers never inherit the
+   main (orchestrating) agent's conversation or opinions — that independence is the
    anti-bias requirement.
 3. Fan-in consolidates the per-angle findings unchanged.
 
@@ -285,17 +287,42 @@ MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
-Fan out one fresh-context reviewer per gate-specific review angle. The reviewer is the scoped `review` agent ([review agent scoped angle-review mode](../../agents/review.md)), spawned once per resolved angle via the plain Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded context of, the main agent or a sibling reviewer. Parallelism is capped at `gates.maxFanoutReviewers` (default 8); when the resolved angle set exceeds the cap, the overflow runs in sequential batches (planned by `planFanoutBatches` from `@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each reviewer:
+Fan out one fresh-context reviewer per resolved **dispatch unit**: in the default grouped
+mode a dispatch unit is a group of angles (`resolveFanoutGroups`, below); in per-angle mode
+or under `gate:full` it is a single angle, matching every version of this contract before
+grouping existed. The reviewer is the scoped `review` agent ([review agent scoped
+angle-review mode](../../agents/review.md)), spawned once per dispatch unit via the plain
+Agent tool. Reviewers are **independent and seeded with the identical neutral context bundle
+verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the loaded
+context of, the main agent or a sibling reviewer. Parallelism is capped at
+`gates.maxFanoutReviewers` (default 8); when the resolved dispatch-unit set exceeds the cap,
+the overflow runs in sequential batches (planned by `planFanoutBatches` from
+`@dev-loops/core/loop/gate-fanin`) and the degradation is recorded in the gate evidence. Each
+reviewer:
 
-- starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle, and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when its single angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
-- is scoped to exactly one review angle
+- starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph
+- is scoped to exactly one review angle (per-angle mode / `gate:full`) or to every angle in its resolved group (grouped mode) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
   fails closed if the seeded artifact isn't present at the reviewer's cwd).
-- produces a focused findings artifact with verdict (clean/findings_present) and file references, stamped per the head-stamp rule below
-- completion is detected via the harness completion notification, or the reviewer's findings artifact at its deterministic output path; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
+- produces a focused findings artifact PER ANGLE it covers, each with its own verdict (clean/findings_present) and file references, stamped per the head-stamp rule below — a grouped reviewer writes as many artifacts, at the existing per-angle paths, as it has angles, never one merged artifact for the group
+- completion is detected via the harness completion notification, or the reviewer's findings artifact(s) at their deterministic output paths; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
+
+**Grouped dispatch (default).** Before fanning out, the conductor resolves this round's
+dispatch units by calling `resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel })`
+(`@dev-loops/core/config`): with no `gate:full` label and `gates.fanout.mode` not set to
+`per-angle`, angles map onto the static `gates.fanout.groups` table (an angle in no
+configured group forms its own singleton group), and the fan-out spawns ONE reviewer per
+returned group — never per angle. `gate:full` (label or `mode: per-angle`) makes every group
+a singleton, reproducing today's one-reviewer-per-angle fan-out verbatim. Because fan-in,
+the disposition ledger, coverage checks, and `GATE-EXEC-ARTIFACT-HEAD-STAMP` all read
+per-angle artifacts and never the reviewer that produced them, none of that machinery
+changes between the two modes. Provenance for a grouped round records the shared group name
+on every angle a group's reviewer covered (`fanoutReviewerPairingError`'s within-group
+exception, [Fan-out provenance](#fan-out-provenance-closing-the-self-produced-artifact-loophole)) —
+not restated here.
 <!-- rule: GATE-EXEC-NO-CWD-DEPENDENCE -->
 `GATE-EXEC-NO-CWD-DEPENDENCE`: A reviewer MUST NOT depend on the shell's working directory — each command may start in the primary checkout, not the worktree under review, so a bare `git branch`/`git log`/`git diff` can read the wrong tree and produce confident false findings. Run the mandatory sentinel invocation as ONE compound command that enters the worktree first (`cd <worktree> && node scripts/github/verify-fresh-review-context.mjs ...`) with its cwd-relative `--context-path` exactly as briefed — the locality guard depends on that form, and the compound form is the sanctioned remedy for the resetting cwd. After it passes, address the tree explicitly with the explicit-root idiom owned by `WORKTREE-DEFAULT-USE` in [worktree-guidance](./worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) (`git -C <repoRoot>`, absolute-path reads), where `<repoRoot>` is the briefing prefix's `worktree:` line, echoed back as `repoRoot` in `verify-fresh-review-context.mjs`'s fresh output (the directory the sentinel ran in, worktree-local when the locality guard passed).
 
@@ -307,15 +334,31 @@ Fan out one fresh-context reviewer per gate-specific review angle. The reviewer 
 
 <!-- rule: GATE-EXEC-BRIEFING-PREFIX -->
 `GATE-EXEC-BRIEFING-PREFIX`: Every per-angle reviewer briefing MUST be composed as an
-**invariant block** followed by an **angle-specific prompt**, in that order — never
-angle-first. The invariant block MUST be byte-identical across every reviewer of the same
-gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
+**invariant block** followed by the **angle-specific prompt(s)** of its dispatch unit (one
+under per-angle mode / `gate:full`, every angle's under grouped mode), in that order —
+never angle-first. The invariant block MUST be byte-identical across every reviewer of the
+same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
 `write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); and the
 mandatory `verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
 — never inside the invariant block, or the byte-identity requirement is violated by
 construction and the shared-prefix prompt-cache opportunity is destroyed byte one.
+
+**Cache alignment.** Prefix-first, angle-last is the cache-alignment rule: a provider prompt
+cache matches on a shared PREFIX of the request, so the orchestrator MUST place the
+byte-identical block at the START of every reviewer prompt and the angle-specific suffix
+LAST, never interleaved or reordered per reviewer. This governs prompt LAYOUT only — the
+byte-identity/hash machinery above (`--prefix-hash`/`--prefix-file`,
+`verify-briefing-prefixes.mjs`) is unchanged, and the rendered
+`<gate>-<headSha>.briefing-prefix.txt` file remains the recorded proof of what was
+byte-identical. Under a harness where
+the orchestrator seeds each reviewer with a pointer to that file rather than inlining its
+bytes into the prompt (`prefixMode: "file"` below, or any other pointer-based seeding), the
+pointer LINE ITSELF — not just the file it names — MUST be byte-identical across every
+reviewer of the round; a pointer that varies per reviewer (e.g. embeds the angle name or a
+per-reviewer path) defeats prefix matching exactly as an inlined angle-first prefix would,
+even though the referenced file's bytes are still shared.
 
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
@@ -354,9 +397,61 @@ whichever mode ran, every reviewer of the same round still receives byte-identic
 bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs`
 hash and compare those bytes exactly as before, oblivious to which mode produced them.
 
+**Hunk-collapse.** Inline diff rendering (prefix and scoped variants below) first collapses
+any run of AT LEAST TWO consecutive hunks that is PROVABLY one pure single-token
+substitution — every changed-line pair in every hunk of the run replaces the SAME old
+token with the SAME new token on a whole token boundary (never a shared substring inside a
+larger identifier — a rename touching `grossAmount`/`netAmount` and a different rename
+touching `grossRate`/`netRate` do NOT collapse together just because both reduce to
+"gross"→"net" at the character level) — into one summary line naming the substitution, the
+hunk/file counts, and the affected file paths (capped, with a "+N more" tail), with a
+pointer back to the byte-exact `scope.diffPath`. A run of exactly one hunk stays below the
+collapse floor and renders in full, unchanged — collapsing exists to absorb large
+mechanical runs, not to hide a single hunk's own diff. Any hunk not provably pure (unequal
+add/remove counts, more than one token changed, an inconsistent pair, or any changed line
+that is not a `+`/`-`/context line) renders in full — fail-closed. A file whose own header
+carries anything beyond the bare `diff --git`/`index`/`---`/`+++` identity lines (a mode
+change, a rename, a similarity-index line, a binary marker) is excluded from collapse
+entirely, even when every one of its hunks is otherwise pure: that metadata lives in the
+header, not a hunk, so hunk-purity analysis alone would never see it, and a collapsed
+summary line would silently drop it. This only changes what
+gets INLINED; the persisted `.diff` file is never touched, so a reviewer can always read
+the untouched original.
+
+**Per-angle scoped variants.** An angle whose configured `scope` (`gates.<gate>.angles[].scope`)
+is `changed-files` or `docs-only` gets an additional companion file,
+`<gate>-<headSha>.briefing-<scope>.txt`, sibling to the invariant prefix: `changed-files`
+carries the full (hunk-collapsed) diff without the adjacent-code bundle OR the invariant
+prefix's "Changed files + adjacent-code summary" section — the diff text itself still names
+every changed file, but the file-count/adjacent-file-list summary is not re-rendered into
+this companion; `docs-only` narrows further to doc-file hunks only — its surface's own
+diff slice, explicitly stating
+"(no doc-file hunks in this diff)" when that slice is empty (a round that touched no doc
+files is a truthful zero, not a builder fault). No
+scoped variant drops a mandatory input: both variants MUST carry the PR body, the
+acceptance-criteria text (linked-issue body/sections), and the validation-results pointer
+verbatim from the invariant prefix, unabridged. A scoped variant MUST ALSO link the full
+bundle unconditionally — an explicit pointer back to the invariant-prefix file path AND to
+`scope.diffPath` (falling back to an explicit "pointer unavailable" line when
+`scope.diffPath` is null), plus the sibling JSON context-artifact path — so a reviewer
+whose angle turns out to need more than its slice can always widen to the
+full diff and adjacent-code bundle (`GATE-EXEC-BUILD-ONCE-SEED` still applies — a scoped
+variant is an additional narrow seed, never a replacement, and AC1's reviewer-effectiveness
+requirement is exactly this: no angle loses PR body, acceptance criteria, validation
+results, or its surface's diff slice, and every angle can reach the full bundle on demand).
+The context artifact records each
+resolved angle's scope (`angleScopes`) and the emitted variant paths (`briefingVariants`);
+an unconfigured/unknown scope, or any error building a variant, fails open to the full
+invariant prefix.
+
 **Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
 hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. An orchestrator that briefs reviewers with its OWN
+reviewer's per-scope sentinel. This hash/file is ALWAYS the invariant prefix, never a
+per-angle scoped variant: a reviewer additionally seeded with `briefingVariants[scope]`
+(previous section) still hashes/records the invariant-prefix bytes it was also given, so
+this per-gate record index and the one-hash-per-round check below apply unchanged whether
+or not any reviewer of the round was additionally seeded with a variant — the variant
+carries no hash or record of its own. An orchestrator that briefs reviewers with its OWN
 composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
 record file then carries those exact bytes (`prefixMode: "file"`) instead of the
 tool's self-rendered prefix, so the fan-in verification below agrees with the actual
@@ -511,6 +606,7 @@ sanctioned fan-in CLI:
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
+  --jq '.severityCounts' \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
@@ -521,7 +617,7 @@ concatenation and never an inline interpreter over the artifacts. Pass
 stamp rule it activates is owned by `GATE-EXEC-ARTIFACT-HEAD-STAMP` (Phase 2).
 `--gate`
 applies that gate's configured `blockCleanOnFindingSeverities` to the overall
-verdict; omitting it falls back to the shipped `["must-fix"]` default. One
+verdict; omitting it falls back to the shipped `["must-fix"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
@@ -530,10 +626,15 @@ the exact `--findings-file` input `write-gate-findings-log.mjs` and
 `post-gate-findings.mjs` accept, so neither tool needs an improvised
 `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
-asked (`--pr-checklist-matrix clean`). FAILS CLOSED (exit 1, naming the
-offending angles) when any per-angle artifact is malformed or itself blocked
-— a blocked fan-in never yields a publishable findings shape; fix or re-run
-the offending reviewer first.
+asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,
+`severityCounts` (the true, unbudgeted totals), and the `out`/`ledgerOut` paths
+it actually wrote — a caller narrows that same stdout to just the severity
+breakdown with `--jq '.severityCounts'` (as above) without a second
+invocation, since the `--out`/`--ledger-out` writes already happened before
+`--jq` renders. FAILS CLOSED (exit 1, naming the offending angles) when any
+per-angle artifact is malformed or itself blocked — a blocked fan-in never
+yields a publishable findings shape; fix or re-run the offending reviewer
+first.
 
 `--carried-angles <json>` (a JSON array of angle-name strings — Phase 1.2's
 `plan.carried[].angle` values) upserts `{ angle, verdict: "clean", findings:
@@ -1039,7 +1140,8 @@ findings-log ledger can additionally record **fan-out provenance**:
 "provenance": {
   "distinctReviewers": 2,               // count of distinct reviewer agents dispatched (<= distinct identities in perAngle)
   "perAngle": [                          // per-angle dispatch provenance
-    { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…" },
+    { "angle": "scope",   "reviewer": "review-a", "dispatchId": "…", "model": "…", "group": "docs-surface" },
+    { "angle": "docs",    "reviewer": "review-a", "dispatchId": "…", "model": "…", "group": "docs-surface" }, // "group" is REQUIRED whenever fresh angles share one reviewer identity (grouped dispatch, the shipped default) — see the grouped-dispatch exception below
     { "angle": "safety",  "reviewer": "review-b" }
   ]
 }
@@ -1055,10 +1157,11 @@ recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angl
 not a countable reviewer). You cannot claim more reviewers than you recorded dispatch
 entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
-**One scoped reviewer per fresh angle (always-on write-time floor).** `fanout_fanin`
-execution mandates one independent reviewer per resolved angle — recording an
-internally-consistent `distinctReviewers` count is not enough on its own, because one
-reviewer could still cover two angles without that count ever going inconsistent. The
+**One scoped reviewer per fresh dispatch unit (always-on write-time floor).** `fanout_fanin`
+execution mandates one independent reviewer per resolved dispatch unit — one angle in
+per-angle mode / under `gate:full`, one declared group in grouped mode — because
+recording an internally-consistent `distinctReviewers` count is not enough on its own:
+one reviewer could still cover two angles without that count ever going inconsistent. The
 write path additionally rejects, unconditionally (not gated by `requireFanoutProvenance`),
 any `perAngle` where two **fresh** angles (angles WITHOUT `carriedFromHead`) share one
 reviewer identity, **and** any fresh angle recording no reviewer identity at all (a bare
@@ -1072,23 +1175,42 @@ reviewer identity on the carried entry is preferred (honest attribution) but opt
 and reusing that identity on a carried angle is never a collision. The sanctioned
 non-fan-out path for a single-reviewer run is `executionMode: inline_single_agent` with
 a recorded `--inline-reason`, not a `fanout_fanin` ledger that pairs one reviewer across
-angles. The shared helper is `fanoutReviewerPairingError` (paired with
-`countFreshAngles`) in `@dev-loops/core/loop/gate-fanin`.
+angles. **Grouped fan-out dispatch** (`gates.fanout.mode: grouped`, the shipped default —
+see `resolveFanoutGroups` in `@dev-loops/core/config`) is a second sanctioned exception: a
+`perAngle` entry may declare a `group` name, and fresh angles sharing one reviewer identity
+are valid exactly when every entry sharing that identity declares the SAME `group` name
+**AND** — whenever the caller supplies the round's resolved dispatch groups (both call
+sites do, `write-gate-findings-log.mjs` via its own `--full-label` flag threaded into
+`resolveFanoutGroups` just like `write-gate-context.mjs`'s) — every one of those fresh
+angles is a member of that SAME configured dispatch unit per `resolveFanoutGroups`. A
+self-attested `group` label spanning angles the
+configured table splits apart (or never groups together at all) fails closed even though
+the label itself is internally consistent; `resolveFanoutGroups` already collapses to
+one-angle-per-unit singletons for `gates.fanout.mode: per-angle` and for a `gate:full`
+round, so passing its output here also rejects ANY shared identity in those modes, with
+no separate mode flag needed. Fresh angles sharing a reviewer under differing or missing
+`group` values still violate the contract above. The shared helper is
+`fanoutReviewerPairingError` (paired with `countFreshDispatchUnits`) in
+`@dev-loops/core/loop/gate-fanin`.
 
 Enforcement of the `distinctReviewers` floor itself is opt-in via
 **`gates.requireFanoutProvenance`** (default **false**). When enabled, it layers ON TOP of
 `requireFanoutEvidence` (it only takes effect while fan-out evidence enforcement is
 active): each required `fanout_fanin` gate's ledger must record internally-consistent
-provenance with `provenance.distinctReviewers >= max(2, <fresh-angle count>)` — a floor of
-**2** is the smallest count that is not a single agent, and the floor SCALES UP with the
-number of fresh (non-carried) angles recorded in `perAngle`, since a compliant ledger
-can never have fewer distinct fresh reviewers than fresh angles. The read path also
-re-validates the per-identity pairing itself (the same `fanoutReviewerPairingError`
-check as the write path, at both the pre-merge enforcement and the cross-checkout
-ledger selector): the ledger is a worktree-local file, so the reader never assumes the
-write-time floor produced it — a hand-crafted padded ledger that meets the cardinality
-floor still fails. When the flag is off,
-behavior is byte-identical to today (no new failures) — the Claude-Code path, which
+provenance with `provenance.distinctReviewers >= max(2, <fresh DISPATCH UNIT count>)` — a
+floor of **2** is the smallest count that is not a single agent, and the floor SCALES UP
+with the number of fresh (non-carried) DISPATCH UNITS recorded in `perAngle`
+(`countFreshDispatchUnits`: one unit per distinct declared `group` name among fresh
+entries, plus one unit per fresh entry with no `group` at all) — NOT with the fresh-angle
+count. For an ungrouped ledger the two counts are identical (today's one-reviewer-per-angle
+shape); for a grouped ledger the unit count is <= the angle count, since one group of N
+angles is one dispatch unit, not N — a compliant ledger can never have fewer distinct fresh
+reviewers than fresh dispatch units. The read path also re-validates the per-identity
+pairing itself (the same `fanoutReviewerPairingError` check as the write path, at both the
+pre-merge enforcement and the cross-checkout ledger selector): the ledger is a
+worktree-local file, so the reader never assumes the write-time floor produced it — a
+hand-crafted padded ledger that meets the cardinality floor still fails. When the flag is
+off, behavior is byte-identical to today (no new failures) — the Claude-Code path, which
 already honors child fan-out, is a validated no-op.
 
 **Honest caveat (this is NOT un-forgeable):** recorded provenance is self-reported — it is

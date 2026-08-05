@@ -24,7 +24,9 @@ test("checkpoint-contract CLI rejects invalid --state values", async () => {
   const parsed = JSON.parse(stderr);
   assert.equal(parsed.ok, false);
   assert.match(parsed.error, /must be one of/);
-  assert.match(parsed.usage, /Usage:/);
+  // Short-error contract (formatCliError): a `hint` pointing at --help, never
+  // the full usage text inlined into the JSON payload.
+  assert.match(parsed.hint, /--help/);
 });
 
 test("checkpoint-contract CLI enforces state-specific metadata", async () => {

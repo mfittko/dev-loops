@@ -12,11 +12,13 @@ import {
   assertWorktreeAtHead,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingPrefixPath,
+  buildGateBriefingScopePath,
   buildGateContext,
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
   captureDiffFromBase,
+  collapsePureSubstitutionRuns,
   ISSUE_BODY_ABSENT_SENTINEL,
   main,
   mapGateToConfigKey,
@@ -27,6 +29,7 @@ import {
   resolvePrSpecContext,
   readGateContext,
   renderBriefingPrefix,
+  renderScopedBriefingVariant,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 
@@ -389,6 +392,15 @@ test("parseWriteGateContextCliArgs parses required args", () => {
   assert.equal(result.headSha, "abc1234567890abcdef");
   assert.deepEqual(result.angles, ["scope", "correctness"]);
   assert.equal(result.tmpRoot, "tmp");
+});
+
+test("parseWriteGateContextCliArgs: --angles dedupes a repeated angle name (first occurrence wins), so resolveFanoutGroups never mints two dispatch units sharing one name from a duplicated --angles list", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef",
+    "--angles", '["scope","docs","scope"]',
+  ]);
+  assert.deepEqual(result.angles, ["scope", "docs"]);
 });
 
 test("parseWriteGateContextCliArgs parses optional scope + rationale", () => {
@@ -2092,12 +2104,12 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("verify-fresh-review-context.mjs"));
   // Reviewer scope is gate-prefixed so each reviewer's sentinel self-identifies
   // its gate; renderInput() defaults to gate: "draft_gate".
-  assert.ok(text.includes("--scope draft-gate-<your-angle>"));
+  assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
 });
 
 test("renderBriefingPrefix: gate scope hyphenation covers ALL underscores, not just the first", () => {
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate" }));
-  assert.ok(text.includes("--scope pre-approval-gate-<your-angle>"));
+  assert.ok(text.includes("--scope pre-approval-gate-<your-dispatch-unit>"));
 });
 
 test("renderBriefingPrefix: deterministic — two renders of identical input produce byte-identical text", () => {
@@ -2480,7 +2492,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
-      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-angle> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt`. Refuse to proceed on contamination or a missing artifact.",
+      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
@@ -2532,6 +2544,27 @@ test("writeGateContext: --prefix-file records the exact bytes of the supplied fi
     const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath));
     assert.equal(onDisk.toString("utf8"), orchestratorPrefix, "record file holds the EXACT bytes of --prefix-file, no rendering/normalization");
     assert.equal(createHash("sha256").update(onDisk).digest("hex"), manuallyComputedHash);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: --prefix-file still normalizes angleScopes (a foreign value fails open to full) even though no variant is ever rendered", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefixfile-anglescopes-"));
+  try {
+    const prefixFile = path.join(repoRoot, "orchestrator-prefix.txt");
+    await writeFile(prefixFile, "# Orchestrator's own briefing\n", "utf8");
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "83", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope", "link-check"]',
+      "--prefix-file", prefixFile,
+    ]);
+    options.angleScopes = { scope: " docs-only ", "link-check": "everything-and-more" };
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.angleScopes.scope, "docs-only", "a valid value is still trimmed and accepted");
+    assert.equal(result.artifact.angleScopes["link-check"], "full", "a foreign value fails open to full");
+    assert.equal(result.artifact.briefingVariants, undefined, "--prefix-file never renders a variant file, regardless of angleScopes");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -3156,5 +3189,660 @@ test("writeGateContext warns, naming the retirement command, when a rebuild over
     assert.match(paRebuilt.warning, /1 reviewer sentinel/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AC8 (#1572) — prefix hunk-collapse: collapsePureSubstitutionRuns
+// ---------------------------------------------------------------------------
+
+test("collapsePureSubstitutionRuns: a lone (length-1) pure single-token substitution run stays below the collapse floor and renders in full", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    " context line",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "a single hunk never collapses, regardless of purity — MIN_COLLAPSE_RUN_LENGTH is 2");
+  assert.ok(!collapsed.includes("[collapsed:"));
+});
+
+test("collapsePureSubstitutionRuns: a run spanning multiple files collapses to one line naming the hunk/file counts and the affected paths", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 333..444 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/c.txt b/c.txt",
+    "index 555..666 100644",
+    "--- a/c.txt",
+    "+++ b/c.txt",
+    "@@ -1,2 +1,2 @@",
+    "-defer",
+    "+nice-to-have",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(
+    collapsed,
+    '[collapsed: 3 hunks across 3 files (a.txt, b.txt, c.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+  );
+});
+
+test("collapsePureSubstitutionRuns (token-boundary purity): grossAmount->netAmount and grossRate->netRate do NOT collapse together despite sharing the character-level run \"gross\"->\"net\"", () => {
+  const diff = [
+    "diff --git a/pay.mjs b/pay.mjs",
+    "index 111..222 100644",
+    "--- a/pay.mjs",
+    "+++ b/pay.mjs",
+    "@@ -1 +1 @@",
+    "-const grossAmount = 1;",
+    "+const netAmount = 1;",
+    "diff --git a/tax.mjs b/tax.mjs",
+    "index 333..444 100644",
+    "--- a/tax.mjs",
+    "+++ b/tax.mjs",
+    "@@ -1 +1 @@",
+    "-const grossRate = 1;",
+    "+const netRate = 1;",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "neither line is a whole-token substitution (the token butts against a word character), so both hunks fail closed to impure and render unchanged");
+  assert.ok(!collapsed.includes("[collapsed:"));
+});
+
+test("collapsePureSubstitutionRuns: a run of more files than the summary cap truncates the file list with a '+N more' tail", () => {
+  const files = Array.from({ length: 10 }, (_, i) => `f${i}.txt`);
+  const diff = files
+    .map((f) => [
+      `diff --git a/${f} b/${f}`, "index 111..222 100644", `--- a/${f}`, `+++ b/${f}`,
+      "@@ -1 +1 @@", "-defer", "+nice-to-have",
+    ].join("\n"))
+    .join("\n") + "\n";
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.match(collapsed, /^\[collapsed: 10 hunks across 10 files \(f0\.txt, f1\.txt, f2\.txt, f3\.txt, f4\.txt, f5\.txt, f6\.txt, f7\.txt, \+2 more\)/);
+});
+
+test("collapsePureSubstitutionRuns: a hunk with a second, different substitution is not provably pure — renders unchanged", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    "-defer",
+    "+nice-to-have",
+    "-always",
+    "+alwayz",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "two DIFFERENT substitutions in one hunk fail closed to a full render");
+  assert.ok(!collapsed.includes("[collapsed:"));
+});
+
+test("collapsePureSubstitutionRuns: an unequal add/remove count (a real content addition, not a substitution) is not provably pure — renders unchanged", () => {
+  const diff = [
+    "diff --git a/b.txt b/b.txt",
+    "index 333..444 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1,2 +1,3 @@",
+    " context",
+    "+brand new line",
+    "+another new line",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff);
+});
+
+test("collapsePureSubstitutionRuns: a mixed diff collapses only the qualifying (length >= 2) runs, leaving the impure hunk rendered in full", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/c.txt b/c.txt",
+    "index 333..444 100644",
+    "--- a/c.txt",
+    "+++ b/c.txt",
+    "@@ -1,2 +1,3 @@",
+    " context",
+    "+brand new line",
+    "+another new line",
+    "diff --git a/d.txt b/d.txt",
+    "index 444..555 100644",
+    "--- a/d.txt",
+    "+++ b/d.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/e.txt b/e.txt",
+    "index 555..666 100644",
+    "--- a/e.txt",
+    "+++ b/e.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  const lines = collapsed.split("\n");
+  assert.equal(
+    lines[0],
+    '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+  );
+  assert.ok(collapsed.includes("diff --git a/c.txt b/c.txt"), "the impure hunk keeps its file header");
+  assert.ok(collapsed.includes("brand new line"));
+  const summaryCount = (collapsed.match(/\[collapsed:/g) ?? []).length;
+  assert.equal(summaryCount, 2, "two separate qualifying runs, broken by the impure c.txt hunk in between");
+  assert.match(lines.at(-1), /\[collapsed: 2 hunks across 2 files \(d\.txt, e\.txt\)/);
+});
+
+test("collapsePureSubstitutionRuns: a header-only block (no @@ hunk at all) round-trips byte-identically", () => {
+  const diff = "diff --git a/src/a.mjs b/src/a.mjs\n+line\n";
+  assert.equal(collapsePureSubstitutionRuns(diff), diff);
+});
+
+test("collapsePureSubstitutionRuns: a diff carrying a PREAMBLE before its first 'diff --git ' line (e.g. git show/format-patch output) fails open and round-trips byte-identically", () => {
+  const diff = [
+    "commit deadbeef",
+    "Author: x <x@example.com>",
+    "",
+    "    subject line",
+    "",
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  assert.equal(collapsePureSubstitutionRuns(diff), diff, "the preamble is preserved by not collapsing at all, rather than silently dropped");
+});
+
+test("collapsePureSubstitutionRuns: a zero-hunk block (binary/rename) between two pure runs breaks them into two summaries, preserving its own header", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/r.bin b/r.bin",
+    "Binary files a/r.bin and b/r.bin differ",
+    "diff --git a/c.txt b/c.txt",
+    "index 333..444 100644",
+    "--- a/c.txt",
+    "+++ b/c.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/d.txt b/d.txt",
+    "index 444..555 100644",
+    "--- a/d.txt",
+    "+++ b/d.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.ok(collapsed.includes("diff --git a/r.bin b/r.bin"), "the binary block's own header is preserved");
+  assert.ok(collapsed.includes("Binary files a/r.bin and b/r.bin differ"));
+  const summaryCount = (collapsed.match(/\[collapsed:/g) ?? []).length;
+  assert.equal(summaryCount, 2, "the zero-hunk block breaks the run into two separate summaries rather than merging across it");
+});
+
+test("analyzeHunkPurity (via collapsePureSubstitutionRuns): a hunk line with no +/-/space prefix fails closed to impure — renders unchanged", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    " context",
+    "unrecognized line shape",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "an unrecognized line shape fails the hunk closed to impure, not just the substitution check");
+});
+
+test("renderBriefingPrefix (AC8): a diff over the inline cap raw that collapses under the cap flips prefixMode to inline (measured on the collapsed bytes)", () => {
+  const files = Array.from({ length: 20 }, (_, i) => `f${i}.txt`);
+  const diffOutput = files
+    .map((f) => [
+      `diff --git a/${f} b/${f}`, "index 111..222 100644", `--- a/${f}`, `+++ b/${f}`,
+      "@@ -1 +1 @@", "-defer", "+nice-to-have",
+    ].join("\n"))
+    .join("\n") + "\n";
+  const rawBytes = Buffer.byteLength(diffOutput, "utf8");
+  const collapsedBytes = Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8");
+  assert.ok(collapsedBytes < rawBytes, "collapsing must shrink the diff for this fixture to be meaningful");
+  const capBytes = Math.floor((rawBytes + collapsedBytes) / 2); // strictly between raw and collapsed
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
+    diffOutput, diffPath: "tmp/x.diff", capBytes,
+  };
+  const result = renderBriefingPrefix(input);
+  assert.equal(result.prefixMode, "inline", "the raw diff exceeds capBytes but the collapsed diff does not");
+  assert.equal(result.diffBytes, collapsedBytes, "diffBytes is measured on the collapsed text, not the raw diff");
+});
+
+test("renderBriefingPrefix (AC8): a qualifying (length >= 2) pure substitution run over TRIVIAL headers collapses in the rendered diff section, absorbing those headers; twice-rendered bytes are identical (determinism)", () => {
+  const diffOutput = [
+    "diff --git a/a.txt b/a.txt",
+    "index 111..222 100644",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/b.txt b/b.txt",
+    "index 222..333 100644",
+    "--- a/b.txt",
+    "+++ b/b.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
+    diffOutput, diffPath: "tmp/x.diff",
+  };
+  const r1 = renderBriefingPrefix(input);
+  const r2 = renderBriefingPrefix(input);
+  assert.equal(r1.text, r2.text, "deterministic across two renders");
+  assert.ok(r1.text.includes(
+    '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
+  ));
+  assert.ok(!r1.text.includes("diff --git a/a.txt"), "a TRIVIAL header (diff --git/index/---/+++ only) is absorbed into the collapsed run");
+});
+
+test("collapsePureSubstitutionRuns: a block whose header carries a mode change or a rename is excluded from collapse — its header and hunk render in full", () => {
+  const diff = [
+    "diff --git a/scripts/deploy.sh b/scripts/deploy.sh",
+    "old mode 100644",
+    "new mode 100755",
+    "index 111..222 100644",
+    "--- a/scripts/deploy.sh",
+    "+++ b/scripts/deploy.sh",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "diff --git a/old-name.txt b/new-name.txt",
+    "similarity index 100%",
+    "rename from old-name.txt",
+    "rename to new-name.txt",
+    "index 333..333 100644",
+    "--- a/old-name.txt",
+    "+++ b/new-name.txt",
+    "@@ -1 +1 @@",
+    "-defer",
+    "+nice-to-have",
+    "",
+  ].join("\n");
+  const collapsed = collapsePureSubstitutionRuns(diff);
+  assert.equal(collapsed, diff, "neither block's header is trivial, so nothing about this diff qualifies for collapse");
+  assert.ok(collapsed.includes("old mode 100644") && collapsed.includes("new mode 100755"), "the mode change survives");
+  assert.ok(collapsed.includes("similarity index 100%") && collapsed.includes("rename from old-name.txt") && collapsed.includes("rename to new-name.txt"), "the rename metadata survives");
+  assert.ok(!collapsed.includes("[collapsed:"), "a non-trivial header blocks collapse even though both hunks are pure single-token substitutions");
+});
+
+// ---------------------------------------------------------------------------
+// AC3 (#1572) — per-angle scoped briefings: buildGateBriefingScopePath,
+// renderScopedBriefingVariant, and their wiring into writeGateContext/buildGateContext
+// ---------------------------------------------------------------------------
+
+test("buildGateBriefingScopePath produces a deterministic per-scope companion path; rejects scope \"full\"", () => {
+  const p = buildGateBriefingScopePath({
+    repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890", scope: "docs-only",
+  });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-9", "draft_gate-abc1234567890.briefing-docs-only.txt"));
+  assert.throws(
+    () => buildGateBriefingScopePath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890", scope: "full" }),
+    /non-"full"/,
+  );
+});
+
+test("renderScopedBriefingVariant: docs-only scope with no doc-file hunks in the diff states so explicitly, and links back to the full prefix", () => {
+  const { text } = renderScopedBriefingVariant("docs-only", {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+    diffOutput: [
+      "diff --git a/src/a.mjs b/src/a.mjs",
+      "index 111..222 100644",
+      "--- a/src/a.mjs",
+      "+++ b/src/a.mjs",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n"),
+  });
+  assert.ok(text.includes("(no doc-file hunks in this diff)"));
+  assert.ok(text.includes("tmp/x.briefing-prefix.txt"), "links back to the full byte-identical prefix (AC1)");
+  assert.ok(!text.includes("src/a.mjs"), "non-doc hunks are excluded from the docs-only variant");
+});
+
+test("renderScopedBriefingVariant: rejects scope \"full\" and any non-GATE_ANGLE_SCOPES value", () => {
+  const base = { repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234", briefingPrefixPath: "tmp/x.txt" };
+  assert.throws(() => renderScopedBriefingVariant("full", base), /non-"full"/);
+  assert.throws(() => renderScopedBriefingVariant("Docs-Only", base), /non-"full"/);
+});
+
+test("renderScopedBriefingVariant (AC1): both docs-only and changed-files variants carry the PR body, the linked-issue acceptance-criteria text, the validation-results pointer, AND unconditional diffPath/context-artifact pointers", () => {
+  const shared = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+    contextPath: "tmp/x.json",
+    prBody: "Real PR description text.",
+    issueRef: "#900",
+    issueSections: [{ label: "#900", body: "- [ ] AC1: real acceptance criteria text" }],
+    diffPath: "tmp/x.diff",
+    validationResultsPath: "tmp/x.validation.json",
+    diffOutput: [
+      "diff --git a/docs/a.md b/docs/a.md",
+      "index 111..222 100644",
+      "--- a/docs/a.md",
+      "+++ b/docs/a.md",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n"),
+  };
+  for (const scope of ["docs-only", "changed-files"]) {
+    const { text } = renderScopedBriefingVariant(scope, shared);
+    assert.ok(text.includes("Real PR description text."), `${scope}: PR body`);
+    assert.ok(text.includes("real acceptance criteria text"), `${scope}: linked-issue acceptance-criteria text`);
+    assert.ok(text.includes("tmp/x.validation.json"), `${scope}: validation-results pointer`);
+    assert.ok(text.includes("tmp/x.diff"), `${scope}: diffPath pointer`);
+    assert.ok(text.includes("tmp/x.json"), `${scope}: context-artifact pointer`);
+    assert.ok(text.includes("tmp/x.briefing-prefix.txt"), `${scope}: full-prefix widen-back pointer`);
+  }
+});
+
+test("renderScopedBriefingVariant is deterministic: same input renders the same bytes", () => {
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.txt", prBody: "Body text.",
+    diffOutput: [
+      "diff --git a/docs/a.md b/docs/a.md",
+      "index 111..222 100644",
+      "--- a/docs/a.md",
+      "+++ b/docs/a.md",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n"),
+  };
+  const r1 = renderScopedBriefingVariant("docs-only", input);
+  const r2 = renderScopedBriefingVariant("docs-only", input);
+  assert.equal(r1.text, r2.text);
+});
+
+test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only companion file, excludes non-doc hunks, and records angleScopes + briefingVariants", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-docs-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "link-check", scope: "docs-only" }, { name: "gate-evidence", mandatory: true }],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    // Both hunks are deliberately NOT pure single-token substitutions
+    // (unequal add/remove counts) so AC8 hunk-collapse never engages here —
+    // this fixture isolates AC3's scope-exclusion behavior.
+    const diff = {
+      nameStatusOutput: "M\tdocs/foo.md\nM\tsrc/a.mjs\n",
+      diffOutput: [
+        "diff --git a/docs/foo.md b/docs/foo.md",
+        "index 111..222 100644",
+        "--- a/docs/foo.md",
+        "+++ b/docs/foo.md",
+        "@@ -1 +1,2 @@",
+        "-# Old heading",
+        "+# New heading",
+        "+More detail.",
+        "diff --git a/src/a.mjs b/src/a.mjs",
+        "index 333..444 100644",
+        "--- a/src/a.mjs",
+        "+++ b/src/a.mjs",
+        "@@ -1,2 +1,3 @@",
+        " context line",
+        "-const x = 1;",
+        "+const x = 2;",
+        "+const y = 3;",
+        "",
+      ].join("\n"),
+    };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 90, headSha: "abc1234567890" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.angleScopes.scope, "full");
+    assert.equal(result.artifact.angleScopes["link-check"], "docs-only");
+    assert.equal(result.artifact.angleScopes["gate-evidence"], "full");
+    const variantPath = result.artifact.briefingVariants["docs-only"];
+    assert.equal(
+      variantPath,
+      buildGateBriefingScopePath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: "abc1234567890", scope: "docs-only" }),
+    );
+    const variantText = await readFile(path.resolve(repoRoot, variantPath), "utf8");
+    assert.ok(variantText.includes("docs/foo.md"));
+    assert.ok(variantText.includes("# New heading"));
+    assert.ok(!variantText.includes("src/a.mjs"), "docs-only variant excludes non-doc hunks");
+    assert.ok(!variantText.includes("const x = 2;"));
+    assert.ok(variantText.includes(result.prefixPath), "links back to the full briefing prefix so the angle can always widen (AC1)");
+
+    // The full prefix is untouched and still carries everything.
+    const fullPrefixText = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(fullPrefixText.includes("src/a.mjs"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext (AC3): a changed-files-scoped angle's companion carries the full diff but omits the adjacent-code bundle", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-changed-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "coverage", scope: "changed-files" }, { name: "gate-evidence", mandatory: true }],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    // Unequal add/remove count so AC8 hunk-collapse never engages — this
+    // fixture isolates AC3's changed-files-scope behavior (full diff, no
+    // adjacent-code bundle).
+    const diff = {
+      nameStatusOutput: "M\tsrc/changed.mjs\n",
+      diffOutput: [
+        "diff --git a/src/changed.mjs b/src/changed.mjs",
+        "index 111..222 100644",
+        "--- a/src/changed.mjs",
+        "+++ b/src/changed.mjs",
+        "@@ -1,2 +1,3 @@",
+        " context line",
+        "-const x = 1;",
+        "+const x = 99;",
+        "+const y = 2;",
+        "",
+      ].join("\n"),
+    };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 91, headSha: "cafefeed123456" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.angleScopes.coverage, "changed-files");
+    const variantPath = result.artifact.briefingVariants["changed-files"];
+    const variantText = await readFile(path.resolve(repoRoot, variantPath), "utf8");
+    assert.ok(variantText.includes("const x = 99;"), "the full diff is carried");
+    assert.ok(!variantText.includes("Adjacent files"), "no adjacent-code section in the changed-files variant");
+    assert.ok(variantText.includes(result.prefixPath), "links back to the full prefix");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext (AC3): every resolved angle at scope full emits no briefingVariants field (backward compatible artifact shape)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-none-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const diff = { nameStatusOutput: "M\tsrc/a.mjs\n", diffOutput: "diff --git a/src/a.mjs b/src/a.mjs\n+line\n" };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 92, headSha: "beadfeed123456" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.briefingVariants, undefined);
+    assert.equal(result.artifact.angleScopes.scope, "full");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext (AC3): an invalid/foreign angleScopes value fails open to full at write time (defensive, independent of config-level resolution)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-invalid-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "93", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    options.angleScopes = { scope: "everything-and-more" };
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.angleScopes.scope, "full");
+    assert.equal(result.artifact.briefingVariants, undefined, "no variant file for an angle normalized back to full");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext (AC3): a variant write failure fails open to full for its own scope only, and does not disturb the other scope's variant", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-writefail-"));
+  try {
+    // Force the docs-only variant's write to fail (EISDIR) by pre-creating its
+    // target path as a DIRECTORY; the changed-files variant's own path is
+    // untouched and must still succeed.
+    const docsOnlyPath = buildGateBriefingScopePath({
+      repo: "owner/repo", pr: 95, gate: "draft_gate", headSha: "abc1234567890", scope: "docs-only",
+    });
+    await mkdir(path.resolve(repoRoot, docsOnlyPath), { recursive: true });
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "95", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["link-check", "coverage"]',
+    ]);
+    options.angleScopes = { "link-check": "docs-only", coverage: "changed-files" };
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.angleScopes["link-check"], "full", "the failed scope's angle normalizes to full");
+    assert.equal(result.artifact.angleScopes.coverage, "changed-files", "the other scope's angle is untouched");
+    assert.equal(result.artifact.briefingVariants["docs-only"], undefined, "no briefingVariants entry for the failed scope");
+    assert.equal(
+      result.artifact.briefingVariants["changed-files"],
+      buildGateBriefingScopePath({ repo: "owner/repo", pr: 95, gate: "draft_gate", headSha: "abc1234567890", scope: "changed-files" }),
+      "the other scope's variant still lands",
+    );
+    const variantOnDisk = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
+    assert.ok(variantOnDisk.includes("changed-files"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI main: an explicit --angles override still resolves angleScopes from local config (independent of dynamic resolution)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-cli-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  draft:",
+        "    angles:",
+        "      - name: link-check",
+        "        scope: docs-only",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "94", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["link-check"]',
+      "--pr-body", "A doc fix.",
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 94, gate: "draft_gate", headSha: "abc1234567890" }, { repoRoot });
+    assert.equal(artifact.angleScopes["link-check"], "docs-only");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

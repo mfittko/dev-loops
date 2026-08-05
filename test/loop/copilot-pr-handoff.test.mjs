@@ -178,23 +178,21 @@ test("copilot-pr-handoff rejects malformed arguments with usage guidance", async
   const missingPrErr = JSON.parse(missingPr.stderr);
   assert.equal(missingPrErr.ok, false);
   assert.equal(missingPrErr.error, "copilot-pr-handoff requires --pr <number>");
-  assert.equal(typeof missingPrErr.usage, "string");
-  assert(missingPrErr.usage.length > 0);
+  assert.equal(missingPrErr.hint, "run with --help for usage");
 
   const noArgs = await runNode([]);
   assert.equal(noArgs.code, 1);
   assert.equal(noArgs.stdout, "");
   const noArgsErr = JSON.parse(noArgs.stderr);
   assert.equal(noArgsErr.ok, false);
-  assert.equal(typeof noArgsErr.usage, "string");
+  assert.equal(noArgsErr.hint, "run with --help for usage");
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--unexpected"]);
   assert.equal(unknown.code, 1);
   const unknownErr = JSON.parse(unknown.stderr);
   assert.equal(unknownErr.ok, false);
   assert.equal(unknownErr.error, "Unknown argument: --unexpected");
-  assert.equal(typeof unknownErr.usage, "string");
-  assert(unknownErr.usage.length > 0);
+  assert.equal(unknownErr.hint, "run with --help for usage");
 
   const badWatchStatus = await runNode(["--repo", "owner/repo", "--pr", "17", "--watch-status", "later"]);
   assert.equal(badWatchStatus.code, 1);

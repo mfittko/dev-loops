@@ -225,13 +225,13 @@ test("detect-tracker-pr-state CLI emits stable output for no_tracker_item state"
   }
 });
 
-test("detect-tracker-pr-state CLI exits 1 with usage for missing --input", async () => {
+test("detect-tracker-pr-state CLI exits 1 with a usage hint for missing --input", async () => {
   const result = await runNode([]);
   assert.equal(result.code, 1);
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.ok(typeof parsed.error === "string");
-  assert.ok(typeof parsed.usage === "string");
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("detect-tracker-pr-state CLI exits 1 with error for unknown argument", async () => {
