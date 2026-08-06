@@ -840,7 +840,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   means. GATE-CLOSE is a third, stricter layer: a clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
   fixer or defer-closed by the disposition pass) first, asserted by `fetchDraftGateEvidence` /
-  `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` as 0 unresolved gate-authored threads
+  `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
+  `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
   (`GATE-EXEC-THREAD-DISPOSITION`). Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
   never a round-by-round judgement call.
 
@@ -1107,7 +1108,9 @@ field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposit
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
 defers it (a worth-fixing-now thread past the gate's configured worth-fixing-now fix window
-(default 3, round 4 under the default; #1581), or a nice-to-have thread immediately). A
+(default 3, round 4 under the default; #1581), or a nice-to-have thread the fixer triaged and
+chose to defer — closed by the post-fixer disposition sweep, never a silent pre-fixer auto-defer
+(#1585)). A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
 severity other than `must-fix`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a

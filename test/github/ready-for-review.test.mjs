@@ -848,3 +848,69 @@ test("succeeds when gate comment has abbreviated SHA matching full PR head SHA",
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #1585: ready-for-review backstop — 0 unresolved gate-authored threads
+// ---------------------------------------------------------------------------
+
+import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+
+function reviewThreadsResponse(nodes) {
+  return `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } })}\n`;
+}
+
+function niceToHaveThreadNode() {
+  const marker = buildFindingMarker({ fp: "f".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  return {
+    id: "THREAD_NTH",
+    isResolved: false,
+    isOutdated: false,
+    path: "src/naming.mjs",
+    line: 4,
+    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+test("#1585: ready-for-review refuses to mark ready when an unresolved gate-authored thread remains (the #1584 bug, caught at the ready boundary)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-1585-threads-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review", id: 101, html_url: "x", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+      { stdout: "[]" }, // listPrReviews (fail-open)
+      { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: reviewThreadsResponse([niceToHaveThreadNode()]) },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unresolved gate-authored review thread/i);
+    // gh pr ready must NOT have been called.
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready should not be called when threads remain unresolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1585: ready-for-review fails closed (-1) when review-thread state is unreadable", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-1585-unreadable-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review", id: 101, html_url: "x", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+      { stdout: "[]" },
+      { assertArgs: ["api", "user"], stdout: "", code: 1, stderr: "HTTP 500" }, // login read fails → -1
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /could not read review-thread state/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

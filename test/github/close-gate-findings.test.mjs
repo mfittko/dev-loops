@@ -866,3 +866,34 @@ test("#1581 (d): must-fix escalates (not defers) at round-cap exhaustion", async
     },
   ));
 });
+
+// ---------------------------------------------------------------------------
+// #1585: close-gate-findings reports unresolvedGateThreadCount after the defer pass
+// ---------------------------------------------------------------------------
+
+test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays, nice-to-have deferred)", async () => {
+  // A must-fix thread (never deferred) + a nice-to-have thread (deferred at
+  // round 1) => pre-defer count is 2, deferredResolved is 1, reported
+  // unresolvedGateThreadCount is 1 (the must-fix the fixer has not yet closed).
+  const mustFixBodyStr = `${buildFindingMarker({ fp: "2222222222222222", severity: "must-fix", angle: "security", round: 1 })}\n**must-fix** (\`security\`): SQL injection`;
+  const niceToHaveBodyStr = `${buildFindingMarker({ fp: "7777777777777777", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`;
+  const mustFix = threadNode({ id: "THREAD_MUST", path: "src/db.mjs", line: 2, commentId: 8001, body: mustFixBodyStr });
+  const niceToHave = threadNode({ id: "THREAD_NTH", path: "src/naming.mjs", line: 4, commentId: 8002, body: niceToHaveBodyStr });
+
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [mustFix, niceToHave] }),
+      // The disposition pass defers ONLY the nice-to-have (must-fix never defers).
+      getReviewCommentEntry(8002, niceToHaveBodyStr),
+      patchReviewCommentEntry(8002),
+      postReplyEntry(8002, { id: 7800 }),
+      resolveThreadEntry("THREAD_NTH"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      // 2 unresolved gate-authored threads pre-defer, 1 deferred => 1 remains.
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
