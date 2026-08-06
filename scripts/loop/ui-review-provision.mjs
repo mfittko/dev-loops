@@ -35,7 +35,7 @@ Required:
 Optional:
   --branch <name>                 Branch used only to CREATE the worktree
                                   (default: pr-<n>). The worktree is then pinned
-                                  DETACHED onto refs/pull/<n>/head regardless, so
+                                  DETACHED onto a local mirror of refs/pull/<n>/head regardless, so
                                   this no longer decides which code is reviewed.
   --ack-destructive-migration     Acknowledge + unblock a destructive migration.
   -h, --help                      Show this help.
@@ -301,7 +301,7 @@ export async function pinPrHead({ worktreePath, pr }) {
     return { ok: false, detail: `git checkout --detach ${ref} failed: ${reason(err)}` };
   }
   try {
-    return { ok: true, sha: git(["rev-parse", "HEAD"]).trim(), detail: `detached at refs/pull/${pr}/head` };
+    return { ok: true, sha: git(["rev-parse", "HEAD"]).trim(), detail: `detached at refs/dev-loops/pr-${pr}/head (mirrors refs/pull/${pr}/head)` };
   } catch (err) {
     return { ok: false, detail: `git rev-parse HEAD failed: ${reason(err)}` };
   }
