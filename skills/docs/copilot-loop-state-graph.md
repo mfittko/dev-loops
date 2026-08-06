@@ -65,7 +65,6 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
   - re-request failed with unavailable
 - `ready_to_rerequest_review` -> `done`
   - agent decides PR is complete
-  - clean current-head convergence (submitted clean Copilot review + 0 unresolved threads + green CI) hands off to `pre_approval_gate` (#1588); a lingering `requested` status whose request predates the latest same-head submitted review is settled (`none`) by the shared reconciliation helper, so the loop proceeds to `pre_approval_gate` instead of dead-ending into `stop`
 - `waiting_for_ci` -> `pr_ready_no_feedback`
   - CI passed; no review yet
 - `waiting_for_ci` -> `ready_to_rerequest_review`
@@ -159,6 +158,8 @@ When rule 11 yields `ready_to_rerequest_review`, the interpreter also emits two 
 ### Automatic same-head re-request suppression after clean convergence
 
 When the current head already has a submitted Copilot review, the unresolved thread count is 0, and CI is not in a blocked wait/failure state, automatic follow-up re-request is suppressed for that head (clean convergence on current head, automatic re-request suppressed). Automatic re-request becomes eligible again only after a meaningful remediation event changes the review basis (for this loop: a newer head without a submitted Copilot review on that head). Explicit operator/manual re-request remains allowed, but the direct request helper now suppresses same-head clean re-requests by default unless `--force-rerequest-review` is provided.
+
+Clean convergence is a behavioral indicator (`sameHeadCleanConverged`) emitted while the state remains `ready_to_rerequest_review` — it is not a transition to `done` or `pre_approval_gate`. The handoff to `pre_approval_gate` is owned by the broader PR-lifecycle/gate-coordination layer, which consumes the `sameHeadCleanConverged` indicator (and the shared `resolveCopilotReviewRequestStatus` reconciliation that settles a stale `requested` status to `none` when the request predates the latest same-head submitted review) to grant `RUN_PRE_APPROVAL_GATE` instead of dead-ending into `stop` (#1588).
 
 ### `unavailable` stops the loop only when no in-progress evidence exists
 

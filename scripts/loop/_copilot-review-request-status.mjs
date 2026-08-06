@@ -83,7 +83,7 @@ export async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env = pr
 // @param {string} [params.reviewRequestStatusOverride] - explicit override
 // @param {boolean} [params.copilotRequested] - pre-fetched requested_reviewers result (avoids duplicate API call)
 // @param {object} runtime - { env, ghCommand, runChild }
-// @returns {Promise<"none"|"requested">}
+// @returns {Promise<"none"|"requested"|"already-requested"|"unavailable"|"failed">}
 export async function resolveCopilotReviewRequestStatus(
   { repo, pr, reviewSummary, reviewRequestStatusOverride, copilotRequested },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
@@ -111,13 +111,13 @@ export async function resolveCopilotReviewRequestStatus(
   // current head satisfies an outstanding formal request when the request is
   // not newer than the latest submitted review. A request newer than the
   // latest review is genuinely outstanding (re-requested after convergence).
-  // An unknown request timestamp fails closed to "requested".
+  // An unknown request OR review timestamp fails closed to "requested".
   const latestRequestAt = await fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild });
   const latestReviewAt = reviewSummary?.latestSubmittedReviewOnCurrentHeadAt ?? null;
-  if (latestRequestAt !== null && latestReviewAt !== null && latestRequestAt > latestReviewAt) {
+  if (latestRequestAt === null || latestReviewAt === null) {
     return "requested";
   }
-  if (latestRequestAt === null) {
+  if (latestRequestAt > latestReviewAt) {
     return "requested";
   }
   return "none";
