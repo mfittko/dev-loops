@@ -144,7 +144,7 @@ localImplementation:
 
 tracker:
   board:
-    title: "dev-loops Queue"
+    number: 3  # https://github.com/users/mfittko/projects/3 (stable; survives project renames)
 
 queue:
   maxParallel: 3

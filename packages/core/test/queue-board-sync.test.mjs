@@ -51,6 +51,30 @@ test("loadBoardConfig enabled by boardTitle", async () => {
   }
 });
 
+test("loadBoardConfig resolves tracker.board.number without a stale title (#1589)", async () => {
+  // A project number is stable across renames; a title is not. The queue must
+  // resolve the board from `tracker.board.number` alone — no `title` required.
+  const dir = await makeRepo("tracker:\n  board:\n    number: 3\n");
+  try {
+    assert.deepEqual(loadBoardConfig(dir), { enabled: true, projectNumber: 3 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("tracker.board.number takes precedence over a stale queue.board.title (#1589)", async () => {
+  // tracker.board is canonical; a leftover (renamed-stale) queue.board.title
+  // must not be used when tracker.board.number is set.
+  const dir = await makeRepo(
+    'tracker:\n  board:\n    number: 3\nqueue:\n  board:\n    title: "dev-loops Queue"\n',
+  );
+  try {
+    assert.deepEqual(loadBoardConfig(dir), { enabled: true, projectNumber: 3 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("syncBoardStatus skips when board not configured", async () => {
   const dir = await makeRepo(null);
   try {
