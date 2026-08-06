@@ -22,6 +22,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-surface.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
@@ -828,13 +829,25 @@ async function main() {
   try {
     const result = await detectCheckpointEvidence(options);
     let unresolvedThreadCount = -1;
+    let unresolvedGateThreadCount = -1;
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
+      // #1585: the draftGateSatisfied field must assert 0 unresolved
+      // gate-authored threads (must-fix, worth-fixing-now, AND nice-to-have),
+      // not just a clean verdict. Reuse the same raw thread payload already
+      // fetched for the total count (marker-only, fail-closed proxy — no extra
+      // gh round-trip; the read-only counter cannot under-count a real
+      // gate-authored thread, only over-count a foreign quote, which blocks
+      // safely).
+      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
     } catch {
       unresolvedThreadCount = -1;
+      unresolvedGateThreadCount = -1;
     }
+    // #1585: fold the gate-authored thread invariant into draftGateSatisfied.
+    result.draftGateSatisfied = result.draftGateSatisfied && unresolvedGateThreadCount === 0;
     const staleRunnerCheck = {
       ok: result.staleRunner.status === "fresh_runner" || result.staleRunner.status === "no_owner_record",
       failures: result.staleRunner.status === "stale_runner"

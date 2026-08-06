@@ -272,6 +272,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         headSha: HEAD_SHA,
         round: 1,
         deferredResolved: 0,
+        unresolvedGateThreadCount: 0,
       });
     },
   ));

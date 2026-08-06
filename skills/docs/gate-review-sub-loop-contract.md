@@ -827,13 +827,21 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
   no code location, so it never gets a thread to fix through) is outside this round window
   entirely — it is deferred by construction at post time, at any round, per
-  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is never fixed inside the gate, at any
-  round. Two layers govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
+  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is a fixer TRIAGE target, not a silent
+  auto-defer (#1585): the fixer receives every gate-authored finding (must-fix,
+  worth-fixing-now, AND nice-to-have) as a fix/triage target and may fix-if-cheap-in-the-same-commit
+  (free polish when already touching that code), else defer. Defer is permitted from round 1 on for
+  nice-to-haves — no forced fix window (the WFN window (#1581) is unaffected). Two layers govern
+  this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open worth-fixing-now thread; an unresolved in-window locatable
   worth-fixing-now THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
-  means. Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
+  means. GATE-CLOSE is a third, stricter layer: a clean verdict is NOT sufficient to close the
+  gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
+  fixer or defer-closed by the disposition pass) first, asserted by `fetchDraftGateEvidence` /
+  `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` as 0 unresolved gate-authored threads
+  (`GATE-EXEC-THREAD-DISPOSITION`). Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
   never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
@@ -1027,10 +1035,15 @@ same-head rerun the existing review's BODY is corrected in place (GitHub exposes
 add inline comments to a submitted review), so every still-unposted finding is body-filed on that
 correction rather than dropped.
 
-After the verdict post, at every gate close, run `close-gate-findings.mjs --ledger <path>` against
-that same ledger, in the post-verdict, pre-fix slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts
-NOTHING of its own — it runs only the thread disposition pass
-(`GATE-EXEC-THREAD-DISPOSITION`). That pass runs independently of
+After the verdict post AND after the Phase 4 fixer triage pass, at every gate close, run
+`close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
+it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
+nice-to-haves runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
+finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
+the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
+failing the gate closed when any gate-authored thread is still unresolved.
+`GATE-EXEC-POST-BEFORE-FIX` (findings visible on the PR before fixes) is unaffected: only the
+defer-close timing moves to post-fix. That pass runs independently of
 `gates.postFindingsComments`: that toggle governs only the opt-in consolidated
 `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's second, prose suppression layer is
 owned by the
@@ -1055,8 +1068,19 @@ under the default window), an open worth-fixing-now thread is instead
 replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferral record
 (`GATE-EXEC-DEFERRAL-RECORD`) tells a deferred thread apart from one the fix loop genuinely
-resolved. A nice-to-have finding is replied to and resolved immediately, at the same round it
-was first posted. Because an unresolved review thread routes the PR to the
+resolved. A nice-to-have finding is a fixer TRIAGE target, not a silent auto-defer (#1585): the
+fixer receives it as a fix/triage target alongside must-fix and worth-fixing-now, and may
+fix-if-cheap-in-the-same-commit (free polish when already touching that code) or defer. Defer is
+permitted from round 1 on for nice-to-haves — no forced fix window. A nice-to-have the fixer
+defers is still reply+resolved (stamped `disposition=deferred`) via an explicit fixer triage
+decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER the fixer triage
+— not a silent post-hoc pass that can skip threads. GATE-CLOSE requires 0 unresolved
+gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
+that every gate-authored review thread (any severity: must-fix, worth-fixing-now, OR
+nice-to-have) is resolved before the gate is considered satisfied and before `ready-for-review`
+— a clean verdict alone no longer satisfies the gate. The disposition pass MUST run and resolve
+(fix-close or defer-close) every gate-authored thread before gate satisfaction; a thread left
+unresolved fails the gate closed (not silently satisfied). Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
 worth-fixing-now thread forces a fix round even after the current round's severity set is

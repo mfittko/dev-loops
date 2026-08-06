@@ -80,6 +80,13 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
   if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
+  // #1585: a clean verdict is not enough — every gate-authored review thread
+  // (must-fix, worth-fixing-now, AND nice-to-have) must be resolved before the
+  // PR leaves draft. The disposition pass (close-gate-findings) + fixer triage
+  // own that; this assertion is the ready-for-review backstop that refuses to
+  // mark ready while any gate-authored thread still dangles (the #1584 bug).
+  if (gate.unresolvedGateThreadCount === -1) throw new Error(`PR #${options.pr} could not read review-thread state from GitHub; re-run when API connectivity is restored`);
+  if (gate.unresolvedGateThreadCount !== 0) throw new Error(`PR #${options.pr} has ${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s); run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread before marking ready for review`);
   const readyResult = await runChild(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
@@ -95,7 +102,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {

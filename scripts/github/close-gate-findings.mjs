@@ -7,6 +7,7 @@ import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-
 import {
   FINDING_MARKER_RE,
   WORTH_FIXING_NOW_FIX_WINDOW,
+  countUnresolvedGateAuthoredThreads,
   fetchThreadsWithFullBodies,
   isDeferredAtRound,
   listPrReviews,
@@ -53,7 +54,8 @@ Optional:
 
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
-    "deferredResolved": <disposition reply+resolve count> }
+    "deferredResolved": <disposition reply+resolve count>,
+    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585)> }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -267,7 +269,21 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     gh,
   );
 
-  return { ok: true, repo, pr, gate, headSha, round, deferredResolved };
+  // #1585: report gate-authored threads still unresolved AFTER the defer pass.
+  // The defer pass resolves exactly the deferrable subset (nice-to-haves and
+  // out-of-window worth-fixing-now threads — the targets selectDispositionTargets
+  // returned, counted by deferredResolved), so the remaining unresolved
+  // gate-authored count is the pre-defer total minus that resolved count —
+  // i.e. must-fix the fixer has not yet fix-closed, in-window worth-fixing-now,
+  // or any gate-authored thread the fixer triaged but did not yet close. The
+  // gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses to
+  // mark ready while this is non-zero, so a clean verdict can never again leave
+  // a gate-authored thread dangling. Computed in-memory from the pre-defer
+  // snapshot (runDispositionPass throws if any target's resolve failed, so
+  // deferredResolved is exact) — no second thread walk.
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved;
+
+  return { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount };
 }
 
 async function main() {

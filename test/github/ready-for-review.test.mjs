@@ -26,6 +26,26 @@ async function readGhCalls(logPath) {
     .filter(Boolean);
   return lines.map((line) => JSON.parse(line));
 }
+// #1585: fetchDraftGateEvidence now also fetches the authenticated login
+// (api user) + review threads (graphql reviewThreads) to assert 0 unresolved
+// gate-authored threads. listPrReviews (fail-open) runs between the
+// issue-comments read and these calls, so a stub array that has NO explicit
+// reviews entry needs an empty-reviews filler (gateCloseStubs); one that
+// already stubs reviews appends only the login + threads (gateThreadLoginStubs).
+function gateThreadLoginStubs({ login = "pi-local-run", threads = [] } = {}) {
+  return [
+    { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login })}\n` },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: threads } } } } })}\n`,
+    },
+  ];
+}
+function gateCloseStubs(opts = {}) {
+  return [{ stdout: "[]" }, ...gateThreadLoginStubs(opts)];
+}
+
 
 // --- parseReadyForReviewCliArgs unit tests ---
 
@@ -266,6 +286,7 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -326,6 +347,7 @@ test("succeeds when the clean draft verdict lives only in the review stream (sin
           },
         ]),
       },
+      ...gateThreadLoginStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -383,6 +405,7 @@ test("still marks ready off an issue-comment verdict when the reviews fetch fail
         ]),
       },
       { stdout: "", stderr: "HTTP 500", exitCode: 1 }, // reviews fetch fails
+      ...gateThreadLoginStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -476,6 +499,7 @@ test("proceeds when PR title is clean", async () => {
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -573,6 +597,7 @@ test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -634,6 +659,7 @@ function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
         },
       ]),
     },
+    ...gateCloseStubs(),
     { stdout: "" }, // gh pr ready
   ]);
 }
@@ -742,6 +768,7 @@ test("fails when draft_gate marker does not match current head SHA", async () =>
           },
         ]),
       },
+      ...gateCloseStubs(),
     ]);
 
     const result = await runNode(
@@ -799,6 +826,7 @@ test("succeeds when gate comment has abbreviated SHA matching full PR head SHA",
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
