@@ -9,6 +9,9 @@ import {
   summarizeHeadScopedCheckRunsSignal,
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
+  partitionEntriesByCheckName,
+  LOOP_DERIVED_CI_CHECK_NAMES,
+  LOOP_DERIVED_CI_CHECK_NAME,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -201,7 +204,7 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
  * fabricate green. On fetchError, ciStatus is forced to "pending" so the watch
  * keeps polling (and a persistent error settles as "timeout", never success).
  *
- * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }> }}
+ * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }>, excludedFailureDetails: Array<string> }}
  */
 async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, ghCommand }) {
   const [checkRunsResult, statusesResult] = await Promise.all([
@@ -212,16 +215,30 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
   let checkRunsSignal = null;
   let checkRunsCount = 0;
   let checkRunsError = checkRunsResult.code !== 0;
+  // Loop-derived gate-evidence exclusion (#1531): partition out
+  // LOOP_DERIVED_CI_CHECK_NAMES (the gate-evidence status and the workflow's
+  // own gate-evidence-runner check run) before computing the status, the same
+  // way detect-copilot-loop-state.mjs does. The wait must not block on the
+  // very derived signal the loop itself posts. A genuinely failing check
+  // beside a red gate-evidence still blocks; the excluded entry stays visible
+  // via excludedFailureDetails.
+  let checkRunsExcludedFailureDetails = [];
   if (checkRunsResult.code === 0) {
     try {
       const payload = JSON.parse(checkRunsResult.stdout);
       if (Array.isArray(payload?.check_runs)) {
+        const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
+          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAMES);
+        checkRunsExcludedFailureDetails =
+          summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
+            ? [LOOP_DERIVED_CI_CHECK_NAME]
+            : [];
         const visibleSet = prVisibleCheckNames?.length > 0 ? new Set(prVisibleCheckNames) : null;
         const visibleRuns = visibleSet
-          ? payload.check_runs.filter((run) => !run.name || visibleSet.has(run.name))
-          : payload.check_runs;
+          ? nonLoopDerivedRuns.filter((run) => !run.name || visibleSet.has(run.name))
+          : nonLoopDerivedRuns;
         const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
-        const fullSignal = summarizeHeadScopedCheckRunsSignal(payload);
+        const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
         checkRunsSignal = { ...visibleSignal, unsupportedCompleted: fullSignal.unsupportedCompleted };
         checkRunsCount = payload.check_runs.length;
       } else {
@@ -236,14 +253,24 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
   let commitStatus = null;
   let statusesCount = 0;
   let statusFailures = [];
+  let commitStatusExcludedFailureDetails = [];
   let statusesError = statusesResult.code !== 0;
   if (statusesResult.code === 0) {
     try {
       const payload = JSON.parse(statusesResult.stdout);
       if (Array.isArray(payload?.statuses)) {
-        commitStatus = normalizeHeadScopedCommitStatus(payload);
+        // Same gate-evidence exclusion mirrored for the commit-status API: the
+        // gate-evidence StatusContext is the loop's own derived signal, so its
+        // failure must not leak into commitStatus or failedChecks (#1531).
+        const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
+          partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
+        commitStatusExcludedFailureDetails =
+          normalizeHeadScopedCommitStatus({ statuses: loopDerivedStatuses }) === "failure"
+            ? [LOOP_DERIVED_CI_CHECK_NAME]
+            : [];
+        commitStatus = normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses });
         statusesCount = payload.statuses.length;
-        statusFailures = extractFailedStatusContexts(payload.statuses);
+        statusFailures = extractFailedStatusContexts(nonLoopDerivedStatuses);
       } else {
         statusesError = true; // exit 0 but no statuses array → malformed payload, not empty
       }
@@ -271,6 +298,9 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
         ...(checkRunsSignal?.failureDetails ?? []).map((name) => ({ name })),
         ...statusFailures,
       ];
+  const excludedFailureDetails = fetchError
+    ? []
+    : [...new Set([...checkRunsExcludedFailureDetails, ...commitStatusExcludedFailureDetails])];
   // No-checks: zero check-runs AND zero commit-statuses, observed cleanly (no
   // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
   // lists expected checks the providers haven't reported yet, that is pending
@@ -280,7 +310,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
     checkRunsCount === 0 &&
     statusesCount === 0 &&
     !(prVisibleCheckNames?.length > 0);
-  return { ciStatus, noChecks, fetchError, failedChecks };
+  return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails };
 }
 
 function buildAttemptBudget(timeoutMs, pollIntervalMs) {
@@ -309,6 +339,7 @@ function settledResult(state, { settled, status }) {
     settled,
     ciStatus: state.ciStatus,
     failedChecks: state.failedChecks,
+    excludedFailureDetails: state.excludedFailureDetails ?? [],
     headSha: state.headSha,
     attempts: state.attempts,
   };
