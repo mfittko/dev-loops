@@ -104,7 +104,7 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
-    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward completed: local main advanced to origin/main", level: "info" },
   ]);
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
@@ -278,7 +278,7 @@ test("update failure is warning-only and leaves the session healthy", async () =
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
-    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
   ]);
 });
@@ -297,7 +297,7 @@ test("killed post-merge updates surface a clear warning message", async () => {
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
-    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
   ]);
 });

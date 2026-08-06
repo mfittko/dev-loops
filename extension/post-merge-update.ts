@@ -215,7 +215,7 @@ async function fastForwardMainCheckout(
 
   notify(
     ctx,
-    `Post-merge main-checkout fast-forward running: git -C ${mainCheckout} fetch origin main && merge --ff-only origin/main`,
+    `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand(mainCheckout)}`,
     'info',
   );
 

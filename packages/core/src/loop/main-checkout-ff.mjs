@@ -16,6 +16,11 @@
  * push). `mainCheckout` is POSIX single-quoted so consumer checkout paths containing
  * spaces or shell metacharacters cannot break or inject into the shell string.
  *
+ * The `merge --ff-only` is guarded to only run when the main checkout is currently on
+ * `main`, so a non-`main` checkout (detached HEAD, or another branch checked out)
+ * warns-and-continues instead of fast-forwarding the wrong branch. No `git switch` is
+ * performed (a state change) — only the guard test runs.
+ *
  * No imports so this file vendors into the `.claude/hooks/` bundle unchanged
  * (vendored modules may only import `node:` builtins or relative paths).
  */
@@ -42,9 +47,12 @@ function shellQuotePath(value) {
  * Build the best-effort main-checkout fast-forward command string.
  *
  * @param {string} mainCheckout - Absolute path to the main (primary) git checkout.
- * @returns {string} `git -C '<mainCheckout>' fetch origin main && git -C '<mainCheckout>' merge --ff-only origin/main` (path POSIX single-quoted)
+ * @returns {string} `git -C '<main>' fetch origin main && [ "$(git -C '<main>' rev-parse --abbrev-ref HEAD)" = main ] && git -C '<main>' merge --ff-only origin/main` (path POSIX single-quoted; merge only runs when the main checkout is on `main`)
  */
 export function buildMainCheckoutFastForwardCommand(mainCheckout) {
   const quoted = shellQuotePath(mainCheckout);
-  return `git -C ${quoted} fetch origin main && git -C ${quoted} merge --ff-only origin/main`;
+  // ponytail: guard with a `[ ... = main ]` test instead of switching branches — a
+  // non-main checkout fails the && chain (warn-and-continue) rather than ff-ing the
+  // wrong branch. No state change, no git switch.
+  return `git -C ${quoted} fetch origin main && [ "$(git -C ${quoted} rev-parse --abbrev-ref HEAD)" = main ] && git -C ${quoted} merge --ff-only origin/main`;
 }
