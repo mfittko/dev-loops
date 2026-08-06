@@ -485,3 +485,21 @@ test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes maps raw GraphQL thr
   // T1 unresolved + marker => counted; T2 resolved => not counted; T3 no marker => not counted.
   assert.equal(countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes), 1);
 });
+
+test("#1585: countUnresolvedGateAuthoredThreads throws (fail-closed) on a non-array threads input", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreads(null, GATE_LOGIN), /threads must be an array/);
+  assert.throws(() => countUnresolvedGateAuthoredThreads(undefined, GATE_LOGIN), /threads must be an array/);
+});
+
+test("#1585: an empty-string login falls back to the marker-only fail-closed proxy (never fail-open)", () => {
+  const marker = buildFindingMarker({ fp: "d".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  const thread = { author: "someone-else", body: `${marker}\n**nice-to-have** (\`naming\`): z`, isResolved: false };
+  // "" must behave like null (marker-only: over-counts a foreign quote, blocks safely).
+  assert.equal(countUnresolvedGateAuthoredThreads([thread], ""), 1);
+  assert.equal(countUnresolvedGateAuthoredThreads([thread], null), 1);
+});
+
+test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes(null), /rawNodes must be an array/);
+  assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes("not-an-array"), /rawNodes must be an array/);
+});

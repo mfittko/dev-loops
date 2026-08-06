@@ -1093,7 +1093,8 @@ FIX-closing reply (the standard fix loop, or a dispute reply) follows
 `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change that fixed that thread,
 with the resolving commit — nothing was fixed for a thread the fix loop never touched, so this
 requirement cannot apply verbatim there. A DEFERRAL reply (`close-gate-findings.mjs` past the
-worth-fixing-now window, or a nice-to-have finding closed immediately) is instead distinct by
+worth-fixing-now window, or a nice-to-have finding the fixer triaged and chose to defer via
+the post-fixer disposition sweep (#1585)) is instead distinct by
 construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
 round) and states the window/disposition reason (see `dispositionMessage` in
 `close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only

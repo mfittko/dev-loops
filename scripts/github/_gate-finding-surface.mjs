@@ -447,10 +447,21 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
  * returns: `{ author, body, isResolved, ... }`.
  */
 export function countUnresolvedGateAuthoredThreads(threads, login) {
+  // A non-array `threads` is a caller contract violation; for a gate-close
+  // safety predicate the fail-closed posture is to THROW (callers catch and
+  // treat the unreadable state as -1 / blocked), never to silently coerce to
+  // an empty array and under-count dangling threads (#1585 review finding).
+  if (!Array.isArray(threads)) {
+    throw new Error(`countUnresolvedGateAuthoredThreads: threads must be an array, got ${typeof threads}`);
+  }
+  // Any falsy login (null/undefined/"") falls back to the MARKER-ONLY fail-closed
+  // proxy — an empty-string login must NOT silently skip every thread (fail-open);
+  // it must over-count and block, matching the documented posture.
+  const loginKnown = typeof login === "string" && login.length > 0;
   let count = 0;
   for (const thread of threads) {
     if (thread.isResolved) continue;
-    if (login !== null && login !== undefined && thread.author !== login) continue;
+    if (loginKnown && thread.author !== login) continue;
     if (!parseFindingMarker(thread.body)) continue;
     count += 1;
   }
@@ -466,7 +477,14 @@ export function countUnresolvedGateAuthoredThreads(threads, login) {
  * of issuing a second thread walk.
  */
 export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
-  const threads = (Array.isArray(rawNodes) ? rawNodes : []).map((node) => {
+  // A non-array `rawNodes` is a caller contract violation; for a gate-close
+  // safety predicate, fail CLOSED — let the TypeError propagate to the caller's
+  // catch (detect-checkpoint-evidence sets unresolvedGateThreadCount = -1 /
+  // blocked) rather than silently coerce to [] and under-count (#1585 review).
+  if (!Array.isArray(rawNodes)) {
+    throw new Error(`countUnresolvedGateAuthoredThreadsFromRawNodes: rawNodes must be an array, got ${typeof rawNodes}`);
+  }
+  const threads = rawNodes.map((node) => {
     const firstComment = node?.comments?.nodes?.[0] ?? null;
     return {
       author: typeof firstComment?.author?.login === "string" && firstComment.author.login.length > 0
