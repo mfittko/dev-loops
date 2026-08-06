@@ -37,6 +37,10 @@ const MUST_FIX = "must-fix";
  * @param {object} seams - Injected IO (all required except clock/log defaults).
  * @param {(a:{repoRoot:string,pr:number,branch?:string})=>Promise<{path:string,created:boolean,reused:boolean}>} seams.ensureWorktree
  * @param {(a:{worktreePath:string,repoRoot:string})=>{ok:boolean,message?:string,mainWorktreePath?:string|null}} seams.assertNotPrimary
+ * @param {(a:{worktreePath:string,repoRoot:string,pr:number})=>Promise<{ok:boolean,sha?:string|null,detail?:string}>} [seams.pinPrHead] -
+ *   Pin the worktree to the PR head and report the resolved SHA. Optional only
+ *   for back-compat: omitting it leaves the ref UNVERIFIED and is logged as such.
+ *   Runs after the primary-checkout guard, never before.
  * @param {(a:{repoRoot:string,worktreePath:string})=>Promise<{changed:boolean,detail:string}>} seams.detectDepDelta
  * @param {(a:{worktreePath:string})=>Promise<{ok:boolean,detail:string}>} seams.installDeps
  * @param {(worktreePath:string)=>Promise<object|null>} seams.resolveRunRecipe
@@ -58,6 +62,7 @@ export async function provisionAndBoot(
   {
     ensureWorktree,
     assertNotPrimary,
+    pinPrHead,
     detectDepDelta,
     installDeps,
     resolveRunRecipe,
@@ -109,6 +114,35 @@ export async function provisionAndBoot(
       { kind: "worktree-guard", severity: MUST_FIX, message: guard.message ?? "resolved worktree is the primary checkout" },
       { worktreePath },
     );
+  }
+
+  // 2b. Pin the worktree to the PR head, AFTER the primary-checkout guard above
+  //     (this checks out a ref, so it must never run in the primary checkout).
+  //     ensureWorktree's `branch` is a branch to CREATE off the default base when
+  //     no such local branch exists, so the default `pr-<n>` silently produces a
+  //     worktree sitting on origin/<default> — and provision used to return
+  //     ok:true for it, so every later stage reviewed the base branch as if it
+  //     were the PR head. Pin explicitly and record the resolved SHA.
+  let headSha = null;
+  if (pinPrHead) {
+    const pin = await pinPrHead({ worktreePath, repoRoot, pr });
+    if (!pin?.ok) {
+      return stop(
+        `cannot pin PR head: ${pin?.detail ?? "unknown failure"}`,
+        {
+          kind: "pr-head-unpinned",
+          severity: MUST_FIX,
+          message: `the worktree could not be pinned to PR #${pr}'s head, so it cannot be reviewed as that PR: ${pin?.detail ?? "unknown failure"}`,
+        },
+        { worktreePath },
+      );
+    }
+    headSha = pin.sha ?? null;
+    record(`worktree pinned to PR head ${headSha ?? "(sha unknown)"}${pin.detail ? ` (${pin.detail})` : ""}`);
+  } else {
+    // Never silent: a caller without the seam gets an unverified ref, which is
+    // exactly the failure mode this step exists to close.
+    record("WARNING: PR head not pinned (no pinPrHead seam) — worktree ref is UNVERIFIED");
   }
 
   // 3. Install only the dependency-lock delta vs. the primary checkout. No delta
@@ -256,6 +290,7 @@ export async function provisionAndBoot(
     worktreePath,
     created: wt.created,
     reused: wt.reused,
+    headSha,
     depInstall,
     migrations,
     boot: bootResult,

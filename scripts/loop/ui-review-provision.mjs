@@ -33,12 +33,15 @@ Required:
   --repo-root <p>                 Absolute path to the primary checkout.
   --pr <n>                        PR number whose head is provisioned.
 Optional:
-  --branch <name>                 Branch to check out (default: pr-<n>).
+  --branch <name>                 Branch used only to CREATE the worktree
+                                  (default: pr-<n>). The worktree is then pinned
+                                  DETACHED onto refs/pull/<n>/head regardless, so
+                                  this no longer decides which code is reviewed.
   --ack-destructive-migration     Acknowledge + unblock a destructive migration.
   -h, --help                      Show this help.
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
-    "worktreePath": <p>, "depInstall": {...}, "migrations": {...},
+    "worktreePath": <p>, "headSha": <sha|null>, "depInstall": {...}, "migrations": {...},
     "boot": { "ready": bool, "attempts": n, ... }, "findings": [...], "logs": [...] }
 
 ${JQ_OUTPUT_USAGE}`.trim();
@@ -267,6 +270,43 @@ export function assertNotPrimary({ worktreePath, repoRoot }) {
   return { ok: true, mainWorktreePath };
 }
 
+/** Pin the worktree to the PR head via the origin's `refs/pull/<n>/head`.
+ *
+ * DETACHED on purpose. `ensureWorktree` takes a branch NAME, and git refuses to
+ * check out one branch in two worktrees at once — so re-attaching fails exactly
+ * when the primary checkout already holds the PR branch, which is the common
+ * case right after a `gh pr checkout`. A review never needs a branch, only the
+ * commit. Fetching `refs/pull/<n>/head` also covers fork PRs, whose head branch
+ * does not exist on origin at all.
+ *
+ * No `--force`: a checkout that would clobber real modifications fails closed
+ * with git's own reason instead of silently discarding someone's work. The
+ * gitignored files ensureWorktree provisions (database.yml, node_modules links)
+ * do not block a checkout.
+ *
+ * Exported for direct testing.
+ */
+export async function pinPrHead({ worktreePath, pr }) {
+  const git = (args) => execFileSync("git", args, { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const reason = (err) => (err.stderr ?? err.message ?? "").toString().trim();
+  const ref = `refs/dev-loops/pr-${pr}/head`;
+  try {
+    git(["fetch", "--quiet", "origin", `+refs/pull/${pr}/head:${ref}`]);
+  } catch (err) {
+    return { ok: false, detail: `git fetch refs/pull/${pr}/head failed: ${reason(err)}` };
+  }
+  try {
+    git(["checkout", "--detach", ref]);
+  } catch (err) {
+    return { ok: false, detail: `git checkout --detach ${ref} failed: ${reason(err)}` };
+  }
+  try {
+    return { ok: true, sha: git(["rev-parse", "HEAD"]).trim(), detail: `detached at refs/pull/${pr}/head` };
+  } catch (err) {
+    return { ok: false, detail: `git rev-parse HEAD failed: ${reason(err)}` };
+  }
+}
+
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const options = parseUiReviewProvisionCliArgs(argv);
   if (options.help) {
@@ -283,6 +323,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     {
       ensureWorktree: (a) => ensureWorktree(a).then((r) => ({ path: r.path, created: r.created, reused: r.reused })),
       assertNotPrimary,
+      pinPrHead,
       detectDepDelta,
       installDeps,
       resolveRunRecipe,
