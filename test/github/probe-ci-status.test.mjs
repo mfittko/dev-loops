@@ -499,3 +499,312 @@ test("watch-ci --help prints usage and exits 0", async () => {
   assert.equal(helpShort.code, 0);
   assert.equal(helpShort.stdout, helpLong.stdout);
 });
+
+// ---------------------------------------------------------------------------
+// Loop-derived gate-evidence exclusion (#1531): watch-ci / probe-ci-status must
+// apply the same LOOP_DERIVED_CI_CHECK_NAMES exclusion as
+// detect-copilot-loop-state.mjs, so the wait never block-waits on the
+// gate-evidence status/check-run the loop itself derives. Mirrors
+// deriveLoopCiStatusFromRollup.
+// ---------------------------------------------------------------------------
+import { deriveLoopCiStatusFromRollup } from "@dev-loops/core/loop/copilot-ci-status";
+
+test("watch-ci settles success when gate-evidence is the only pending entry (self-referential trigger, #1531)", async () => {
+  // Trigger 1: the verdict needs green CI, and gate-evidence cannot go green
+  // until the verdict exists. gate-evidence-runner is still in_progress; the
+  // gate-evidence status is pending. Every REAL check is green. The wait must
+  // settle success, not burn the budget.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "success", name: "changes" },
+          { status: "in_progress", conclusion: null, name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+    },
+  );
+});
+
+test("watch-ci settles success when gate-evidence pending on unresolved threads (trigger 2, #1584 reproduction)", async () => {
+  // Trigger 2: ALL check-runs complete and green (including gate-evidence-runner),
+  // gate-evidence status pending due to unresolved gate-authored threads. The
+  // wait settles on real CI; thread enforcement is owned by the pre-merge
+  // evidence check (#1585), not the CI wait.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "success", name: "changes" },
+          { status: "completed", conclusion: "success", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+    },
+  );
+});
+
+test("watch-ci blocks when gate-evidence is pending AND a real check fails (exclusion does not mask failure, #1531)", async () => {
+  // gate-evidence pending + a genuinely failing real check → the wait must
+  // still block (failure), and the real failure must be reported in failedChecks.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "failure", name: "verify" },
+          { status: "completed", conclusion: "success", name: "changes" },
+          { status: "completed", conclusion: "success", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "failure");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "failure");
+      assert.deepEqual(result.failedChecks, [{ name: "verify" }]);
+    },
+  );
+});
+
+test("watch-ci: gate-evidence red alone does not mask a green run — surfaces excludedFailureDetails (#1531)", async () => {
+  // gate-evidence status FAILURE + every real check green → ciStatus success
+  // (the exclusion resolves it), but excludedFailureDetails lists gate-evidence
+  // so a reader can tell "green apart from gate-evidence" from "green".
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "success", name: "changes" },
+          { status: "completed", conclusion: "success", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "failure", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+      assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+    },
+  );
+});
+
+test("watch-ci: a green run with no gate-evidence entry reports empty excludedFailureDetails", async () => {
+  // Plain green (no gate-evidence present) — excludedFailureDetails is empty,
+  // distinct from "green apart from gate-evidence".
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify"]) },
+        { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "verify" }]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.deepEqual(result.excludedFailureDetails, []);
+    },
+  );
+});
+
+test("watch-ci: a failing gate-evidence-runner check-run is excluded, not in failedChecks (#1531)", async () => {
+  // gate-evidence-runner FAILURE + real checks green → ciStatus success, and the
+  // runner does NOT appear in failedChecks (it is excluded as loop-derived).
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "failure", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+      assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+    },
+  );
+});
+
+test("the prober and the detector agree on one rollup fixture (#1531)", async () => {
+  // One fixture expressed in both statusCheckRollup form (for the detector's
+  // deriveLoopCiStatusFromRollup) and check-runs + commit-status form (for the
+  // prober's watchCiStatus). The two must derive the same status — they cannot
+  // disagree about whether the loop may proceed.
+  const fixture = {
+    rollup: [
+      { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "CheckRun", name: "changes", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "CheckRun", name: "gate-evidence-runner", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "StatusContext", context: "gate-evidence", state: "PENDING" },
+    ],
+    checkRuns: [
+      { status: "completed", conclusion: "success", name: "verify" },
+      { status: "completed", conclusion: "success", name: "changes" },
+      { status: "completed", conclusion: "success", name: "gate-evidence-runner" },
+    ],
+    statuses: [{ state: "pending", context: "gate-evidence" }],
+  };
+
+  const derivation = deriveLoopCiStatusFromRollup(fixture.rollup);
+
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns(fixture.checkRuns) },
+        { match: ["/status"], stdout: statuses(fixture.statuses) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 0 }, fastDeps(env));
+      // The prober's ciStatus must match the detector's derived status.
+      assert.equal(result.ciStatus, derivation.status,
+        `prober ciStatus "${result.ciStatus}" must match detector status "${derivation.status}"`);
+      assert.equal(result.ciStatus, "success");
+    },
+  );
+});
+
+test("the prober and the detector agree on a failing-check fixture (#1531)", async () => {
+  // Same agreement, but with a real failure beside gate-evidence pending: both
+  // must report failure so the loop does not proceed on a red check.
+  const fixture = {
+    rollup: [
+      { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "FAILURE" },
+      { __typename: "CheckRun", name: "changes", status: "COMPLETED", conclusion: "SUCCESS" },
+      { __typename: "StatusContext", context: "gate-evidence", state: "PENDING" },
+    ],
+    checkRuns: [
+      { status: "completed", conclusion: "failure", name: "verify" },
+      { status: "completed", conclusion: "success", name: "changes" },
+    ],
+    statuses: [{ state: "pending", context: "gate-evidence" }],
+  };
+
+  const derivation = deriveLoopCiStatusFromRollup(fixture.rollup);
+
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "changes", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns(fixture.checkRuns) },
+        { match: ["/status"], stdout: statuses(fixture.statuses) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 0 }, fastDeps(env));
+      assert.equal(result.ciStatus, derivation.status,
+        `prober ciStatus "${result.ciStatus}" must match detector status "${derivation.status}"`);
+      assert.equal(result.ciStatus, "failure");
+    },
+  );
+});
+
+test("watch-ci: a cancelled gate-evidence-runner is excluded — pins the documented deadlock-resolution path (#1531)", async () => {
+  // The contract doc names a cancelled/superseded runner as the exact deadlock
+  // trigger the exclusion exists to resolve. CANCELLED → unsupportedCompleted →
+  // status none, but the exclusion partitions it out, so ciStatus is success.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "cancelled", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+      assert.deepEqual(result.excludedFailureDetails, []);
+    },
+  );
+});
+
+test("watch-ci: excludedFailureDetails dedup — both runner failure AND status failure yields single entry (#1531)", async () => {
+  // Both the gate-evidence-runner check-run (failure) and the gate-evidence
+  // commit-status (failure) are excluded. The Set-based dedup must produce
+  // exactly ['gate-evidence'], not a duplicate pair.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "failure", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "failure", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+      assert.equal(result.excludedFailureDetails.length, 1);
+    },
+  );
+});
+
+test("watch-ci: a head with ONLY loop-derived entries settles success after grace (no real CI to wait on, #1531)", async () => {
+  // Only gate-evidence-runner (excluded) + gate-evidence status pending (excluded).
+  // After exclusion: zero real check-runs, zero real statuses, no real expected
+  // checks. The watcher must settle success after the grace window, NOT hang to
+  // timeout on the excluded loop-derived signal.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "in_progress", conclusion: null, name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "none");
+      assert.equal(result.attempts, 2); // grace: not the first poll
+    },
+  );
+});

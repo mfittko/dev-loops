@@ -38,7 +38,8 @@ Not-yet-registered-check race guard:
 Output (stdout, JSON, the final per-check summary):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
-    "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N }
+    "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
+    "excludedFailureDetails": ["gate-evidence", ...] }
 "changed" means the head SHA advanced during the wait; re-baseline and re-run.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
