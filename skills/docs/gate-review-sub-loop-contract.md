@@ -1042,7 +1042,12 @@ it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The d
 nice-to-haves runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
 the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
-failing the gate closed when any gate-authored thread is still unresolved.
+REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved after the defer
+pass). The actual gate-close assertion is performed by the downstream callers
+(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, and the
+`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`) on a non-zero count — the
+disposition pass itself never throws or sets `ok:false`; it only reports, so its role and the
+gate-close assertion's role stay distinct.
 `GATE-EXEC-POST-BEFORE-FIX` (findings visible on the PR before fixes) is unaffected: only the
 defer-close timing moves to post-fix. That pass runs independently of
 `gates.postFindingsComments`: that toggle governs only the opt-in consolidated
