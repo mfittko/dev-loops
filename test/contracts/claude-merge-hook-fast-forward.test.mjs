@@ -10,7 +10,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const hookScript = path.join(repoRoot, ".claude", "hooks", "post-tool-use-merge.mjs");
 
 function git(cwd, args) {
-  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function revParse(cwd, ref) {
@@ -19,32 +19,26 @@ function revParse(cwd, ref) {
 
 test("post-tool-use-merge hook fast-forwards the main checkout's local main to origin/main (#1596)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-"));
-  const bareDir = path.join(tmp, "origin.git");
+  const originDir = path.join(tmp, "origin");
   const mainDir = path.join(tmp, "main");
-  const cloneDir = path.join(tmp, "clone");
 
   try {
-    // Bare origin repo.
-    git(tmp, ["init", "--bare", "-q", bareDir]);
+    // Normal origin repo with commit A, then commit B (B at HEAD).
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    const commitASha = revParse(originDir, "HEAD");
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+    const originSha = revParse(originDir, "HEAD");
+    assert.notEqual(commitASha, originSha, "origin must have two distinct commits");
 
-    // Main checkout with commit A, pushed to origin.
-    git(tmp, ["init", "-q", "-b", "main", mainDir]);
-    git(mainDir, ["config", "user.email", "test@example.com"]);
-    git(mainDir, ["config", "user.name", "Test"]);
-    git(mainDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
-    git(mainDir, ["remote", "add", "origin", bareDir]);
-    git(mainDir, ["push", "-q", "origin", "main"]);
+    // Clone origin so mainDir local main = B and refs/remotes/origin/main = B.
+    git(tmp, ["clone", "-q", originDir, mainDir]);
 
-    // Advance origin/main to commit B via a temp clone.
-    git(tmp, ["clone", "-q", bareDir, cloneDir]);
-    git(cloneDir, ["config", "user.email", "test@example.com"]);
-    git(cloneDir, ["config", "user.name", "Test"]);
-    git(cloneDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
-    git(cloneDir, ["push", "-q", "origin", "main"]);
-
-    // mainDir local main is still at A; origin/main (bare) is at B.
+    // Put local main behind origin/main: reset to A (remote-tracking stays at B).
+    git(mainDir, ["reset", "--hard", commitASha]);
     const beforeSha = revParse(mainDir, "main");
-    const originSha = revParse(cloneDir, "main");
     assert.notEqual(beforeSha, originSha, "local main must start behind origin/main");
 
     // Run the hook as a PostToolUse Bash event for a merge-capable command.
