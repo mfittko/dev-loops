@@ -29,7 +29,8 @@ per-gate continuation until the gate round cap escalates); worth-fixing-now stay
 open through this gate's configured worth-fixing-now fix window (default
 ${WORTH_FIXING_NOW_FIX_WINDOW}, set per gate via gates.<gate>.worthFixingNowFixWindow)
 and is replied-to + resolved ("deferred at gate close") from the next round on;
-nice-to-have is replied-to + resolved immediately. A deferred thread's marker is
+nice-to-have is replied-to + resolved at gate close (after the Phase 5 fixer
+triage; #1585). A deferred thread's marker is
 stamped \`disposition=deferred\` before it is resolved, so the deferral disposition
 lives on the thread itself and in the durable tmp ledger.
 

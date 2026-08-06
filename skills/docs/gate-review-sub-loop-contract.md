@@ -1087,9 +1087,17 @@ decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER t
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: must-fix, worth-fixing-now, OR
 nice-to-have) is resolved before the gate is considered satisfied and before `ready-for-review`
-— a clean verdict alone no longer satisfies the gate. The disposition pass MUST run and resolve
-(fix-close or defer-close) every gate-authored thread before gate satisfaction; a thread left
-unresolved fails the gate closed (not silently satisfied). Because an unresolved review thread routes the PR to the
+— a clean verdict alone no longer satisfies the gate. The fixer triages EVERY gate-authored
+finding (must-fix, worth-fixing-now, AND nice-to-have) on EVERY gate round (clean verdict or
+not): fix-if-cheap-in-the-same-commit, else defer — defer is permitted from round 1 on for
+nice-to-haves (#1585). Fix-close is the fixer's role; the disposition pass
+(`close-gate-findings`) then defer-closes every still-open DEFERRABLE gate-authored thread
+(nice-to-have and out-of-window worth-fixing-now) as the closing sweep AFTER the fixer's
+triage — it never fix-closes, and it deliberately leaves must-fix and in-window
+worth-fixing-now threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
+blocks gate close until the fixer/fix-loop resolves them). A thread left unresolved after the
+sweep fails the gate closed (not silently satisfied); a nice-to-have the fixer did not fix is
+defer-close by the sweep (the fixer had its chance first), never a silent pre-fixer auto-defer. Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
 worth-fixing-now thread forces a fix round even after the current round's severity set is
