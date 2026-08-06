@@ -25,6 +25,7 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
   try {
     // Normal origin repo with commit A, then commit B (B at HEAD).
     git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(originDir, ["config", "user.email", "test@example.com"]);
     git(originDir, ["config", "user.name", "Test"]);
     git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
