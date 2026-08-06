@@ -1036,7 +1036,7 @@ same-head rerun the existing review's BODY is corrected in place (GitHub exposes
 add inline comments to a submitted review), so every still-unposted finding is body-filed on that
 correction rather than dropped.
 
-After the verdict post AND after the Phase 4 fixer triage pass, at every gate close, run
+After the verdict post AND after the Phase 5 (Retry) fixer triage pass, at every gate close, run
 `close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
 it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
 nice-to-haves runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
@@ -1046,8 +1046,11 @@ REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved af
 pass). The actual gate-close assertion is performed by the downstream callers
 (`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, and the
 `draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`) on a non-zero count — the
-disposition pass itself never throws or sets `ok:false`; it only reports, so its role and the
-gate-close assertion's role stay distinct.
+disposition pass does not assert the gate-close decision itself; it only REPORTS
+`unresolvedGateThreadCount` (its return always uses `ok:true`). It may still throw on gh or
+resolve failures inside the defer sweep, which the conductor must treat as a failed gate-close
+sweep (re-run); only the gate-close *decision* is not its role, so its role and the gate-close
+assertion's role stay distinct.
 `GATE-EXEC-POST-BEFORE-FIX` (findings visible on the PR before fixes) is unaffected: only the
 defer-close timing moves to post-fix. That pass runs independently of
 `gates.postFindingsComments`: that toggle governs only the opt-in consolidated
