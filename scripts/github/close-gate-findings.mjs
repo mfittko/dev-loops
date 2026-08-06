@@ -78,7 +78,7 @@ function windowReason(severity, worthFixingNowFixWindow) {
   if (severity === "worth-fixing-now") {
     return `stayed open past this gate's round-${worthFixingNowFixWindow} worth-fixing-now fix window`;
   }
-  return "nice-to-have findings are deferred immediately, at the round they are first posted";
+  return "nice-to-have findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer; #1585)";
 }
 
 // Every deferral reply is distinct by construction through the thread's own
