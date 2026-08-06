@@ -241,7 +241,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
         const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
         const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
         checkRunsSignal = { ...visibleSignal, unsupportedCompleted: fullSignal.unsupportedCompleted };
-        checkRunsCount = payload.check_runs.length;
+        checkRunsCount = nonLoopDerivedRuns.length;
       } else {
         checkRunsError = true; // exit 0 but no check_runs array → malformed payload, not empty
       }
@@ -270,7 +270,7 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
             ? [LOOP_DERIVED_CI_CHECK_NAME]
             : [];
         commitStatus = normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses });
-        statusesCount = payload.statuses.length;
+        statusesCount = nonLoopDerivedStatuses.length;
         statusFailures = extractFailedStatusContexts(nonLoopDerivedStatuses);
       } else {
         statusesError = true; // exit 0 but no statuses array → malformed payload, not empty
@@ -306,11 +306,18 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
   // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
   // lists expected checks the providers haven't reported yet, that is pending
   // (checks expected but not yet posted), not a genuinely check-less head.
+  // The no-checks settle logic must also exclude loop-derived entries: a head
+  // whose only checks are gate-evidence has no REAL CI to wait on, so it should
+  // settle (after the grace window) rather than hang to timeout. prVisibleCheckNames
+  // from the rollup includes gate-evidence, so filter it out here too (#1531).
+  const nonLoopDerivedPrVisibleNames = prVisibleCheckNames?.filter(
+    (name) => !LOOP_DERIVED_CI_CHECK_NAMES.includes(name),
+  );
   const noChecks =
     !fetchError &&
     checkRunsCount === 0 &&
     statusesCount === 0 &&
-    !(prVisibleCheckNames?.length > 0);
+    !(nonLoopDerivedPrVisibleNames?.length > 0);
   return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails };
 }
 

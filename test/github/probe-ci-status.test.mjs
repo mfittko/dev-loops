@@ -783,3 +783,28 @@ test("watch-ci: excludedFailureDetails dedup — both runner failure AND status 
     },
   );
 });
+
+test("watch-ci: a head with ONLY loop-derived entries settles success after grace (no real CI to wait on, #1531)", async () => {
+  // Only gate-evidence-runner (excluded) + gate-evidence status pending (excluded).
+  // After exclusion: zero real check-runs, zero real statuses, no real expected
+  // checks. The watcher must settle success after the grace window, NOT hang to
+  // timeout on the excluded loop-derived signal.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "in_progress", conclusion: null, name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "none");
+      assert.equal(result.attempts, 2); // grace: not the first poll
+    },
+  );
+});
