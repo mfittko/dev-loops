@@ -732,3 +732,54 @@ test("the prober and the detector agree on a failing-check fixture (#1531)", asy
     },
   );
 });
+
+test("watch-ci: a cancelled gate-evidence-runner is excluded — pins the documented deadlock-resolution path (#1531)", async () => {
+  // The contract doc names a cancelled/superseded runner as the exact deadlock
+  // trigger the exclusion exists to resolve. CANCELLED → unsupportedCompleted →
+  // status none, but the exclusion partitions it out, so ciStatus is success.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "cancelled", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.failedChecks, []);
+      assert.deepEqual(result.excludedFailureDetails, []);
+    },
+  );
+});
+
+test("watch-ci: excludedFailureDetails dedup — both runner failure AND status failure yields single entry (#1531)", async () => {
+  // Both the gate-evidence-runner check-run (failure) and the gate-evidence
+  // commit-status (failure) are excluded. The Set-based dedup must produce
+  // exactly ['gate-evidence'], not a duplicate pair.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["verify", "gate-evidence-runner", "gate-evidence"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "completed", conclusion: "success", name: "verify" },
+          { status: "completed", conclusion: "failure", name: "gate-evidence-runner" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "failure", context: "gate-evidence" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "success");
+      assert.equal(result.ciStatus, "success");
+      assert.deepEqual(result.excludedFailureDetails, ["gate-evidence"]);
+      assert.equal(result.excludedFailureDetails.length, 1);
+    },
+  );
+});

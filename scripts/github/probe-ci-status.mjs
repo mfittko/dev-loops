@@ -36,7 +36,8 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
-    "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N }
+    "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
+    "excludedFailureDetails": ["gate-evidence", ...] }
 Statuses:
   success    Combined CI is green (or no checks present — see no-checks rule)
   failure    At least one check/status failed (failedChecks populated)
