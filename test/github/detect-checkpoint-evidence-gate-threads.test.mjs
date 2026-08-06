@@ -97,3 +97,34 @@ test("#1585: draftGateSatisfied stays true when the gate-authored thread is reso
   assert.equal(parsed.draftGateSatisfied, true);
   assert.equal(parsed.preMergeGateCheck.ok, true);
 });
+
+test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to false and fails the pre-merge evidence check (fail-closed)", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-1585-unreadable-"));
+  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+
+  const { env } = await writeGhStubHelper(tempDir, [
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+    {
+      assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: JSON.stringify([
+        { id: 42, body: cleanGateBody("draft_gate", "abc1234"), updated_at: "2026-05-29T21:00:00Z" },
+        { id: 43, body: cleanGateBody("pre_approval_gate", "abc1234"), updated_at: "2026-05-29T22:00:00Z" },
+      ]) + "\n",
+    },
+    { stdout: "[]" },
+    // Thread-fetch fails → fetchGithubReviewThreadsPayload throws → main()'s catch sets
+    // unresolvedThreadCount=-1 AND unresolvedGateThreadCount=-1 → draftGateSatisfied folds to false.
+    { assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: "", code: 1, stderr: "HTTP 500" },
+  ], { repeatLastOnOverflow: true });
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+  // The thread-fetch failure (-1) fails the pre-merge evidence check fail-closed
+  // (the draftGateSatisfied fold also sets it false, though the failure output
+  // shape does not expose the field — the preMergeGateCheck failure is the
+  // observable gate-close signal here).
+  assert.equal(result.code, 1, `Expected exit 1. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stderr);
+  assert.equal(parsed.preMergeGateCheck.ok, false);
+  assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
+});
