@@ -8,6 +8,12 @@ import {
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
 } from '@dev-loops/core/loop/bash-command-classify';
+import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
+import {
+  buildMainCheckoutFastForwardCommand,
+  MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
+  MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
+} from '@dev-loops/core/loop/main-checkout-ff';
 
 // The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
 // Pi extension and the Claude Code Bash hook share one source of truth. Re-export them here so
@@ -177,6 +183,66 @@ async function queueIfEligible(
   return true;
 }
 
+
+/**
+ * Best-effort main-checkout fast-forward (#1596).
+ *
+ * Resolves the main (primary) checkout via `git worktree list` (first entry) from
+ * `pendingRoot`, then runs `fetch origin main && merge --ff-only origin/main` there.
+ * `--ff-only` refuses a diverged main without rewriting history, so a diverged
+ * checkout fails the merge step and the caller treats it as warn-and-continue.
+ * Never throws — every failure path emits a warning notification instead.
+ */
+async function fastForwardMainCheckout(
+  runCommand: (args: RunCommandArgs) => Promise<RunCommandResult>,
+  pendingRoot: string,
+  ctx: Pick<HarnessContext, 'hasUI' | 'ui'>,
+): Promise<void> {
+  let mainCheckout = pendingRoot;
+  try {
+    const wtResult = await runCommand({
+      command: 'git worktree list',
+      cwd: pendingRoot,
+      timeout: MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
+    });
+    if (wtResult.code === 0 && !wtResult.killed) {
+      const resolved = parseMainWorktreePath(wtResult.stdout ?? '');
+      if (resolved) mainCheckout = resolved;
+    }
+  } catch {
+    // fall back to pendingRoot
+  }
+
+  notify(
+    ctx,
+    `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand(mainCheckout)}`,
+    'info',
+  );
+
+  try {
+    const result = await runCommand({
+      command: buildMainCheckoutFastForwardCommand(mainCheckout),
+      cwd: mainCheckout,
+      timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
+    });
+    if (result.code === 0 && !result.killed) {
+      notify(
+        ctx,
+        'Post-merge main-checkout fast-forward completed: local main advanced to origin/main',
+        'info',
+      );
+    } else {
+      notify(
+        ctx,
+        `Post-merge main-checkout fast-forward skipped (warning only): ${buildFailureSummary(result)}`,
+        'warning',
+      );
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    notify(ctx, `Post-merge main-checkout fast-forward skipped (warning only): ${detail}`, 'warning');
+  }
+}
 
 export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
   const exec = options.exec ?? null;
@@ -361,13 +427,17 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
         return;
       }
 
+      // Capture before reset() clears it — the main-checkout fast-forward runs after the
+      // pi-update step and needs a repo root to resolve the main checkout from.
+      const pendingRoot = state.pendingRepoRoot ?? ctx.cwd;
+
       state.updateInFlight = true;
       notify(ctx, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
 
       try {
         const result = await runCommand({
           command: POST_MERGE_UPDATE_COMMAND,
-          cwd: state.pendingRepoRoot ?? ctx.cwd,
+          cwd: pendingRoot,
           timeout: POST_MERGE_UPDATE_TIMEOUT_MS,
         });
 
@@ -384,6 +454,13 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
         const detail = error instanceof Error ? error.message : String(error);
         notify(ctx, `Post-merge update failed (warning only): ${detail}`, 'warning');
       } finally {
+        // Best-effort main-checkout fast-forward (#1596): the dev-loop merges remotely
+        // but never fast-forwarded the main checkout's local main, so read-only gate
+        // scripts ran stale code. Never throw out of onAgentEnd; reset() must still run.
+        await fastForwardMainCheckout(runCommand, pendingRoot, ctx).catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          notify(ctx, `Post-merge main-checkout fast-forward skipped (warning only): ${detail}`, 'warning');
+        });
         reset();
       }
     },

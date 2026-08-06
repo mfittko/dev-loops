@@ -495,6 +495,8 @@ node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name
 
 `dev-loops queue reconcile` (idempotent, run best-effort at loop startup) is the fallback convergence path when the sync above is ever skipped or missed — it re-derives every item's column from live GitHub state, so a merge that could not run this hook still lands on Done at the next startup.
 
+The post-merge hook also fast-forwards the main checkout's local `main` to `origin/main` (#1596) so read-only gate scripts run current code; see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge" for the canonical step. Best-effort and non-blocking (`--ff-only` refuses a diverged main without rewriting history).
+
 ## Validation policy
 
 Follow [Validation Policy](../docs/validation-policy.md). Default: `npm run verify` before PR creation, gate entry, and merge. For repo-local examples: `npm run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full PR-equivalent checks, awaiting CI.
