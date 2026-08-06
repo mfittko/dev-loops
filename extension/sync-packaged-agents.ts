@@ -33,11 +33,6 @@ export const TOOL_NAME_MAP_PI: Readonly<Record<string, string | null>> = Object.
   review_loop: "review_loop",
 });
 
-/** Valid Pi builtin tool names (the mapped value set, minus dropped entries). */
-const BUILTIN_TOOL_SET = new Set(
-  Object.values(TOOL_NAME_MAP_PI).filter((v): v is string => v != null),
-);
-
 /** Map a list of harness-neutral tool names to deduped Pi builtin names (first-seen order). */
 export function mapAgentToolsForPi(tools: string[]): string[] {
   const out: string[] = [];
@@ -80,13 +75,15 @@ export function renderPiAgent(raw: string): string {
     return raw;
   }
   const mapped = mapAgentToolsForPi(parseToolList(toolsLineMatch[1]));
+  let newFrontmatter: string;
   if (mapped.length === 0) {
-    return raw;
+    // All declared tools dropped (e.g. a source with only `todo`) — remove the
+    // `tools:` line entirely so no forbidden name leaks into the rendered
+    // allowlist (#1583). Returning raw would leave the unmapped names in place.
+    newFrontmatter = frontmatter.replace(/^[ \t]*tools:[^\n]*\n?/m, "");
+  } else {
+    newFrontmatter = frontmatter.replace(TOOLS_LINE_RE, `tools: ${mapped.join(", ")}`);
   }
-  const newFrontmatter = frontmatter.replace(
-    TOOLS_LINE_RE,
-    `tools: ${mapped.join(", ")}`,
-  );
   return `${open}${newFrontmatter}${close}${body}`;
 }
 
@@ -117,4 +114,3 @@ export function syncPackagedAgents({
   }
 }
 
-export { BUILTIN_TOOL_SET };
