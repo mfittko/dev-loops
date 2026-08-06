@@ -22,7 +22,7 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { flattenPaginatedSlurp, listIssueComments, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
@@ -424,10 +424,108 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
 }
 
 /**
+ * Count unresolved GATE-AUTHORED review threads — threads whose first comment
+ * was authored by the gate's own login (`login`) and carries a parseable
+ * `dev-loops:finding` marker (any severity: must-fix, worth-fixing-now, OR
+ * nice-to-have). This is the gate-close predicate #1585 wires into
+ * `fetchDraftGateEvidence`: a clean verdict alone no longer satisfies the
+ * gate — every gate-authored thread must be resolved (fix-closed by the fixer
+ * or defer-closed by the disposition pass) first.
+ *
+ * When `login` is `null`, the author-identity check is skipped and the count
+ * is MARKER-ONLY (any unresolved thread carrying a finding marker). That is a
+ * deliberately fail-closed proxy — a foreign comment that quotes a real marker
+ * would over-count and block, which is safe (the gate waits) rather than
+ * under-counting and proceeding. The disposition pass
+ * (`selectDispositionTargets` in close-gate-findings.mjs) uses author identity
+ * because it MUTATES threads (forgery matters there); this read-only counter
+ * accepts the marker-only fallback so a caller without a resolved login (e.g.
+ * detect-checkpoint-evidence reusing an existing thread payload) can still
+ * assert the gate-close invariant without an extra `api user` round-trip.
+ *
+ * `threads` is the shape `fetchAllReviewThreads` (list-review-threads.mjs)
+ * returns: `{ author, body, isResolved, ... }`.
+ */
+export function countUnresolvedGateAuthoredThreads(threads, login) {
+  // A non-array `threads` is a caller contract violation; for a gate-close
+  // safety predicate the fail-closed posture is to THROW (callers catch and
+  // treat the unreadable state as -1 / blocked), never to silently coerce to
+  // an empty array and under-count dangling threads (#1585 review finding).
+  if (!Array.isArray(threads)) {
+    throw new Error(`countUnresolvedGateAuthoredThreads: threads must be an array, got ${typeof threads}`);
+  }
+  // Any falsy login (null/undefined/"") falls back to the MARKER-ONLY fail-closed
+  // proxy — an empty-string login must NOT silently skip every thread (fail-open);
+  // it must over-count and block, matching the documented posture.
+  const loginKnown = typeof login === "string" && login.length > 0;
+  let count = 0;
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+    if (loginKnown && thread.author !== login) continue;
+    if (!parseFindingMarker(thread.body)) continue;
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * Map the raw GraphQL review-thread nodes `fetchGithubReviewThreadsPayload`
+ * (capture-review-threads.mjs) returns onto the `{ author, body, isResolved }`
+ * shape `countUnresolvedGateAuthoredThreads` consumes, then count unresolved
+ * gate-authored threads MARKER-ONLY (`login=null`). Lets a caller that already
+ * fetched the raw thread payload reuse it for the gate-close assertion instead
+ * of issuing a second thread walk.
+ */
+export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
+  // A non-array `rawNodes` is a caller contract violation; for a gate-close
+  // safety predicate, fail CLOSED — let the TypeError propagate to the caller's
+  // catch (detect-checkpoint-evidence sets unresolvedGateThreadCount = -1 /
+  // blocked) rather than silently coerce to [] and under-count (#1585 review).
+  if (!Array.isArray(rawNodes)) {
+    throw new Error(`countUnresolvedGateAuthoredThreadsFromRawNodes: rawNodes must be an array, got ${typeof rawNodes}`);
+  }
+  const threads = rawNodes.map((node) => {
+    const firstComment = node?.comments?.nodes?.[0] ?? null;
+    return {
+      author: typeof firstComment?.author?.login === "string" && firstComment.author.login.length > 0
+        ? firstComment.author.login
+        : null,
+      body: typeof firstComment?.body === "string" ? firstComment.body : "",
+      isResolved: Boolean(node?.isResolved),
+    };
+  });
+  return countUnresolvedGateAuthoredThreads(threads, null);
+}
+
+/**
+ * Fetch the unresolved gate-authored thread count for a PR. Resolves the
+ * authenticated login once (the trust boundary for the gate-authored
+ * provenance decision, identical to `selectDispositionTargets`' author check)
+ * and lists review threads, then counts the unresolved gate-authored ones.
+ * Throws on gh failure — callers (fetchDraftGateEvidence) catch and treat the
+ * unreadable state as fail-closed (-1): the gate cannot assert 0 unresolved, so
+ * it blocks rather than guessing clean.
+ */
+export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
+  const login = await resolveAuthenticatedLogin(gh);
+  const threads = await fetchAllReviewThreads({ repo, pr }, gh);
+  return countUnresolvedGateAuthoredThreads(threads, login);
+}
+
+/**
  * Summarize the draft-gate evidence the `gh pr ready` guards decide on, read
  * from BOTH surfaces. One function so the hook guard (pre-pr-ready-gate.mjs)
  * and the wrapper that performs the transition (ready-for-review.mjs) can never
  * disagree about what counts as evidence.
+ *
+ * #1585: a clean verdict is NO LONGER sufficient to satisfy the gate. Every
+ * gate-authored review thread (must-fix, worth-fixing-now, AND nice-to-have)
+ * must be resolved first — the fixer triages every gate-authored finding
+ * (fix-if-cheap-in-the-same-commit, else defer) and the disposition pass
+ * (close-gate-findings) defer-closes what remains — so the gate-close
+ * assertion here refuses ready-for-review while any gate-authored thread still
+ * dangles. `unresolvedGateThreadCount` is fail-closed (-1) when the
+ * thread/login state cannot be read.
  */
 export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   const comments = await fetchGateEvidenceComments({ repo, pr }, gh);
@@ -437,6 +535,19 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   const draftGateMarker = marker
     ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
     : { visible: false, contractComplete: false };
+  // #1585: a clean verdict is necessary but NO LONGER sufficient to close the
+  // gate. The verdict-clean flags below stay VERDICT-ONLY (unchanged) so a
+  // verdict/head mismatch is reported distinctly from an unresolved-thread
+  // mismatch; the unresolved-gate-authored-thread count is a SEPARATE field the
+  // callers (pre-pr-ready-gate / ready-for-review) assert alongside the verdict
+  // check. Fail-closed (-1) when the thread/login state is unreadable: the
+  // callers treat a non-zero count (including -1) as gate-close-blocked.
+  let unresolvedGateThreadCount;
+  try {
+    unresolvedGateThreadCount = await fetchUnresolvedGateThreadCount({ repo, pr }, gh);
+  } catch {
+    unresolvedGateThreadCount = -1;
+  }
   // Marker match: the current head starts with the marker's recorded (often
   // abbreviated) head SHA.
   const currentHeadClean = Boolean(
@@ -450,6 +561,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   return {
     draftGate,
     draftGateMarker,
+    unresolvedGateThreadCount,
     currentHeadClean,
     cleanEvidenceExists,
     effectiveHeadClean: currentHeadClean || legacyHeadMatch,

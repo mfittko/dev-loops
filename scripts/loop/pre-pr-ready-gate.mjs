@@ -109,17 +109,35 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
   const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
 
   // When the PR is no longer draft, a visible clean draft_gate comment that
-  // exists at all (one-time transition record) is sufficient — don't require
-  // head-SHA matching after draft has been left.
-  const gateSatisfied = prState.isDraft
+  // exists at all (one-time transition record) satisfies the VERDICT check
+  // (don't require head-SHA matching after draft has been left). The gate-close
+  // invariant (#1585) is still enforced below: threadsResolved (0 unresolved
+  // gate-authored threads) is required regardless of draft state.
+  const verdictClean = prState.isDraft
     ? gate.effectiveHeadClean
     : gate.cleanEvidenceExists;
+  // #1585: a clean verdict is necessary but not sufficient — every
+  // gate-authored review thread (must-fix, worth-fixing-now, AND nice-to-have)
+  // must be resolved first. A clean verdict with dangling nice-to-have threads
+  // is exactly the #1584 regression this guard now catches at the
+  // ready-for-review boundary instead of stalling at the merge boundary.
+  const threadsResolved = gate.unresolvedGateThreadCount === 0;
+  const gateSatisfied = verdictClean && threadsResolved;
 
   if (!gateSatisfied) {
     const shortSha = headSha.slice(0, 7);
-    const reason = gate.cleanEvidenceExists
-      ? `PR #${options.pr} draft_gate evidence exists but does not match current head ${shortSha}. Re-run draft gate for the current head.`
-      : `No visible clean draft_gate checkpoint verdict found on PR #${options.pr} for head ${shortSha}. Run the draft gate review and post a clean verdict before marking ready for review.`;
+    let reason;
+    if (!verdictClean) {
+      reason = gate.cleanEvidenceExists
+        ? `PR #${options.pr} draft_gate evidence exists but does not match current head ${shortSha}. Re-run draft gate for the current head.`
+        : `No visible clean draft_gate checkpoint verdict found on PR #${options.pr} for head ${shortSha}. Run the draft gate review and post a clean verdict before marking ready for review.`;
+    } else {
+      // Verdict is clean, but gate-authored threads remain unresolved.
+      const threadReason = gate.unresolvedGateThreadCount === -1
+        ? "could not read review-thread state from GitHub; re-run when API connectivity is restored"
+        : `${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s) remain; run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread before ready-for-review`;
+      reason = `PR #${options.pr} draft_gate verdict is clean for head ${shortSha} but ${threadReason}.`;
+    }
     return {
       ok: false,
       error: reason,
@@ -127,6 +145,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
       pr: options.pr,
       currentHeadSha: headSha,
       draftGateSatisfied: false,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
       draftGate: gate.draftGate,
       draftGateMarker: gate.draftGateMarker,
     };
@@ -138,6 +157,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     pr: options.pr,
     currentHeadSha: headSha,
     draftGateSatisfied: true,
+    unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
     draftGate: gate.draftGate,
     draftGateMarker: gate.draftGateMarker,
   };

@@ -26,6 +26,26 @@ async function readGhCalls(logPath) {
     .filter(Boolean);
   return lines.map((line) => JSON.parse(line));
 }
+// #1585: fetchDraftGateEvidence now also fetches the authenticated login
+// (api user) + review threads (graphql reviewThreads) to assert 0 unresolved
+// gate-authored threads. listPrReviews (fail-open) runs between the
+// issue-comments read and these calls, so a stub array that has NO explicit
+// reviews entry needs an empty-reviews filler (gateCloseStubs); one that
+// already stubs reviews appends only the login + threads (gateThreadLoginStubs).
+function gateThreadLoginStubs({ login = "pi-local-run", threads = [] } = {}) {
+  return [
+    { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login })}\n` },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: threads } } } } })}\n`,
+    },
+  ];
+}
+function gateCloseStubs(opts = {}) {
+  return [{ stdout: "[]" }, ...gateThreadLoginStubs(opts)];
+}
+
 
 // --- parseReadyForReviewCliArgs unit tests ---
 
@@ -266,6 +286,7 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -326,6 +347,7 @@ test("succeeds when the clean draft verdict lives only in the review stream (sin
           },
         ]),
       },
+      ...gateThreadLoginStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -383,6 +405,7 @@ test("still marks ready off an issue-comment verdict when the reviews fetch fail
         ]),
       },
       { stdout: "", stderr: "HTTP 500", exitCode: 1 }, // reviews fetch fails
+      ...gateThreadLoginStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -476,6 +499,7 @@ test("proceeds when PR title is clean", async () => {
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -573,6 +597,7 @@ test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -634,6 +659,7 @@ function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
         },
       ]),
     },
+    ...gateCloseStubs(),
     { stdout: "" }, // gh pr ready
   ]);
 }
@@ -742,6 +768,7 @@ test("fails when draft_gate marker does not match current head SHA", async () =>
           },
         ]),
       },
+      ...gateCloseStubs(),
     ]);
 
     const result = await runNode(
@@ -799,6 +826,7 @@ test("succeeds when gate comment has abbreviated SHA matching full PR head SHA",
           },
         ]),
       },
+      ...gateCloseStubs(),
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -816,6 +844,72 @@ test("succeeds when gate comment has abbreviated SHA matching full PR head SHA",
     const calls = await readGhCalls(ghLogPath);
     const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
     assert.ok(readyCall, "gh pr ready should have been called");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1585: ready-for-review backstop — 0 unresolved gate-authored threads
+// ---------------------------------------------------------------------------
+
+import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+
+function reviewThreadsResponse(nodes) {
+  return `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } })}\n`;
+}
+
+function niceToHaveThreadNode() {
+  const marker = buildFindingMarker({ fp: "f".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  return {
+    id: "THREAD_NTH",
+    isResolved: false,
+    isOutdated: false,
+    path: "src/naming.mjs",
+    line: 4,
+    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+test("#1585: ready-for-review refuses to mark ready when an unresolved gate-authored thread remains (the #1584 bug, caught at the ready boundary)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-1585-threads-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review", id: 101, html_url: "x", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+      { stdout: "[]" }, // listPrReviews (fail-open)
+      { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: reviewThreadsResponse([niceToHaveThreadNode()]) },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unresolved gate-authored review thread/i);
+    // gh pr ready must NOT have been called.
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready should not be called when threads remain unresolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1585: ready-for-review fails closed (-1) when review-thread state is unreadable", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-1585-unreadable-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review", id: 101, html_url: "x", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+      { stdout: "[]" },
+      { assertArgs: ["api", "user"], stdout: "", code: 1, stderr: "HTTP 500" }, // login read fails → -1
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /could not read review-thread state/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

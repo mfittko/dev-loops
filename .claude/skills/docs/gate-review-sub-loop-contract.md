@@ -827,13 +827,22 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
   no code location, so it never gets a thread to fix through) is outside this round window
   entirely — it is deferred by construction at post time, at any round, per
-  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is never fixed inside the gate, at any
-  round. Two layers govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
+  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is a fixer TRIAGE target, not a silent
+  auto-defer (#1585): the fixer receives every gate-authored finding (must-fix,
+  worth-fixing-now, AND nice-to-have) as a fix/triage target and may fix-if-cheap-in-the-same-commit
+  (free polish when already touching that code), else defer. Defer is permitted from round 1 on for
+  nice-to-haves — no forced fix window (the WFN window (#1581) is unaffected). Two layers govern
+  this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open worth-fixing-now thread; an unresolved in-window locatable
   worth-fixing-now THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
-  means. Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
+  means. GATE-CLOSE is a third, stricter layer: a clean verdict is NOT sufficient to close the
+  gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
+  fixer or defer-closed by the disposition pass) first, asserted by `fetchDraftGateEvidence` /
+  `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
+  `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
+  (`GATE-EXEC-THREAD-DISPOSITION`). Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
   never a round-by-round judgement call.
 
 ### Phase 5 — Repeat until clean
@@ -1027,10 +1036,23 @@ same-head rerun the existing review's BODY is corrected in place (GitHub exposes
 add inline comments to a submitted review), so every still-unposted finding is body-filed on that
 correction rather than dropped.
 
-After the verdict post, at every gate close, run `close-gate-findings.mjs --ledger <path>` against
-that same ledger, in the post-verdict, pre-fix slot `GATE-EXEC-POST-BEFORE-FIX` names. It posts
-NOTHING of its own — it runs only the thread disposition pass
-(`GATE-EXEC-THREAD-DISPOSITION`). That pass runs independently of
+After the verdict post AND after the Phase 5 (Retry) fixer triage pass, at every gate close, run
+`close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
+it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
+nice-to-haves runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
+finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
+the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
+REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved after the defer
+pass). The actual gate-close assertion is performed by the downstream callers
+(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, and the
+`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`) on a non-zero count — the
+disposition pass does not assert the gate-close decision itself; it only REPORTS
+`unresolvedGateThreadCount` (its return always uses `ok:true`). It may still throw on gh or
+resolve failures inside the defer sweep, which the conductor must treat as a failed gate-close
+sweep (re-run); only the gate-close *decision* is not its role, so its role and the gate-close
+assertion's role stay distinct.
+`GATE-EXEC-POST-BEFORE-FIX` (findings visible on the PR before fixes) is unaffected: only the
+defer-close timing moves to post-fix. That pass runs independently of
 `gates.postFindingsComments`: that toggle governs only the opt-in consolidated
 `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's second, prose suppression layer is
 owned by the
@@ -1055,8 +1077,27 @@ under the default window), an open worth-fixing-now thread is instead
 replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferral record
 (`GATE-EXEC-DEFERRAL-RECORD`) tells a deferred thread apart from one the fix loop genuinely
-resolved. A nice-to-have finding is replied to and resolved immediately, at the same round it
-was first posted. Because an unresolved review thread routes the PR to the
+resolved. A nice-to-have finding is a fixer TRIAGE target, not a silent auto-defer (#1585): the
+fixer receives it as a fix/triage target alongside must-fix and worth-fixing-now, and may
+fix-if-cheap-in-the-same-commit (free polish when already touching that code) or defer. Defer is
+permitted from round 1 on for nice-to-haves — no forced fix window. A nice-to-have the fixer
+defers is still reply+resolved (stamped `disposition=deferred`) via an explicit fixer triage
+decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER the fixer triage
+— not a silent post-hoc pass that can skip threads. GATE-CLOSE requires 0 unresolved
+gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
+that every gate-authored review thread (any severity: must-fix, worth-fixing-now, OR
+nice-to-have) is resolved before the gate is considered satisfied and before `ready-for-review`
+— a clean verdict alone no longer satisfies the gate. The fixer triages EVERY gate-authored
+finding (must-fix, worth-fixing-now, AND nice-to-have) on EVERY gate round (clean verdict or
+not): fix-if-cheap-in-the-same-commit, else defer — defer is permitted from round 1 on for
+nice-to-haves (#1585). Fix-close is the fixer's role; the disposition pass
+(`close-gate-findings`) then defer-closes every still-open DEFERRABLE gate-authored thread
+(nice-to-have and out-of-window worth-fixing-now) as the closing sweep AFTER the fixer's
+triage — it never fix-closes, and it deliberately leaves must-fix and in-window
+worth-fixing-now threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
+blocks gate close until the fixer/fix-loop resolves them). A thread left unresolved after the
+sweep fails the gate closed (not silently satisfied); a nice-to-have the fixer did not fix is
+defer-close by the sweep (the fixer had its chance first), never a silent pre-fixer auto-defer. Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
 worth-fixing-now thread forces a fix round even after the current round's severity set is
@@ -1068,7 +1109,8 @@ FIX-closing reply (the standard fix loop, or a dispute reply) follows
 `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change that fixed that thread,
 with the resolving commit — nothing was fixed for a thread the fix loop never touched, so this
 requirement cannot apply verbatim there. A DEFERRAL reply (`close-gate-findings.mjs` past the
-worth-fixing-now window, or a nice-to-have finding closed immediately) is instead distinct by
+worth-fixing-now window, or a nice-to-have finding the fixer triaged and chose to defer via
+the post-fixer disposition sweep (#1585)) is instead distinct by
 construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
 round) and states the window/disposition reason (see `dispositionMessage` in
 `close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
@@ -1083,7 +1125,9 @@ field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposit
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
 defers it (a worth-fixing-now thread past the gate's configured worth-fixing-now fix window
-(default 3, round 4 under the default; #1581), or a nice-to-have thread immediately). A
+(default 3, round 4 under the default; #1581), or a nice-to-have thread the fixer triaged and
+chose to defer — closed by the post-fixer disposition sweep, never a silent pre-fixer auto-defer
+(#1585)). A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
 severity other than `must-fix`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a

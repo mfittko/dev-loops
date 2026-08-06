@@ -415,3 +415,91 @@ test("readGateFindingsLedger normalizes the legacy severity spelling on read", a
     assert.equal(ledger.findings[0].severity, "nice-to-have");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1585: countUnresolvedGateAuthoredThreads — the gate-close predicate
+// ---------------------------------------------------------------------------
+
+import {
+  countUnresolvedGateAuthoredThreads,
+  countUnresolvedGateAuthoredThreadsFromRawNodes,
+} from "../../scripts/github/_gate-finding-surface.mjs";
+
+const GATE_LOGIN = "gate-bot";
+
+function thread({ author = GATE_LOGIN, body, isResolved = false } = {}) {
+  return { author, body, isResolved };
+}
+
+test("#1585 (a) fixer sees nice-to-have targets: an unresolved nice-to-have thread counts as gate-authored", () => {
+  const niceToHave = thread({ body: `${buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit` });
+  // A nice-to-have thread IS counted (the fixer must see it as a triage target,
+  // not have it silently auto-deferred before triage).
+  assert.equal(countUnresolvedGateAuthoredThreads([niceToHave], GATE_LOGIN), 1);
+});
+
+test("#1585: must-fix, worth-fixing-now, AND nice-to-have unresolved threads all count toward the gate-close assertion", () => {
+  const mustFix = thread({ body: `${buildFindingMarker({ fp: "1".repeat(16), severity: "must-fix", angle: "sec", round: 1 })}\n**must-fix** (\`sec\`): x` });
+  const wfn = thread({ body: `${buildFindingMarker({ fp: "2".repeat(16), severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): y` });
+  const nth = thread({ body: `${buildFindingMarker({ fp: "3".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z` });
+  assert.equal(countUnresolvedGateAuthoredThreads([mustFix, wfn, nth], GATE_LOGIN), 3);
+});
+
+test("#1585 (b) gate-close requires 0 unresolved gate-authored threads: resolved threads do not count", () => {
+  const resolved = thread({ body: `${buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z`, isResolved: true });
+  assert.equal(countUnresolvedGateAuthoredThreads([resolved], GATE_LOGIN), 0);
+});
+
+test("#1585: a FOREIGN-authored thread carrying a finding marker is excluded by author identity (login required)", () => {
+  const foreign = thread({ author: "someone-else", body: `${buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z` });
+  assert.equal(countUnresolvedGateAuthoredThreads([foreign], GATE_LOGIN), 0);
+});
+
+test("#1585: login=null is the marker-only fail-closed proxy (a foreign quote over-counts, never under-counts)", () => {
+  const foreignQuote = thread({ author: "someone-else", body: `${buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z` });
+  // marker-only: a foreign-authored thread carrying a marker still counts
+  // (fail-closed toward blocking — safe, never under-counts a real gate thread).
+  assert.equal(countUnresolvedGateAuthoredThreads([foreignQuote], null), 1);
+});
+
+test("#1585: a thread without a parseable finding marker never counts", () => {
+  const noMarker = thread({ body: "looks good to me" });
+  assert.equal(countUnresolvedGateAuthoredThreads([noMarker], GATE_LOGIN), 0);
+});
+
+test("#1585 (c) defer-from-round-1 is permitted for nice-to-haves: a round-1 nice-to-have thread is counted (defer allowed from round 1, no fix window)", () => {
+  // The counter is severity-agnostic and round-agnostic: a nice-to-have at
+  // round 1 is a gate-authored thread that must be resolved (fix-close or
+  // defer-close) before gate close — defer is permitted from round 1 on.
+  const nthRound1 = thread({ body: `${buildFindingMarker({ fp: "b".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z` });
+  assert.equal(countUnresolvedGateAuthoredThreads([nthRound1], GATE_LOGIN), 1);
+});
+
+test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes maps raw GraphQL thread nodes (marker-only, no login round-trip)", () => {
+  const marker = buildFindingMarker({ fp: "c".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  const rawNodes = [
+    { id: "T1", isResolved: false, comments: { nodes: [{ databaseId: 100, body: `${marker}\n**nice-to-have** (\`naming\`): z`, author: { login: GATE_LOGIN } }] } },
+    { id: "T2", isResolved: true, comments: { nodes: [{ databaseId: 101, body: `${marker}\n**nice-to-have** (\`naming\`): w`, author: { login: GATE_LOGIN } }] } },
+    { id: "T3", isResolved: false, comments: { nodes: [{ databaseId: 102, body: "no marker here", author: { login: GATE_LOGIN } }] } },
+  ];
+  // T1 unresolved + marker => counted; T2 resolved => not counted; T3 no marker => not counted.
+  assert.equal(countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes), 1);
+});
+
+test("#1585: countUnresolvedGateAuthoredThreads throws (fail-closed) on a non-array threads input", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreads(null, GATE_LOGIN), /threads must be an array/);
+  assert.throws(() => countUnresolvedGateAuthoredThreads(undefined, GATE_LOGIN), /threads must be an array/);
+});
+
+test("#1585: an empty-string login falls back to the marker-only fail-closed proxy (never fail-open)", () => {
+  const marker = buildFindingMarker({ fp: "d".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  const thread = { author: "someone-else", body: `${marker}\n**nice-to-have** (\`naming\`): z`, isResolved: false };
+  // "" must behave like null (marker-only: over-counts a foreign quote, blocks safely).
+  assert.equal(countUnresolvedGateAuthoredThreads([thread], ""), 1);
+  assert.equal(countUnresolvedGateAuthoredThreads([thread], null), 1);
+});
+
+test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes(null), /rawNodes must be an array/);
+  assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes("not-an-array"), /rawNodes must be an array/);
+});

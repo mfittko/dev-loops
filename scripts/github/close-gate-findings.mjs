@@ -7,6 +7,7 @@ import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-
 import {
   FINDING_MARKER_RE,
   WORTH_FIXING_NOW_FIX_WINDOW,
+  countUnresolvedGateAuthoredThreads,
   fetchThreadsWithFullBodies,
   isDeferredAtRound,
   listPrReviews,
@@ -28,7 +29,8 @@ per-gate continuation until the gate round cap escalates); worth-fixing-now stay
 open through this gate's configured worth-fixing-now fix window (default
 ${WORTH_FIXING_NOW_FIX_WINDOW}, set per gate via gates.<gate>.worthFixingNowFixWindow)
 and is replied-to + resolved ("deferred at gate close") from the next round on;
-nice-to-have is replied-to + resolved immediately. A deferred thread's marker is
+nice-to-have is replied-to + resolved at gate close (after the Phase 5 fixer
+triage; #1585). A deferred thread's marker is
 stamped \`disposition=deferred\` before it is resolved, so the deferral disposition
 lives on the thread itself and in the durable tmp ledger.
 
@@ -53,7 +55,8 @@ Optional:
 
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
-    "deferredResolved": <disposition reply+resolve count> }
+    "deferredResolved": <disposition reply+resolve count>,
+    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585)> }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -76,7 +79,7 @@ function windowReason(severity, worthFixingNowFixWindow) {
   if (severity === "worth-fixing-now") {
     return `stayed open past this gate's round-${worthFixingNowFixWindow} worth-fixing-now fix window`;
   }
-  return "nice-to-have findings are deferred immediately, at the round they are first posted";
+  return "nice-to-have findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer; #1585)";
 }
 
 // Every deferral reply is distinct by construction through the thread's own
@@ -267,7 +270,27 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     gh,
   );
 
-  return { ok: true, repo, pr, gate, headSha, round, deferredResolved };
+  // #1585: report gate-authored threads still unresolved AFTER the defer pass.
+  // The defer pass resolves exactly the deferrable subset (nice-to-haves and
+  // out-of-window worth-fixing-now threads — the targets selectDispositionTargets
+  // returned, counted by deferredResolved), so the remaining unresolved
+  // gate-authored count is the pre-defer total minus that resolved count —
+  // i.e. must-fix the fixer has not yet fix-closed, in-window worth-fixing-now,
+  // or any gate-authored thread the fixer triaged but did not yet close. The
+  // gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses to
+  // mark ready while this is non-zero, so a clean verdict can never again leave
+  // a gate-authored thread dangling. Computed in-memory from the pre-defer
+  // snapshot (runDispositionPass throws if any target's resolve failed, so
+  // deferredResolved is exact) — no second thread walk.
+  // `threads` is the PRE-DEFER snapshot fetched above (fetchThreadsWithFullBodies);
+  // runDispositionPass resolves threads via the GitHub API but does NOT mutate this
+  // in-memory array's `isResolved` flags, so the pre-defer count minus the resolved
+  // count is the correct post-defer unresolved remainder. (If a future change makes
+  // runDispositionPass mutate `threads` in place, re-fetch here instead of relying on
+  // this snapshot invariant.)
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved;
+
+  return { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount };
 }
 
 async function main() {
