@@ -282,6 +282,12 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // a gate-authored thread dangling. Computed in-memory from the pre-defer
   // snapshot (runDispositionPass throws if any target's resolve failed, so
   // deferredResolved is exact) — no second thread walk.
+  // `threads` is the PRE-DEFER snapshot fetched above (fetchThreadsWithFullBodies);
+  // runDispositionPass resolves threads via the GitHub API but does NOT mutate this
+  // in-memory array's `isResolved` flags, so the pre-defer count minus the resolved
+  // count is the correct post-defer unresolved remainder. (If a future change makes
+  // runDispositionPass mutate `threads` in place, re-fetch here instead of relying on
+  // this snapshot invariant.)
   const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved;
 
   return { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount };
