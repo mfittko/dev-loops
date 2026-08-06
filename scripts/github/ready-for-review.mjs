@@ -102,7 +102,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {
