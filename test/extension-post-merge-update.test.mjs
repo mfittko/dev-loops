@@ -15,6 +15,7 @@ import {
   extractRepoFlagFromGhPrReady,
   normalizeGitHubRepoSlug,
 } from "../extension/post-merge-update.ts";
+import { buildMainCheckoutFastForwardCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
 
 function createUiCalls() {
   const notifications = [];
@@ -95,15 +96,21 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
   assert.equal(hook.getState().pendingPostMergeUpdate, true);
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
 
-  assert.deepEqual(calls, [{ command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" }]);
+  assert.deepEqual(calls, [
+    { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+  ]);
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
+    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: "Post-merge main-checkout fast-forward completed: local main advanced to origin/main", level: "info" },
   ]);
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
 
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
 });
 
 test("successful user_bash git merge queues and flushes one update", async () => {
@@ -135,6 +142,8 @@ test("successful user_bash git merge queues and flushes one update", async () =>
   assert.deepEqual(calls, [
     { command: "git merge origin/main", cwd: "/repo" },
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
   ]);
 });
 
@@ -247,7 +256,11 @@ test("multiple merge signals in one turn still run only one update", async () =>
   assert.equal(hook.getState().pendingPostMergeUpdate, true);
 
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
-  assert.deepEqual(calls, [{ command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" }]);
+  assert.deepEqual(calls, [
+    { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+  ]);
 });
 
 test("update failure is warning-only and leaves the session healthy", async () => {
@@ -265,6 +278,8 @@ test("update failure is warning-only and leaves the session healthy", async () =
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
+    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
   ]);
 });
 
@@ -282,7 +297,78 @@ test("killed post-merge updates surface a clear warning message", async () => {
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
+    { message: "Post-merge main-checkout fast-forward running: git -C /repo fetch origin main && merge --ff-only origin/main", level: "info" },
+    { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
   ]);
+});
+
+test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "/main/checkout  deadbeef [main]\n/repo  cafebabe [feature]\n", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 373 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  const worktreeCall = calls.find((c) => c.command === "git worktree list");
+  assert.deepEqual(worktreeCall, { command: "git worktree list", cwd: "/repo" });
+
+  const ffCall = calls.find((c) => c.command === buildMainCheckoutFastForwardCommand("/main/checkout"));
+  assert.deepEqual(ffCall, { command: buildMainCheckoutFastForwardCommand("/main/checkout"), cwd: "/main/checkout" });
+
+  assert.ok(
+    notifications.some((n) => n.message.includes("Post-merge main-checkout fast-forward completed")),
+    "expected a completed ff notification",
+  );
+  assert.equal(hook.getState().pendingPostMergeUpdate, false);
+  assert.equal(hook.getState().updateInFlight, false);
+});
+
+test("a non-fast-forwardable main checkout warns and does not block", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "/main/checkout  deadbeef [main]\n", stderr: "", killed: false };
+      }
+      if (command === buildMainCheckoutFastForwardCommand("/main/checkout")) {
+        return { code: 1, stdout: "", stderr: "Not possible to fast-forward", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 373 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  assert.equal(hook.getState().pendingPostMergeUpdate, false);
+  assert.equal(hook.getState().updateInFlight, false);
+  assert.ok(
+    notifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    "expected a warning notification for the non-fast-forwardable checkout",
+  );
 });
 
 test("session_start resets post-merge hook state and extension registers lifecycle listeners", async () => {

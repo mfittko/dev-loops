@@ -74,6 +74,7 @@
     "./harness": "./src/harness/index.mjs",
     "./tracker": "./src/tracker/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
+    "./loop/main-checkout-ff": "./src/loop/main-checkout-ff.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
   },
   "bin": {

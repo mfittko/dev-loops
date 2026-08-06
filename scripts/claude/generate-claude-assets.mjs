@@ -125,6 +125,9 @@ const HOOK_BUNDLE = [
       ['"../loop/bash-command-classify.mjs"', '"./_bash-command-classify.mjs"'],
     ],
   },
+  // #1596: main-checkout fast-forward support shared by the Pi and Claude post-merge hooks.
+  { source: "packages/core/src/loop/worktree-guard.mjs", target: ".claude/hooks/_worktree-guard.mjs", rewrites: [] },
+  { source: "packages/core/src/loop/main-checkout-ff.mjs", target: ".claude/hooks/_main-checkout-ff.mjs", rewrites: [] },
 ];
 
 /** Marker that identifies a generated hook-bundle module (a JS comment, distinct from the
