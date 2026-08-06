@@ -1,8 +1,3 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { executeDevLoopsCommand } from '../lib/dev-loops-core.mjs';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
@@ -24,29 +19,16 @@ type ExtensionRuntimeOverrides = NonNullable<Parameters<typeof createExtensionCo
 
 const STATUS_KEY = 'dev-loops';
 const WIDGET_KEY = 'dev-loops.setup';
-const PACKAGED_AGENTS_ROOT = new URL('../agents/', import.meta.url);
+
+// `syncPackagedAgents` remaps the harness-neutral `tools:` frontmatter to Pi
+// builtins at session-start sync time (#1583); the pure transform + IO live in
+// a dedicated module so they stay testable offline. Import for local use AND
+// re-export so tests can reach the same binding the session_start handler calls.
+import { syncPackagedAgents } from './sync-packaged-agents.ts';
+export { syncPackagedAgents };
 
 async function dispatchDevLoopIntent(ctx: { sendUserMessage?: (message: string) => unknown }, intent: string) {
   await ctx.sendUserMessage?.(`/skill:dev-loop ${intent}`);
-}
-
-export function syncPackagedAgents({
-  sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
-  targetRoot = path.join(os.homedir(), '.agents'),
-} = {}) {
-  if (!fs.existsSync(sourceRoot)) {
-    return;
-  }
-
-  fs.mkdirSync(targetRoot, { recursive: true });
-
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.agent.md')) {
-      continue;
-    }
-
-    fs.copyFileSync(path.join(sourceRoot, entry.name), path.join(targetRoot, entry.name));
-  }
 }
 
 export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOverrides = {}) {

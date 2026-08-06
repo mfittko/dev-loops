@@ -5,6 +5,7 @@ import path from "node:path";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 
 import registerExtension, { syncPackagedAgents } from "../extension/index.ts";
+import { renderPiAgent } from "../extension/sync-packaged-agents.ts";
 import { buildWidgetLines } from "../extension/presentation.ts";
 import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
 
@@ -101,10 +102,19 @@ test("extension clears stale footer status and syncs packaged agents on session 
     await pi.events.get("session_start")({}, ctx);
 
     assert.deepEqual(calls.statuses, [{ key: "dev-loops", text: undefined }]);
+    // #1583: sync no longer copies verbatim — it remaps the `tools:` frontmatter to
+    // Pi builtins. The rendered copy must equal renderPiAgent(source), not the raw
+    // source, and must list only Pi builtin tool names.
+    const sourceRaw = await readFile(new URL("../agents/dev-loop.agent.md", import.meta.url), "utf8");
     assert.equal(
       await readFile(path.join(tempHome, ".agents", "dev-loop.agent.md"), "utf8"),
-      await readFile(new URL("../agents/dev-loop.agent.md", import.meta.url), "utf8"),
+      renderPiAgent(sourceRaw),
     );
+    const syncedTools = (await readFile(path.join(tempHome, ".agents", "dev-loop.agent.md"), "utf8"))
+      .match(/^tools:\s*(.*)$/m)[1].split(/[\s,]+/).filter(Boolean);
+    for (const forbidden of ["search", "execute", "agent", "todo"]) {
+      assert.equal(syncedTools.includes(forbidden), false, `synced dev-loop tools must not include ${forbidden}`);
+    }
     assert.equal(await readFile(path.join(tempHome, ".agents", "keep.txt"), "utf8"), "keep me\n");
     await access(path.join(tempHome, ".agents", "developer.agent.md"));
   } finally {
