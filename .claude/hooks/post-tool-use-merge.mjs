@@ -17,7 +17,7 @@ import { execFileSync, execSync } from "node:child_process";
 
 import { isMergeCapableCommand } from "./_bash-command-classify.mjs";
 import { parseMainWorktreePath } from "./_worktree-guard.mjs";
-import { buildMainCheckoutFastForwardCommand, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS } from "./_main-checkout-ff.mjs";
+import { buildMainCheckoutFastForwardCommand, MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS } from "./_main-checkout-ff.mjs";
 
 import { readHookInput } from "./_hook-io.mjs";
 
@@ -27,7 +27,7 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
   const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   let mainCheckout = null;
   try {
-    const list = execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8" });
+    const list = execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8", timeout: MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS });
     mainCheckout = parseMainWorktreePath(list);
   } catch {
     // Not a git repo / git unavailable — mainCheckout stays null.

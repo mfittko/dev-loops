@@ -28,6 +28,7 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
     git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(originDir, ["config", "user.email", "test@example.com"]);
     git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
     git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
     const commitASha = revParse(originDir, "HEAD");
     git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
@@ -61,6 +62,72 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
     assert.notEqual(afterSha, beforeSha, "local main actually moved");
 
     assert.match(res.stderr, /fast-forwarded/, "hook must emit a fast-forwarded stderr note");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook skips with a note when the main checkout cannot be resolved (#1596)", async () => {
+  // A NON-git temp directory: `git worktree list` fails → mainCheckout stays null.
+  const nonGit = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-nogit-"));
+
+  try {
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: nonGit,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: nonGit,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.match(res.stderr, /could not resolve main checkout/, "hook must note it could not resolve the main checkout");
+  } finally {
+    await rm(nonGit, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook warns and exits 0 when fast-forward is non-fast-forwardable (diverged main) (#1596)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-diverged-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    // Origin: A then B (B at HEAD).
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    const commitASha = revParse(originDir, "HEAD");
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+
+    // Clone so mainDir local main = B and refs/remotes/origin/main = B.
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    // Local main = A (behind), then add commit C so local main = A+C (diverged from origin B).
+    git(mainDir, ["reset", "--hard", commitASha]);
+    git(mainDir, ["config", "user.email", "test@example.com"]);
+    git(mainDir, ["config", "user.name", "Test"]);
+    git(mainDir, ["config", "commit.gpgsign", "false"]);
+    git(mainDir, ["commit", "--allow-empty", "-q", "-m", "C"]);
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.match(res.stderr, /skipped \(best-effort\)/, "hook must warn and skip on a diverged main");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

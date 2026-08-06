@@ -13,25 +13,38 @@
  * merge. It is best-effort and NON-BLOCKING: `--ff-only` refuses a diverged `main`
  * without rewriting history, so a diverged checkout fails the merge step cleanly and
  * the caller treats that as warn-and-continue (never a hard failure, never a force
- * push). `mainCheckout` is substituted verbatim — repo paths have no spaces, matching
- * codebase style (no shell quoting).
+ * push). `mainCheckout` is POSIX single-quoted so consumer checkout paths containing
+ * spaces or shell metacharacters cannot break or inject into the shell string.
  *
  * No imports so this file vendors into the `.claude/hooks/` bundle unchanged
  * (vendored modules may only import `node:` builtins or relative paths).
  */
 
-/** Timeout (ms) for the `git fetch origin main` half of the fast-forward. */
+/**
+ * Timeout (ms) for the `git worktree list` resolution step (the fetch-half budget;
+ * a separate fetch timeout isn't applied — the fetch runs inline within the merge
+ * command under `MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS`).
+ */
 export const MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS = 60_000;
 
 /** Timeout (ms) for the `git merge --ff-only origin/main` half. */
 export const MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS = 60_000;
 
 /**
+ * POSIX single-quote a path so spaces/shell metacharacters in a consumer's checkout
+ * path cannot break or inject into the shell string.
+ */
+function shellQuotePath(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Build the best-effort main-checkout fast-forward command string.
  *
  * @param {string} mainCheckout - Absolute path to the main (primary) git checkout.
- * @returns {string} `git -C <mainCheckout> fetch origin main && git -C <mainCheckout> merge --ff-only origin/main`
+ * @returns {string} `git -C '<mainCheckout>' fetch origin main && git -C '<mainCheckout>' merge --ff-only origin/main` (path POSIX single-quoted)
  */
 export function buildMainCheckoutFastForwardCommand(mainCheckout) {
-  return `git -C ${mainCheckout} fetch origin main && git -C ${mainCheckout} merge --ff-only origin/main`;
+  const quoted = shellQuotePath(mainCheckout);
+  return `git -C ${quoted} fetch origin main && git -C ${quoted} merge --ff-only origin/main`;
 }
