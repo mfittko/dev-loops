@@ -2468,10 +2468,8 @@ describe("role resolution", () => {
 
     // The canonical key must round-trip through the REAL loader (per-layer
     // FileConfigSchema parse + mergeGateObject), not just a hand-built plain
-    // object — this is what would have caught a schema-level `.default()` on
-    // `mediumFixWindow` poisoning the deprecated-alias fallback (every prior
-    // test in this describe block only exercised the alias, never this key,
-    // through loadDevLoopConfig).
+    // object — every prior test in this describe block only exercised the
+    // alias, never this key, through loadDevLoopConfig.
     test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file's canonical mediumFixWindow", async () => {
       const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-mediumfixwindow-"));
       try {
@@ -2483,6 +2481,30 @@ describe("role resolution", () => {
         const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
         assert.deepEqual(errors, []);
         assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 7);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    // This is the test that actually catches a schema-level `.default()` on
+    // `mediumFixWindow` poisoning the deprecated-alias fallback: a layer that
+    // sets ONLY the alias. Each config layer is parsed independently through
+    // the FULL schema before merging (applyLayer → FileConfigSchema.safeParse
+    // per layer), so a `.default(3)` on `mediumFixWindow` would fill it on
+    // THIS layer's own parse even though the raw YAML never mentions it —
+    // permanently shadowing the real `worthFixingNowFixWindow: 5` override the
+    // test above alone would never expose (it never omits the canonical key).
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file setting ONLY the deprecated worthFixingNowFixWindow alias", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-wfn-alias-only-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    worthFixingNowFixWindow: 5\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 5);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }

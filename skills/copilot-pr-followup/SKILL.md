@@ -226,7 +226,7 @@ Key rules:
 
 ### Async delegation guard rules (#524)
 
-See [Async delegation guard rules](../dev-loop/SKILL.md#async-delegation-guard-rules-524) in the public `dev-loop` skill. Those rules are authoritative and apply to all async subagent dispatch in the PR-followup pipeline. The dev-loop skill is the single source of truth; this section exists only to ensure the rules are visible when this skill is loaded standalone.
+See [Guard rules](../dev-loop/SKILL.md#guard-rules) in the public `dev-loop` skill. Those rules are authoritative and apply to all async subagent dispatch in the PR-followup pipeline. The dev-loop skill is the single source of truth; this section exists only to ensure the rules are visible when this skill is loaded standalone.
 
 ## Step 7: Pi review/fix follow-up loop
 

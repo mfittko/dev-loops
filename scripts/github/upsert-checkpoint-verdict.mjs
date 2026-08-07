@@ -653,7 +653,7 @@ function normalizeStructuredFinding(f) {
   return entry;
 }
 // Map a severity to its sort rank. Known severities follow
-// SEVERITY_ORDER (high → medium → low → question → nit);
+// SEVERITY_ORDER (high → question → medium → low → nit);
 // unknown/missing severities map to a LARGE rank so they sort LAST, never
 // before high. (indexOf alone would give an unknown severity rank -1,
 // floating it ABOVE high and hiding the highest-priority items below it.)
