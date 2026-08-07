@@ -848,7 +848,9 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers every finding whose severity is in the gate's
   `blockCleanOnFindingSeverities` set. Through this gate's configured medium fix
-  window (default 3, `gates.<gate>.mediumFixWindow`; #1581) of the gate's chain, it also covers
+  window (default 3, `gates.<gate>.mediumFixWindow` — the deprecated
+  `worthFixingNowFixWindow` key is still honored as an alias, `mediumFixWindow`
+  wins when both are set; #1581) of the gate's chain, it also covers
   every open LOCATABLE medium finding — one anchored to an in-diff `file:line` and
   tracked through its own resolvable review thread per `GATE-EXEC-FINDING-THREADS` — fixed the
   same way even though that severity is not in the blocking set. From the next round on (round 4
@@ -861,19 +863,25 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   auto-defer (#1585): the fixer receives every gate-authored finding (high,
   medium, AND low) as a fix/triage target and may fix-if-cheap-in-the-same-commit
   (free polish when already touching that code), else defer. Defer is permitted from round 1 on for
-  low findings — no forced fix window (the medium window (#1581) is unaffected). A question is a
-  fixer ANSWER target, never fixed or deferred: the fixer replies with an answer (promoting the
+  low findings — no forced fix window (the medium window (#1581) is unaffected). A LOCATABLE
+  question is a fixer ANSWER target, never fixed or deferred: the fixer replies with an answer
+  (promoting the
   finding to a defect severity if the answer reveals one, or escalating to the author when
-  unanswerable); an unanswered question blocks gate-close through `GATE-CLOSE` below, exactly like
-  an open defect. A nit is deferred immediately at round 1, with no fixer cycle at all. Two layers
+  unanswerable); an unanswered locatable question blocks gate-close exactly like
+  an open defect (see `GATE-EXEC-THREAD-DISPOSITION` below). A NON-LOCATABLE question (body-filed)
+  is, like every non-high body-filed finding, deferred by construction at post time per
+  `GATE-EXEC-DEFERRAL-RECORD` — the answered/never-deferred contract applies only to a locatable
+  question's own resolvable thread, which is the only surface an answer reply can land on. A nit
+  is deferred immediately at round 1, with no fixer cycle at all. Two layers
   govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open medium thread; an unresolved in-window locatable
   medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
-  means. GATE-CLOSE is a third, stricter layer: a clean verdict is NOT sufficient to close the
+  means. GATE-CLOSE is a third, stricter layer (see `GATE-EXEC-THREAD-DISPOSITION` below): a
+  clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
-  fixer, answered for a question, or defer-closed by the disposition pass) first, asserted by
+  fixer, answered for a locatable question, or defer-closed by the disposition pass) first, asserted by
   `fetchDraftGateEvidence` /
   `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
   `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
@@ -1123,8 +1131,9 @@ fixer replies with an answer (promoting the finding to a defect severity when th
 one, or escalating to the author when the fixer cannot answer it) and resolves the thread once
 answered; an unanswered question stays unresolved through the same round cap/escalation path a
 high finding uses, since `isDeferredAtRound` never selects it for auto-deferral. A nit thread is
-deferred immediately at round 1 by `close-gate-findings.mjs`, with no fixer cycle at all — the
-fixer never triages a nit. GATE-CLOSE requires 0 unresolved
+deferred immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no triage cycle
+(unlike low, it is never handed to the fixer as a fix/triage target); the closing sweep
+defer-closes it regardless of whether the fixer looked at it. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: high, medium, low,
 question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`

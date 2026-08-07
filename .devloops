@@ -49,16 +49,16 @@ gates:
       - name: renderer-security
         enabled: false
     requireCi: true
-    # Draft gate blocks on must-fix only. With worth-fixing-now also blocking,
+    # Draft gate blocks on high only. With medium also blocking,
     # this gate did not converge on a non-trivial change: correctness settled
-    # while worth-fixing-now renewed itself every round, because each fix round
+    # while medium renewed itself every round, because each fix round
     # creates fresh surface for the next round to review. Measured over eight
-    # rounds on one PR (72 reviewer dispatches), must-fix per round ran
-    # 1,1,7,0,1,1,3,0 while worth-fixing-now ran 6,11,17,14,16,9,12,7.
+    # rounds on one PR (72 reviewer dispatches), high per round ran
+    # 1,1,7,0,1,1,3,0 while medium ran 6,11,17,14,16,9,12,7.
     #
-    # worth-fixing-now findings still go through the normal fan-in flow
+    # medium findings still go through the normal fan-in flow
     # (ledger + finding-threads review) as long as that flow is followed; this key
-    # does not itself force a count or a ledger entry for worth-fixing-now
+    # does not itself force a count or a ledger entry for medium
     # (upsert-checkpoint-verdict only requires explicit counts for the
     # severities listed here). They no longer count toward the ledger's clean
     # verdict. A LOCATABLE one (in-diff file:line) stays open as an unresolved
@@ -68,8 +68,8 @@ gates:
     # immediately and tracked only through the disposition ledger and its
     # fingerprint, with no review-thread force-fix guarantee
     # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval's
-    # own blockCleanOnFindingSeverities below is must-fix only too, same as
-    # here — a worth-fixing-now finding never blocks either gate's clean
+    # own blockCleanOnFindingSeverities below is high only too, same as
+    # here — a medium finding never blocks either gate's clean
     # verdict on its own; an in-window (round <= 3) locatable one still forces
     # a fix round through the unresolved-feedback routing described above,
     # regardless of severity's effect on the verdict. preApproval re-reviews
@@ -80,13 +80,13 @@ gates:
     # fan-out. This also affects light-mode dispatch: resolveGateDispatchMode
     # escalates inline to full fan-out only on a blocking-severity inline
     # finding, so a light-dispatched draft PR whose inline pass surfaces only
-    # worth-fixing-now stays inline instead of escalating.
+    # medium stays inline instead of escalating.
     #
     # A deferred finding is recorded on its own thread's resolving reply and in
     # the durable findings-log ledger (GATE-EXEC-DEFERRAL-RECORD), never in a
     # separate summary comment.
     blockCleanOnFindingSeverities:
-      - must-fix
+      - high
   preApproval:
     dynamic:
       subtractive: true
@@ -119,8 +119,8 @@ gates:
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
     # Operator-directed, and narrower in justification than the draft-gate
     # entry above: the pre-approval gate showed the same non-convergence on the
-    # PR that carries this change. Two rounds ran 2 must-fix / 17
-    # worth-fixing-now and 2 / 16 — correctness flat, the soft column flat
+    # PR that carries this change. Two rounds ran 2 high / 17
+    # medium and 2 / 16 — correctness flat, the soft column flat
     # beside it, each pass creating fresh surface for the next.
     #
     # Unlike the draft gate, this IS a relaxation below the shipped default's
@@ -129,7 +129,7 @@ gates:
     # (owned by GATE-EXEC-THREAD-DISPOSITION, GATE-EXEC-DEFERRAL-RECORD,
     # GATE-EXEC-FINDING-THREADS) — it applies here unchanged.
     blockCleanOnFindingSeverities:
-      - must-fix
+      - high
 
 workflow:
   requireRetrospective: true
