@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, lstat, rm, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, lstat, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import {
   mapAgentToolsForPi,
   renderPiAgent,
   syncPackagedAgents,
+  syncProjectAgentsDir,
 } from "../extension/sync-packaged-agents.ts";
 
 // #1583 — the harness-neutral tool names that Pi must NOT see in a rendered
@@ -456,4 +457,31 @@ fixer body
     lstat(path.join(projectRoot, ".pi", "agents")),
     "project-local .pi/agents must not be created when absent",
   );
+});
+
+test("#1607 Copilot: a write failure leaves the .pi/agents symlink intact (atomic swap, no unlink-before-prepare)", async () => {
+  // The symlink replacement must prepare the replacement content BEFORE unlinking
+  // the symlink. A read/render failure must never leave the project without
+  // `.pi/agents` (the original #1607 Copilot review concern).
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pi-project-robustness-"));
+  const projectRoot = path.join(tempDir, "project");
+  const projectAgentsDir = path.join(projectRoot, ".pi", "agents");
+  await mkdir(path.join(projectRoot, ".pi"), { recursive: true });
+  // source is a FILE so writeSyncedAgents's readdirSync throws (simulates a
+  // read/render failure inside the temp-directory preparation).
+  const sourceRoot = path.join(tempDir, "source-file");
+  await writeFile(sourceRoot, "not a directory\n");
+  // .pi/agents -> a dummy target (the symlink under test)
+  await symlink(path.join(tempDir, "dummy"), projectAgentsDir, "dir");
+
+  // The sync throws (read failure) but must leave the symlink intact.
+  assert.throws(() => syncProjectAgentsDir(projectRoot, sourceRoot));
+
+  // The symlink is untouched (no unlink-before-prepare).
+  const stat = await lstat(projectAgentsDir);
+  assert.equal(stat.isSymbolicLink(), true, ".pi/agents symlink must remain after a write failure");
+  // No temp-directory leak.
+  const piDir = path.join(projectRoot, ".pi");
+  const leftovers = (await readdir(piDir)).filter((f) => f.startsWith(".pi-agents.tmp-"));
+  assert.deepEqual(leftovers, [], "no temp directory must leak after a write failure");
 });

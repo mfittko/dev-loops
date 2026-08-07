@@ -133,7 +133,7 @@ function writeSyncedAgents(sourceRoot: string, destDir: string) {
  * project `.pi/agents` entry resolve from the global `~/.agents/` (already
  * Pi-valid after `syncPackagedAgents`) and stay unaffected.
  */
-function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
+export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
   const projectAgentsDir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   let stat: fs.Stats | undefined;
   try {
@@ -143,12 +143,27 @@ function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
     return;
   }
   if (stat.isSymbolicLink()) {
-    // Remove the symlink itself (NOT its target) and replace it with a real
-    // directory of Pi-valid copies. rmSync on a symlink unlinks the link only;
-    // the neutral source target stays untouched.
+    // Render all Pi-valid copies into a TEMP directory FIRST, so a read/render
+    // failure never leaves the project without `.pi/agents`. Only once the
+    // replacement content is known-good do we unlink the symlink and atomically
+    // rename the prepared directory into place (#1607 Copilot review: never
+    // remove the symlink before the replacement is prepared). rmSync on a
+    // symlink unlinks the link only; the neutral source target stays untouched.
+    const tmpDir = path.join(path.dirname(projectAgentsDir), `.pi-agents.tmp-${process.pid}`);
+    fs.rmSync(tmpDir, { force: true, recursive: true });
+    try {
+      writeSyncedAgents(sourceRoot, tmpDir);
+    } catch (err) {
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+      throw err;
+    }
     fs.rmSync(projectAgentsDir, { force: true });
+    fs.renameSync(tmpDir, projectAgentsDir);
+  } else {
+    // Real directory: refresh packaged-agent files in place (same overwrite
+    // semantics as the global ~/.agents/ sync).
+    writeSyncedAgents(sourceRoot, projectAgentsDir);
   }
-  writeSyncedAgents(sourceRoot, projectAgentsDir);
 }
 
 /**
