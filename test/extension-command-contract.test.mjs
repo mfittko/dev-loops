@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { access, mkdir, mkdtemp, readFile, writeFile, symlink, lstat, readdir } from "node:fs/promises";
 
 import registerExtension, { syncPackagedAgents } from "../extension/index.ts";
 import { renderPiAgent } from "../extension/sync-packaged-agents.ts";
@@ -99,6 +100,10 @@ test("extension clears stale footer status and syncs packaged agents on session 
     await writeFile(path.join(tempHome, ".agents", "keep.txt"), "keep me\n");
 
     const { ctx, calls } = createCommandContext();
+    // #1606: session_start now syncs the project-local .pi/agents too (projectRoot = ctx.cwd).
+    // Point cwd at the temp home (no .pi/agents) so the project-local sync is a no-op here
+    // and does not mutate the repo checkout's .pi/agents symlink.
+    ctx.cwd = tempHome;
     await pi.events.get("session_start")({}, ctx);
 
     assert.deepEqual(calls.statuses, [{ key: "dev-loops", text: undefined }]);
@@ -139,6 +144,60 @@ test("syncPackagedAgents creates the target directory and only copies .agent.md 
 
   assert.equal(await readFile(path.join(targetRoot, "developer.agent.md"), "utf8"), "developer\n");
   await assert.rejects(access(path.join(targetRoot, "ignore.txt")));
+});
+
+test("session_start syncs the project-local .pi/agents (symlink replaced with Pi-valid copies) (#1606)", async () => {
+  const previousHome = process.env.HOME;
+  const tempHome = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-"));
+  process.env.HOME = tempHome;
+  // A project root with a .pi/agents -> ../agents symlink (the dev-loops repo convention).
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-cwd-"));
+  const projectAgentsDir = path.join(projectRoot, ".pi", "agents");
+  await mkdir(path.join(projectRoot, ".pi"), { recursive: true });
+  // Symlink to the real package source (the same target the dev-loops repo uses).
+  const sourceAgentsDir = fileURLToPath(new URL("../agents/", import.meta.url));
+  await symlink(sourceAgentsDir, projectAgentsDir, "dir");
+
+  try {
+    const pi = readyPi();
+    registerExtension(pi);
+
+    const { ctx } = createCommandContext();
+    ctx.cwd = projectRoot;
+    await pi.events.get("session_start")({}, ctx);
+
+    // The session_start handler passed projectRoot = ctx.cwd, so the project-local
+    // sync replaced the symlink with a real directory of Pi-valid copies.
+    const stat = await lstat(projectAgentsDir);
+    assert.equal(stat.isSymbolicLink(), false, ".pi/agents must no longer be a symlink after session_start");
+    assert.ok(stat.isDirectory(), ".pi/agents must be a real directory after session_start");
+
+    const files = (await readdir(projectAgentsDir)).filter((f) => f.endsWith(".agent.md"));
+    assert.ok(files.length >= 7, `expected the canonical agent set, got ${files.length}`);
+    for (const file of files) {
+      const content = await readFile(path.join(projectAgentsDir, file), "utf8");
+      const toolsLine = content.match(/^tools:\s*(.*)$/m);
+      assert.ok(toolsLine, `${file} must have a rendered tools: line`);
+      const tools = toolsLine[1].split(/[\s,]+/).filter(Boolean);
+      for (const tool of tools) {
+        assert.equal(
+          ["search", "execute", "agent", "todo"].includes(tool),
+          false,
+          `${file} must not list a forbidden tool under Pi: ${tool}`,
+        );
+      }
+    }
+    // The neutral source the symlink pointed at is untouched (no write-through).
+    const sourceFixer = await readFile(path.join(sourceAgentsDir, "fixer.agent.md"), "utf8");
+    assert.ok(sourceFixer.includes("search"), "source fixer must still keep neutral `search`");
+    assert.ok(sourceFixer.includes("execute"), "source fixer must still keep neutral `execute`");
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  }
 });
 
 test("help is the default action and removed install/update commands fall back to help", async () => {
