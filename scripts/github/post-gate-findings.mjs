@@ -106,6 +106,11 @@ function validateFindingsArray(parsed, flagLabel) {
       // non-blocking low/nit finding with no explicit disposition defaults
       // to "deferred" rather than rendering with no disposition suffix.
       entry.disposition = "deferred";
+    } else if (f.severity === "question") {
+      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
+      // question with no explicit disposition defaults to "needs-answer",
+      // never "deferred".
+      entry.disposition = "needs-answer";
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());

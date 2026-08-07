@@ -23,6 +23,11 @@ import {
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 const HEAD_SHA = "abc123def4560000000000000000000000000000";
 
 // A minimal in-diff patch: new-file lines 1-4 are all commentable.
@@ -134,6 +139,17 @@ test("isDeferredAtRound: legacy severity spellings behave identically to their c
   assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
   assert.equal(isDeferredAtRound("nice-to-have", 1), true);
   assert.equal(isDeferredAtRound("defer", 1), true);
+});
+
+// Fail-closed: an unrecognized severity (a malformed/forged marker) must
+// never be silently auto-deferred and resolved through the same path as a
+// genuine low/nit finding — it must stay open and surface as a dangling
+// gate-authored thread that blocks gate-close.
+test("isDeferredAtRound: an unrecognized severity fails CLOSED (never deferred)", () => {
+  assert.equal(isDeferredAtRound("bogus", 1), false);
+  assert.equal(isDeferredAtRound("bogus", 99), false);
+  assert.equal(isDeferredAtRound("", 1), false);
+  assert.equal(isDeferredAtRound(undefined, 1), false);
 });
 
 // #1581: the per-gate medium fix window overrides the built-in

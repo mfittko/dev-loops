@@ -14,6 +14,12 @@ import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { runNode } from "../_helpers.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
+
 // Drive the REAL renderer upsert-checkpoint-verdict.mjs itself uses — the
 // structured findings sub-block is what enforcePostedCommentLimit bounds at
 // 2000 chars (and throws above), not the whole comment body (which also
@@ -1382,13 +1388,20 @@ test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an 
       artifact: { angle: "scope", verdict: "blocked", findings: [] },
       detailPattern: /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
     },
-    "padded-severity": {
-      artifact: {
-        angle: "scope",
-        verdict: "findings_present",
-        findings: [{ severity: " must-fix ", summary: "padded" }],
-      },
-      detailPattern: /scope: angle 'scope' has a finding with invalid severity/,
+    // #1592: incidental whitespace/casing around a RECOGNIZED severity is no
+    // longer invalid (normalizeSeverity trims+lowercases before the alias
+    // lookup — see the sibling "a severity with incidental whitespace..."
+    // test in gate-fanin.test.mjs), and an unrecognized severity token is now
+    // caught earlier, by this CLI's OWN artifact-shape floor (a distinct,
+    // unwrapped Error — not routed through consolidateFanin's "fan-in is
+    // blocked" wrapper), which is exactly what a stricter shared floor should
+    // do. This variant instead exercises a malformation the floor does NOT
+    // check but consolidateFanin's OWN validation does — a mismatched
+    // verdict/findings-count pair — so this test still pins two DISTINCT
+    // "fan-in is blocked" detail messages.
+    "findings-present-with-no-findings": {
+      artifact: { angle: "scope", verdict: "findings_present", findings: [] },
+      detailPattern: /scope: angle 'scope' reported findings_present but has no findings/,
     },
   };
   for (const [name, { artifact: badArtifact, detailPattern }] of Object.entries(variants)) {
@@ -2026,7 +2039,11 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
 // ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
 // reverted behavior) would spend the verbose budget on defer-only angles and
 // leave the must-fix angle bare. Reverting the severity-first ordering back
-// to plain index order fails this test.
+// to plain index order fails this test. Both severities are LEGACY spellings
+// ("must-fix"/"nice-to-have") — this also pins angleWorstSeverityRank
+// ranking correctly on a legacy-spelled artifact (consolidateFanin
+// normalizes on the way in, so this exercises the same end-to-end path a
+// live pre-rename reviewer artifact would take).
 test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const DEFER_ANGLE_COUNT = 13;
@@ -2068,6 +2085,57 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
 
     // Sanity: this fixture really does force at least one angle to bare —
     // otherwise the test would pass even with the old, unfixed ordering.
+    const bareCount = [...byAngle.values()].filter(
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
+    ).length;
+    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
+  });
+});
+
+// #1592: SEVERITY_ORDER ranks "question" ahead of "medium" (both defer/
+// answer eventually, but a question keeps gate-close blocked the same way a
+// defect does) — angleWorstSeverityRank must give the scarce verbose-marker
+// budget to a question-carrying angle before a medium-only one, mirroring the
+// must-fix-vs-defer-only case above.
+test("the question-carrying angle wins the scarce verbose-marker budget over medium-only angles", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const MEDIUM_ANGLE_COUNT = 13;
+  const files = {};
+  for (let i = 0; i < MEDIUM_ANGLE_COUNT; i++) {
+    files[`d${String(i).padStart(2, "0")}.json`] = {
+      angle: `medium-angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "medium",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  files["z-question.json"] = {
+    angle: "question-angle",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "question",
+      summary: `finding question-${j} ${"z".repeat(150)}`,
+      file: "src/fquestion.mjs",
+      line: j + 1,
+    })),
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const questionSummary = byAngle.get("question-angle").findings[0].summary;
+    assert.match(
+      questionSummary,
+      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
+      "the question-carrying angle must keep the verbose breakdown",
+    );
+
     const bareCount = [...byAngle.values()].filter(
       (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
     ).length;

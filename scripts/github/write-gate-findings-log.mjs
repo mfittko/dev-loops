@@ -47,7 +47,11 @@ function normalizeVerdict(value) {
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
 // RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
 // disposition vocabulary instead of hand-copying it out of sync.
-export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
+// "needs-answer" is the disposition a "question" severity finding gets
+// (@dev-loops/core/loop/gate-fanin's consolidateFanin): a question is
+// answered, never deferred or fixed, so it needs its own disposition rather
+// than being forced into "deferred" like every other non-blocking finding.
+export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
@@ -81,7 +85,7 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       const disp = f.disposition.trim();
       if (!VALID_DISPOSITIONS.has(disp)) {
-        throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
+        throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, needs-answer, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
     } else if (f.severity === "low" || f.severity === "nit") {
@@ -91,6 +95,10 @@ function validateFindingsArray(parsed, flagLabel) {
       // lowest-tier entry. Explicit dispositions (including an explicit
       // "deferred") always keep the validation above unchanged.
       entry.disposition = "deferred";
+    } else if (f.severity === "question") {
+      // A question with no explicit disposition defaults to "needs-answer" —
+      // never "deferred" (a question is answered, not dropped).
+      entry.disposition = "needs-answer";
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);

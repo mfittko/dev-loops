@@ -16,6 +16,7 @@ import {
   freshAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
+  normalizeSeverity,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -29,6 +30,34 @@ function findingAngle(angle, severity, summary = "issue", extra = {}) {
     findings: [{ severity, summary, ...extra }],
   };
 }
+
+describe("normalizeSeverity (trim + lowercase before alias lookup)", () => {
+  test("trims incidental whitespace around a canonical value", () => {
+    assert.equal(normalizeSeverity("high "), "high");
+    assert.equal(normalizeSeverity(" high"), "high");
+    assert.equal(normalizeSeverity(" high \t"), "high");
+  });
+
+  test("trims whitespace around a legacy spelling before the alias lookup", () => {
+    assert.equal(normalizeSeverity(" must-fix "), "high");
+    assert.equal(normalizeSeverity("worth-fixing-now\n"), "medium");
+  });
+
+  test("lowercases before lookup", () => {
+    assert.equal(normalizeSeverity("HIGH"), "high");
+    assert.equal(normalizeSeverity("Must-Fix"), "high");
+  });
+
+  test("a non-string passes through unchanged (caller's validation rejects it)", () => {
+    assert.equal(normalizeSeverity(undefined), undefined);
+    assert.equal(normalizeSeverity(null), null);
+    assert.equal(normalizeSeverity(42), 42);
+  });
+
+  test("an unrecognized value still normalizes (trim+lowercase) so every caller sees the same rejected form", () => {
+    assert.equal(normalizeSeverity(" Bogus "), "bogus");
+  });
+});
 
 describe("consolidateFanin — verdict", () => {
   test("clean when all angles clean", () => {
@@ -106,6 +135,17 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(consolidateFanin({ angleResults: [findingAngle("kiss", "nice-to-have")] }).verdict, "clean");
   });
 
+  test("a severity with incidental whitespace validates and blocks identically to its trimmed form", () => {
+    // consolidate-fanin.mjs's own artifact-shape floor trims before validating
+    // (see scripts/loop/consolidate-fanin.mjs's validateArtifactShape); this
+    // pins that consolidateFanin itself is just as tolerant, so the two never
+    // disagree on whether "high " is a valid, blocking severity.
+    const result = consolidateFanin({ angleResults: [findingAngle("kiss", "high ")] });
+    assert.equal(result.verdict, "findings_present");
+    assert.equal(result.malformed.length, 0);
+    assert.equal(result.findings[0].severity, "high");
+  });
+
   test("question and nit are non-defect categories: never blocking under the default policy", () => {
     const result = consolidateFanin({
       angleResults: [findingAngle("scope", "question"), findingAngle("docs", "nit")],
@@ -113,6 +153,13 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(result.verdict, "clean");
     assert.equal(result.counts.blocking, 0);
     assert.deepEqual(result.counts.bySeverity, { high: 0, medium: 0, low: 0, question: 1, nit: 1 });
+    // A question is answered, never deferred — it gets its own disposition,
+    // never "deferred" (which every other non-blocking severity, including
+    // nit, gets).
+    const question = result.findings.find((f) => f.severity === "question");
+    const nit = result.findings.find((f) => f.severity === "nit");
+    assert.equal(question.disposition, "needs-answer");
+    assert.equal(nit.disposition, "deferred");
   });
 
   test("blocked when any angle result is malformed/missing", () => {

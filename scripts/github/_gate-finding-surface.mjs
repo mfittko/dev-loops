@@ -89,7 +89,11 @@ function slugForMarker(value) {
 // is past the in-gate fix window; low always defers immediately; question
 // never defers (it is answered, not deferred — an unanswered question blocks
 // gate-close as an unresolved thread, exactly like an open defect); nit always
-// defers immediately, with no fixer cycle. Governs the THREAD disposition pass
+// defers immediately, with no fixer cycle. An unrecognized severity fails
+// CLOSED (false, never auto-deferred): a malformed/forged marker must surface
+// as a dangling gate-authored thread that blocks gate-close, never get
+// silently stamped `disposition=deferred` and resolved through the same path
+// as a genuine low/nit finding. Governs the THREAD disposition pass
 // ONLY — a locatable finding's round-gated fix window, decided through its own
 // resolvable review thread. Body-filed finding rendering
 // (renderNonLocatableBlock) deliberately does NOT call this: a body-filed
@@ -98,6 +102,7 @@ function slugForMarker(value) {
 // comment).
 export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
+  if (!VALID_SEVERITIES.has(sev)) return false;
   if (sev === "high" || sev === "question") return false;
   if (sev === "medium") return round > mediumFixWindow;
   return true; // "low" or "nit" (and any legacy spelling of either)

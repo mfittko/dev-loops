@@ -15,6 +15,11 @@ import {
   renderFindingsCommentBody,
 } from "../../scripts/github/post-gate-findings.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // postGateFindings resolves the authenticated `gh` viewer's login (the
 // author-scoping trust boundary for findMarkedComment) as its first gh call
 // whenever gates.postFindingsComments does not short-circuit it. Every
@@ -721,4 +726,33 @@ test("every legacy severity spelling parses, normalizes, and renders under its c
   assert.ok(body.includes("High (1)"));
   assert.ok(body.includes("Medium (1)"));
   assert.ok(body.includes("Low (1)"));
+});
+
+// #1592: the two non-defect categories render under their own labels too.
+test("renderFindingsCommentBody renders Question and Nit group labels", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "question", angle: "scope", summary: "why this approach?" },
+    { severity: "nit", angle: "naming", summary: "casing nit" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("Question (1)"));
+  assert.ok(body.includes("Nit (1)"));
+});
+
+// A low/nit finding with no explicit disposition defaults to "deferred"; a
+// question with no explicit disposition defaults to "needs-answer" — never
+// "deferred" (a question is answered, not dropped).
+test("parseFindings defaults disposition: low/nit to deferred, question to needs-answer", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "low", angle: "naming", summary: "a" },
+    { severity: "nit", angle: "naming", summary: "b" },
+    { severity: "question", angle: "scope", summary: "c" },
+  ]));
+  assert.deepEqual(findings.map((f) => f.disposition), ["deferred", "deferred", "needs-answer"]);
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("needs-answer"));
+  // The question's disposition suffix must never render "deferred".
+  const questionLine = body.split("\n").find((line) => line.includes("`scope`"));
+  assert.ok(questionLine, "expected a rendered line for the scope (question) finding");
+  assert.ok(!questionLine.includes("deferred"), `question finding line must not render "deferred": ${questionLine}`);
 });

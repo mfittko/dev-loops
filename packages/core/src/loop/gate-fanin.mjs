@@ -81,10 +81,14 @@ export function backoffMaxConcurrent(maxConcurrent) {
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each
 // hand-copying its own list (and its own load-time drift guard) — ORDER is
-// part of the contract here (most blocking first, then the non-defect
-// categories), not just membership, so a consumer that only checked
-// membership against a Set could accept a silently reordered copy.
-export const SEVERITY_ORDER = ["high", "medium", "low", "question", "nit"];
+// part of the contract here, not just membership, so a consumer that only
+// checked membership against a Set could accept a silently reordered copy.
+// Ranked by gate-close urgency, not just defect-severity: "question" sits
+// right after "high" because BOTH force gate-close to stay blocked (a high
+// finding via the fix loop, a question via never being auto-deferred) — it
+// outranks "medium"/"low", which both eventually defer. "nit" trails last:
+// it defers immediately, with no fixer cycle at all.
+export const SEVERITY_ORDER = ["high", "question", "medium", "low", "nit"];
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
@@ -104,14 +108,22 @@ export const LEGACY_SEVERITY_ALIASES = Object.freeze({
 
 /**
  * Map a legacy severity spelling to its canonical name; unknown values pass
- * through unchanged (the caller's validation still rejects them).
+ * through trimmed+lowercased (the caller's validation still rejects them) —
+ * a non-string passes through unchanged. Trimming/lowercasing BEFORE the
+ * alias lookup (rather than requiring every caller to do it first) is what
+ * keeps every call site of this function agreeing on the same value for the
+ * same incidentally-whitespace/case-varied input: consolidate-fanin.mjs's own
+ * floor validation trims before calling this, while gate-fanin's
+ * `consolidateFanin` does not — two call sites trimming inconsistently is
+ * exactly how an untrimmed "high " passed one gate's validation and then
+ * failed the other's.
  * @param {unknown} severity
  * @returns {unknown}
  */
 export function normalizeSeverity(severity) {
-  return typeof severity === "string" && Object.hasOwn(LEGACY_SEVERITY_ALIASES, severity)
-    ? LEGACY_SEVERITY_ALIASES[severity]
-    : severity;
+  if (typeof severity !== "string") return severity;
+  const normalized = severity.trim().toLowerCase();
+  return Object.hasOwn(LEGACY_SEVERITY_ALIASES, normalized) ? LEGACY_SEVERITY_ALIASES[normalized] : normalized;
 }
 
 /**
@@ -591,9 +603,17 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
           severity,
           angle,
           summary: String(f.summary).trim(),
-          // Blocking findings default to accepted-for-fix; non-blocking default
-          // to deferred. The fix cycle / operator can override the disposition.
-          disposition: isBlocking ? "accepted-for-fix" : "deferred",
+          // Blocking findings default to accepted-for-fix; non-blocking defect
+          // findings (low/nit, or medium outside the blocking set) default to
+          // deferred. "question" is never deferred — it is answered, not
+          // fixed or dropped — so it gets its own disposition ("needs-answer",
+          // in write-gate-findings-log.mjs's VALID_DISPOSITIONS) regardless of
+          // blocking status; a "question" can never be blocking in practice
+          // (blockCleanOnFindingSeverities is restricted to defect severities),
+          // but this stays severity-first rather than isBlocking-first so that
+          // invariant is enforced here too, not just at the config boundary.
+          // The fix cycle / operator can override the disposition.
+          disposition: severity === "question" ? "needs-answer" : (isBlocking ? "accepted-for-fix" : "deferred"),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;

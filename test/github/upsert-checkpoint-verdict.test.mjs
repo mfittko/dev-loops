@@ -17,6 +17,11 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // The header literal and its matcher are OWNED by packages/core: the shared
 // summarizers' machine-artifact filter has to recognize the same line the
 // producer renders.
@@ -3956,6 +3961,38 @@ test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never b
     body.indexOf("critical finding") < body.indexOf("unknown severity finding"),
     "must-fix must sort before an unknown severity, not be hidden below it",
   );
+});
+
+// #1592: SEVERITY_ORDER ranks "question" right after "high" (both keep
+// gate-close blocked — a high via the fix loop, a question via never
+// auto-deferring) — ahead of "medium"/"low" (both eventually defer).
+test("renderGateReviewCommentBody sorts a question finding between high and medium (#1592)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          { severity: "medium", summary: "medium finding" },
+          { severity: "question", summary: "why this approach finding" },
+          { severity: "high", summary: "critical finding" },
+        ],
+      },
+    ],
+  });
+  const order = ["critical finding", "why this approach finding", "medium finding"];
+  let cursor = -1;
+  for (const summary of order) {
+    const idx = body.indexOf(summary);
+    assert.ok(idx > cursor, `"${summary}" should appear after the previous entry (high, then question, then medium)`);
+    cursor = idx;
+  }
 });
 
 test("renderGateReviewCommentBody throws when a non-empty payload mixes recognized and unrecognized items (no silent drop) (Copilot review)", () => {

@@ -11,6 +11,11 @@ import {
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // A repo config with a fully controlled, minimal angle contract (independent
 // of the shipped extension defaults) so mandatory-angle / pool assertions
 // below are exact.
@@ -620,6 +625,29 @@ test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have findi
       findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
     });
   }, /disposition must be one of/);
+});
+
+// #1592: a question is answered, never deferred — it gets its own
+// disposition ("needs-answer"), distinct from every other non-blocking
+// severity's "deferred" default.
+test("writeGateFindingsLog derives a needs-answer disposition for a question finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "1111111111111111111100000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?" }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-1111111111111111111100000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "needs-answer");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // --- Fan-out provenance (AC1) ---

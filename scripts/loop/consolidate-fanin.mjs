@@ -348,7 +348,12 @@ function buildAngleMarker(a, verbose) {
 function angleWorstSeverityRank(a) {
   let best = SEVERITY_ORDER.length;
   for (const f of a.findings) {
-    const idx = SEVERITY_ORDER.indexOf(f.severity);
+    // Normalized first (mirrors upsert-checkpoint-verdict.mjs's sibling
+    // severitySortRank): an un-normalized legacy-spelled severity (e.g.
+    // "must-fix") would never match SEVERITY_ORDER's canonical spellings and
+    // rank as if the angle carried no findings at all — starving it of the
+    // scarce verbose-marker budget it should have won.
+    const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(f.severity)));
     if (idx !== -1 && idx < best) best = idx;
   }
   return best;
