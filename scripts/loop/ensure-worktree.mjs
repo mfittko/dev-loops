@@ -9,6 +9,13 @@
  * - `git fetch <base-origin>` then `git worktree add` if absent. If a worktree
  *   already exists at the exact path it is REUSED (idempotent); if one exists
  *   there on a DIFFERENT branch it is a hard conflict (we never clobber).
+ * - The branch a fresh worktree is created from depends on what already
+ *   exists, never on guessing: an existing LOCAL branch of that name is
+ *   re-attached as-is; otherwise an existing REMOTE branch of that name is
+ *   tracked at its remote tip (never forked off base — that would silently
+ *   drop the remote branch's commits and point upstream at base instead);
+ *   only when neither exists is a genuinely new branch created off the
+ *   resolved base. See `branchOrigin` below.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
  *   provision warning never aborts the worktree.
@@ -54,7 +61,17 @@ Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
     "base": <ref>,   // present on create: the ref the worktree was created off —
                      // the origin/-prefixed resolved base (default or --base) for
-                     // a NEW branch, or the existing local branch when re-attached
+                     // a genuinely new branch, the tracked remote branch
+                     // (<remote>/<branch>), or the existing local branch when
+                     // re-attached
+    "branchOrigin": <str>, // present on create: which of the three happened —
+                     // "created-from-base" | "tracked-remote" | "reused-local"
+    "diverged"?: { "remoteRef": <str>, "local": <sha>, "remote": <sha> },
+                     // present only when "reused-local" found a REMOTE branch
+                     // of the same name that has genuinely forked from the
+                     // local one (neither is an ancestor of the other) — the
+                     // caller decides what to do, this never silently picks
+                     // local or remote
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
                "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
@@ -181,6 +198,42 @@ function branchExists(gitCommand, branch, cwd) {
   } catch {
     return false;
   }
+}
+
+/** True when `<remote>/<branch>` is a known remote-tracking ref. */
+function remoteBranchExists(gitCommand, remote, branch, cwd) {
+  try {
+    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function revParseOrNull(gitCommand, ref, cwd) {
+  try {
+    return runGit(gitCommand, ["rev-parse", "--verify", "--quiet", ref], cwd).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True only for a genuine fork (neither ref is an ancestor of the other) —
+ * NOT for a plain ahead-or-behind difference, which is the normal state of a
+ * local branch carrying commits the remote has not seen yet (or vice versa).
+ * Flagging that as "diverged" would fire on every ordinary in-progress branch.
+ */
+function branchesDiverged(gitCommand, localRef, remoteRef, cwd) {
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      runGit(gitCommand, ["merge-base", "--is-ancestor", ancestor, descendant], cwd);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return !isAncestor(localRef, remoteRef) && !isAncestor(remoteRef, localRef);
 }
 
 /**
@@ -404,24 +457,69 @@ export async function ensureWorktree(
   } catch (err) {
     process.stderr.write(`[ensure-worktree] WARN fetch failed (continuing): ${(err.stderr ?? err.message ?? "").toString().trim()}\n`);
   }
-  // The branch may already exist (worktree removed but branch left behind). `git
-  // worktree add -b` fails on an existing branch, so attach to it instead; only
-  // create-from-base when the branch is genuinely new.
-  // Report the ref the worktree was created off: an already-existing branch is
-  // re-attached; a genuinely new branch is created from `effectiveBase` (the
-  // origin/-prefixed auto-detected default, or an explicit --base). Lets
-  // callers/tests confirm the origin/ prefix was applied to the default.
+  // Three ways the worktree's branch can come into being, in priority order:
+  //   1. A LOCAL branch of that name already exists (worktree removed but the
+  //      branch left behind) → re-attach to it (`branchOrigin: "reused-local"`).
+  //      `git worktree add -b` fails on an existing branch, so this is not
+  //      optional — attaching plainly is the only way to reuse it.
+  //   2. No local branch, but the remote already has one → check out a NEW
+  //      local branch tracking `<remote>/<name>` at the remote tip
+  //      (`branchOrigin: "tracked-remote"`). Forking a fresh branch off
+  //      `effectiveBase` here would silently sit the worktree at base with
+  //      none of the existing branch's commits, upstream set to base — one
+  //      `git push` away from clobbering whatever the remote branch holds.
+  //   3. Neither exists → the branch is genuinely new, created off
+  //      `effectiveBase` (the origin/-prefixed auto-detected default, or an
+  //      explicit --base) (`branchOrigin: "created-from-base"`).
+  // Report the ref the worktree was created off, and which of the three paths
+  // was taken, so callers/tests can tell them apart.
+  const remote = remoteFromBase(effectiveBase);
+  const remoteRef = `${remote}/${wantBranch}`;
   let createdBase;
+  let branchOrigin;
+  let diverged;
   if (branchExists(gitCommand, wantBranch, root)) {
     createdBase = wantBranch;
+    branchOrigin = "reused-local";
     runGit(gitCommand, ["worktree", "add", target, wantBranch], root);
+    // A local branch that has genuinely forked from the remote of the same
+    // name is never silently resolved one way or the other — report it so
+    // the caller can decide, instead of masking a rewrite-in-progress remote
+    // (or a stale local branch) as an ordinary re-attach.
+    if (remoteBranchExists(gitCommand, remote, wantBranch, root)) {
+      const localSha = revParseOrNull(gitCommand, `refs/heads/${wantBranch}`, root);
+      const remoteSha = revParseOrNull(gitCommand, `refs/remotes/${remoteRef}`, root);
+      if (
+        localSha &&
+        remoteSha &&
+        localSha !== remoteSha &&
+        branchesDiverged(gitCommand, `refs/heads/${wantBranch}`, `refs/remotes/${remoteRef}`, root)
+      ) {
+        diverged = { remoteRef, local: localSha, remote: remoteSha };
+      }
+    }
+  } else if (remoteBranchExists(gitCommand, remote, wantBranch, root)) {
+    createdBase = remoteRef;
+    branchOrigin = "tracked-remote";
+    runGit(gitCommand, ["worktree", "add", "-b", wantBranch, "--track", target, remoteRef], root);
   } else {
     createdBase = effectiveBase;
+    branchOrigin = "created-from-base";
     runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, effectiveBase], root);
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root, base) };
+  return {
+    ok: true,
+    path: target,
+    created: true,
+    reused: false,
+    base: createdBase,
+    branchOrigin,
+    ...(diverged ? { diverged } : {}),
+    provision: summary,
+    guard: installGuard(gitCommand, root, base),
+  };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
