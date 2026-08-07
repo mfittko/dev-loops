@@ -214,31 +214,37 @@ function runGit(gitCommand, args, cwd) {
   });
 }
 
-/** True when a local branch ref already exists (non-zero exit → absent). */
-function branchExists(gitCommand, branch, cwd) {
-  try {
-    runGit(gitCommand, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** True when `<remote>/<branch>` is a known remote-tracking ref. */
-function remoteBranchExists(gitCommand, remote, branch, cwd) {
-  try {
-    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], cwd);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function revParseOrNull(gitCommand, ref, cwd) {
   try {
     return runGit(gitCommand, ["rev-parse", "--verify", "--quiet", ref], cwd).trim();
   } catch {
     return null;
+  }
+}
+
+/** True when a local branch ref already exists. */
+function branchExists(gitCommand, branch, cwd) {
+  return revParseOrNull(gitCommand, `refs/heads/${branch}`, cwd) !== null;
+}
+
+/**
+ * True when `<remote>/<branch>` is a known remote-tracking ref. Guarded
+ * against an empty/whitespace branch (`--verify` on a bare `refs/remotes/foo/`
+ * throws either way, but a guard reads as intent, not a coincidental catch).
+ * Only the REMOTE-tracking ref counts — a local branch of the same name
+ * proves nothing about what a remote has: a `master` repo carrying a stale
+ * local `main` must not read as "origin has a main branch" (this backs
+ * BOTH the branchOrigin lookup and the default-branch guard's own-default
+ * resolution below, which used to duplicate this exact check unguarded).
+ * `--verify` with the full path also keeps a TAG named `main` from matching.
+ */
+function remoteBranchExists(gitCommand, remote, branch, cwd) {
+  if (typeof branch !== "string" || branch.trim().length === 0) return false;
+  try {
+    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch.trim()}`], cwd);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -307,6 +313,21 @@ function fetchRemoteBestEffort(gitCommand, root, remote) {
 }
 
 /**
+ * Best-effort fetch every candidate remote; `true` (fetchDegraded) if ANY of
+ * them failed. Shared by the create path and the reuse-on-a-local-branch
+ * path so both stay in step — a fetch added to one and not the other is
+ * exactly the "the same repo state answers differently based on fetch
+ * timing" defect the reuse-path fetch itself exists to close.
+ */
+function fetchCandidatesDegraded(gitCommand, root, candidates) {
+  let degraded = false;
+  for (const remote of candidates) {
+    if (!fetchRemoteBestEffort(gitCommand, root, remote)) degraded = true;
+  }
+  return degraded;
+}
+
+/**
  * Divergence report for the local `branch` against the first of `candidates`
  * (priority order) that already has a matching remote branch, or `undefined`
  * when there is nothing to report (no candidate has the branch, no
@@ -358,14 +379,17 @@ function branchFromBase(base) {
 
 /**
  * Split a base ref into the remote it actually names and the bare branch —
- * the ONE place that answers "which remote is this base on". A slashed base
- * is only ever split when its first segment genuinely names a configured
- * remote (`git remote`); a bare slashed branch (the shape `workflow.baseBranch`
- * documents — "main" or "spike/foo", or an unrecognized remote) is NOT split
- * and defaults to "origin" — guessing a remote from an unqualified first
- * segment used to silently point the fetch, and every remote-branch lookup
- * keyed off it, at a remote that does not exist (falling through to
- * created-from-base even when the real remote already had the branch).
+ * the ONE place that answers "which remote is this base on". `origin/` and
+ * `refs/*` prefixes are ALWAYS stripped first (normalizeToBareBranch, an
+ * unconditional string reduction — no remote lookup involved). What remains
+ * is only EVER further split into remote/branch when its first segment
+ * genuinely names a configured remote (`git remote`); a bare slashed branch
+ * (the shape `workflow.baseBranch` documents — "main" or "spike/foo", or an
+ * unrecognized remote) is NOT split and defaults to "origin" — guessing a
+ * remote from an unqualified first segment used to silently point the fetch,
+ * and every remote-branch lookup keyed off it, at a remote that does not
+ * exist (falling through to created-from-base even when the real remote
+ * already had the branch).
  */
 function resolveRemoteAndBranch(gitCommand, root, base) {
   const bareBase = normalizeToBareBranch(base);
@@ -376,23 +400,6 @@ function resolveRemoteAndBranch(gitCommand, root, base) {
     remote: isRealRemote ? maybeRemote : "origin",
     branch: isRealRemote ? branchFromBase(bareBase) : bareBase,
   };
-}
-
-// Only the REMOTE-tracking ref counts. A local branch of the same name proves
-// nothing about the remote's default: a `master` repo carrying a stale local
-// `main` would otherwise bake in `main`, leaving the real default unguarded
-// while reporting success. Requiring `<remote>/<name>` makes that case fall to
-// inert, and a repo with no remote is inert too — correctly, since there is no
-// remote default to land on. `--verify` with the full path is what keeps a tag
-// named `main` from matching.
-function remoteDefaultRefExists(gitCommand, remote, branch, cwd) {
-  if (typeof branch !== "string" || branch.trim().length === 0) return false;
-  try {
-    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch.trim()}`], cwd);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // Git's OWN advertised default for `remote` — `<remote>/HEAD`, set by every
@@ -441,7 +448,7 @@ function guardedBranches(gitCommand, root, explicitBase) {
   // because this particular call's --base happens to name a different
   // remote (or, worse, a bare slashed branch that only LOOKS like one).
   const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, "origin", root);
-  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, "origin", repoDefaultCandidate, root)
+  const repoDefault = repoDefaultCandidate && remoteBranchExists(gitCommand, "origin", repoDefaultCandidate, root)
     ? repoDefaultCandidate
     : null;
 
@@ -456,7 +463,7 @@ function guardedBranches(gitCommand, root, explicitBase) {
     // explicit base unguarded) while origin/HEAD resolved to a phantom "HEAD"
     // branch (a guard for a branch nobody has).
     const { remote, branch } = resolveRemoteAndBranch(gitCommand, root, explicitBase);
-    explicitCandidate = branch !== "HEAD" && remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
+    explicitCandidate = branch !== "HEAD" && remoteBranchExists(gitCommand, remote, branch, root) ? branch : null;
   }
 
   return { repoDefault, explicitBase: explicitCandidate };
@@ -608,10 +615,7 @@ export async function ensureWorktree(
     // from freshly-fetched remote-tracking refs rather than whatever the
     // operator last happened to fetch — the same repo state must not answer
     // differently purely based on fetch timing.
-    let fetchDegraded = false;
-    for (const remote of remoteCandidates) {
-      if (!fetchRemoteBestEffort(gitCommand, root, remote)) fetchDegraded = true;
-    }
+    const fetchDegraded = fetchCandidatesDegraded(gitCommand, root, remoteCandidates);
     const diverged = detectDivergence(gitCommand, root, remoteCandidates, wantBranch);
     return {
       ok: true,
@@ -628,10 +632,7 @@ export async function ensureWorktree(
 
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
   // but `git worktree add` failing is a HARD error.
-  let fetchDegraded = false;
-  for (const remote of remoteCandidates) {
-    if (!fetchRemoteBestEffort(gitCommand, root, remote)) fetchDegraded = true;
-  }
+  const fetchDegraded = fetchCandidatesDegraded(gitCommand, root, remoteCandidates);
   // Three ways the worktree's branch can come into being, in priority order:
   //   1. A LOCAL branch of that name already exists (worktree removed but the
   //      branch left behind) → re-attach to it (`branchOrigin: "reused-local"`).

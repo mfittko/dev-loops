@@ -204,7 +204,9 @@ merge-completion flow.
 <!-- rule: WORKTREE-DEFAULT-USE -->
 `WORKTREE-DEFAULT-USE`: Non-trivial local edits, PR follow-up, or
 delegated/parallel work MUST use a dedicated git worktree, not the main
-checkout. The default base is `origin/main` (the tooling fetches it first,
+checkout. The default base is the repo's auto-detected default branch
+(`origin/HEAD`, else `main`/`master` — `origin/main` only on a repo whose
+actual default is `main`; the tooling fetches candidate remotes first,
 best-effort, and honors an explicit `--base` override). The main checkout is
 reserved for inspection, control, and lightweight status checks.
 
@@ -238,10 +240,12 @@ local branch: `git worktree add tmp/worktrees/dev-loops/<kind>-<number>
 <branch>`; an existing same-name remote branch on any candidate remote:
 `git worktree add -b <branch> --track tmp/worktrees/dev-loops/<kind>-<number>
 <remote>/<branch>`; neither: `git worktree add -b <branch>
-tmp/worktrees/dev-loops/<kind>-<number> origin/main`. Unconditionally forking
-off base (the last case) when a same-name branch already exists on a remote
-silently drops that branch's commits and points upstream at base instead —
-the exact hazard `branchOrigin: tracked-remote` exists to avoid.
+tmp/worktrees/dev-loops/<kind>-<number> origin/<auto-detected-default>` (e.g.
+`origin/main`, or `origin/master` on a repo whose actual default is
+`master`). Unconditionally forking off base (the last case) when a same-name
+branch already exists on a remote silently drops that branch's commits and
+points upstream at base instead — the exact hazard `branchOrigin:
+tracked-remote` exists to avoid.
 
 ## Dependency and install expectations
 

@@ -612,6 +612,17 @@ test("ensure: --pr (no --branch) derives pr-<n> and tracks an existing origin/pr
     assert.equal(viaIssue.branchOrigin, viaPr.branchOrigin, "--pr and --issue default-naming resolve through the same algorithm");
     assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "HEAD").trim(), issueSha);
     assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "--abbrev-ref", "issue-3006@{upstream}").trim(), "origin/issue-3006");
+
+    // Genuine "--pr ≡ --branch" parity: --issue + an EXPLICIT --branch
+    // targeting the SAME branch name --pr derived above must land on the
+    // exact same outcome (branchOrigin, base, HEAD sha, upstream) — not just
+    // a structurally similar one on a different branch.
+    const { root: rootOverride, git: gitOverride } = cloneRepo(origin.tmp, origin.originDir, "root-override");
+    const viaOverride = await ensureWorktree({ repoRoot: rootOverride, issue: 9999, branch: "pr-3005" });
+    assert.equal(viaOverride.branchOrigin, viaPr.branchOrigin);
+    assert.equal(viaOverride.base, viaPr.base);
+    assert.equal(gitOverride("-C", viaOverride.path, "rev-parse", "HEAD").trim(), prSha);
+    assert.equal(gitOverride("-C", viaOverride.path, "rev-parse", "--abbrev-ref", "pr-3005@{upstream}").trim(), "origin/pr-3005");
   } finally {
     origin.cleanup();
   }
