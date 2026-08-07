@@ -2188,8 +2188,8 @@ describe("role resolution", () => {
         requireCi: true,
         dynamicAngles: true,
         additiveAngles: false,
-        blockCleanOnFindingSeverities: ["must-fix"],
-        worthFixingNowFixWindow: 3,
+        blockCleanOnFindingSeverities: ["high"],
+        mediumFixWindow: 3,
         tiers: [],
       });
     });
@@ -2209,8 +2209,8 @@ describe("role resolution", () => {
         requireCi: false,
         dynamicAngles: true,
         additiveAngles: false,
-        blockCleanOnFindingSeverities: ["must-fix"],
-        worthFixingNowFixWindow: 3,
+        blockCleanOnFindingSeverities: ["high"],
+        mediumFixWindow: 3,
         tiers: [],
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);
@@ -2354,7 +2354,7 @@ describe("role resolution", () => {
       };
       const result = resolveGateConfig(config, "draft");
       assert.deepEqual(result.angles, ["scope", "coverage"]);
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high"]);
     });
 
     test("resolveGateConfig returns configured blockCleanOnFindingSeverities", () => {
@@ -2363,12 +2363,12 @@ describe("role resolution", () => {
         gates: {
           draft: {
             angles: ["scope"],
-            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+            blockCleanOnFindingSeverities: ["high", "medium"],
           },
         },
       };
       const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium"]);
     });
 
     test("resolveGateConfig returns default blockCleanOnFindingSeverities for missing field", () => {
@@ -2382,7 +2382,7 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high"]);
     });
 
     test("resolveGateConfig blockCleanOnFindingSeverities returns a copy, not reference", () => {
@@ -2391,13 +2391,13 @@ describe("role resolution", () => {
         gates: {
           draft: {
             angles: ["scope"],
-            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+            blockCleanOnFindingSeverities: ["high", "medium"],
           },
         },
       };
       const result = resolveGateConfig(config, "draft");
       result.blockCleanOnFindingSeverities.push("defer");
-      assert.deepEqual(config.gates.draft.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now"]);
+      assert.deepEqual(config.gates.draft.blockCleanOnFindingSeverities, ["high", "medium"]);
     });
 
     test("resolveGateConfig returns blockCleanOnFindingSeverities for preApproval gate", () => {
@@ -2406,12 +2406,12 @@ describe("role resolution", () => {
         gates: {
           preApproval: {
             angles: ["dry"],
-            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now", "defer"],
+            blockCleanOnFindingSeverities: ["high", "medium", "defer"],
           },
         },
       };
       const result = resolveGateConfig(config, "preApproval");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "nice-to-have"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium", "low"]);
     });
 
     test("resolveGateConfig normalizes and dedupes legacy blockCleanOnFindingSeverities spellings", () => {
@@ -2425,15 +2425,49 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "nice-to-have"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "low"]);
     });
 
-    test("FileConfigSchema accepts both nice-to-have and the deprecated defer spelling", () => {
+    // Backward compatibility (#1592): every pre-rename spelling still resolves
+    // to its canonical replacement, so a live PR / unmigrated config carrying
+    // the old vocabulary keeps behaving identically.
+    test("resolveGateConfig normalizes a fully legacy-spelled blockCleanOnFindingSeverities list", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium"]);
+    });
+
+    test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { worthFixingNowFixWindow: 5 } },
+      };
+      assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 5);
+    });
+
+    test("resolveGateConfig prefers mediumFixWindow over the deprecated worthFixingNowFixWindow alias when both are set", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { mediumFixWindow: 2, worthFixingNowFixWindow: 5 } },
+      };
+      assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 2);
+    });
+
+    test("FileConfigSchema accepts every canonical and legacy severity spelling, plus the deprecated worthFixingNowFixWindow alias", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            blockCleanOnFindingSeverities: ["high", "medium", "low", "question", "nit", "must-fix", "worth-fixing-now", "nice-to-have", "defer"],
+            worthFixingNowFixWindow: 5,
           },
         },
       };
@@ -2675,16 +2709,16 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     spike: [],
   };
   // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
-  // both were deliberately narrowed to must-fix only (see the .devloops
+  // both were deliberately narrowed to high only (see the .devloops
   // gates.draft and gates.preApproval comments / issue #1527) because
-  // worth-fixing-now churns every gate round on a non-trivial change and
+  // medium churns every gate round on a non-trivial change and
   // never converges. spike is still pinned to its pre-#1404 value — draft's
   // and preApproval's entries here track the current shipped baseline
   // rather than the pre-#1404 one.
   const CURRENT_BLOCK_CLEAN = {
-    draft: ["must-fix"],
-    preApproval: ["must-fix"],
-    spike: ["must-fix"],
+    draft: ["high"],
+    preApproval: ["high"],
+    spike: ["high"],
   };
 
   const sortedSet = (arr) => [...new Set(arr)].sort();
@@ -3188,7 +3222,7 @@ const lightConfig = (over = {}) => ({
   version: 1,
   localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, ...over } },
   gates: {
-    preApproval: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] },
+    preApproval: { blockCleanOnFindingSeverities: ["high", "medium"] },
   },
 });
 
@@ -3244,7 +3278,7 @@ test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
 test("resolveGateDispatchMode: under threshold + blocking inline finding → escalated", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["worth-fixing-now"],
+    inlineFindingSeverities: ["medium"],
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "escalated");
@@ -3259,29 +3293,43 @@ test("resolveGateDispatchMode: under threshold + only non-blocking finding → i
   assert.equal(result.reason, "under_threshold");
 });
 
-test("resolveGateDispatchMode: draft gate under threshold + worth-fixing-now-only inline finding → stays inline (must-fix-only blocking set)", () => {
+test("resolveGateDispatchMode: draft gate under threshold + medium-only inline finding → stays inline (high-only blocking set)", () => {
   const config = {
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
-    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["worth-fixing-now"],
+    inlineFindingSeverities: ["medium"],
   });
   assert.equal(result.mode, "inline");
   assert.equal(result.reason, "under_threshold");
 });
 
-test("resolveGateDispatchMode: draft gate under threshold + must-fix inline finding → escalated", () => {
+test("resolveGateDispatchMode: draft gate under threshold + high inline finding → escalated", () => {
   const config = {
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
-    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["must-fix"],
+    inlineFindingSeverities: ["high"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
+});
+
+test("resolveGateDispatchMode: legacy-spelled config blocking list still escalates against a legacy-spelled inline finding (backward compat)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["worth-fixing-now"],
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "escalated");

@@ -225,17 +225,27 @@ const GateConfig = z.strictObject({
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
   blockCleanOnFindingSeverities: z
-    .array(z.enum(["must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
+    .array(z.enum(["high", "medium", "low", "question", "nit", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
     .min(1)
-    .default(["must-fix"])
-    .describe("Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it."),
-  // Per-gate worth-fixing-now fix window (#1581): an open worth-fixing-now
-  // finding stays in the in-gate fix loop through this many rounds of THIS
-  // gate's chain and is deferred (replied-to + resolved) from the next round
-  // on. Defaults to 3 (the built-in WORTH_FIXING_NOW_FIX_WINDOW fallback in
-  // scripts/github/_gate-finding-surface.mjs). must-fix is exempt: it never
+    .default(["high"])
+    .describe("Finding severities that block a clean gate verdict. \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
+  // Per-gate medium fix window (#1581): an open medium finding stays in the
+  // in-gate fix loop through this many rounds of THIS gate's chain and is
+  // deferred (replied-to + resolved) from the next round on. Defaults to 3
+  // (the built-in MEDIUM_FIX_WINDOW fallback in
+  // scripts/github/_gate-finding-surface.mjs). high is exempt: it never
   // defers and forces per-gate continuation until the gate round cap escalates.
-  worthFixingNowFixWindow: z.number().int().nonnegative().default(3).describe("Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3."),
+  // No schema-level `.default()`: resolveGateConfig applies the built-in
+  // fallback (3) only after checking BOTH this key and the deprecated
+  // `worthFixingNowFixWindow` alias. A schema-level default would fill this
+  // key on every config LAYER independently (each layer is parsed through
+  // this schema on its own before merging), permanently shadowing a layer
+  // that sets only the deprecated alias.
+  mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3."),
+  // Deprecated alias for `mediumFixWindow` (pre-rename key); accepted on read
+  // and normalized in resolveGateConfig so an unmigrated config still behaves
+  // identically. `mediumFixWindow` wins when both are set.
+  worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply, so a gate that never sets this key keeps
   // today's dynamic-subtractive/additive/full-pool resolution unchanged.
@@ -1779,7 +1789,7 @@ export function resolveRefinement(config) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, tiers: Array<{name: string, match: object, angles: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
@@ -1798,11 +1808,14 @@ export function resolveGateConfig(config, gate) {
     additiveAngles: gateConfig?.dynamic?.additive ?? false,
     // Normalized + deduped at the resolve boundary so every consumer (envelope,
     // verdict poster, fan-in, viewer) sees canonical spellings only; a
-    // half-migrated ["must-fix","nice-to-have","defer"] collapses to two entries.
+    // half-migrated ["must-fix","low","defer"] collapses to two entries.
     blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
       ? [...new Set(gateConfig.blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)))]
-      : ["must-fix"],
-    worthFixingNowFixWindow: gateConfig?.worthFixingNowFixWindow ?? 3,
+      : ["high"],
+    // `mediumFixWindow` wins; `worthFixingNowFixWindow` is the deprecated
+    // pre-rename key, still honored so an unmigrated config keeps its
+    // configured window rather than silently reverting to the default.
+    mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
     tiers: gateConfig?.tiers ?? [],
   };
 }
@@ -1990,7 +2003,7 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
   }
   if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
     // Both sides normalize legacy spellings so a "defer" finding still
-    // compares against a "nice-to-have" blocking entry and vice versa.
+    // compares against a "low" blocking entry and vice versa.
     const blocking = new Set(resolveGateConfig(config, gate).blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)));
     if (inlineFindingSeverities.some((s) => blocking.has(normalizeSeverity(s)))) {
       return { mode: "full_fanout", reason: "escalated", threshold };
