@@ -350,7 +350,7 @@ concurrent unit; `countFreshDispatchUnits` derives the `requireFanoutProvenance`
 `GATE-EXEC-NO-CWD-DEPENDENCE`: A reviewer MUST NOT depend on the shell's working directory — each command may start in the primary checkout, not the worktree under review, so a bare `git branch`/`git log`/`git diff` can read the wrong tree and produce confident false findings. Run the mandatory sentinel invocation as ONE compound command that enters the worktree first (`cd <worktree> && node scripts/github/verify-fresh-review-context.mjs ...`) with its cwd-relative `--context-path` exactly as briefed — the locality guard depends on that form, and the compound form is the sanctioned remedy for the resetting cwd. After it passes, address the tree explicitly with the explicit-root idiom owned by `WORKTREE-DEFAULT-USE` in [worktree-guidance](./worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) (`git -C <repoRoot>`, absolute-path reads), where `<repoRoot>` is the briefing prefix's `worktree:` line, echoed back as `repoRoot` in `verify-fresh-review-context.mjs`'s fresh output (the directory the sentinel ran in, worktree-local when the locality guard passed).
 
 <!-- rule: GATE-EXEC-SOURCE-READ-WORKTREE -->
-`GATE-EXEC-SOURCE-READ-WORKTREE`: A reviewer citing a skill/doc/source file in a finding MUST read it from the WORKTREE SOURCE under review, not from an installed skill layout (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those source files, so reading them produces false must-fix findings against text the PR already fixed (#1603). Resolve skill/doc paths (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) as RELATIVE paths from the worktree cwd named on the briefing prefix's `worktree:` line. Before reporting a finding that quotes a skill/doc line, verify the cited text matches `git show HEAD:<path>` (the worktree source at the reviewed head); a finding whose cited text does not appear in `git show HEAD:<path>` is a false positive against a stale installed copy and MUST NOT be reported. This governs SOURCE FILES reviewed as content, not HELPER SCRIPT paths invoked as tooling — those still resolve from the installed skill layout per `ASSET-PATH-SOURCE-NO-REPO-LOCAL`. The briefing prefix carries this invariant as a fixed `## Reviewer source-read invariant` section (below) so every reviewer of a round is seeded with it byte-identically.
+`GATE-EXEC-SOURCE-READ-WORKTREE`: A reviewer citing a skill/doc/source file in a finding MUST read it from the WORKTREE SOURCE under review, not from an installed skill layout (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those source files, so reading them produces false high-severity findings against text the PR already fixed (#1603). Resolve skill/doc paths (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) as RELATIVE paths from the worktree cwd named on the briefing prefix's `worktree:` line. Before reporting a finding that quotes a skill/doc line, verify the cited text matches `git show HEAD:<path>` (the worktree source at the reviewed head); a finding whose cited text does not appear in `git show HEAD:<path>` is a false positive against a stale installed copy and MUST NOT be reported. This governs SOURCE FILES reviewed as content, not HELPER SCRIPT paths invoked as tooling — those still resolve from the installed skill layout per `ASSET-PATH-SOURCE-NO-REPO-LOCAL`. The briefing prefix carries this invariant as a fixed `## Reviewer source-read invariant` section (below) so every reviewer of a round is seeded with it byte-identically.
 
 
 <!-- rule: GATE-EXEC-ARTIFACT-HEAD-STAMP -->
@@ -647,7 +647,7 @@ concatenation and never an inline interpreter over the artifacts. Pass
 stamp rule it activates is owned by `GATE-EXEC-ARTIFACT-HEAD-STAMP` (Phase 2).
 `--gate`
 applies that gate's configured `blockCleanOnFindingSeverities` to the overall
-verdict; omitting it falls back to the shipped `["must-fix"]` default. This ONE
+verdict; omitting it falls back to the shipped `["high"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
@@ -707,7 +707,7 @@ which the sanctioned ledger/post path cannot consume). Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
 most blocking severity (ties by artifact index), and an upgrade is kept only
-while the WHOLE round still renders — so a nice-to-have-only angle can stay bare
+while the WHOLE round still renders — so a low-only angle can stay bare
 purely because a higher-severity angle consumed the budget first, even
 though its own verbose sentence would fit alone:
 
@@ -793,10 +793,16 @@ the marker text and the ledger always carry the true numbers regardless.
 Consolidation:
 
 - collate findings from all review angles
-- classify each finding: `must-fix`, `worth-fixing-now`, `nice-to-have` (severity is the
-  reviewer's advisory weight only; deferral is a DISPOSITION — derived at fan-in for
-  non-blocking findings, finalized per thread by the fix cycle / gate close — so no
-  severity is spelled "defer" — the legacy spelling is normalized to `nice-to-have` on read)
+- classify each finding: `high`, `medium`, `low` (defects), or `question`/`nit`
+  (non-defects) — severity is the reviewer's advisory weight only; deferral is a
+  DISPOSITION — derived at fan-in for non-blocking findings, finalized per thread by the
+  fix cycle / gate close — so no severity is spelled "defer" — the pre-rename spellings
+  (`must-fix`, `worth-fixing-now`, `nice-to-have`, `defer`) are normalized to their
+  canonical replacement on read. A `question` is answered, never deferred: the fixer
+  replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
+  unanswerable question escalates to the author), and an unanswered question blocks
+  gate-close exactly like an open defect. A `nit` is a cosmetic, non-defect finding
+  deferred immediately, with no fixer cycle.
 - write the disposition ledger: every finding receives a severity classification and a
   disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged)
 - produce a merged findings artifact
@@ -841,29 +847,34 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - commit and push fixes on the branch
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers every finding whose severity is in the gate's
-  `blockCleanOnFindingSeverities` set. Through this gate's configured worth-fixing-now fix
-  window (default 3, `gates.<gate>.worthFixingNowFixWindow`; #1581) of the gate's chain, it also covers
-  every open LOCATABLE worth-fixing-now finding — one anchored to an in-diff `file:line` and
+  `blockCleanOnFindingSeverities` set. Through this gate's configured medium fix
+  window (default 3, `gates.<gate>.mediumFixWindow`; #1581) of the gate's chain, it also covers
+  every open LOCATABLE medium finding — one anchored to an in-diff `file:line` and
   tracked through its own resolvable review thread per `GATE-EXEC-FINDING-THREADS` — fixed the
   same way even though that severity is not in the blocking set. From the next round on (round 4
   under the default window), an open
-  locatable worth-fixing-now finding is no longer fixed inside the gate: it is deferred per
-  `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE worth-fixing-now finding (body-filed:
+  locatable medium finding is no longer fixed inside the gate: it is deferred per
+  `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE medium finding (body-filed:
   no code location, so it never gets a thread to fix through) is outside this round window
   entirely — it is deferred by construction at post time, at any round, per
-  `GATE-EXEC-DEFERRAL-RECORD`. A nice-to-have finding is a fixer TRIAGE target, not a silent
-  auto-defer (#1585): the fixer receives every gate-authored finding (must-fix,
-  worth-fixing-now, AND nice-to-have) as a fix/triage target and may fix-if-cheap-in-the-same-commit
+  `GATE-EXEC-DEFERRAL-RECORD`. A low finding is a fixer TRIAGE target, not a silent
+  auto-defer (#1585): the fixer receives every gate-authored finding (high,
+  medium, AND low) as a fix/triage target and may fix-if-cheap-in-the-same-commit
   (free polish when already touching that code), else defer. Defer is permitted from round 1 on for
-  nice-to-haves — no forced fix window (the WFN window (#1581) is unaffected). Two layers govern
-  this, and they stay distinct: the LEDGER verdict is `clean` whenever
+  low findings — no forced fix window (the medium window (#1581) is unaffected). A question is a
+  fixer ANSWER target, never fixed or deferred: the fixer replies with an answer (promoting the
+  finding to a defect severity if the answer reveals one, or escalating to the author when
+  unanswerable); an unanswered question blocks gate-close through `GATE-CLOSE` below, exactly like
+  an open defect. A nit is deferred immediately at round 1, with no fixer cycle at all. Two layers
+  govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
-  and never from an open worth-fixing-now thread; an unresolved in-window locatable
-  worth-fixing-now THREAD still forces another fix round, but through the unresolved-feedback
+  and never from an open medium thread; an unresolved in-window locatable
+  medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
   means. GATE-CLOSE is a third, stricter layer: a clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
-  fixer or defer-closed by the disposition pass) first, asserted by `fetchDraftGateEvidence` /
+  fixer, answered for a question, or defer-closed by the disposition pass) first, asserted by
+  `fetchDraftGateEvidence` /
   `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
   `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
   (`GATE-EXEC-THREAD-DISPOSITION`). Widening the blocking set is a per-gate config decision (`blockCleanOnFindingSeverities`),
@@ -907,7 +918,7 @@ The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryFo
 - `config-drift` → `config`/`ci`; `ci-guard` → `ci`.
 - always-run angles (`gate-evidence`, `pr-description`, `renderer-security`, and any configured mandatory angle) → **never carried** (their surface includes inputs the file delta cannot bound, e.g. the PR body).
 
-**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); the angle is named by any finding in the prior log however non-blocking (a `nice-to-have` still means that angle is not provably clean); or any changed file's kind is in the angle's surface. The CLI additionally refuses to emit a plan at all — the whole run, not one angle — when: the prior log records one angle twice in `provenance.perAngle` (reviewer attribution would be ambiguous); the log's own recorded `headSha` disagrees with `--prev-head` (the log path and the diffed head would no longer agree, so a carried entry would stamp a head that was never diffed); the log's `findings` field is present but not an array (a malformed/truncated log cannot prove no angle has an open finding); a finding in that field has no angle (it cannot be attributed to a carried angle); or a finding's angle matches no `provenance.perAngle` entry (its attribution cannot be verified, base-name/case-insensitively). The delta and the worktree-head guard both run with `GIT_DIR`/`GIT_WORK_TREE` scrubbed from the git child-process environment, so an inherited repo pointer can never steer either to a different repository than the worktree at `cwd`.
+**Fail-closed defaults (carry forward = false unless proven safe).** Must-re-run whenever: the prior verdict is not `clean`; the prior findings-log is missing / not clean; the delta is empty or unavailable; any changed file is unclassifiable (`unknown` kind); the angle has no declared surface (unmapped); the angle is a configured mandatory angle (the CLI loads the gate's angle entries with `mandatory: true` and forces every one to re-run, never carried); the angle is named by any finding in the prior log however non-blocking (a `low` finding still means that angle is not provably clean); or any changed file's kind is in the angle's surface. The CLI additionally refuses to emit a plan at all — the whole run, not one angle — when: the prior log records one angle twice in `provenance.perAngle` (reviewer attribution would be ambiguous); the log's own recorded `headSha` disagrees with `--prev-head` (the log path and the diffed head would no longer agree, so a carried entry would stamp a head that was never diffed); the log's `findings` field is present but not an array (a malformed/truncated log cannot prove no angle has an open finding); a finding in that field has no angle (it cannot be attributed to a carried angle); or a finding's angle matches no `provenance.perAngle` entry (its attribution cannot be verified, base-name/case-insensitively). The delta and the worktree-head guard both run with `GIT_DIR`/`GIT_WORK_TREE` scrubbed from the git child-process environment, so an inherited repo pointer can never steer either to a different repository than the worktree at `cwd`.
 
 **A dev-loop config-source delta re-runs EVERY angle.** `.devloops` (and its
 `.devloops.yaml/.yml/.json` and `.pi/dev-loop/settings.*`/`defaults.*` siblings)
@@ -998,7 +1009,7 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
-  --findings-file <path>   # or inline: --findings '[{"severity":"must-fix","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
+  --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
 `--findings-file` reads the same JSON array from a file (identical validation) —
@@ -1006,7 +1017,7 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
 `--ledger-out <path>` writes exactly this shape — pass that path straight to
 `--findings-file` on both tools, no hand extraction. A finding with severity
-`nice-to-have` (or the legacy `defer` spelling, normalized on read) and no
+`low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
@@ -1032,7 +1043,7 @@ the full per-angle breakdown, since that body is then the only place those findi
 A finding anchored to unchanged code has no in-diff `file:line` and is therefore always
 body-filed, tracked through the disposition ledger and its fingerprint rather than a review
 thread; the thread-based force-fix guarantee `GATE-EXEC-THREAD-DISPOSITION` describes applies to
-locatable findings only — a body-filed finding at any non-`must-fix` severity is instead deferred
+locatable findings only — a body-filed finding at any non-`high` severity is instead deferred
 by construction, stamped `disposition=deferred` at the round it is first posted. Every posted
 finding, inline or body-filed, carries a fingerprint marker on its first line (`<!--
 dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`), and the
@@ -1063,7 +1074,7 @@ correction rather than dropped.
 After the verdict post AND after the Phase 5 (Retry) fixer triage pass, at every gate close, run
 `close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
 it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
-nice-to-haves runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
+low findings runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
 the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
 REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved after the defer
@@ -1088,43 +1099,49 @@ findings post.
 
 <!-- rule: GATE-EXEC-THREAD-DISPOSITION -->
 `GATE-EXEC-THREAD-DISPOSITION`: A gate-authored thread's severity decides how it closes. A
-must-fix thread stays unresolved until the standard fix, reply-with-resolving-commit, resolve
+high thread stays unresolved until the standard fix, reply-with-resolving-commit, resolve
 loop (Step 7 of [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)) closes it — no other
-exit exists. Must-fix-if-present is the per-gate continuation default: an open must-fix finding
-forces another fix round for that gate, and an unfixable must-fix escalates to the operator via
+exit exists. High-if-present is the per-gate continuation default: an open high finding
+forces another fix round for that gate, and an unfixable high finding escalates to the operator via
 the existing gate round cap (`roundCapReached` in `packages/core/src/loop/pr-gate-coordination.mjs`)
-plus the "Maximum retry cycles exhausted → escalate to operator" rule — never deferred (must-fix
-is exempt from the worth-fixing-now window). A worth-fixing-now thread stays unresolved and goes
-through that SAME loop through this gate's configured worth-fixing-now fix window (default 3,
-`gates.<gate>.worthFixingNowFixWindow`; #1581) of this gate's chain; from the next round on (round 4
-under the default window), an open worth-fixing-now thread is instead
+plus the "Maximum retry cycles exhausted → escalate to operator" rule — never deferred (high
+is exempt from the medium window). A medium thread stays unresolved and goes
+through that SAME loop through this gate's configured medium fix window (default 3,
+`gates.<gate>.mediumFixWindow`; #1581) of this gate's chain; from the next round on (round 4
+under the default window), an open medium thread is instead
 replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 `disposition=deferred` onto the thread's marker first so the deferral record
 (`GATE-EXEC-DEFERRAL-RECORD`) tells a deferred thread apart from one the fix loop genuinely
-resolved. A nice-to-have finding is a fixer TRIAGE target, not a silent auto-defer (#1585): the
-fixer receives it as a fix/triage target alongside must-fix and worth-fixing-now, and may
+resolved. A low finding is a fixer TRIAGE target, not a silent auto-defer (#1585): the
+fixer receives it as a fix/triage target alongside high and medium, and may
 fix-if-cheap-in-the-same-commit (free polish when already touching that code) or defer. Defer is
-permitted from round 1 on for nice-to-haves — no forced fix window. A nice-to-have the fixer
+permitted from round 1 on for low findings — no forced fix window. A low finding the fixer
 defers is still reply+resolved (stamped `disposition=deferred`) via an explicit fixer triage
 decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER the fixer triage
-— not a silent post-hoc pass that can skip threads. GATE-CLOSE requires 0 unresolved
+— not a silent post-hoc pass that can skip threads. A question thread is never deferred: the
+fixer replies with an answer (promoting the finding to a defect severity when the answer reveals
+one, or escalating to the author when the fixer cannot answer it) and resolves the thread once
+answered; an unanswered question stays unresolved through the same round cap/escalation path a
+high finding uses, since `isDeferredAtRound` never selects it for auto-deferral. A nit thread is
+deferred immediately at round 1 by `close-gate-findings.mjs`, with no fixer cycle at all — the
+fixer never triages a nit. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
-that every gate-authored review thread (any severity: must-fix, worth-fixing-now, OR
-nice-to-have) is resolved before the gate is considered satisfied and before `ready-for-review`
+that every gate-authored review thread (any severity: high, medium, low,
+question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`
 — a clean verdict alone no longer satisfies the gate. The fixer triages EVERY gate-authored
-finding (must-fix, worth-fixing-now, AND nice-to-have) on EVERY gate round (clean verdict or
+defect finding (high, medium, AND low) on EVERY gate round (clean verdict or
 not): fix-if-cheap-in-the-same-commit, else defer — defer is permitted from round 1 on for
-nice-to-haves (#1585). Fix-close is the fixer's role; the disposition pass
+low findings (#1585) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
 (`close-gate-findings`) then defer-closes every still-open DEFERRABLE gate-authored thread
-(nice-to-have and out-of-window worth-fixing-now) as the closing sweep AFTER the fixer's
-triage — it never fix-closes, and it deliberately leaves must-fix and in-window
-worth-fixing-now threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
+(low, nit, and out-of-window medium) as the closing sweep AFTER the fixer's
+triage — it never fix-closes, and it deliberately leaves high, question, and in-window
+medium threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
 blocks gate close until the fixer/fix-loop resolves them). A thread left unresolved after the
-sweep fails the gate closed (not silently satisfied); a nice-to-have the fixer did not fix is
+sweep fails the gate closed (not silently satisfied); a low finding the fixer did not fix is
 defer-close by the sweep (the fixer had its chance first), never a silent pre-fixer auto-defer. Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
-worth-fixing-now thread forces a fix round even after the current round's severity set is
+medium thread forces a fix round even after the current round's severity set is
 otherwise clean — this is the existing unresolved-feedback routing, not a new enforcement path.
 A finding the fixer rejects under its triage authority is not left dangling: it is closed with
 an explicit dispute reply and resolved, and its fingerprint keeps it suppressed, so no
@@ -1132,8 +1149,10 @@ gate-authored thread can deadlock the chain. Distinctness differs by what closed
 FIX-closing reply (the standard fix loop, or a dispute reply) follows
 `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change that fixed that thread,
 with the resolving commit — nothing was fixed for a thread the fix loop never touched, so this
-requirement cannot apply verbatim there. A DEFERRAL reply (`close-gate-findings.mjs` past the
-worth-fixing-now window, or a nice-to-have finding the fixer triaged and chose to defer via
+requirement cannot apply verbatim there. An ANSWER reply to a question names the answer (and, when
+the answer promotes the finding, the new severity and follow-up thread it becomes). A DEFERRAL
+reply (`close-gate-findings.mjs` past the
+medium window, or a low/nit finding the fixer triaged and chose to defer via
 the post-fixer disposition sweep (#1585)) is instead distinct by
 construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
 round) and states the window/disposition reason (see `dispositionMessage` in
@@ -1148,12 +1167,14 @@ durable findings-log ledger under `tmp/gate-findings/...`. Both carry the findin
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
-defers it (a worth-fixing-now thread past the gate's configured worth-fixing-now fix window
-(default 3, round 4 under the default; #1581), or a nice-to-have thread the fixer triaged and
+defers it (a medium thread past the gate's configured medium fix window
+(default 3, round 4 under the default; #1581), or a low/nit thread the fixer triaged (nit skips
+the fixer entirely) and
 chose to defer — closed by the post-fixer disposition sweep, never a silent pre-fixer auto-defer
-(#1585)). A
+(#1585)). A question thread is never stamped `disposition=deferred` — it is answered, not
+deferred; its resolution is the answer reply itself. A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
-severity other than `must-fix`, at the round it is first posted — permanently deferred by
+severity other than `high`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a
 resolvable thread through which the standard fix loop could otherwise close it.
 
