@@ -34,6 +34,10 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 
+// #1592: a few fixtures below use pre-rename severity spellings
+// ("must-fix"/"worth-fixing-now"/"nice-to-have") as generic example diff text
+// (collapsePureSubstitutionRuns fixtures) or backward-compat INPUT — not
+// stale fixture drift; do not mass-rewrite them to the canonical spelling.
 const contextGuardPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
 const briefingCheckerPath = path.resolve("scripts/github/verify-briefing-prefixes.mjs");
 
