@@ -38,12 +38,14 @@ underlying mechanism, not the operator interface.
 `WORKTREE-CREATE-PROVISION`: Creating or reusing a loop-owned worktree MUST use
 this lifecycle entrypoint. It resolves the canonical namespaced path, best-effort
 `git fetch --prune`es every candidate remote (see branch resolution below —
-the one `--base` names, then `origin` when it differs; run on BOTH the create
-path and an already-existing-worktree reuse, so a divergence report answers
-from freshly-fetched refs rather than whatever was last fetched), creates the
-worktree if absent (or reuses it if one already exists at that exact path —
-idempotent; a different branch at the path is reported as a conflict rather
-than clobbered), then provisions it (below) in the same step:
+the one `--base` names, then `origin` when it differs; run on the create path
+AND on an already-existing-worktree reuse ON A LOCAL BRANCH, so a divergence
+report answers from freshly-fetched refs rather than whatever was last
+fetched — a DETACHED reuse, see below, fetches nothing and skips straight to
+provisioning, by design: there is no local branch there to fetch for),
+creates the worktree if absent (or reuses it if one already exists at that
+exact path — idempotent; a different branch at the path is reported as a
+conflict rather than clobbered), then provisions it (below) in the same step:
 
 ```sh
 node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \

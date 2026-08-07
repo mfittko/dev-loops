@@ -534,13 +534,16 @@ export async function ensureWorktree(
   // --base/--branch are refs/names an operator (or a config value) may hand
   // in with incidental whitespace — trimmed up front so every use below (the
   // "origin/" prefix match inside resolveRemoteAndBranch included) sees the
-  // same value. A PREFIX-ONLY --base ("origin/", "refs/heads/") normalizes to
-  // empty — treated as UNSET (falls through to auto-detect below), matching
-  // resolveBaseBranch's own documented prefix-only-is-unset contract for a
-  // configured workflow.baseBranch value, rather than reaching git as the
-  // invalid ref "origin/" ("fatal: invalid reference: origin/").
+  // same value. A PREFIX-ONLY --base ("origin/", "refs/heads/", OR a
+  // configured-remote prefix like "upstream/" — resolveRemoteAndBranch, not a
+  // bare normalizeToBareBranch, so this catches the same remote prefixes
+  // --branch's own emptiness check below does) normalizes to empty — treated
+  // as UNSET (falls through to auto-detect below), matching resolveBaseBranch's
+  // own documented prefix-only-is-unset contract for a configured
+  // workflow.baseBranch value, rather than reaching git as the invalid ref
+  // "origin/" ("fatal: invalid reference: origin/").
   if (typeof base === "string") base = base.trim();
-  if (typeof base === "string" && normalizeToBareBranch(base).length === 0) base = undefined;
+  if (typeof base === "string" && resolveRemoteAndBranch(gitCommand, root, base).branch.length === 0) base = undefined;
   const kind = issue !== undefined ? "issue" : "pr";
   const number = issue !== undefined ? issue : pr;
   const target = resolveWorktreePath({ repoRoot: root, kind, number });

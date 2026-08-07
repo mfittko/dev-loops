@@ -516,6 +516,29 @@ test("ensure: a prefix-only --base ('origin/') is treated as unset, falling back
   }
 });
 
+// WFN regression: the emptiness check used a bare normalizeToBareBranch,
+// which only strips "origin/"/"refs/*" — a prefix-only --base on a
+// NON-origin configured remote ("upstream/") stayed truthy and reached git
+// as the invalid ref "upstream/", while --branch's identical check (already
+// routed through resolveRemoteAndBranch) handled it correctly.
+test("ensure: a prefix-only --base on a non-origin configured remote ('upstream/') is treated as unset too", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    const { root } = cloneRepo(origin.tmp, origin.originDir);
+    execFileSync("git", ["remote", "add", "upstream", upstream.originDir], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
+    execFileSync("git", ["fetch", "-q", "upstream"], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5004, base: "upstream/" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(res.base, "origin/main");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
 // NTH: --branch stripping a configured-remote prefix (not just "origin/") had
 // no direct test — only the algorithm's "origin/" case was covered.
 test("ensure: --branch strips a NON-origin configured-remote prefix (upstream/feature-x) too", async () => {
