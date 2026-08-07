@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  branchesDiverged,
   ensureWorktree,
   parseEnsureWorktreeCliArgs,
 } from "../../scripts/loop/ensure-worktree.mjs";
@@ -199,11 +200,72 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     assert.equal(second.created, false);
     assert.equal(second.reused, true);
     assert.equal(second.path, first.path);
+    // MUST-FIX regression: branchOrigin/diverged used to be emitted only on
+    // the create path — deleting them from the reuse return left this whole
+    // suite green while a persisting diverged state vanished on re-run.
+    assert.equal(second.branchOrigin, "reused-local");
+    assert.equal(second.diverged, undefined);
     // `guard` is documented as always present on BOTH the create and reuse
     // paths — deleting installGuard's call on the reuse branch would leave
     // this whole suite green while breaking that contract.
     assert.equal(second.guard.ok, true);
     assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-merge-commit", "pre-push"]);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// MUST-FIX regression: no test asserted diverged on the REUSE path, so
+// deleting the reuse-path divergence check entirely left the suite green.
+test("ensure: an already-existing worktree being reused reports a divergence on its local branch too", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    const first = await ensureWorktree({ repoRoot: root, issue: 4001 });
+    assert.equal(first.created, true);
+    assert.equal(first.branchOrigin, "created-from-base");
+
+    // Publish issue-4001 on the remote at a DIFFERENT commit — a genuine
+    // fork from the local branch the worktree already created, forked from
+    // the SAME base commit as the local branch (init).
+    origin.originGit("branch", "issue-4001", "HEAD");
+    origin.originGit("checkout", "-q", "issue-4001");
+    origin.originGit("commit", "-q", "--allow-empty", "-m", "remote-side rewrite");
+    origin.originGit("checkout", "-q", "main");
+    const remoteSha = origin.originGit("rev-parse", "issue-4001").trim();
+
+    // Advance the LOCAL branch too, so it is a genuine, mutually-unreachable fork.
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "local-side work"], { cwd: first.path, encoding: "utf8", env: REPO_GIT_ENV });
+    const localSha = git("-C", first.path, "rev-parse", "HEAD").trim();
+
+    const second = await ensureWorktree({ repoRoot: root, issue: 4001 }); // hits the REUSE path
+    assert.equal(second.ok, true);
+    assert.equal(second.created, false);
+    assert.equal(second.reused, true);
+    assert.equal(second.branchOrigin, "reused-local");
+    assert.deepEqual(second.diverged, { remoteRef: "origin/issue-4001", local: localSha, remote: remoteSha });
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// WFN: a DETACHED-HEAD worktree at the path (this repo's ui-review
+// pinPrHead creates those via `git worktree add --detach`) used to pass the
+// `existing.branch &&` conflict guard and get labeled "reused-local" —
+// even a fabricated diverged report — for a branch it is not even on.
+test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabricating reused-local/diverged", async () => {
+  const repo = makeRepo();
+  try {
+    const target = path.join(repo.root, "tmp/worktrees/dev-loops/issue-4002");
+    repo.git("worktree", "add", "--detach", target, "main");
+
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, false);
+    assert.equal(res.reused, true);
+    assert.equal(res.branchOrigin, "reused-detached");
+    assert.equal(res.diverged, undefined);
+    assert.equal(res.base, undefined, "base is only reported on create");
   } finally {
     repo.cleanup();
   }
@@ -365,34 +427,73 @@ test("ensure: a slashed non-remote --base still tracks an existing origin/<branc
   }
 });
 
-test("ensure: --pr resolving a branch behaves identically to --branch for the tracked-remote case", async () => {
+// MUST-FIX regression: a fork workflow's --base on a DIFFERENT, real remote
+// ("upstream", distinct from "origin") used to consult ONLY that remote for
+// the branch lookup — an existing origin/<branch> was invisible, silently
+// forking the branch off base with "upstream" as its (wrong) implied world.
+// This is the exact clobber state the whole fix exists to prevent.
+test("ensure: a fork workflow's --base on a different remote still finds an existing origin/<branch> (never forks off base)", async () => {
+  const origin = makeOriginRepo();
+  // A second, INDEPENDENT remote that genuinely lacks the branch — unlike
+  // origin.originDir, it was never given "issue-4003" at all, mirroring a
+  // real upstream that never saw a fork-only branch.
+  const upstream = makeOriginRepo();
+  try {
+    origin.originGit("branch", "issue-4003");
+    origin.originGit("checkout", "-q", "issue-4003");
+    origin.originGit("commit", "-q", "--allow-empty", "-m", "fork branch work");
+    origin.originGit("checkout", "-q", "main");
+    const remoteSha = origin.originGit("rev-parse", "issue-4003").trim();
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 4003, branch: "issue-4003", base: "upstream/main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "origin/issue-4003");
+    assert.equal(git("-C", res.path, "rev-parse", "HEAD").trim(), remoteSha);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "issue-4003@{upstream}").trim(), "origin/issue-4003");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// WFN regression: passing an explicit --branch on BOTH arms never exercised
+// --pr's OWN default-branch derivation ("pr-<n>") — the one actual behavior
+// difference between --pr and --issue. Neither arm takes an explicit
+// --branch here; each derives its own default name and must resolve
+// tracked-remote through the identical algorithm.
+test("ensure: --pr (no --branch) derives pr-<n> and tracks an existing origin/pr-<n>, identically to --issue's issue-<n>", async () => {
   const origin = makeOriginRepo();
   try {
-    origin.originGit("branch", "feature-x");
-    origin.originGit("checkout", "-q", "feature-x");
+    origin.originGit("branch", "pr-3005");
+    origin.originGit("checkout", "-q", "pr-3005");
     origin.originGit("commit", "-q", "--allow-empty", "-m", "pr work");
     origin.originGit("checkout", "-q", "main");
-    const remoteSha = origin.originGit("rev-parse", "feature-x").trim();
+    origin.originGit("branch", "issue-3006");
+    origin.originGit("checkout", "-q", "issue-3006");
+    origin.originGit("commit", "-q", "--allow-empty", "-m", "issue work");
+    origin.originGit("checkout", "-q", "main");
+    const prSha = origin.originGit("rev-parse", "pr-3005").trim();
+    const issueSha = origin.originGit("rev-parse", "issue-3006").trim();
 
-    const { root, git } = cloneRepo(origin.tmp, origin.originDir, "root-pr");
-    const viaPr = await ensureWorktree({ repoRoot: root, pr: 2004, branch: "feature-x" });
+    const { root: rootPr, git: gitPr } = cloneRepo(origin.tmp, origin.originDir, "root-pr");
+    const viaPr = await ensureWorktree({ repoRoot: rootPr, pr: 3005 }); // no --branch: must derive "pr-3005"
     assert.equal(viaPr.ok, true);
     assert.equal(viaPr.branchOrigin, "tracked-remote");
-    assert.equal(viaPr.base, "origin/feature-x");
-    assert.equal(git("-C", viaPr.path, "rev-parse", "HEAD").trim(), remoteSha);
-    assert.equal(git("-C", viaPr.path, "rev-parse", "--abbrev-ref", "feature-x@{upstream}").trim(), "origin/feature-x");
+    assert.equal(viaPr.base, "origin/pr-3005");
+    assert.equal(gitPr("-C", viaPr.path, "rev-parse", "HEAD").trim(), prSha);
+    assert.equal(gitPr("-C", viaPr.path, "rev-parse", "--abbrev-ref", "pr-3005@{upstream}").trim(), "origin/pr-3005");
 
-    // Same branch, resolved via --issue + --branch instead of --pr's default
-    // naming: the two selectors only affect the CANONICAL PATH/default branch
-    // NAME, never the branch-resolution algorithm itself. Proven directly by
-    // running the identical branch through the --issue entrypoint against a
-    // second clone (git refuses two worktrees on the same branch at once).
-    const { root: root2, git: git2 } = cloneRepo(origin.tmp, origin.originDir, "root-issue");
-    const viaIssue = await ensureWorktree({ repoRoot: root2, issue: 2005, branch: "feature-x" });
-    assert.equal(viaIssue.branchOrigin, viaPr.branchOrigin, "--pr and --issue+--branch take the same branchOrigin path");
-    assert.equal(viaIssue.base, viaPr.base);
-    assert.equal(git2("-C", viaIssue.path, "rev-parse", "HEAD").trim(), remoteSha);
-    assert.equal(git2("-C", viaIssue.path, "rev-parse", "--abbrev-ref", "feature-x@{upstream}").trim(), "origin/feature-x");
+    const { root: rootIssue, git: gitIssue } = cloneRepo(origin.tmp, origin.originDir, "root-issue");
+    const viaIssue = await ensureWorktree({ repoRoot: rootIssue, issue: 3006 }); // no --branch: must derive "issue-3006"
+    assert.equal(viaIssue.branchOrigin, viaPr.branchOrigin, "--pr and --issue default-naming resolve through the same algorithm");
+    assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "HEAD").trim(), issueSha);
+    assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "--abbrev-ref", "issue-3006@{upstream}").trim(), "origin/issue-3006");
   } finally {
     origin.cleanup();
   }
@@ -434,6 +535,76 @@ test("ensure: --branch accepts a plain bare branch name unchanged", async () => 
     assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "plain-name");
   } finally {
     repo.cleanup();
+  }
+});
+
+test("ensure: --branch accepts a refs/heads/<b> shaped value, normalized to the bare name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4004, branch: "refs/heads/plain-name-2" });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "plain-name-2");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a whitespace-only --branch falls back to the default <kind>-<n> name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4005, branch: "   " });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "issue-4005");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// MUST-FIX regression (finding 8): "origin/" normalizes to the empty string
+// and used to reach git as `-b ''`, an invalid branch name.
+test("ensure: --branch origin/ (collapses to empty after normalizing) falls back to the default name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4006, branch: "origin/" });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "issue-4006");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// WFN regression: the ahead/behind test only ever produces merge-base exit 1,
+// so `err.status === 1` and a bare catch-all-false mutation are both
+// mutation-green. Exercised directly against an unresolvable ref, which
+// forces merge-base to exit 128 (a git ERROR), not 1.
+test("branchesDiverged: fails safe (not diverged) when merge-base errors, not just on exit 1", () => {
+  const repo = makeRepo();
+  try {
+    assert.equal(branchesDiverged("git", "refs/heads/main", "refs/heads/does-not-exist", repo.root), false);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// NICE-TO-HAVE: a failed best-effort fetch (e.g. no configured remote at
+// all) used to degrade silently to created-from-base with no signal in the
+// result.
+test("ensure: a failed best-effort fetch is signaled via fetchDegraded, not silently swallowed", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-noremote-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
+  try {
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@t.t");
+    git("config", "user.name", "t");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    // No "origin" remote configured at all — the fallback candidate itself
+    // fails to fetch.
+    const res = await ensureWorktree({ repoRoot: root, issue: 4007, base: "main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.fetchDegraded, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

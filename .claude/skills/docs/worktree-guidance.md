@@ -48,18 +48,32 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
 ```
 
 Branch resolution on the create path is three-way, reported via `branchOrigin`:
-an existing local branch is re-attached (`reused-local`); otherwise an existing
-same-name remote branch is checked out as a new local branch tracking the
-remote tip (`tracked-remote` — upstream is the remote branch, never base);
-otherwise the branch is created off the resolved base (`created-from-base`).
-When a local branch and its same-name remote branch have genuinely forked, the
-result carries a `diverged: { remoteRef, local, remote }` report (on both the
-create and reuse paths) instead of silently picking a side.
+an existing local branch is re-attached (`reused-local`); otherwise the first
+candidate remote — in priority order, the one `--base` names, then `origin`
+when it differs, so an existing `origin/<branch>` is never invisible just
+because `--base` pointed at a different remote (a fork workflow's `--base
+upstream/main`) — that already has a same-name branch is checked out as a new
+local branch tracking that remote's tip (`tracked-remote` — upstream is the
+remote branch, never base); otherwise the branch is created off the resolved
+base (`created-from-base`). Reusing an already-existing worktree that is
+DETACHED (no local branch — e.g. `ui-review`'s pinned-PR-head worktrees)
+reports `branchOrigin: "reused-detached"` instead of fabricating a branch
+association. When a local branch and a candidate remote's same-name branch
+have genuinely forked, the result carries a `diverged: { remoteRef, local,
+remote }` report (on both the create and reuse paths) instead of silently
+picking a side; a `--single-branch` clone only carries remote-tracking refs
+for the branches it was cloned with, so a genuinely existing but
+never-fetched remote branch can still fall through to `created-from-base`
+there.
 
-It prints `{ ok, path, created|reused, branchOrigin, diverged?, provision: { actions, summary }, guard }`
-(the full `provisionWorktree()` result, not just its summary). Provisioning is
-fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
-a hard error. It does **not** run `npm install` (see dependencies below).
+It prints `{ ok, path, created|reused, base?, branchOrigin, diverged?,
+fetchDegraded?, provision: { actions, summary }, guard }` (`base` only on
+create; `provision` is the full `provisionWorktree()` result, not just its
+summary; `fetchDegraded: true` means at least one candidate remote's
+best-effort fetch failed, so branch resolution ran against whatever was
+already fetched). Provisioning is fail-soft (a warning never aborts the
+worktree); a `git worktree add` failure is a hard error. It does **not** run
+`npm install` (see dependencies below).
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`), always
@@ -212,8 +226,17 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> --issue <n>
 ```
 
 **Underlying mechanism** (use directly only when the entrypoint is
-unavailable): `git fetch origin`, check `git worktree list`, then
-`git worktree add -b <branch> tmp/worktrees/dev-loops/<kind>-<number> origin/main`.
+unavailable): `git fetch --prune origin` (and any other remote `--base`
+names), check `git worktree list`, then pick ONE of the three branch
+resolutions the entrypoint automates (see `branchOrigin` above) — an existing
+local branch: `git worktree add tmp/worktrees/dev-loops/<kind>-<number>
+<branch>`; an existing same-name remote branch on any candidate remote:
+`git worktree add -b <branch> --track tmp/worktrees/dev-loops/<kind>-<number>
+<remote>/<branch>`; neither: `git worktree add -b <branch>
+tmp/worktrees/dev-loops/<kind>-<number> origin/main`. Unconditionally forking
+off base (the last case) when a same-name branch already exists on a remote
+silently drops that branch's commits and points upstream at base instead —
+the exact hazard `branchOrigin: tracked-remote` exists to avoid.
 
 ## Dependency and install expectations
 
