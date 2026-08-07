@@ -152,11 +152,20 @@ gates:
   postFindingsComments: false
   # Grouped fan-out dispatch (AC6, default mode — see resolveFanoutGroups):
   # angles that read the same surface batch onto one reviewer. Angles not
-  # named below each resolve as their own singleton group, so bug-hunting
-  # angles that benefit from independent judgment stay one-reviewer-per-angle
-  # by omission. Set `mode: per-angle` to restore full one-reviewer-per-angle
-  # fan-out repo-wide; `gate:full` always escalates to per-angle regardless.
+  # named below join the auto-chunked leftover pool. Set `mode: per-angle`
+  # to restore full one-reviewer-per-angle fan-out repo-wide (≡
+  # maxAnglesPerGroup: 1). `gate:full` forces the full angle set but no
+  # longer restores per-angle dispatch (ADR 0047 superseded by 0048) — it
+  # dispatches grouped.
+  #
+  # Two orthogonal dispatch bounds (#1601):
+  #   maxAnglesPerGroup (N, default 3, min 1) — leftover ungrouped angles
+  #     auto-chunk into dispatch units of ≤N instead of singletons.
+  #   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave.
+  # Both count dispatch units (groups), not angles.
   fanout:
+    maxAnglesPerGroup: 3
+    maxConcurrent: 4
     groups:
       - name: docs-surface
         angles: [docs, link-check, config-drift, contract-surface]

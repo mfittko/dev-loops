@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-08-04 ([issue 1572](https://github.com/mfittko/dev-loops/issues/1572))
+Partially amended by [0048](./0048-gate-full-dispatches-grouped-two-knob-dispatch-bounds.md) — the `gate:full` per-angle restoration clause is superseded; `gate:full` now dispatches grouped. The grouped default, static grouping table, and `mode: per-angle` opt-in are unchanged.
 
 ## Context
 

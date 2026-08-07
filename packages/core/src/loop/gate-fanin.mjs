@@ -28,6 +28,50 @@
  * LEGACY_SEVERITY_ALIASES / normalizeSeverity).
  */
 
+import { scheduleParallelWaves } from "./queue-parallel.mjs";
+
+/**
+ * Schedule fan-out dispatch units into bounded-concurrency waves (issue #1601).
+ *
+ * Reuses the existing wave scheduler `scheduleParallelWaves`
+ * (packages/core/src/loop/queue-parallel.mjs, originally the queue-mode parallel
+ * scheduler): each wave holds at most `maxConcurrent` dispatch units, and the
+ * conductor dispatches wave-by-wave — awaiting a free slot (wave completion)
+ * before launching the next — instead of fire-all-then-retry. This replaces
+ * the unbounded concurrent fan-out that 429-stormed multi-angle gate rounds
+ * (issue #1588 drive: 5–6 reviewers 429'd per round).
+ *
+ * Pure: same input always yields the same wave plan (deterministic order, so
+ * the wave plan a reviewer's gate-context artifact records is byte-stable
+ * across fresh reviewer spawns for the same head+config).
+ *
+ * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output
+ * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 4, min 1)
+ * @returns {{ name: string, angles: string[] }[][]} waves of dispatch units (at most `maxConcurrent` per wave)
+ */
+export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
+  const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  if (groups.length === 0) return [];
+  return scheduleParallelWaves(groups, cap);
+}
+
+/**
+ * Adaptive 429-backoff concurrency (issue #1601): halve the active batch before
+ * escalating to foreground one-at-a-time fallback. On a 429, the conductor
+ * recomputes the wave plan with `backoffMaxConcurrent(maxConcurrent)` and
+ * retries the failed wave; if a single-unit wave still 429s, it falls back to
+ * foreground (one-at-a-time) dispatch. The backoff is recorded in the round's
+ * provenance (see skills/docs/gate-review-sub-loop-contract.md). Pure; never
+ * returns 0 (a backoff from 1 stays 1 → foreground fallback owns that path).
+ * @param {number} maxConcurrent
+ * @returns {number}
+ */
+export function backoffMaxConcurrent(maxConcurrent) {
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  return Math.max(1, Math.floor(cap / 2));
+}
+
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each

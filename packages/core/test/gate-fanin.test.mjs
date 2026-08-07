@@ -14,6 +14,8 @@ import {
   countFreshDispatchUnits,
   fanoutReviewerPairingError,
   freshAngleNames,
+  scheduleFanoutWaves,
+  backoffMaxConcurrent,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -515,7 +517,7 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
       assert.match(error, /does not place all of them in one group/);
     });
 
-    test("per-angle mode / gate:full (resolveFanoutGroups collapses every angle to its own singleton) rejects ANY shared identity, regardless of the declared group label", () => {
+    test("per-angle mode (resolveFanoutGroups emits one singleton unit per angle) rejects ANY shared identity across units, regardless of the declared group label — gate:full no longer collapses to singletons (ADR 0048)", () => {
       const perAngleModeGroups = [
         { name: "a", angles: ["a"] },
         { name: "b", angles: ["b"] },
@@ -591,5 +593,73 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
       { mandatoryAngles: [], pool: ["dry", "kiss"] },
     );
     assert.deepEqual(result.foreignAngles, []);
+  });
+});
+
+describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via scheduleParallelWaves)", () => {
+  const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+  test("empty dispatch groups → no waves", () => {
+    assert.deepEqual(scheduleFanoutWaves([], 4), []);
+    assert.deepEqual(scheduleFanoutWaves(null, 4), []);
+  });
+
+  test("respects maxConcurrent: M units per wave", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f"]);
+    const waves = scheduleFanoutWaves(groups, 2);
+    assert.equal(waves.length, 3);
+    assert.deepEqual(waves.map((w) => w.length), [2, 2, 2]);
+    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b"]);
+    assert.deepEqual(waves[2].map((u) => u.name), ["e", "f"]);
+  });
+
+  test("default cap is 4", () => {
+    const groups = units(["a", "b", "c", "d", "e"]);
+    const waves = scheduleFanoutWaves(groups);
+    assert.equal(waves.length, 2);
+    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b", "c", "d"]);
+    assert.deepEqual(waves[1].map((u) => u.name), ["e"]);
+  });
+
+  test("a single unit / light round is one wave of one (not serialized)", () => {
+    const waves = scheduleFanoutWaves(units(["a"]), 4);
+    assert.deepEqual(waves, [[{ name: "a", angles: ["a"] }]]);
+  });
+
+  test("invalid maxConcurrent falls back to 4", () => {
+    const groups = units(["a", "b", "c", "d", "e"]);
+    assert.equal(scheduleFanoutWaves(groups, 0).length, 2);
+    assert.equal(scheduleFanoutWaves(groups, -1).length, 2);
+    assert.equal(scheduleFanoutWaves(groups, 1.5).length, 2);
+  });
+
+  test("deterministic: same input → same wave plan", () => {
+    const groups = units(["a", "b", "c", "d"]);
+    assert.deepEqual(scheduleFanoutWaves(groups, 3), scheduleFanoutWaves(groups, 3));
+  });
+});
+
+describe("backoffMaxConcurrent (#1601 — adaptive 429 backoff)", () => {
+  test("halves the active batch", () => {
+    assert.equal(backoffMaxConcurrent(4), 2);
+    assert.equal(backoffMaxConcurrent(8), 4);
+    assert.equal(backoffMaxConcurrent(6), 3);
+    assert.equal(backoffMaxConcurrent(3), 1);
+  });
+  test("never returns 0 — a backoff from 1 stays 1 (foreground fallback owns that path)", () => {
+    assert.equal(backoffMaxConcurrent(1), 1);
+    assert.equal(backoffMaxConcurrent(2), 1);
+  });
+  test("invalid input falls back to 4 then halves", () => {
+    assert.equal(backoffMaxConcurrent(0), 2);
+    assert.equal(backoffMaxConcurrent("4"), 2);
+    assert.equal(backoffMaxConcurrent(-1), 2);
+  });
+  test("a backoff wave plan is tighter than the original", () => {
+    const groups = [{ name: "a", angles: ["a"] }, { name: "b", angles: ["b"] }, { name: "c", angles: ["c"] }, { name: "d", angles: ["d"] }];
+    const original = scheduleFanoutWaves(groups, 4);
+    const backed = scheduleFanoutWaves(groups, backoffMaxConcurrent(4));
+    assert.equal(original.length, 1); // one wave of 4
+    assert.equal(backed.length, 2); // two waves of 2 after backoff
   });
 });

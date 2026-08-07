@@ -250,17 +250,27 @@ const FanoutGroup = z.strictObject({
   angles: z.array(z.string().trim().min(1)).min(1).describe("Angle names batched onto one reviewer when this group resolves."),
 });
 
-// Angle-dispatch fan-out policy (AC6). `grouped` (default) batches related
-// angles from a static table onto one reviewer per group, cutting the fixed
-// per-reviewer briefing cost when several angles read the same surface;
-// `per-angle` keeps the original one-reviewer-per-angle fan-out. The
-// `gate:full` label always escalates to per-angle regardless of this setting
-// (see resolveFanoutGroups). An angle resolved for a round but not named in
-// any configured group forms its own implicit singleton group — `groups`
-// need only list the angles worth batching.
+// Angle-dispatch fan-out policy (AC6 + #1601 two-knob dispatch bounds). The
+// grouped default batches related angles from a static table onto one
+// reviewer per group, cutting the fixed per-reviewer briefing cost when
+// several angles read the same surface; `per-angle` keeps the original
+// one-reviewer-per-angle fan-out (≡ maxAnglesPerGroup: 1). `gate:full` no
+// longer restores per-angle dispatch (ADR 0047 superseded by 0048): it forces
+// the full angle set upstream (resolveGateTier) and dispatches GROUPED here.
+// Two orthogonal bounds (issue #1601):
+//   maxAnglesPerGroup (N, default 3, min 1) — after configured-groups
+//     matching, leftover ungrouped angles auto-chunk into dispatch units of
+//     ≤N instead of singletons. mode: per-angle ≡ N=1.
+//   maxConcurrent (M, default 4, min 1) — the conductor dispatches at most M
+//     dispatch units per wave (scheduleFanoutWaves via scheduleParallelWaves).
+// An angle resolved for a round but not named in any configured group joins
+// the auto-chunked leftover pool — `groups` need only list the angles worth
+// batching explicitly.
 const FanoutConfig = z.strictObject({
-  mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle."),
-  groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group resolves as its own singleton group."),
+  mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle (≡ maxAnglesPerGroup: 1)."),
+  groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
+  maxAnglesPerGroup: z.number().int().min(1).default(3).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). mode: per-angle ≡ 1. Configured groups are matched first and never split by this knob."),
+  maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves)."),
 });
 
 /**
@@ -1987,28 +1997,91 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
 }
 
 /**
- * Resolve grouped fan-out dispatch (AC6): map a round's resolved review
- * angles onto the reviewer groups it actually dispatches.
+ * Default auto-chunk size for ungrouped angles (issue #1601). Mirrors the
+ * zod default on `gates.fanout.maxAnglesPerGroup`.
+ */
+export const DEFAULT_MAX_ANGLES_PER_GROUP = 3;
+
+/**
+ * Default concurrent-dispatch-unit cap per wave (issue #1601). Mirrors the
+ * zod default on `gates.fanout.maxConcurrent`; consumed by
+ * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
+ */
+export const DEFAULT_FANOUT_MAX_CONCURRENT = 4;
+
+/**
+ * Resolve `gates.fanout.maxAnglesPerGroup` (issue #1601, default 3, min 1).
+ * The number of ungrouped angles auto-chunked into one dispatch unit.
+ * Defensive, independent of zod: a non-integer or sub-1 value falls back to
+ * the built-in default so a malformed raw merged config (which zod may have
+ * rejected at load time while still returning it) never crashes Phase 2.
+ * @param {DevLoopConfig} config
+ * @returns {number}
+ */
+export function resolveMaxAnglesPerGroup(config) {
+  const n = config?.gates?.fanout?.maxAnglesPerGroup;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1) return DEFAULT_MAX_ANGLES_PER_GROUP;
+  return n;
+}
+
+/**
+ * Resolve `gates.fanout.maxConcurrent` (issue #1601, default 4, min 1). The
+ * max dispatch units (groups) the conductor dispatches concurrently per wave.
+ * Defensive, independent of zod (same rationale as resolveMaxAnglesPerGroup).
+ * @param {DevLoopConfig} config
+ * @returns {number}
+ */
+export function resolveFanoutMaxConcurrent(config) {
+  const m = config?.gates?.fanout?.maxConcurrent;
+  if (typeof m !== "number" || !Number.isInteger(m) || m < 1) return DEFAULT_FANOUT_MAX_CONCURRENT;
+  return m;
+}
+
+/**
+ * Resolve grouped fan-out dispatch (AC6 + #1601 two-knob dispatch bounds):
+ * map a round's resolved review angles onto the dispatch units it actually
+ * dispatches.
  *
- * Precedence (first match wins):
- *   1. `options.fullLabel` (`gate:full`)   → per-angle (one group per angle)
- *   2. `gates.fanout.mode === "per-angle"` → per-angle
- *   3. otherwise (default `grouped`)       → `resolvedAngles` map onto
- *      `gates.fanout.groups`; an angle absent from every configured group
- *      forms its own implicit singleton group.
+ * Dispatch shape precedence (first match wins):
+ *   1. `gates.fanout.mode === "per-angle"` → one singleton unit per angle
+ *      (≡ maxAnglesPerGroup: 1; bypasses the configured-groups table so
+ *      every angle keeps its own reviewer, matching the original one-reviewer-
+ *      per-angle fan-out verbatim)
+ *   2. otherwise (default `grouped`) → configured `gates.fanout.groups` are
+ *      matched first (unchanged), then the leftover ungrouped angles are
+ *      auto-chunked into dispatch units of ≤ `maxAnglesPerGroup` (default 3)
+ *      instead of singletons.
+ *
+ * `gate:full` (`options.fullLabel`) NO LONGER restores per-angle dispatch
+ * (ADR 0047 superseded by 0048): `gate:full` keeps forcing the full angle set
+ * UPSTREAM (resolveGateTier returns `gate_full_label`, so resolveGateAnglesDynamic
+ * skips diff-class tier reduction) and dispatches GROUPED here. The `fullLabel`
+ * parameter is retained on the signature (callers thread it) but no longer
+ * changes the dispatch shape — it is a no-op here, kept only to avoid a breaking
+ * API change to the exported resolver; its angle-set effect lives upstream.
  *
  * A configured group is included only when at least one of its angles is in
  * `resolvedAngles` this round — an unmatched group is dropped, never emitted
- * empty. Each reviewer still writes ONE artifact per angle at the existing
- * per-angle paths; grouping only changes how many reviewers are dispatched,
- * not the artifact shape (see skills/docs/gate-review-sub-loop-contract.md).
+ * empty. Configured groups are NEVER split by `maxAnglesPerGroup` (the knob
+ * chunks only the leftover ungrouped pool). Each reviewer still writes ONE
+ * artifact per angle at the existing per-angle paths; grouping only changes how
+ * many reviewers are dispatched, not the artifact shape (see
+ * skills/docs/gate-review-sub-loop-contract.md).
+ *
+ * Auto-chunk unit names are deterministic and stable (issue #1601): a
+ * single-angle leftover chunk is named by its angle (collisions with an emitted
+ * group name disambiguated to `angle:<name>`, preserving the pre-#1601
+ * singleton convention); a multi-angle chunk is named `group:<a>+<b>+<c>` from
+ * its deterministically-ordered members. Unit names key reviewer-sentinel
+ * scopes and provenance `group`, so they must be unique — a chunk whose base
+ * name still collides gets a `#2`/`#3`/… suffix.
  *
  * Defensive, independent of zod: `loadDevLoopConfig` returns the raw merged
  * config even when schema validation fails (on ANY layer, not necessarily
  * `gates.fanout` itself), so a malformed `gates.fanout.groups` entry can
  * reach here. A non-object entry, a non-array/blank `angles`, or a
- * blank/duplicate `name` is dropped (its angles fall through to their own
- * singleton groups) rather than thrown — mirroring the sibling
+ * blank/duplicate `name` is dropped (its angles fall through to the leftover
+ * auto-chunk pool) rather than thrown — mirroring the sibling
  * `normalizeAngleEntries` convention: this resolver degrades to a smaller
  * grouping table, never crashes the conductor's Phase 2 planning.
  * `resolvedAngles` is deduplicated up front so a duplicated entry (e.g. a
@@ -2019,7 +2092,8 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
  *   is a global policy (`gates.fanout`), not per-gate; accepted for symmetry
  *   with the other `resolveGate*(config, gate, ...)` resolvers.
  * @param {string[]} resolvedAngles this round's resolved angle names
- * @param {{ fullLabel?: boolean }} [options]
+ * @param {{ fullLabel?: boolean }} [options] — retained for API stability;
+ *   no longer changes the dispatch shape (see `gate:full` note above).
  * @returns {{ name: string, angles: string[] }[]}
  */
 export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = false } = {}) {
@@ -2027,7 +2101,9 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     ? [...new Set(resolvedAngles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
     : [];
   const perAngleGroups = () => angles.map((name) => ({ name, angles: [name] }));
-  if (fullLabel) return perAngleGroups();
+  // per-angle ≡ N=1: bypass configured groups and emit one singleton unit per
+  // angle (the original one-reviewer-per-angle fan-out). gate:full no longer
+  // takes this branch (ADR 0047 superseded by 0048): fullLabel is a no-op here.
   const fanout = config?.gates?.fanout ?? {};
   if (fanout.mode === "per-angle") return perAngleGroups();
   const angleSet = new Set(angles);
@@ -2053,17 +2129,43 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     for (const a of members) grouped.add(a);
     result.push({ name: group.name, angles: members });
   }
-  // Dispatch-unit names key reviewer-sentinel scopes and batching, so they
-  // must be unique. An ungrouped angle whose name collides with an emitted
-  // group's name gets a disambiguated singleton unit name.
+  // Issue #1601: leftover ungrouped angles auto-chunk into dispatch units of
+  // ≤ maxAnglesPerGroup (default 3) instead of singletons. Configured groups
+  // are matched first and never split by this knob (only the leftover pool is
+  // chunked). Deterministic order (input order) + stable unit names.
   const usedNames = new Set(result.map((g) => g.name));
-  for (const name of angles) {
-    if (grouped.has(name)) continue;
-    const unitName = usedNames.has(name) ? `angle:${name}` : name;
+  const leftover = angles.filter((name) => !grouped.has(name));
+  const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
+  for (let i = 0; i < leftover.length; i += maxAnglesPerGroup) {
+    const chunk = leftover.slice(i, i + maxAnglesPerGroup);
+    const unitName = stableAutoChunkUnitName(chunk, usedNames);
     usedNames.add(unitName);
-    result.push({ name: unitName, angles: [name] });
+    result.push({ name: unitName, angles: chunk });
   }
   return result;
+}
+
+/**
+ * Deterministic, stable dispatch-unit name for an auto-chunked leftover
+ * unit (issue #1601). A single-angle chunk keeps the pre-#1601 singleton
+ * convention (the angle name, disambiguated to `angle:<name>` on collision
+ * with an emitted group name); a multi-angle chunk is named
+ * `group:<a>+<b>+<c>` from its deterministically-ordered members, with a
+ * `#N` suffix when even that base collides. Pure.
+ * @param {string[]} chunk — non-empty, deterministically ordered
+ * @param {Set<string>} usedNames — already-emitted unit names (mutated by caller)
+ * @returns {string}
+ */
+function stableAutoChunkUnitName(chunk, usedNames) {
+  if (chunk.length === 1) {
+    const name = chunk[0];
+    return usedNames.has(name) ? `angle:${name}` : name;
+  }
+  const base = `group:${chunk.join("+")}`;
+  if (!usedNames.has(base)) return base;
+  let k = 2;
+  while (usedNames.has(`${base}#${k}`)) k++;
+  return `${base}#${k}`;
 }
 
 /**

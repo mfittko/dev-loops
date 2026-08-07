@@ -878,15 +878,14 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
   }
 });
 
-test("writeGateFindingsLog rejects a grouped-provenance ledger under --full-label (per-angle singletons resolved, shared identity across angles fails)", async () => {
+test("writeGateFindingsLog accepts a grouped-provenance ledger under --full-label (gate:full dispatches grouped per ADR 0048, #1601)", async () => {
   // Same fixture + provenance as the "accepts a grouped-dispatch ledger" test
-  // above, EXCEPT fullLabel: true is threaded through. resolveFanoutGroups
-  // returns per-angle singleton groups under gate:full (AC6 precedence #1),
-  // regardless of the configured "process" group — so the SAME provenance
-  // that a tiered round accepts must fail closed on a gate:full round
-  // (the write path must resolve the SAME grouping the read/enforcement path
-  // resolves for gate:full, or a grouped ledger the write path accepts would
-  // be rejected at pre-merge enforcement).
+  // above, EXCEPT fullLabel: true is threaded through. As of #1601 (ADR 0048)
+  // gate:full no longer restores per-angle dispatch — it forces the full angle
+  // set upstream and dispatches GROUPED, so the configured "process" group
+  // still resolves and the SAME provenance a tiered round accepts is also
+  // accepted on a gate:full round (the write path resolves the SAME grouping
+  // the read/enforcement path resolves for gate:full).
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-"));
   try {
     await writeFile(
@@ -910,26 +909,24 @@ test("writeGateFindingsLog rejects a grouped-provenance ledger under --full-labe
     );
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-full-label-grouped-out-"));
     try {
-      await assert.rejects(
-        () => writeGateFindingsLog({
-          repo: "a/b",
-          pr: 1,
-          gate: "pre_approval_gate",
-          headSha: "abc1234500000000000000000000000000000000",
-          verdict: "clean",
-          findings: "[]",
-          provenance: JSON.stringify({
-            distinctReviewers: 1,
-            perAngle: [
-              { angle: "dry", reviewer: "review-a", group: "process" },
-              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
-            ],
-          }),
-          fullLabel: true,
-          tmpRoot: tmpDir,
-        }, { repoRoot }),
-        /does not place all of them in one group/,
-      );
+      const result = await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "pre_approval_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "clean",
+        findings: "[]",
+        provenance: JSON.stringify({
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+          ],
+        }),
+        fullLabel: true,
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -937,7 +934,6 @@ test("writeGateFindingsLog rejects a grouped-provenance ledger under --full-labe
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
-
 test("writeGateFindingsLog rejects a grouped-dispatch ledger whose declared group the configured gates.fanout.groups table does not actually place together (fabricated group label)", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-grouped-fabricated-"));

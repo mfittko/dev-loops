@@ -1488,8 +1488,11 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
         "      - kiss",
         "      - name: pr-checklist-matrix",
         "        mandatory: true",
-        // No gates.fanout.groups at all — dry/kiss each resolve as their own
-        // singleton dispatch unit.
+        "  fanout:",
+        "    maxAnglesPerGroup: 1",
+        // No gates.fanout.groups; maxAnglesPerGroup: 1 (≡ per-angle) keeps
+        // dry/kiss as separate singleton dispatch units (#1601) so a
+        // fabricated group label spanning them is still rejected.
         "",
       ].join("\n"),
       "utf8",
@@ -1539,7 +1542,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
   }
 });
 
-test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME legitimately-grouped ledger FAILS under hasFullLabel: true (gate:full resolves per-angle singletons, so the shared group is no longer valid)", async () => {
+test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): the SAME legitimately-grouped ledger PASSES under hasFullLabel: true (gate:full dispatches grouped per ADR 0048, so the shared group stays valid)", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-full-label-grouped-"));
   try {
     await writeFile(
@@ -1598,9 +1601,11 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
       draftGate: { visible: true, verdict: "clean" },
       preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
     }, 0, null, enforcement);
-    assert.equal(result.ok, false);
+    // #1601 (ADR 0048): gate:full dispatches grouped, so the configured
+    // "process" group stays valid and the shared reviewer passes provenance.
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
     assert.ok(
-      result.failures.some((f) => f.includes("does not place all of them in one group")),
+      !result.failures.some((f) => f.includes("does not place all of them in one group")),
       JSON.stringify(result.failures),
     );
   } finally {
