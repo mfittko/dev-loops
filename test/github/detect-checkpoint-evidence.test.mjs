@@ -2697,3 +2697,70 @@ test("deriveEvidenceState: both gates clean but an unrelated pre-merge failure (
   const preMergeGateCheck = { ok: false, failures: ["unresolved review threads present (2); must resolve all threads before merge"] };
   assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
 });
+
+test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked N>1 round (AC7, #1601)", async () => {
+  // No configured groups; maxAnglesPerGroup: 2 → resolveFanoutGroups auto-chunks
+  // [a,b,c,d] into group:a+b + group:c+d, with pr-checklist-matrix a leftover
+  // singleton. A ledger recording one reviewer per chunk (shared identity within
+  // the chunk, distinct across chunks) must PASS requireFanoutProvenance —
+  // countFreshDispatchUnits counts 3 dispatch units, not 5 angles.
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-autochunk-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - a",
+        "      - b",
+        "      - c",
+        "      - d",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    maxAnglesPerGroup: 2",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "e".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-31");
+    await mkdir(path.join(ledgerDir), { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 3,
+          perAngle: [
+            { angle: "a", reviewer: "review-a", group: "group:a+b" },
+            { angle: "b", reviewer: "review-a", group: "group:a+b" },
+            { angle: "c", reviewer: "review-b", group: "group:c+d" },
+            { angle: "d", reviewer: "review-b", group: "group:c+d" },
+            { angle: "pr-checklist-matrix", reviewer: "review-c" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 31, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

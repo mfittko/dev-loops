@@ -663,3 +663,27 @@ describe("backoffMaxConcurrent (#1601 — adaptive 429 backoff)", () => {
     assert.equal(backed.length, 2); // two waves of 2 after backoff
   });
 });
+
+test("countFreshDispatchUnits counts auto-chunked groups as single units on a chunked round (#1601 AC7)", () => {
+  // Simulate a round where resolveFanoutGroups auto-chunked 5 angles into 2
+  // dispatch units (group:a+b+c, group:d+e) — each chunk is ONE dispatch unit,
+  // so countFreshDispatchUnits must be 2, not 5.
+  const perAngle = [
+    { angle: "a", reviewer: "r1", group: "group:a+b+c" },
+    { angle: "b", reviewer: "r1", group: "group:a+b+c" },
+    { angle: "c", reviewer: "r1", group: "group:a+b+c" },
+    { angle: "d", reviewer: "r2", group: "group:d+e" },
+    { angle: "e", reviewer: "r2", group: "group:d+e" },
+  ];
+  assert.equal(countFreshDispatchUnits(perAngle), 2);
+  assert.equal(countFreshDispatchUnits(perAngle) < freshAngleNames(perAngle).length, true);
+  // A singleton leftover chunk named by its angle still counts as 1 unit.
+  assert.equal(
+    countFreshDispatchUnits([
+      { angle: "a", reviewer: "r1", group: "group:a+b" },
+      { angle: "b", reviewer: "r1", group: "group:a+b" },
+      { angle: "c", reviewer: "r3" }, // leftover singleton, no group
+    ]),
+    2,
+  );
+});

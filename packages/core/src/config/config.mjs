@@ -254,22 +254,22 @@ const FanoutGroup = z.strictObject({
 // grouped default batches related angles from a static table onto one
 // reviewer per group, cutting the fixed per-reviewer briefing cost when
 // several angles read the same surface; `per-angle` keeps the original
-// one-reviewer-per-angle fan-out (≡ maxAnglesPerGroup: 1). `gate:full` no
+// one-reviewer-per-angle fan-out (bypasses configured groups). `gate:full` no
 // longer restores per-angle dispatch (ADR 0047 superseded by 0048): it forces
 // the full angle set upstream (resolveGateTier) and dispatches GROUPED here.
 // Two orthogonal bounds (issue #1601):
 //   maxAnglesPerGroup (N, default 3, min 1) — after configured-groups
 //     matching, leftover ungrouped angles auto-chunk into dispatch units of
-//     ≤N instead of singletons. mode: per-angle ≡ N=1.
+//     ≤N instead of singletons. mode: per-angle bypasses the table entirely
 //   maxConcurrent (M, default 4, min 1) — the conductor dispatches at most M
 //     dispatch units per wave (scheduleFanoutWaves via scheduleParallelWaves).
 // An angle resolved for a round but not named in any configured group joins
 // the auto-chunked leftover pool — `groups` need only list the angles worth
 // batching explicitly.
 const FanoutConfig = z.strictObject({
-  mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle (≡ maxAnglesPerGroup: 1)."),
+  mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
-  maxAnglesPerGroup: z.number().int().min(1).default(3).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). mode: per-angle ≡ 1. Configured groups are matched first and never split by this knob."),
+  maxAnglesPerGroup: z.number().int().min(1).default(3).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
   maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves)."),
 });
 
@@ -2043,10 +2043,9 @@ export function resolveFanoutMaxConcurrent(config) {
  * dispatches.
  *
  * Dispatch shape precedence (first match wins):
- *   1. `gates.fanout.mode === "per-angle"` → one singleton unit per angle
- *      (≡ maxAnglesPerGroup: 1; bypasses the configured-groups table so
- *      every angle keeps its own reviewer, matching the original one-reviewer-
- *      per-angle fan-out verbatim)
+ *   1. `gates.fanout.mode === "per-angle"` → bypasses configured groups; one
+ *      singleton unit per angle (the original one-reviewer-per-angle fan-out;
+ *      NOT equivalent to maxAnglesPerGroup: 1 when configured groups match)
  *   2. otherwise (default `grouped`) → configured `gates.fanout.groups` are
  *      matched first (unchanged), then the leftover ungrouped angles are
  *      auto-chunked into dispatch units of ≤ `maxAnglesPerGroup` (default 3)
@@ -2101,7 +2100,7 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     ? [...new Set(resolvedAngles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
     : [];
   const perAngleGroups = () => angles.map((name) => ({ name, angles: [name] }));
-  // per-angle ≡ N=1: bypass configured groups and emit one singleton unit per
+  // per-angle: bypass configured groups and emit one singleton unit per
   // angle (the original one-reviewer-per-angle fan-out). gate:full no longer
   // takes this branch (ADR 0047 superseded by 0048): fullLabel is a no-op here.
   const fanout = config?.gates?.fanout ?? {};

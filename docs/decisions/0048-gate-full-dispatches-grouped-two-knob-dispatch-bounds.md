@@ -78,7 +78,7 @@ concurrent unit.
 
 Rejected: dynamic/heuristic grouping (defeats the auditability a static table
 gives a reviewer of the contract — unchanged from 0047); removing the per-angle
-opt-in entirely (`mode: per-angle` stays as the ≡ N=1 escape hatch); a single
+opt-in entirely (`mode: per-angle` stays as the bypass-groups escape hatch); a single
 concurrency knob without the grouping knob (grouping is what reduces the unit
 count the concurrency cap bounds — the two are orthogonal and both are needed).
 
@@ -95,7 +95,7 @@ set, not the per-angle dispatch shape. The `fullLabel` parameter on
 `resolveFanoutGroups` is retained on the signature (callers thread it) but is a
 no-op for dispatch shape; its angle-set effect lives upstream in
 `resolveGateTier`. A reviewer who wants the un-grouped signal opts in via
-`mode: per-angle` (≡ N=1). Provenance, fan-in, the disposition ledger, coverage
+`mode: per-angle` (bypasses configured groups). Provenance, fan-in, the disposition ledger, coverage
 checks, and the head-stamp guard are all unchanged — they were already
 angle-keyed / dispatch-unit-keyed, not reviewer-count-keyed. The adaptive 429
 backoff is a conductor procedure backed by `backoffMaxConcurrent` +

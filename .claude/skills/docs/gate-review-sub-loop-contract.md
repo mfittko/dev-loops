@@ -297,7 +297,7 @@ Fan out one fresh-context reviewer per resolved **dispatch unit**. In the defaul
 mode a dispatch unit is a group of angles (`resolveFanoutGroups`, below): configured
 `gates.fanout.groups` are matched first (unchanged), then the leftover ungrouped angles are
 auto-chunked into dispatch units of ≤ `gates.fanout.maxAnglesPerGroup` (default 3, #1601)
-instead of singletons. `mode: per-angle` is the exact equivalent of `maxAnglesPerGroup: 1`
+instead of singletons. `mode: per-angle` bypasses configured groups (one singleton per angle); it matches `maxAnglesPerGroup: 1` in unit size only when no configured multi-angle group matches
 (one singleton unit per angle, bypassing the configured-groups table). `gate:full` no longer
 restores per-angle dispatch (ADR 0048 supersedes 0047): it forces the full angle set upstream
 (`resolveGateTier` returns `gate_full_label`, so `resolveGateAnglesDynamic` skips diff-class
@@ -320,7 +320,7 @@ reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
-- is scoped to exactly one review angle (`mode: per-angle` ≡ `maxAnglesPerGroup: 1`) or to every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
+- is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
   prohibition; `verify-fresh-review-context.mjs --context-path` enforces it mechanically —
@@ -334,7 +334,7 @@ dispatch units by calling `resolveFanoutGroups(config, gate, resolvedAngles, { f
 no configured group joins the leftover pool), then the leftover ungrouped angles are
 auto-chunked into dispatch units of ≤ `gates.fanout.maxAnglesPerGroup` (default 3, #1601)
 instead of singletons, and the fan-out spawns ONE reviewer per returned group — never per
-angle. `mode: per-angle` (≡ `maxAnglesPerGroup: 1`) bypasses the configured-groups table and
+angle. `mode: per-angle` bypasses the configured-groups table and
 emits one singleton unit per angle, reproducing the original one-reviewer-per-angle fan-out.
 `gate:full` no longer makes every group a singleton (ADR 0048 supersedes 0047): it forces the
 full angle set upstream and dispatches GROUPED. Because fan-in, the disposition ledger,
@@ -358,7 +358,7 @@ concurrent unit; `countFreshDispatchUnits` derives the `requireFanoutProvenance`
 <!-- rule: GATE-EXEC-BRIEFING-PREFIX -->
 `GATE-EXEC-BRIEFING-PREFIX`: Every per-angle reviewer briefing MUST be composed as an
 **invariant block** followed by the **angle-specific prompt(s)** of its dispatch unit (one
-prompt per angle under `mode: per-angle` (≡ `maxAnglesPerGroup: 1`); every angle.s under
+prompt per angle under `mode: per-angle` (bypasses configured groups: one singleton unit per angle); every angle prompt under
 grouped mode, the default — including `gate:full`, which dispatches grouped as of ADR 0048), in that order —
 never angle-first. The invariant block MUST be byte-identical across every reviewer of the
 same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
@@ -1286,7 +1286,7 @@ angles is a member of that SAME configured dispatch unit per `resolveFanoutGroup
 self-attested `group` label spanning angles the
 configured table splits apart (or never groups together at all) fails closed even though
 the label itself is internally consistent; `resolveFanoutGroups` emits one-angle-per-unit
-singletons for `gates.fanout.mode: per-angle` (≡ `maxAnglesPerGroup: 1`), so passing its
+singletons for `gates.fanout.mode: per-angle` (bypasses configured groups), so passing its
 output here rejects ANY shared identity in that mode, with no separate mode flag needed.
 As of #1601 (ADR 0048) `gate:full` dispatches GROUPED, so a shared identity within an
 auto-chunked dispatch unit is honored exactly as for a configured group. Fresh angles sharing a reviewer under differing or missing

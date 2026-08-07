@@ -3391,12 +3391,33 @@ test("resolveFanoutGroups: maxAnglesPerGroup chunks leftovers into units of ≤N
   ]);
 });
 
-test("resolveFanoutGroups: maxAnglesPerGroup: 1 ≡ per-angle (one unit per angle, #1601)", () => {
-  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1 } } };
-  const result = resolveFanoutGroups(config, "draft", ["scope", "docs"]);
-  assert.deepEqual(result, [
+test("resolveFanoutGroups: maxAnglesPerGroup: 1 and mode: per-angle both yield singletons with NO configured groups (#1601)", () => {
+  // With no configured groups, both produce one singleton unit per angle.
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1 } } }, "draft", ["scope", "docs"]);
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle" } } }, "draft", ["scope", "docs"]);
+  assert.deepEqual(n1, [
     { name: "scope", angles: ["scope"] },
     { name: "docs", angles: ["docs"] },
+  ]);
+  assert.deepEqual(pa, [
+    { name: "scope", angles: ["scope"] },
+    { name: "docs", angles: ["docs"] },
+  ]);
+});
+
+test("resolveFanoutGroups: per-angle and maxAnglesPerGroup: 1 DIVERGE when a configured multi-angle group matches (#1601 — not exact equivalents)", () => {
+  // per-angle bypasses configured groups (pure singletons); N=1 honors configured
+  // groups (matched first, never split) then singletons the leftovers. They are
+  // NOT equivalent when a configured multi-angle group matches a resolved angle.
+  const groups = [{ name: "docs-surface", angles: ["docs", "link-check"] }];
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle", groups } } }, "draft", ["docs", "link-check", "scope"]);
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1, groups } } }, "draft", ["docs", "link-check", "scope"]);
+  // per-angle: 3 singletons (configured group bypassed).
+  assert.deepEqual(pa.map((g) => g.angles.length), [1, 1, 1]);
+  // N=1: configured group intact (2 angles, 1 unit) + leftover singleton.
+  assert.deepEqual(n1, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "scope", angles: ["scope"] },
   ]);
 });
 

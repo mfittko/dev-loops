@@ -153,8 +153,8 @@ gates:
   # Grouped fan-out dispatch (AC6, default mode — see resolveFanoutGroups):
   # angles that read the same surface batch onto one reviewer. Angles not
   # named below join the auto-chunked leftover pool. Set `mode: per-angle`
-  # to restore full one-reviewer-per-angle fan-out repo-wide (≡
-  # maxAnglesPerGroup: 1). `gate:full` forces the full angle set but no
+  # to restore full one-reviewer-per-angle fan-out repo-wide (bypasses
+  # maxAnglesPerGroup: 1 honors configured groups; the two match in unit size only when no configured multi-angle group matches). `gate:full` forces the full angle set but no
   # longer restores per-angle dispatch (ADR 0047 superseded by 0048) — it
   # dispatches grouped.
   #

@@ -333,11 +333,13 @@ export function countFreshDispatchUnits(perAngle) {
  * honored when every fresh angle it covers is a member of the SAME
  * configured dispatch unit — a fabricated `group` label spanning angles the
  * table splits apart (or never groups at all) no longer passes.
- * `resolveFanoutGroups` itself already collapses to one-angle-per-unit
- * singletons for `gates.fanout.mode: per-angle` and for a `gate:full` round
- * (`fullLabel: true`), so passing its output here also rejects ANY shared
- * identity in those modes — no separate mode flag needed. Omitting
- * `resolvedGroups` entirely keeps today's fully permissive behavior (any one
+ * `resolveFanoutGroups` itself emits one-angle-per-unit singletons for
+ * `gates.fanout.mode: per-angle` (bypasses configured groups), so passing its
+ * output here rejects ANY shared identity in that mode — no separate mode flag
+ * needed. As of #1601 (ADR 0048) `gate:full` dispatches GROUPED (fullLabel is a
+ * no-op for dispatch shape), so a shared identity within an auto-chunked
+ * dispatch unit is honored exactly as for a configured group.
+ * Omitting `resolvedGroups` entirely keeps today's fully permissive behavior (any one
  * shared non-null `group` value is accepted, unchecked against config) — both
  * call sites already load config, so they should always supply it; this
  * default only preserves callers (and old ledgers) that don't.
