@@ -37,7 +37,7 @@ underlying mechanism, not the operator interface.
 <!-- rule: WORKTREE-CREATE-PROVISION -->
 `WORKTREE-CREATE-PROVISION`: Creating or reusing a loop-owned worktree MUST use
 this lifecycle entrypoint. It resolves the canonical namespaced path, best-effort
-`git fetch --prune`es every candidate remote (see branch resolution below —
+runs `git fetch --prune` for every candidate remote (see branch resolution below —
 the one `--base` names, then `origin` when it differs; run on the create path
 AND on an already-existing-worktree reuse ON A LOCAL BRANCH, so a divergence
 report answers from freshly-fetched refs rather than whatever was last

@@ -603,10 +603,10 @@ export async function ensureWorktree(
         guard: installGuard(gitCommand, root, base),
       };
     }
-    // Reuse: still (re-)provision — provisioning is idempotent. Fetch first
-    // (mirroring the create path below) so the divergence check answers from
-    // freshly-fetched remote-tracking refs rather than whatever the operator
-    // last happened to fetch — the same repo state must not answer
+    // Reuse: still (re-)provision — provisioning is idempotent. Fetch before
+    // the divergence check (mirroring the create path below) so it answers
+    // from freshly-fetched remote-tracking refs rather than whatever the
+    // operator last happened to fetch — the same repo state must not answer
     // differently purely based on fetch timing.
     let fetchDegraded = false;
     for (const remote of remoteCandidates) {
