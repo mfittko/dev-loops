@@ -61,7 +61,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     const severity = normalizeSeverity(f.severity);
     if (!severity || !VALID_SEVERITIES.has(severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: high, medium, low, question, nit`);
     }
     f = { ...f, severity };
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
@@ -84,8 +84,8 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
-    } else if (f.severity === "nice-to-have") {
-      // A non-blocking nice-to-have finding with no explicit disposition
+    } else if (f.severity === "low" || f.severity === "nit") {
+      // A non-blocking low/nit finding with no explicit disposition
       // defaults to "deferred" so a hand-authored (or consolidate-fanin.mjs-
       // produced) array need not repeat the obvious disposition for every
       // lowest-tier entry. Explicit dispositions (including an explicit

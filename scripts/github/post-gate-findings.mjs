@@ -39,9 +39,11 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 
 const SEVERITY_LABELS = {
-  "must-fix": "Must fix",
-  "worth-fixing-now": "Worth fixing now",
-  "nice-to-have": "Nice to have",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+  question: "Question",
+  nit: "Nit",
 };
 
 function parseError(message) {
@@ -84,7 +86,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     f = { ...f, severity: normalizeSeverity(f.severity) };
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: high, medium, low, question, nit`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
       throw parseError(`${flagLabel}[${i}].angle is required`);
@@ -99,9 +101,9 @@ function validateFindingsArray(parsed, flagLabel) {
     };
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
-    } else if (f.severity === "nice-to-have") {
+    } else if (f.severity === "low" || f.severity === "nit") {
       // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
-      // non-blocking nice-to-have finding with no explicit disposition defaults
+      // non-blocking low/nit finding with no explicit disposition defaults
       // to "deferred" rather than rendering with no disposition suffix.
       entry.disposition = "deferred";
     }
@@ -304,7 +306,11 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
     grouped.set(sev, []);
   }
   for (const finding of findings) {
-    grouped.get(finding.severity).push(finding);
+    // Normalize defensively: this function's real caller (resolveFindings /
+    // validateFindingsArray, above) always normalizes first, but a legacy
+    // severity spelling reaching this grouping loop unnormalized must still
+    // render under its canonical group rather than throw.
+    grouped.get(normalizeSeverity(finding.severity)).push(finding);
   }
   for (const sev of SEVERITY_ORDER) {
     const group = grouped.get(sev);

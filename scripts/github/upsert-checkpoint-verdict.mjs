@@ -146,11 +146,11 @@ Optional:
                                             refinement.maxCopilotRounds) instead of
                                             refinement.maxCopilotRounds alone.
   --findings-severity-counts <json>         JSON object mapping severity to count
-                                             (e.g. '{"must-fix":0,"worth-fixing-now":0}').
+                                             (e.g. '{"high":0,"medium":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
                                              Also, when given alongside --findings-json, its
-                                             known-severity (must-fix/worth-fixing-now/nice-to-have)
+                                             known-severity (high/medium/low/question/nit)
                                              values are SUMMED and used as the posted
                                              "Findings summary:" total whenever that sum is
                                              HIGHER than --findings-json's own (possibly
@@ -653,15 +653,15 @@ function normalizeStructuredFinding(f) {
   return entry;
 }
 // Map a severity to its sort rank. Known severities follow
-// SEVERITY_ORDER (must-fix → worth-fixing-now → nice-to-have);
+// SEVERITY_ORDER (high → medium → low → question → nit);
 // unknown/missing severities map to a LARGE rank so they sort LAST, never
-// before must-fix. (indexOf alone would give an unknown severity rank -1,
-// floating it ABOVE must-fix and hiding the highest-priority items below it.)
+// before high. (indexOf alone would give an unknown severity rank -1,
+// floating it ABOVE high and hiding the highest-priority items below it.)
 function severitySortRank(severity) {
   const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
   return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
-// Sort findings by severity (must-fix first, unknown/missing last) for
+// Sort findings by severity (high first, unknown/missing last) for
 // deterministic output, preserving input order within a severity.
 function sortStructuredFindings(findings) {
   findings.sort(
@@ -836,7 +836,7 @@ export function renderStructuredFindings(angles) {
     // severity/verdict/disposition are enum labels, never prose — rendered
     // inside a backtick code span (like the angle label and file ref already
     // are) rather than bare, so a reviewer-supplied value crafted to look like
-    // markdown link/image syntax (e.g. a severity of `must-fix](url)`) cannot
+    // markdown link/image syntax (e.g. a severity of `high](url)`) cannot
     // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
     // strips any backtick from the value first, so the span it is wrapped in
     // below can never be prematurely closed by the value's own content.
@@ -1518,7 +1518,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   ) {
     if (!options.findingsSeverityCounts) {
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
+        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"high":0,"medium":0,"low":0,"question":0,"nit":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
       );
     }
     const missingBlockingKeys = activeGateConfig.blockCleanOnFindingSeverities.filter(

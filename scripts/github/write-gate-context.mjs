@@ -989,7 +989,7 @@ function extractDocsOnlyDiff(diffOutput) {
  * #1603): the rule that a reviewer citing a skill/doc/source file must read it
  * from the WORKTREE SOURCE under review, not from an installed skill layout
  * (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those
- * source files, so reading them produces false must-fix findings against text
+ * source files, so reading them produces false high-severity findings against text
  * the PR already fixed. Extracted into one function so the full prefix and every
  * scoped variant render this passage byte-identically — every caller of this
  * round passes the same `worktreeRoot`, so threading it in does not break that
@@ -1003,7 +1003,7 @@ function renderSourceReadInvariantSection(worktreeRoot) {
   return [
     "## Reviewer source-read invariant",
     "",
-    `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${worktreeRoot}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false must-fix findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
+    `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${worktreeRoot}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false high-severity findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
   ].join("\n");
 }
 

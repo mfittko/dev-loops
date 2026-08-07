@@ -81,7 +81,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   // #1585: a clean verdict is not enough — every gate-authored review thread
-  // (must-fix, worth-fixing-now, AND nice-to-have) must be resolved before the
+  // (high, medium, low, question, AND nit) must be resolved before the
   // PR leaves draft. The disposition pass (close-gate-findings) + fixer triage
   // own that; this assertion is the ready-for-review backstop that refuses to
   // mark ready while any gate-authored thread still dangles (the #1584 bug).

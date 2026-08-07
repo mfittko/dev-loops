@@ -285,9 +285,9 @@ test("renderFindingsCommentBody groups by severity and renders file refs", () =>
   assert.ok(body.includes("Reviewed head: abc1234"));
   assert.ok(!body.includes("`abc1234`"));
   // Severity group headings, most-blocking first.
-  const mustIdx = body.indexOf("Must fix (1)");
-  const worthIdx = body.indexOf("Worth fixing now (1)");
-  const deferIdx = body.indexOf("Nice to have (1)");
+  const mustIdx = body.indexOf("High (1)");
+  const worthIdx = body.indexOf("Medium (1)");
+  const deferIdx = body.indexOf("Low (1)");
   assert.ok(mustIdx >= 0 && worthIdx >= 0 && deferIdx >= 0);
   assert.ok(mustIdx < worthIdx && worthIdx < deferIdx);
   // Angle as code literal, summary as prose, disposition rendered.
@@ -701,9 +701,24 @@ test("renderFindingsCommentBody states that only the latest round is shown (#AC2
 
 test("a legacy defer-severity finding parses, normalizes, and renders the new label", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]));
-  assert.equal(findings[0].severity, "nice-to-have");
+  assert.equal(findings[0].severity, "low");
   assert.equal(findings[0].disposition, "deferred");
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-  assert.ok(body.includes("Nice to have (1)"));
+  assert.ok(body.includes("Low (1)"));
   assert.ok(!body.includes("[`defer`]"));
+});
+
+// Every pre-rename severity spelling still parses and renders under its
+// canonical label — the full sweep, not just "defer".
+test("every legacy severity spelling parses, normalizes, and renders under its canonical label", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "must-fix", angle: "security", summary: "sql injection" },
+    { severity: "worth-fixing-now", angle: "perf", summary: "n+1 query" },
+    { severity: "nice-to-have", angle: "naming", summary: "casing nit" },
+  ]));
+  assert.deepEqual(findings.map((f) => f.severity), ["high", "medium", "low"]);
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("High (1)"));
+  assert.ok(body.includes("Medium (1)"));
+  assert.ok(body.includes("Low (1)"));
 });

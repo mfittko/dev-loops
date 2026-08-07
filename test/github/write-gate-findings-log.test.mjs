@@ -191,7 +191,7 @@ test("writeGateFindingsLog writes valid JSON log", async () => {
     assert.equal(parsed.verdict, "findings_present");
     assert.ok(parsed.loggedAt);
     assert.equal(parsed.findings.length, 2);
-    assert.equal(parsed.findings[0].severity, "must-fix");
+    assert.equal(parsed.findings[0].severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(parsed.findings[0].angle, "scope");
     assert.deepEqual(parsed.findings[0].files, ["src/a.mjs"]);
   } finally {
@@ -1218,7 +1218,7 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
   }
 });
 
-test("a legacy defer-severity finding normalizes to nice-to-have in the written log", async () => {
+test("a legacy defer-severity finding normalizes to low in the written log", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-legacy-"));
   try {
     const result = await writeGateFindingsLog({
@@ -1231,7 +1231,7 @@ test("a legacy defer-severity finding normalizes to nice-to-have in the written 
       tmpRoot: tmpDir,
     });
     const parsed = JSON.parse(await readFile(result.path, "utf8"));
-    assert.equal(parsed.findings[0].severity, "nice-to-have");
+    assert.equal(parsed.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
     assert.equal(parsed.findings[0].disposition, "deferred");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

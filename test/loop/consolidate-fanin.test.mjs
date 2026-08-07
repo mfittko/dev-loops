@@ -203,7 +203,7 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
           { angle: "scope", verdict: "clean", findingCount: 0 },
         ],
       );
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "nice-to-have": 0 });
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 1, low: 0, question: 0, nit: 0 });
       assert.equal(result.findings.length, 2);
       for (const finding of result.findings) {
         assert.ok(typeof finding.angle === "string" && finding.angle.length > 0);
@@ -248,10 +248,10 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
         findingsJson: [{
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
+          findings: [{ severity: "high", summary: "x", disposition: "accepted-for-fix" }],
         }],
-        findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
-        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 },
+        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        severityCounts: { high: 1, medium: 0, low: 0, question: 0, nit: 0 },
         overallVerdict: "findings_present",
       });
     },
@@ -304,7 +304,7 @@ test("consolidateGateFanin echoes verdict, severityCounts, and both written arti
       const ledgerPath = path.join(dir, "out", "ledger.json");
       const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
       assert.equal(result.overallVerdict, "findings_present");
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
       assert.equal(result.out, outPath);
       assert.equal(result.ledgerOut, ledgerPath);
       // Both echoed paths are real, already-written files — a caller never
@@ -332,7 +332,7 @@ test("consolidate-fanin CLI: one invocation with --out/--ledger-out/--jq writes 
           ["--findings-dir", dir, "--out", outPath, "--ledger-out", ledgerPath, "--jq", ".severityCounts"],
         );
         assert.equal(cliResult.code, 0, cliResult.stderr);
-        assert.deepEqual(JSON.parse(cliResult.stdout), { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+        assert.deepEqual(JSON.parse(cliResult.stdout), { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
         assert.ok(JSON.parse(await readFile(outPath, "utf8")));
         assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
       } finally {
@@ -1097,7 +1097,7 @@ test("consolidateGateFanin derives a deferred disposition for nice-to-have findi
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
       assert.equal(result.findings.length, 1);
-      assert.equal(result.findings[0].severity, "nice-to-have");
+      assert.equal(result.findings[0].severity, "low"); // "nice-to-have" input normalizes to canonical "low"
       assert.equal(result.findings[0].disposition, "deferred");
     },
   );
@@ -1160,7 +1160,7 @@ test("consolidateGateFanin includes a symlinked *.json artifact (not silently dr
 
     const result = await consolidateGateFanin({ findingsDir: dir });
     assert.equal(result.overallVerdict, "findings_present");
-    assert.equal(result.severityCounts["must-fix"], 1);
+    assert.equal(result.severityCounts.high, 1); // "must-fix" input normalizes to canonical "high"
     assert.ok(result.angles.some((a) => a.angle === "correctness"), "symlinked angle must be present, not dropped");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1692,7 +1692,9 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // just a count) for a specific finding.
     const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
     assert.equal(result.findings.length, totalFindings);
-    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, "nice-to-have": 1 });
+    // Legacy-spelled input ("worth-fixing-now"/"must-fix"/"nice-to-have")
+    // normalizes to the canonical output vocabulary.
+    assert.deepEqual(result.severityCounts, { high: 1, medium: totalFindings - 2, low: 1, question: 0, nit: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
     assert.deepEqual(writtenLedger, result.findings);
     assert.equal(writtenLedger.length, totalFindings);
@@ -1720,20 +1722,21 @@ test("a fan-in too large to render at minimum summary length still writes a comp
       assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
       assert.match(marker, /— in the disposition ledger/);
       if (angle === MIXED_ANGLE) {
-        // Highest-severity-wins: must-fix beats worth-fixing-now/defer, and
+        // Highest-severity-wins: high beats medium/low, and
         // the marker's own disposition matches that severity's derivation
         // (accepted-for-fix — the default blockCleanOnFindingSeverities is
-        // ["must-fix"]).
-        assert.match(marker, /must-fix: 1/);
-        assert.match(marker, /worth-fixing-now: 28/);
-        assert.match(marker, /nice-to-have: 1/);
-        assert.equal(section.findings[0].severity, "must-fix");
+        // ["high"]). Legacy-spelled input ("must-fix"/"worth-fixing-now"/
+        // "nice-to-have") normalizes to the canonical output vocabulary.
+        assert.match(marker, /high: 1/);
+        assert.match(marker, /medium: 28/);
+        assert.match(marker, /low: 1/);
+        assert.equal(section.findings[0].severity, "high");
         assert.equal(section.findings[0].disposition, "accepted-for-fix");
       } else {
-        assert.match(marker, /must-fix: 0/);
-        assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
-        assert.match(marker, /nice-to-have: 0/);
-        assert.equal(section.findings[0].severity, "worth-fixing-now");
+        assert.match(marker, /high: 0/);
+        assert.match(marker, new RegExp(`medium: ${FINDINGS_PER_ANGLE}`));
+        assert.match(marker, /low: 0/);
+        assert.equal(section.findings[0].severity, "medium");
         assert.equal(section.findings[0].disposition, "deferred");
       }
     }
@@ -1825,7 +1828,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     // "correctness" keeps its REAL finding (severity + file + line), not a marker.
     const correctnessFinding = byAngle.get("correctness").findings[0];
-    assert.equal(correctnessFinding.severity, "must-fix");
+    assert.equal(correctnessFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(correctnessFinding.file, "foo.mjs");
     assert.equal(correctnessFinding.line, 12);
     // Full, UN-shrunk text — not just a startsWith prefix, which a
@@ -1884,7 +1887,7 @@ test("a narrow angle whose real findings render cheaper than its own bare marker
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "must-fix");
+    assert.equal(narrowFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(narrowFinding.summary, "x", "the narrow angle's real (un-shrunk, un-marked) summary must survive");
     assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "the narrow angle must not be marker-collapsed even though it never entered the upgrade loop");
     assertRendersWithoutThrowing(result.findingsJson);
@@ -1928,7 +1931,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "worth-fixing-now");
+    assert.equal(narrowFinding.severity, "medium"); // "worth-fixing-now" input normalizes to canonical "medium"
     assert.ok(narrowFinding.summary.length < originalSummary.length, "the original, un-shrunk summary must not have survived (too long to fit)");
     assert.ok(originalSummary.startsWith(narrowFinding.summary.replace(/ …$/, "")), "the emitted summary must be a truncated PREFIX of the original real text");
     assert.ok(narrowFinding.summary.endsWith(" …"), "a truncated-real candidate ends with the plain ellipsis suffix, distinguishing it from an omitted-count marker");
@@ -1988,7 +1991,14 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
 // above.
 test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 20;
+  // #1592: the canonical severity spellings (e.g. "medium") are shorter than
+  // the pre-rename ones (e.g. "worth-fixing-now"), so a per-angle count
+  // calibrated to the OLD word lengths could tip a single angle's verbose
+  // marker back under the render budget. 23 (rather than 20) angles keeps
+  // this fixture calibrated to the ALL-BARE tier under the new spellings —
+  // still over budget for even a single verbose marker, but not yet over
+  // budget for the withheld tier (see the sibling test right below this one).
+  const ANGLE_COUNT = 23;
   const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });

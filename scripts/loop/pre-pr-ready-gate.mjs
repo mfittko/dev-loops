@@ -117,8 +117,8 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     ? gate.effectiveHeadClean
     : gate.cleanEvidenceExists;
   // #1585: a clean verdict is necessary but not sufficient — every
-  // gate-authored review thread (must-fix, worth-fixing-now, AND nice-to-have)
-  // must be resolved first. A clean verdict with dangling nice-to-have threads
+  // gate-authored review thread (high, medium, low, question, AND nit)
+  // must be resolved first. A clean verdict with dangling low threads
   // is exactly the #1584 regression this guard now catches at the
   // ready-for-review boundary instead of stalling at the merge boundary.
   const threadsResolved = gate.unresolvedGateThreadCount === 0;

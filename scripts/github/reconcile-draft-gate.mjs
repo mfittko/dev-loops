@@ -212,7 +212,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       gate: "draft_gate",
       headSha,
       verdict: "clean",
-      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0, question: 0, nit: 0 },
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",

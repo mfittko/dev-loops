@@ -835,7 +835,7 @@ async function main() {
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
       // #1585: the draftGateSatisfied field must assert 0 unresolved
-      // gate-authored threads (must-fix, worth-fixing-now, AND nice-to-have),
+      // gate-authored threads (high, medium, low, question, AND nit),
       // not just a clean verdict. Reuse the same raw thread payload already
       // fetched for the total count (marker-only, fail-closed proxy — no extra
       // gh round-trip; the read-only counter cannot under-count a real

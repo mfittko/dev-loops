@@ -224,8 +224,8 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   const prevAngles = perAngle.map((a) => a.angle).filter((a) => typeof a === "string" && a.length > 0);
   // FAIL-CLOSED, per-angle: a log's overall verdict is `clean` when no finding
   // reaches a BLOCKING severity — an angle can therefore sit in a clean log with
-  // an open `defer` (or, under a narrower blockCleanOnFindingSeverities, a
-  // `worth-fixing-now`) finding against it. The carry-forward rule is that an
+  // an open `low` (or, under a narrower blockCleanOnFindingSeverities, a
+  // `medium`) finding against it. The carry-forward rule is that an
   // angle which previously returned findings never carries; the log's overall
   // verdict cannot express that, so derive it from the findings themselves.
   //
