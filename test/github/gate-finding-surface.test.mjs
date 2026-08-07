@@ -59,8 +59,14 @@ test("fingerprintFinding trims files[0]: an untrimmed path fingerprints identica
 // ---------------------------------------------------------------------------
 
 test("buildFindingMarker / parseFindingMarker round-trip", () => {
+  const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "high", angle: "security", round: 2 });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
+});
+
+test("buildFindingMarker / parseFindingMarker round-trip: a legacy-spelled severity still parses and normalizes on read", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2 });
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2, disposition: null });
+  assert.ok(marker.includes("severity=must-fix"), "the marker itself carries the spelling it was built with");
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
 });
 
 test("buildFindingMarker with a disposition round-trips through parseFindingMarker", () => {
@@ -102,32 +108,57 @@ test("buildReviewHeaderMarker renders the gate-scoped round marker at column 0",
 // Disposition window
 // ---------------------------------------------------------------------------
 
-test("isDeferredAtRound: must-fix never defers, worth-fixing-now defers from round 4, defer defers immediately", () => {
+test("isDeferredAtRound: high never defers, medium defers from round 4, low defers immediately", () => {
+  assert.equal(isDeferredAtRound("high", 99), false);
+  assert.equal(isDeferredAtRound("medium", 3), false);
+  assert.equal(isDeferredAtRound("medium", 4), true);
+  assert.equal(isDeferredAtRound("low", 1), true);
+});
+
+// #1592: question is a non-defect category that is answered, never deferred —
+// an unanswered question blocks gate-close exactly like an open defect (via
+// the unresolved-thread count, since it is never selected for auto-deferral).
+// nit is a non-defect category that defers immediately, with no fixer cycle.
+test("isDeferredAtRound: question never defers (any round), nit always defers immediately", () => {
+  assert.equal(isDeferredAtRound("question", 1), false);
+  assert.equal(isDeferredAtRound("question", 99), false);
+  assert.equal(isDeferredAtRound("nit", 1), true);
+  assert.equal(isDeferredAtRound("nit", 99), true);
+});
+
+// Backward compatibility (#1592): every pre-rename severity spelling still
+// normalizes to its canonical replacement and behaves identically.
+test("isDeferredAtRound: legacy severity spellings behave identically to their canonical replacement", () => {
   assert.equal(isDeferredAtRound("must-fix", 99), false);
   assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
   assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
   assert.equal(isDeferredAtRound("nice-to-have", 1), true);
+  assert.equal(isDeferredAtRound("defer", 1), true);
 });
 
-// #1581: the per-gate worth-fixing-now fix window overrides the built-in
-// constant. A consumer raising the window to 5 keeps a round-4 WFN finding open;
-// lowering it to 1 defers a round-2 WFN finding. must-fix is always exempt.
+// #1581: the per-gate medium fix window overrides the built-in
+// constant. A consumer raising the window to 5 keeps a round-4 medium finding open;
+// lowering it to 1 defers a round-2 medium finding. high is always exempt.
 test("isDeferredAtRound: a per-gate window parameter overrides the built-in constant (#1581)", () => {
-  // Default (no third arg) still uses the built-in WORTH_FIXING_NOW_FIX_WINDOW (3).
-  assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
+  // Default (no third arg) still uses the built-in MEDIUM_FIX_WINDOW (3).
+  assert.equal(isDeferredAtRound("medium", 3), false);
+  assert.equal(isDeferredAtRound("medium", 4), true);
   // A raised per-gate window (5): round 4 now stays open; round 6 defers.
-  assert.equal(isDeferredAtRound("worth-fixing-now", 4, 5), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 5, 5), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 6, 5), true);
+  assert.equal(isDeferredAtRound("medium", 4, 5), false);
+  assert.equal(isDeferredAtRound("medium", 5, 5), false);
+  assert.equal(isDeferredAtRound("medium", 6, 5), true);
   // A lowered per-gate window (1): round 2 defers; round 1 stays open.
-  assert.equal(isDeferredAtRound("worth-fixing-now", 1, 1), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 2, 1), true);
-  // must-fix never defers, regardless of the per-gate window or round.
-  assert.equal(isDeferredAtRound("must-fix", 99, 1), false);
-  assert.equal(isDeferredAtRound("must-fix", 99, 5), false);
-  // nice-to-have always defers immediately, regardless of the window.
-  assert.equal(isDeferredAtRound("nice-to-have", 1, 5), true);
+  assert.equal(isDeferredAtRound("medium", 1, 1), false);
+  assert.equal(isDeferredAtRound("medium", 2, 1), true);
+  // high never defers, regardless of the per-gate window or round.
+  assert.equal(isDeferredAtRound("high", 99, 1), false);
+  assert.equal(isDeferredAtRound("high", 99, 5), false);
+  // low always defers immediately, regardless of the window.
+  assert.equal(isDeferredAtRound("low", 1, 5), true);
+  // question never defers, regardless of the window.
+  assert.equal(isDeferredAtRound("question", 99, 1), false);
+  // nit always defers immediately, regardless of the window.
+  assert.equal(isDeferredAtRound("nit", 1, 5), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -159,11 +190,24 @@ test("renderNonLocatableBlock: every content line after the marker is blockquote
   }
 });
 
-test("renderNonLocatableBlock: a non-must-fix finding is stamped disposition=deferred at render time, must-fix is not", () => {
-  const defer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
-  const must = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
-  assert.equal(parseFindingMarker(defer).disposition, "deferred");
-  assert.equal(parseFindingMarker(must).disposition, null);
+test("renderNonLocatableBlock: a non-high finding is stamped disposition=deferred at render time, high is not", () => {
+  const low = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const medium = renderNonLocatableBlock({ severity: "medium", angle: "perf", summary: "n+1" }, { round: 1 });
+  const nit = renderNonLocatableBlock({ severity: "nit", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const question = renderNonLocatableBlock({ severity: "question", angle: "scope", summary: "why this approach?" }, { round: 1 });
+  const high = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection" }, { round: 1 });
+  assert.equal(parseFindingMarker(low).disposition, "deferred");
+  assert.equal(parseFindingMarker(medium).disposition, "deferred");
+  assert.equal(parseFindingMarker(nit).disposition, "deferred");
+  assert.equal(parseFindingMarker(question).disposition, "deferred");
+  assert.equal(parseFindingMarker(high).disposition, null);
+});
+
+test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {
+  const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
+  assert.equal(parseFindingMarker(legacyDefer).disposition, "deferred");
+  assert.equal(parseFindingMarker(legacyMust).disposition, null);
 });
 
 // The line ref belongs to files[0] (the anchor isLocatableFinding keys on), not
@@ -412,7 +456,7 @@ test("readGateFindingsLedger normalizes the legacy severity spelling on read", a
   });
   await withLedgerFile(raw, async (ledgerPath) => {
     const ledger = await readGateFindingsLedger(ledgerPath);
-    assert.equal(ledger.findings[0].severity, "nice-to-have");
+    assert.equal(ledger.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
   });
 });
 

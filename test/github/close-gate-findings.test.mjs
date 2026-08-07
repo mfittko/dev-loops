@@ -500,7 +500,7 @@ test("a legacy severity=defer marker posts a reply in the canonical vocabulary",
       patchReviewCommentEntry(6300),
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity nice-to-have", "nice-to-have findings are deferred at gate close after the fixer triaged them"],
+        assertStdinIncludes: ["severity low", "low findings are deferred at gate close after the fixer triaged them"],
         assertStdinNotIncludes: ["severity defer,", "defer-severity"],
         stdout: `${JSON.stringify({ id: 7200, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7200` })}\n`,
       },

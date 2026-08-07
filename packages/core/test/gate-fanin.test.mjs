@@ -42,9 +42,9 @@ describe("consolidateFanin — verdict", () => {
     assert.deepEqual(result.malformed, []);
   });
 
-  test("findings_present when a blocking-severity finding remains (default must-fix)", () => {
+  test("findings_present when a blocking-severity finding remains (default high)", () => {
     const result = consolidateFanin({
-      angleResults: [cleanAngle("scope"), findingAngle("correctness", "must-fix")],
+      angleResults: [cleanAngle("scope"), findingAngle("correctness", "high")],
     });
     assert.equal(result.verdict, "findings_present");
     assert.equal(result.counts.blocking, 1);
@@ -59,18 +59,18 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(result.verdict, "clean");
     assert.equal(result.counts.findings, 1);
     assert.equal(result.counts.blocking, 0);
-    assert.equal(result.findings[0].severity, "nice-to-have");
-    assert.deepEqual(result.counts.bySeverity, { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 1 });
+    assert.equal(result.findings[0].severity, "low");
+    assert.deepEqual(result.counts.bySeverity, { high: 0, medium: 0, low: 1, question: 0, nit: 0 });
     assert.equal(result.findings[0].disposition, "deferred");
   });
 
-  test("severity gating: worth-fixing-now blocks only when listed", () => {
-    const angleResults = [findingAngle("kiss", "worth-fixing-now")];
+  test("severity gating: medium blocks only when listed", () => {
+    const angleResults = [findingAngle("kiss", "medium")];
     assert.equal(consolidateFanin({ angleResults }).verdict, "clean");
     assert.equal(
       consolidateFanin({
         angleResults,
-        blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+        blockCleanOnFindingSeverities: ["high", "medium"],
       }).verdict,
       "findings_present",
     );
@@ -80,7 +80,7 @@ describe("consolidateFanin — verdict", () => {
     // Legacy-spelled blocking list against a canonical finding…
     assert.equal(
       consolidateFanin({
-        angleResults: [findingAngle("kiss", "nice-to-have")],
+        angleResults: [findingAngle("kiss", "low")],
         blockCleanOnFindingSeverities: ["defer"],
       }).verdict,
       "findings_present",
@@ -89,10 +89,30 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(
       consolidateFanin({
         angleResults: [findingAngle("kiss", "defer")],
-        blockCleanOnFindingSeverities: ["nice-to-have"],
+        blockCleanOnFindingSeverities: ["low"],
       }).verdict,
       "findings_present",
     );
+    // Every pre-rename severity spelling still normalizes to its canonical
+    // replacement and behaves identically.
+    assert.equal(consolidateFanin({ angleResults: [findingAngle("kiss", "must-fix")] }).verdict, "findings_present");
+    assert.equal(
+      consolidateFanin({
+        angleResults: [findingAngle("kiss", "worth-fixing-now")],
+        blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      }).verdict,
+      "findings_present",
+    );
+    assert.equal(consolidateFanin({ angleResults: [findingAngle("kiss", "nice-to-have")] }).verdict, "clean");
+  });
+
+  test("question and nit are non-defect categories: never blocking under the default policy", () => {
+    const result = consolidateFanin({
+      angleResults: [findingAngle("scope", "question"), findingAngle("docs", "nit")],
+    });
+    assert.equal(result.verdict, "clean");
+    assert.equal(result.counts.blocking, 0);
+    assert.deepEqual(result.counts.bySeverity, { high: 0, medium: 0, low: 0, question: 1, nit: 1 });
   });
 
   test("blocked when any angle result is malformed/missing", () => {
@@ -102,7 +122,7 @@ describe("consolidateFanin — verdict", () => {
       [{ angle: "x", verdict: "clean", findings: "nope" }],
       [{ verdict: "clean", findings: [] }], // missing angle
       [{ angle: "x", verdict: "findings_present", findings: [] }], // findings_present w/o findings
-      [{ angle: "x", verdict: "clean", findings: [{ severity: "must-fix", summary: "y" }] }], // clean w/ findings
+      [{ angle: "x", verdict: "clean", findings: [{ severity: "high", summary: "y" }] }], // clean w/ findings
       [{ angle: "x", verdict: "findings_present", findings: [{ severity: "nope", summary: "y" }] }],
       [{ angle: "x".repeat(201), verdict: "clean", findings: [] }], // pathologically long angle
     ];
@@ -133,21 +153,21 @@ describe("consolidateFanin — multi-angle merge", () => {
           angle: "scope",
           verdict: "findings_present",
           findings: [
-            { severity: "must-fix", summary: "a", file: "src/a.mjs", line: 10, recommendation: "fix it" },
-            { severity: "nice-to-have", summary: "b" },
+            { severity: "high", summary: "a", file: "src/a.mjs", line: 10, recommendation: "fix it" },
+            { severity: "low", summary: "b" },
           ],
         },
-        findingAngle("docs", "worth-fixing-now", "c"),
+        findingAngle("docs", "medium", "c"),
         cleanAngle("kiss"),
       ],
-      blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+      blockCleanOnFindingSeverities: ["high", "medium"],
     });
     assert.equal(result.verdict, "findings_present");
     assert.equal(result.counts.angles, 3);
     assert.equal(result.counts.findings, 3);
     assert.equal(result.counts.blocking, 2);
-    assert.deepEqual(result.counts.bySeverity, { "must-fix": 1, "worth-fixing-now": 1, "nice-to-have": 1 });
-    const scopeFinding = result.findings.find((f) => f.angle === "scope" && f.severity === "must-fix");
+    assert.deepEqual(result.counts.bySeverity, { high: 1, medium: 1, low: 1, question: 0, nit: 0 });
+    const scopeFinding = result.findings.find((f) => f.angle === "scope" && f.severity === "high");
     assert.equal(scopeFinding.file, "src/a.mjs");
     assert.equal(scopeFinding.line, 10);
     assert.equal(scopeFinding.recommendation, "fix it");
@@ -168,15 +188,15 @@ describe("toFindingsLogShape", () => {
         {
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "must-fix", summary: "a", file: "src/a.mjs", recommendation: "x" }],
+          findings: [{ severity: "high", summary: "a", file: "src/a.mjs", recommendation: "x" }],
         },
-        findingAngle("docs", "nice-to-have", "b"),
+        findingAngle("docs", "low", "b"),
       ],
     });
     const shaped = toFindingsLogShape(consolidated.findings);
     assert.deepEqual(shaped, [
-      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", recommendation: "x", files: ["src/a.mjs"] },
-      { severity: "nice-to-have", angle: "docs", summary: "b", disposition: "deferred" },
+      { severity: "high", angle: "scope", summary: "a", disposition: "accepted-for-fix", recommendation: "x", files: ["src/a.mjs"] },
+      { severity: "low", angle: "docs", summary: "b", disposition: "deferred" },
     ]);
   });
 
@@ -191,22 +211,22 @@ describe("toFindingsLogShape", () => {
         {
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "must-fix", summary: "a", file: "src/a.mjs", line: 42 }],
+          findings: [{ severity: "high", summary: "a", file: "src/a.mjs", line: 42 }],
         },
       ],
     });
     const shaped = toFindingsLogShape(consolidated.findings);
     assert.deepEqual(shaped, [
-      { severity: "must-fix", angle: "scope", summary: "a", disposition: "accepted-for-fix", files: ["src/a.mjs"], line: 42 },
+      { severity: "high", angle: "scope", summary: "a", disposition: "accepted-for-fix", files: ["src/a.mjs"], line: 42 },
     ]);
   });
 
   test("drops a non-positive-integer or non-numeric line", () => {
     const shaped = toFindingsLogShape([
-      { severity: "must-fix", angle: "a", summary: "x", line: 0 },
-      { severity: "must-fix", angle: "a", summary: "y", line: -1 },
-      { severity: "must-fix", angle: "a", summary: "z", line: 1.5 },
-      { severity: "must-fix", angle: "a", summary: "w", line: "42" },
+      { severity: "high", angle: "a", summary: "x", line: 0 },
+      { severity: "high", angle: "a", summary: "y", line: -1 },
+      { severity: "high", angle: "a", summary: "z", line: 1.5 },
+      { severity: "high", angle: "a", summary: "w", line: "42" },
     ]);
     for (const entry of shaped) {
       assert.equal("line" in entry, false);

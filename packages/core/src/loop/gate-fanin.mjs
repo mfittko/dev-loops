@@ -19,13 +19,18 @@
  *   }
  *
  * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
- * VALID_SEVERITIES / normalizeSeverity):
- *   "must-fix" | "worth-fixing-now" | "nice-to-have"
+ * VALID_SEVERITIES / normalizeSeverity), aligned to the Copilot review
+ * severity scale:
+ *   "high" | "medium" | "low" (defects) | "question" | "nit" (non-defects)
  * Severity is the reviewer's advisory weight only. Deferral is a DISPOSITION
  * (derived at fan-in for non-blocking findings, finalized per thread by the
- * fix cycle / gate close), never a severity — the legacy severity spelling
- * "defer" is accepted on read and normalized to "nice-to-have" (see
- * LEGACY_SEVERITY_ALIASES / normalizeSeverity).
+ * fix cycle / gate close), never a severity — the pre-rename severity
+ * spellings ("must-fix", "worth-fixing-now", "nice-to-have", "defer") are
+ * accepted on read and normalized to their canonical replacement (see
+ * LEGACY_SEVERITY_ALIASES / normalizeSeverity). "question" and "nit" are
+ * non-defect categories: a question is answered (never deferred) and an
+ * unanswered one blocks gate-close like any unresolved thread; a nit is
+ * deferred immediately, with no fixer cycle.
  */
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
@@ -76,10 +81,10 @@ export function backoffMaxConcurrent(maxConcurrent) {
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each
 // hand-copying its own list (and its own load-time drift guard) — ORDER is
-// part of the contract here (most blocking first), not just membership, so a
-// consumer that only checked membership against a Set could accept a
-// silently reordered copy.
-export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
+// part of the contract here (most blocking first, then the non-defect
+// categories), not just membership, so a consumer that only checked
+// membership against a Set could accept a silently reordered copy.
+export const SEVERITY_ORDER = ["high", "medium", "low", "question", "nit"];
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
@@ -87,10 +92,15 @@ export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
 export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 
-// Pre-rename spelling of the lowest tier. Old ledgers, markers, and configs
-// still carry it; every read boundary normalizes through this map and no
-// writer ever emits it again.
-export const LEGACY_SEVERITY_ALIASES = Object.freeze({ defer: "nice-to-have" });
+// Pre-rename spellings. Old ledgers, markers, and configs still carry them;
+// every read boundary normalizes through this map and no writer ever emits
+// them again.
+export const LEGACY_SEVERITY_ALIASES = Object.freeze({
+  "must-fix": "high",
+  "worth-fixing-now": "medium",
+  "nice-to-have": "low",
+  defer: "low",
+});
 
 /**
  * Map a legacy severity spelling to its canonical name; unknown values pass
@@ -508,7 +518,7 @@ function validateAngleResult(result) {
     }
     const finding = /** @type {Record<string, unknown>} */ (f);
     if (typeof finding.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(finding.severity))) {
-      return `angle '${r.angle}' has a finding with invalid severity (expected must-fix|worth-fixing-now|nice-to-have)`;
+      return `angle '${r.angle}' has a finding with invalid severity (expected high|medium|low|question|nit)`;
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       return `angle '${r.angle}' has a finding without a summary`;
@@ -538,7 +548,7 @@ function validateAngleResult(result) {
  *
  * @param {object} input
  * @param {Array<unknown>} input.angleResults — per-angle review artifacts
- * @param {string[]} [input.blockCleanOnFindingSeverities] — blocking severities (default ["must-fix"])
+ * @param {string[]} [input.blockCleanOnFindingSeverities] — blocking severities (default ["high"])
  * @returns {{
  *   verdict: "clean"|"findings_present"|"blocked",
  *   findings: Array<{severity: string, angle: string, summary: string, file?: string, line?: number, recommendation?: string, disposition: string}>,
@@ -549,11 +559,12 @@ function validateAngleResult(result) {
 export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities } = {}) {
   const results = Array.isArray(angleResults) ? angleResults : [];
   // Config values normalize through the same alias map as finding severities,
-  // so a legacy config spelling ("defer") still blocks the renamed tier.
+  // so a legacy config spelling ("must-fix", "defer", …) still blocks the
+  // renamed tier.
   const blocking = new Set(
     (Array.isArray(blockCleanOnFindingSeverities) && blockCleanOnFindingSeverities.length > 0
       ? blockCleanOnFindingSeverities
-      : ["must-fix"]
+      : ["high"]
     ).map((s) => normalizeSeverity(s)),
   );
 

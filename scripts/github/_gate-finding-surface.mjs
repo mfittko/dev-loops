@@ -60,8 +60,8 @@ const VALID_LEDGER_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
 
 // Findings at round <= this stay in the standard fix loop; from the next round
-// on, an open worth-fixing-now finding is deferred instead of re-fixed in-gate.
-export const WORTH_FIXING_NOW_FIX_WINDOW = 3;
+// on, an open medium finding is deferred instead of re-fixed in-gate.
+export const MEDIUM_FIX_WINDOW = 3;
 
 // ---------------------------------------------------------------------------
 // Markers
@@ -85,19 +85,22 @@ function slugForMarker(value) {
 }
 
 // True when a finding at `severity`, reconciled against the CURRENT round, is
-// disposed as deferred: must-fix never defers; worth-fixing-now defers only
-// once the chain is past the in-gate fix window; nice-to-have always defers
-// immediately. Governs the THREAD disposition pass ONLY — a locatable
-// finding's round-gated fix window, decided through its own resolvable review
-// thread. Body-filed finding rendering (renderNonLocatableBlock) deliberately
-// does NOT call this: a body-filed finding never gets a thread to fix through,
-// so it is stamped deferred unconditionally at render time, regardless of round
-// (see that function's own comment).
-export function isDeferredAtRound(severity, round, worthFixingNowFixWindow = WORTH_FIXING_NOW_FIX_WINDOW) {
+// disposed as deferred: high never defers; medium defers only once the chain
+// is past the in-gate fix window; low always defers immediately; question
+// never defers (it is answered, not deferred — an unanswered question blocks
+// gate-close as an unresolved thread, exactly like an open defect); nit always
+// defers immediately, with no fixer cycle. Governs the THREAD disposition pass
+// ONLY — a locatable finding's round-gated fix window, decided through its own
+// resolvable review thread. Body-filed finding rendering
+// (renderNonLocatableBlock) deliberately does NOT call this: a body-filed
+// finding never gets a thread to fix through, so it is stamped deferred
+// unconditionally at render time, regardless of round (see that function's own
+// comment).
+export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
-  if (sev === "must-fix") return false;
-  if (sev === "worth-fixing-now") return round > worthFixingNowFixWindow;
-  return true; // "nice-to-have" (and any legacy spelling of it)
+  if (sev === "high" || sev === "question") return false;
+  if (sev === "medium") return round > mediumFixWindow;
+  return true; // "low" or "nit" (and any legacy spelling of either)
 }
 
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
@@ -210,20 +213,22 @@ export function renderInlineCommentBody(finding, { round }) {
 //
 // A body-filed finding never gets a resolvable thread (it lives in a review
 // body, not a review comment) and so never passes through the thread
-// disposition pass (which is where a THREADED worth-fixing-now finding gets
-// its round<=3 in-gate fix window before deferring). A body-filed finding has
+// disposition pass (which is where a THREADED medium finding gets its
+// round<=3 in-gate fix window before deferring). A body-filed finding has
 // no such window to begin with — there is no thread to fix it through — so it
 // is deferred BY CONSTRUCTION, at render time, regardless of round: every
-// non-must-fix severity (worth-fixing-now, nice-to-have) is stamped
-// disposition=deferred the moment it is posted. must-fix stays unstamped
-// (the ledger blocks a clean verdict on it; it is never body-filed as an
-// accepted outcome). This is what keeps the finding from being suppressed by
-// its own fingerprint (fingerprintFinding, matched back on a later run via
-// collectFingerprints) while tracked nowhere else (fingerprint suppression +
-// zero surface = permanent silent loss).
+// non-high severity (medium, low, nit) is stamped disposition=deferred the
+// moment it is posted. high stays unstamped (the ledger blocks a clean
+// verdict on it; it is never body-filed as an accepted outcome). A question is
+// also stamped deferred here for the same structural reason (no thread to
+// answer it through) — the answered/never-deferred contract only applies to a
+// LOCATABLE question's own resolvable thread. This is what keeps the finding
+// from being suppressed by its own fingerprint (fingerprintFinding, matched
+// back on a later run via collectFingerprints) while tracked nowhere else
+// (fingerprint suppression + zero surface = permanent silent loss).
 export function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
-  const disposition = finding.severity === "must-fix" ? undefined : "deferred";
+  const disposition = normalizeSeverity(finding.severity) === "high" ? undefined : "deferred";
   const lines = [
     buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round, disposition }),
     `> ${renderFindingLine(finding)}`,
@@ -426,8 +431,8 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
 /**
  * Count unresolved GATE-AUTHORED review threads — threads whose first comment
  * was authored by the gate's own login (`login`) and carries a parseable
- * `dev-loops:finding` marker (any severity: must-fix, worth-fixing-now, OR
- * nice-to-have). This is the gate-close predicate #1585 wires into
+ * `dev-loops:finding` marker (any severity: high, medium, low, question, OR
+ * nit). This is the gate-close predicate #1585 wires into
  * `fetchDraftGateEvidence`: a clean verdict alone no longer satisfies the
  * gate — every gate-authored thread must be resolved (fix-closed by the fixer
  * or defer-closed by the disposition pass) first.
@@ -519,7 +524,7 @@ export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
  * disagree about what counts as evidence.
  *
  * #1585: a clean verdict is NO LONGER sufficient to satisfy the gate. Every
- * gate-authored review thread (must-fix, worth-fixing-now, AND nice-to-have)
+ * gate-authored review thread (high, medium, low, question, AND nit)
  * must be resolved first — the fixer triages every gate-authored finding
  * (fix-if-cheap-in-the-same-commit, else defer) and the disposition pass
  * (close-gate-findings) defer-closes what remains — so the gate-close
@@ -646,7 +651,7 @@ export async function updateGateReview({ repo, pr, reviewId, body }, { env, ghCo
 // review, while historical rounds (and any hand-posted verdict) live on the
 // issue-comment stream, so a verdict for the SAME head can exist on both.
 // Deduping by head means that duplication can never inflate the round and end
-// the worth-fixing-now fix window early. A body that matches the header literal
+// the medium fix window early. A body that matches the header literal
 // but carries no parseable reviewed-head line contributes nothing — it cannot
 // be a genuine verdict for any distinguishable head, so it must not count.
 const REVIEWED_HEAD_SHA_RE = /^\*\*Reviewed head SHA:\*\*\s*`([0-9a-f]{7,64})`\s*$/m;
