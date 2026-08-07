@@ -95,7 +95,7 @@ directly.
 
 When the main agent dispatches the `dev-loop` async subagent in an interactive session, it MUST
 return control to the user after dispatch and MUST NOT call `subagent_wait` to block on
-completion. Pi wakes the session when the async run completes or needs attention.
+completion. Pi wakes the session when the async run completes or needs-attention.
 
 The only exception is **run-to-completion**: the user explicitly asked for results reported back
 before continuing, or a skill must finish within a single turn. In that case the main agent may
