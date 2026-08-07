@@ -38,9 +38,13 @@ concurrent unit.
    `resolveFanoutGroups` (`@dev-loops/core/config`) auto-chunks the leftover
    ungrouped angles (after configured-groups matching, unchanged) into dispatch
    units of ≤ N with deterministic order and stable unit names, instead of
-   one singleton per leftover angle. `mode: per-angle` is retained as the exact
-   equivalent of `maxAnglesPerGroup: 1` (one singleton unit per angle, bypassing
-   the configured-groups table). `gate:full` no longer restores per-angle
+   one singleton per leftover angle. `mode: per-angle` is retained as a
+   bypass-groups escape hatch: it emits one singleton unit per angle, bypassing
+   the configured-groups table entirely. It matches `maxAnglesPerGroup: 1` (N=1)
+   in dispatch unit size ONLY on the ungrouped-leftover path — configured groups
+   are matched first in both modes, and per-angle bypasses that table while N=1
+   honors it (matched first, never split), so the two diverge when a configured
+   multi-angle group matches a resolved angle. `gate:full` no longer restores per-angle
    dispatch: it keeps forcing the **full angle set** upstream
    (`resolveGateTier` returns `gate_full_label`, so `resolveGateAnglesDynamic`
    skips diff-class tier reduction) and dispatches **grouped** — the configured

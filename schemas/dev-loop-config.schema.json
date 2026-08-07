@@ -717,7 +717,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "Cap on parallel gate fan-out reviewers; overflow runs in sequential batches."
+          "description": "SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."
         },
         "postFindingsComments": {
           "type": "boolean",

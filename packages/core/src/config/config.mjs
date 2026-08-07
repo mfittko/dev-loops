@@ -328,10 +328,13 @@ const GatesConfig = z.strictObject({
   // is active. Default false (opt-in): closing this loophole is additive and
   // does not change behavior for existing ledgers that carry no provenance.
   requireFanoutProvenance: z.boolean().default(false),
-  // Cap on how many scoped `review` reviewers the gate fan-out spawns in
-  // parallel. When the resolved angle set exceeds this cap, the overflow runs
-  // in sequential batches and the degradation is recorded in the gate evidence.
-  maxFanoutReviewers: z.number().int().min(1).max(64).default(8),
+  // SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): the conductor
+  // now dispatches wave-by-wave at most M dispatch units per wave via
+  // scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs), so
+  // maxFanoutReviewers no longer governs fan-out dispatch. Kept for back-compat
+  // (zero non-test callers in the dispatch path); a consumer setting it gets
+  // no dispatch effect. See gates.fanout.maxConcurrent for the active cap.
+  maxFanoutReviewers: z.number().int().min(1).max(64).default(8).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."),
   // #1462 GATE-EXEC-PRIME is MANDATORY (not a flag): every gate fan-out primes the
   // byte-identical briefing prefix before the reviewers read it — see
   // skills/docs/gate-review-sub-loop-contract.md.
@@ -714,7 +717,7 @@ const FileGatesConfig = z.strictObject({
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
-  maxFanoutReviewers: z.number().int().min(1).max(64).describe("Cap on parallel gate fan-out reviewers; overflow runs in sequential batches.").optional(),
+  maxFanoutReviewers: z.number().int().min(1).max(64).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect.").optional(),
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),

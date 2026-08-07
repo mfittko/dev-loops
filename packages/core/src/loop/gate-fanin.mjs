@@ -654,6 +654,12 @@ export function toFindingsLogShape(findings) {
 /**
  * Plan how a resolved angle set fans out across the reviewer cap. Pure.
  *
+ * SUPERSEDED by `scheduleFanoutWaves` (#1601, ADR 0048): the gate fan-out
+ * conductor now dispatches wave-by-wave at most `gates.fanout.maxConcurrent`
+ * (M) dispatch units per wave, using the wave plan emitted by
+ * `write-gate-context.mjs`. This helper is kept only for back-compat (zero
+ * non-test callers) and no longer participates in the dispatch path.
+ *
  * When `angles.length <= maxReviewers`, all reviewers run in a single parallel
  * batch (no degradation). When it exceeds the cap, the overflow is split into
  * sequential batches of at most `maxReviewers` each, and `degraded` is true so
