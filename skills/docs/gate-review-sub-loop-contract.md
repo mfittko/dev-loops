@@ -804,7 +804,7 @@ Consolidation:
   gate-close exactly like an open defect. A `nit` is a cosmetic, non-defect finding
   deferred immediately, with no fixer cycle.
 - write the disposition ledger: every finding receives a severity classification and a
-  disposition (accepted-for-fix, deferred, disputed, or operator_acknowledged)
+  disposition (accepted-for-fix, deferred, needs-answer, disputed, or operator_acknowledged)
 - produce a merged findings artifact
 - determine the overall gate verdict:
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list remain

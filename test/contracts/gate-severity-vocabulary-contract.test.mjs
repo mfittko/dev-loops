@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_DISPOSITIONS } from "../../scripts/github/write-gate-findings-log.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -40,5 +41,17 @@ test("skills/docs/gate-review-sub-loop-contract.md's classification list names e
     missing,
     [],
     `skills/docs/gate-review-sub-loop-contract.md's classification bullet is missing SEVERITY_ORDER value(s): ${missing.join(", ")}`,
+  );
+});
+
+test("skills/docs/gate-review-sub-loop-contract.md's disposition ledger enumeration matches VALID_DISPOSITIONS", async () => {
+  const text = await readFile(`${repoRoot}skills/docs/gate-review-sub-loop-contract.md`, "utf8");
+  const match = text.match(/disposition \(([a-z_,\- ]+?)\)/);
+  assert.ok(match, "expected a 'disposition (a, b, ...)' enumeration in the contract doc's fan-in consolidation list");
+  const declared = match[1].split(",").map((s) => s.trim().replace(/^or /, ""));
+  assert.deepEqual(
+    [...declared].sort(),
+    [...VALID_DISPOSITIONS].sort(),
+    "skills/docs/gate-review-sub-loop-contract.md's disposition enumeration has drifted from write-gate-findings-log.mjs's VALID_DISPOSITIONS",
   );
 });
