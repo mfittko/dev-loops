@@ -1,7 +1,7 @@
 ---
 name: "dev-loop"
 description: "Use as the single public workflow entrypoint. Route from canonical current state to the deterministic internal strategy, preferring GitHub-first paths and only using local phase implementation when explicitly requested. Keywords: dev-loop, public entrypoint, route workflow, continue dev loop."
-tools: Read, Grep, Glob, Bash, Agent, TodoWrite
+tools: Read, Grep, Glob, Bash, Edit, Write, Agent
 ---
 <!-- GENERATED from agents/dev-loop.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

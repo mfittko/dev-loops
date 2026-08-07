@@ -266,3 +266,61 @@ test("syncPackagedAgents preserves every mappable source tool in the canonical s
     }
   }
 });
+
+
+// #1604 — source-level cleanup of the dev-loop entrypoint template + dispatch
+// source finding. The dev-loop subagent dispatch resolves role agents from the
+// project `.pi/agents/` dir (which symlinks to `../agents` in this repo), so the
+// SOURCE templates must be Pi-valid-neutral. `agent` (redundant with `subagent`)
+// and `todo` (no Pi builtin) are dropped from the dev-loop source; `edit`/`write`
+// are added so the conductor can edit directly under Pi instead of bash/sed.
+// Role agents keep `search`/`execute` (neutral; dropping them regresses Claude —
+// #1086 — which maps `search` -> Grep+Glob).
+test("#1604 dev-loop.agent.md source drops agent/todo and declares edit/write", async () => {
+  const raw = await readFile(fileURLToPath(new URL("../agents/dev-loop.agent.md", import.meta.url)), "utf8");
+  const toolsLine = raw.match(/^tools:\s*(.*)$/m);
+  assert.ok(toolsLine, "dev-loop.agent.md must declare a tools: line");
+  const tools = toolsLine[1].split(/[\s,]+/).filter(Boolean);
+  // agent + todo removed from the dev-loop source
+  assert.equal(tools.includes("agent"), false, "dev-loop source must not declare redundant `agent` (subagent covers it)");
+  assert.equal(tools.includes("todo"), false, "dev-loop source must not declare `todo` (no Pi builtin)");
+  // edit + write present so the conductor can mutate under Pi without bash/sed
+  assert.ok(tools.includes("edit"), "dev-loop source must declare `edit` (conductor mutates under Pi)");
+  assert.ok(tools.includes("write"), "dev-loop source must declare `write` (conductor mutates under Pi)");
+  // neutral search/execute kept (both harnesses map them)
+  assert.ok(tools.includes("search"), "dev-loop source keeps neutral `search`");
+  assert.ok(tools.includes("execute"), "dev-loop source keeps neutral `execute`");
+  assert.ok(tools.includes("subagent"), "dev-loop source keeps `subagent`");
+});
+
+test("#1604 dev-loop source renders to a Pi-valid conductor toolset (read, bash, edit, write, subagent)", () => {
+  const raw = `---
+name: "dev-loop"
+tools: read, search, execute, bash, edit, write, subagent
+---
+
+body
+`;
+  const rendered = renderPiAgent(raw);
+  const toolsLine = rendered.match(/^tools:\s*(.*)$/m)[1];
+  assert.deepEqual(toolsLine.split(/,\s*/), ["read", "bash", "edit", "write", "subagent"]);
+  for (const forbidden of FORBIDDEN_UNDER_PI) {
+    assert.equal(new RegExp(`\\b${forbidden}\\b`).test(rendered), false, `rendered dev-loop must not leak ${forbidden}`);
+  }
+});
+
+test("#1604 role-agent sources keep neutral search/execute (no Claude regression — #1086)", async () => {
+  // Role agents MUST keep search/execute in source: Claude maps search->Grep+Glob
+  // and execute->Bash; dropping them removes Grep/Glob from the Claude-rendered
+  // role agents (a cross-harness regression). Pi sync already maps them to bash.
+  const roleAgents = ["fixer", "developer", "docs", "quality", "refiner", "review"];
+  for (const name of roleAgents) {
+    const raw = await readFile(fileURLToPath(new URL(`../agents/${name}.agent.md`, import.meta.url)), "utf8");
+    const tools = (raw.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
+    assert.ok(tools.includes("search"), `agents/${name}.agent.md must keep neutral \`search\` (Claude maps to Grep+Glob)`);
+    assert.ok(tools.includes("execute"), `agents/${name}.agent.md must keep neutral \`execute\` (Claude maps to Bash)`);
+    assert.equal(tools.includes("agent"), false, `role agent ${name} must not declare \`agent\``);
+    assert.equal(tools.includes("todo"), false, `role agent ${name} must not declare \`todo\``);
+  }
+});
+

@@ -1,7 +1,7 @@
 ---
 name: "dev-loop"
 description: "Use as the single public workflow entrypoint. Route from canonical current state to the deterministic internal strategy, preferring GitHub-first paths and only using local phase implementation when explicitly requested. Keywords: dev-loop, public entrypoint, route workflow, continue dev loop."
-tools: read, search, execute, bash, agent, todo, subagent
+tools: read, search, execute, bash, edit, write, subagent
 argument-hint: "A dev-loop intent such as issue number/URL, PR number/URL, or a request to continue/inspect current state."
 systemPromptMode: append
 inheritProjectContext: true
@@ -89,7 +89,8 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - **When `intercom` is unavailable,** do not call `contact_supervisor`. Instead, brief the supervisor to include the decision in the resume message when re-dispatching. The subagent states what it needs in the task description; the supervisor provides the answer on resume. This avoids the broken response path entirely.
 - **If `contact_supervisor` was already called** (legacy code or unavoidable): expect a ~60s idle timeout followed by a pause. On resume, the supervisor MUST inject the decision in the resume message — do not rely on `intercom` on resume when it was unavailable at call time.
 - **Timeout detection (supervisor-side):** if a `contact_supervisor` call has been pending for >30s, the supervisor SHOULD treat it as a probable timeout and prepare to inject the decision in the resume message on re-dispatch. The subagent cannot execute this detection while blocked inside `contact_supervisor`; the supervisor MUST observe the pending duration externally.
-- **`todo` tool gap under Pi (#1583):** Pi has no `todo` builtin (Claude keeps `TodoWrite`). The `tools:` frontmatter is remapped to Pi builtins at session-start sync time, so `todo` is dropped from the rendered `~/.agents/*.agent.md`. Track the acceptance checklist via prose/bash under Pi — emit the structured acceptance report directly rather than relying on a todo tool. The canonical `agents/*.agent.md` source keeps the harness-neutral vocabulary unchanged.
+- **`todo` tool gap under Pi (#1583, #1604):** Pi has no `todo` builtin (Claude keeps `TodoWrite`). The dev-loop entrypoint source (`agents/dev-loop.agent.md`) no longer declares `todo` or `agent` (#1604): `agent` is redundant with `subagent` (already listed), and `todo` has no Pi builtin. Role-agent sources (`fixer`, `developer`, `docs`, `quality`, `refiner`, `review`) keep the neutral `search`/`execute` vocabulary unchanged — both harnesses map them (Claude `search`→Grep+Glob; Pi sync `search`→`bash`), and dropping them would regress Claude (#1086). Track the acceptance checklist via prose/bash under Pi — emit the structured acceptance report directly rather than relying on a todo tool.
+- **Dispatch source (#1604):** the dev-loop's subagent dispatch resolves role agents from the project `.pi/agents/` directory. In this repo `.pi/agents` symlinks to `../agents` (the package source), so the dispatch reads the source templates directly — `syncPackagedAgents` only rewrites the global `~/.agents/`, which the project symlink bypasses. Cleaning the source templates therefore fixes the dispatch path (and the global path stays valid via sync).
 <!-- /pi-only -->
 
 ## Output

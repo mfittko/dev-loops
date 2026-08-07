@@ -90,9 +90,19 @@ export function renderPiAgent(raw: string): string {
 /**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
- * files stay unchanged (harness-neutral vocabulary); only the rendered copies are
+ * files stay harness-neutral (role agents keep `search`/`execute`; the dev-loop
+ * entrypoint drops `agent`/`todo` per #1604); only the rendered copies are
  * remapped. Best-effort: callers swallow errors so a sync failure never breaks
  * session start.
+ *
+ * #1604 dispatch note: this rewrites the GLOBAL `~/.agents/` copies. In a repo
+ * that symlinks `.pi/agents` -> `../agents` (e.g. this repo dogfooding its own
+ * agents), the Pi `subagent` tool resolves project agents from `.pi/agents/`
+ * (the source) with precedence over `~/.agents/`, so the source templates
+ * themselves must be Pi-valid-neutral. Keeping `search`/`execute` is safe because
+ * they map to real Pi builtins (`bash`) here; the source-level `agent`/`todo`
+ * drop on the dev-loop entrypoint is the only source change needed. This sync
+ * stays load-bearing for consumer repos with no project `.pi/agents` symlink.
  */
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
