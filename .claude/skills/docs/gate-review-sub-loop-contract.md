@@ -349,6 +349,9 @@ concurrent unit; `countFreshDispatchUnits` derives the `requireFanoutProvenance`
 <!-- rule: GATE-EXEC-NO-CWD-DEPENDENCE -->
 `GATE-EXEC-NO-CWD-DEPENDENCE`: A reviewer MUST NOT depend on the shell's working directory — each command may start in the primary checkout, not the worktree under review, so a bare `git branch`/`git log`/`git diff` can read the wrong tree and produce confident false findings. Run the mandatory sentinel invocation as ONE compound command that enters the worktree first (`cd <worktree> && node scripts/github/verify-fresh-review-context.mjs ...`) with its cwd-relative `--context-path` exactly as briefed — the locality guard depends on that form, and the compound form is the sanctioned remedy for the resetting cwd. After it passes, address the tree explicitly with the explicit-root idiom owned by `WORKTREE-DEFAULT-USE` in [worktree-guidance](./worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) (`git -C <repoRoot>`, absolute-path reads), where `<repoRoot>` is the briefing prefix's `worktree:` line, echoed back as `repoRoot` in `verify-fresh-review-context.mjs`'s fresh output (the directory the sentinel ran in, worktree-local when the locality guard passed).
 
+<!-- rule: GATE-EXEC-SOURCE-READ-WORKTREE -->
+`GATE-EXEC-SOURCE-READ-WORKTREE`: A reviewer citing a skill/doc/source file in a finding MUST read it from the WORKTREE SOURCE under review, not from an installed skill layout (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those source files, so reading them produces false must-fix findings against text the PR already fixed (#1603). Resolve skill/doc paths (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) as RELATIVE paths from the worktree cwd named on the briefing prefix's `worktree:` line. Before reporting a finding that quotes a skill/doc line, verify the cited text matches `git show HEAD:<path>` (the worktree source at the reviewed head); a finding whose cited text does not appear in `git show HEAD:<path>` is a false positive against a stale installed copy and MUST NOT be reported. This governs SOURCE FILES reviewed as content, not HELPER SCRIPT paths invoked as tooling — those still resolve from the installed skill layout per `ASSET-PATH-SOURCE-NO-REPO-LOCAL`. The briefing prefix carries this invariant as a fixed `## Reviewer source-read invariant` section (below) so every reviewer of a round is seeded with it byte-identically.
+
 
 <!-- rule: GATE-EXEC-ARTIFACT-HEAD-STAMP -->
 `GATE-EXEC-ARTIFACT-HEAD-STAMP`: A per-angle findings artifact MUST carry a `headSha` field stamped with the reviewed head from the briefing, and Phase 3's `consolidate-fanin --head-sha <sha>` MUST fail closed, naming the angle, when an artifact's stamp differs from the round's head or is missing/malformed — unknown provenance is a failure, not a bypass. Two exemptions exist: an angle declared carried forward via `--carried-angles`/`--carry-forward-plan` (exact declared name, matched case-insensitively), which keeps the existing carry-forward behavior and leaves the ledger's `carriedFromHead` as the single provenance field; and a `verdict: "blocked"` artifact, whose refusal shape carries no stamp and whose failure is owned by the blocked-verdict fail-closed path. This is what makes a stale artifact staged out of an earlier round distinguishable from a fresh verdict at the reviewed head.
@@ -387,11 +390,13 @@ even though the referenced file's bytes are still shared.
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
 fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
-`## Reviewer token discipline` (the per-reviewer token-waste rules, identical for every
+`## Reviewer source-read invariant` (the worktree-source-over-installed-copies rule
+`GATE-EXEC-SOURCE-READ-WORKTREE`, identical for every reviewer), `## Reviewer token
+discipline` (the per-reviewer token-waste rules, identical for every
 reviewer), PR body, linked-issue body (when present), the full diff at the reviewed head,
-and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `##
+and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `#
 Validation results at this head`, present only when a validation-results artifact was
-threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the six fixed sections are
+threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the seven fixed sections are
 the whole prefix: the conditional section appends after the fixed sections without reordering or changing them. The PR body and
 each linked-issue body are
 author-controlled GitHub text (PR author or linked-issue author), so each is carried in

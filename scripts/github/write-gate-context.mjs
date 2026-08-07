@@ -985,6 +985,29 @@ function extractDocsOnlyDiff(diffOutput) {
 }
 
 /**
+ * Render the "## Reviewer source-read invariant" section (GATE-EXEC-SOURCE-READ-WORKTREE,
+ * #1603): the rule that a reviewer citing a skill/doc/source file must read it
+ * from the WORKTREE SOURCE under review, not from an installed skill layout
+ * (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those
+ * source files, so reading them produces false must-fix findings against text
+ * the PR already fixed. Extracted into one function so the full prefix and every
+ * scoped variant render this passage byte-identically — every caller of this
+ * round passes the same `worktreeRoot`, so threading it in does not break that
+ * byte-identity. The worktree path is already stamped on the `worktree:` header
+ * line by `renderBriefingPrefix`; this section restates it inline so a scoped
+ * variant (which carries no header `worktree:` line of its own) is self-contained.
+ * @param {string} worktreeRoot — absolute path of the worktree at the reviewed head
+ * @returns {string}
+ */
+function renderSourceReadInvariantSection(worktreeRoot) {
+  return [
+    "## Reviewer source-read invariant",
+    "",
+    `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${worktreeRoot}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false must-fix findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
+  ].join("\n");
+}
+
+/**
  * Render the "## Reviewer token discipline" section: the per-reviewer
  * token-waste rules that no structural briefing lever (grouping, scoping,
  * hunk-collapse) can remove because they happen inside the reviewer's own
@@ -1116,6 +1139,8 @@ export function renderBriefingPrefix({
     `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
   lines.push("");
+  lines.push(renderSourceReadInvariantSection(worktreeRoot));
+  lines.push("");
   lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push("## PR body");
@@ -1233,6 +1258,7 @@ export function renderBriefingPrefix({
  * @param {string} input.headSha
  * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
  * @param {string|null} [input.contextPath] — the sibling JSON context-artifact path, for the widen-back pointer
+ * @param {string|null} [input.worktreeRoot] — absolute path of the worktree at the reviewed head, stamped into the source-read invariant section (mirrors the full prefix's `worktree:` line so a scoped reviewer need not widen just to learn the tree)
  * @param {string|null} [input.prBody]
  * @param {string|null} [input.issueRef]
  * @param {string|null} [input.issueBody]
@@ -1244,7 +1270,7 @@ export function renderBriefingPrefix({
  * @returns {{ text: string }}
  */
 export function renderScopedBriefingVariant(scope, {
-  repo, pr, gate, headSha, briefingPrefixPath, contextPath = null,
+  repo, pr, gate, headSha, briefingPrefixPath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   validationResultsPath = null,
@@ -1272,6 +1298,10 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   lines.push("");
+  if (worktreeRoot) {
+    lines.push(renderSourceReadInvariantSection(worktreeRoot));
+    lines.push("");
+  }
   lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push("## PR body");
@@ -1825,6 +1855,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           headSha: options.headSha,
           briefingPrefixPath,
           contextPath,
+          worktreeRoot: path.resolve(repoRoot),
           prBody: options.prBody ?? null,
           issueRef: options.acceptanceCriteria ?? null,
           issueBody: options.issueBody ?? null,

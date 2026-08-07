@@ -2086,13 +2086,18 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.equal(diffBytes, Buffer.byteLength(renderInput().diffOutput, "utf8"));
 
   const headerIdx = text.indexOf("repo: owner/repo");
+  const sourceReadIdx = text.indexOf("## Reviewer source-read invariant");
+  const tokenDisciplineIdx = text.indexOf("## Reviewer token discipline");
   const prBodyIdx = text.indexOf("## PR body");
   const issueIdx = text.indexOf("## Linked issue #42");
   const diffIdx = text.indexOf("## Diff at reviewed head");
   const summaryIdx = text.indexOf("## Changed files + adjacent-code summary");
 
-  // Fixed order: header, PR body, linked issue, diff, changed-files summary.
-  assert.ok(headerIdx >= 0 && headerIdx < prBodyIdx);
+  // Fixed order: header, source-read invariant, token discipline, PR body,
+  // linked issue, diff, changed-files summary.
+  assert.ok(headerIdx >= 0 && headerIdx < sourceReadIdx);
+  assert.ok(sourceReadIdx < tokenDisciplineIdx);
+  assert.ok(tokenDisciplineIdx < prBodyIdx);
   assert.ok(prBodyIdx < issueIdx);
   assert.ok(issueIdx < diffIdx);
   assert.ok(diffIdx < summaryIdx);
@@ -2553,6 +2558,10 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      "",
+      "## Reviewer source-read invariant",
+      "",
+      `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${path.resolve(repoRoot)}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false must-fix findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
       "",
       "## Reviewer token discipline",
       "",
@@ -3222,8 +3231,96 @@ test("renderBriefingPrefix carries the worktree root and the git -C cwd-independ
   assert.ok(text.includes(`git -C "${input.worktreeRoot}"`));
   assert.ok(text.indexOf("Shell cwd is NOT trustworthy") < text.indexOf("## PR body"));
   assert.ok(text.includes("repoRoot"));
+  // #1603: the source-read invariant is stamped into every briefing prefix,
+  // naming the worktree source over installed skill copies and the git-show
+  // verification step.
+  assert.ok(text.includes("## Reviewer source-read invariant"));
+  assert.ok(text.includes(`The worktree checkout at the reviewed head is \`${input.worktreeRoot}\``));
+  assert.ok(text.includes(".pi/skills/"));
+  assert.ok(text.includes("~/.pi/agent/"));
+  assert.ok(text.includes("git show HEAD:<path>"));
+  assert.ok(text.indexOf("## Reviewer source-read invariant") < text.indexOf("## Reviewer token discipline"));
 });
 
+// #1603 regression: a PR that rewrites a SKILL.md phrase must not let a
+// reviewer quote the PRE-PR installed copy as a must-fix. The defense is the
+// briefing prefix's source-read invariant, which (a) names the worktree source
+// as the only authoritative copy and (b) requires verifying any cited line
+// against `git show HEAD:<path>` before reporting. This test pins both halves
+// on a prefix whose diff rewrites a skill source file, so a future change that
+// drops the invariant re-opens the false-positive class the issue targets.
+test("#1603: a briefing prefix for a PR rewriting a SKILL.md phrase carries the worktree-source invariant that prevents a stale-installed-copy false finding", () => {
+  const staleInstalledPhrase = "planFanoutBatches/maxFanoutReviewers";
+  const fixedWorktreePhrase = "two-knob wave-plan model";
+  const diffOutput = [
+    "diff --git a/skills/copilot-pr-followup/SKILL.md b/skills/copilot-pr-followup/SKILL.md",
+    "index 1111111..2222222 100644",
+    "--- a/skills/copilot-pr-followup/SKILL.md",
+    "+++ b/skills/copilot-pr-followup/SKILL.md",
+    "@@ -1,1 +1,1 @@",
+    `-${staleInstalledPhrase}`,
+    `+${fixedWorktreePhrase}`,
+    "",
+  ].join("\n");
+  const input = renderInput({
+    diffOutput,
+    changedFiles: ["skills/copilot-pr-followup/SKILL.md"],
+    prBody: "Rewrite the fan-out phrasing to the two-knob model.",
+  });
+  const { text } = renderBriefingPrefix(input);
+
+  // (a) The invariant names the worktree source as authoritative and the
+  // installed layouts to avoid — the exact paths the false-positive class
+  // came from on PR #1602.
+  assert.ok(text.includes("## Reviewer source-read invariant"));
+  assert.ok(text.includes(`The worktree checkout at the reviewed head is \`${input.worktreeRoot}\``));
+  assert.ok(text.includes(".pi/skills/"));
+  assert.ok(text.includes("~/.pi/agent/"));
+  assert.ok(text.includes("WORKTREE SOURCE"));
+
+  // (b) The invariant requires verifying a cited line against the worktree
+  // source at the reviewed head — a reviewer following it would run
+  // `git show HEAD:skills/copilot-pr-followup/SKILL.md`, find the FIXED
+  // phrase (not the stale one), and NOT report a must-fix.
+  assert.ok(text.includes("git show HEAD:<path>"));
+
+  // The diff the reviewer is seeded with carries the FIXED worktree phrase as
+  // the post-change line and the STALE phrase only as the removed `-` line —
+  // so even without the invariant, a reviewer reading the briefed diff sees
+  // the fix is already in the PR.
+  assert.ok(text.includes(`+${fixedWorktreePhrase}`));
+  assert.ok(text.includes(`-${staleInstalledPhrase}`));
+});
+
+test("#1603: scoped briefing variants also carry the worktree-source invariant when worktreeRoot is threaded", () => {
+  const { text } = renderScopedBriefingVariant("docs-only", {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+    worktreeRoot: "/repo/worktree",
+    diffOutput: [
+      "diff --git a/skills/docs/foo.md b/skills/docs/foo.md",
+      "index 111..222 100644",
+      "--- a/skills/docs/foo.md",
+      "+++ b/skills/docs/foo.md",
+      "@@ -1 +1 @@",
+      "-stale phrase",
+      "+fixed phrase",
+      "",
+    ].join("\n"),
+  });
+  assert.ok(text.includes("## Reviewer source-read invariant"));
+  assert.ok(text.includes("/repo/worktree"));
+  assert.ok(text.includes(".pi/skills/"));
+  assert.ok(text.includes("git show HEAD:<path>"));
+});
+
+test("#1603: scoped briefing variants omit the source-read invariant when worktreeRoot is absent (byte-identical to pre-#1603 scoped variant)", () => {
+  const { text } = renderScopedBriefingVariant("docs-only", {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    briefingPrefixPath: "tmp/x.briefing-prefix.txt",
+  });
+  assert.ok(!text.includes("## Reviewer source-read invariant"));
+});
 test("writeGateContext warns, naming the retirement command, when a rebuild overwrites a differing prefix at a head with live sentinels", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-warn-"));
   const fullSha = "abc1234567890def".padEnd(40, "0");

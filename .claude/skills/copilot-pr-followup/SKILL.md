@@ -101,6 +101,12 @@ Required bundled runtime contract docs for installed copies of this skill:
 Read those bundled `../docs/` files from the installed skill layout instead of assuming the source repository checkout is present. If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.
 <!-- rule: ASSET-PATH-SOURCE-NO-REPO-LOCAL --> `ASSET-PATH-SOURCE-NO-REPO-LOCAL`: Agents MUST NOT assume `scripts/...` is repo-local to the target codebase they are operating on.
 
+### Source files under review vs. helper-script paths
+
+The rule above governs HELPER SCRIPT paths invoked as tooling (`scripts/...` you RUN). It does **not** govern SKILL/DOC SOURCE FILES you REVIEW as content. A gate reviewer citing a skill/doc file (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) in a finding is reviewing the PR's content, not invoking tooling — and installed copies of those source files lag the PR under review. Reading an installed copy (`.pi/skills/<name>/SKILL.md`, `~/.pi/agent/...`) produces false must-fix findings against text the PR already fixed (#1603).
+
+A reviewer citing a skill/doc/source file MUST read it from the WORKTREE SOURCE under review, not from an installed skill layout. Resolve skill/doc paths as RELATIVE paths from the worktree cwd named on the briefing prefix's `worktree:` line — never from `.pi/skills/`, `~/.pi/agent/`, or any other installed copy. Before reporting a finding that quotes a skill/doc line, verify the cited text matches `git show HEAD:<path>` (the worktree source at the reviewed head); a finding whose cited text does not appear in `git show HEAD:<path>` is a false positive against a stale installed copy and MUST NOT be reported. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per the rule above. The canonical `GATE-EXEC-SOURCE-READ-WORKTREE` rule and its briefing-prefix wiring live in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md).
+
 ## Authority and safety rules
 
 Source code, tests, CI, and config are authoritative. Generated wiki is navigation aid only. See [Confirmation Rules](../docs/confirmation-rules.md), [Stop Conditions](../docs/stop-conditions.md), and [Merge Preconditions](../docs/merge-preconditions.md) for authorization boundaries.
