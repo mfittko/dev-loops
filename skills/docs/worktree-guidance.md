@@ -47,7 +47,16 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
   [--branch <name>] [--base <ref, default origin/main>]
 ```
 
-It prints `{ ok, path, created|reused, provision: { actions, summary }, guard }`
+Branch resolution on the create path is three-way, reported via `branchOrigin`:
+an existing local branch is re-attached (`reused-local`); otherwise an existing
+same-name remote branch is checked out as a new local branch tracking the
+remote tip (`tracked-remote` — upstream is the remote branch, never base);
+otherwise the branch is created off the resolved base (`created-from-base`).
+When a local branch and its same-name remote branch have genuinely forked, the
+result carries a `diverged: { remoteRef, local, remote }` report (on both the
+create and reuse paths) instead of silently picking a side.
+
+It prints `{ ok, path, created|reused, branchOrigin, diverged?, provision: { actions, summary }, guard }`
 (the full `provisionWorktree()` result, not just its summary). Provisioning is
 fail-soft (a warning never aborts the worktree); a `git worktree add` failure is
 a hard error. It does **not** run `npm install` (see dependencies below).
