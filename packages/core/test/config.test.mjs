@@ -48,6 +48,11 @@ import {
   resolveTrackerProvider,
   resolveTrackerBoard,
 } from "../src/config/config.mjs";
+// #1592: a few fixtures below deliberately keep pre-rename severity spellings
+// ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // ============================================================================
 // Schema validation tests (S1–S26)
 // ============================================================================
@@ -2461,17 +2466,53 @@ describe("role resolution", () => {
       assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 2);
     });
 
-    test("FileConfigSchema accepts every canonical and legacy severity spelling, plus the deprecated worthFixingNowFixWindow alias", () => {
+    // The canonical key must round-trip through the REAL loader (per-layer
+    // FileConfigSchema parse + mergeGateObject), not just a hand-built plain
+    // object — this is what would have caught a schema-level `.default()` on
+    // `mediumFixWindow` poisoning the deprecated-alias fallback (every prior
+    // test in this describe block only exercised the alias, never this key,
+    // through loadDevLoopConfig).
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file's canonical mediumFixWindow", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-mediumfixwindow-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    mediumFixWindow: 7\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 7);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("FileConfigSchema accepts every canonical and legacy DEFECT severity spelling, plus the deprecated worthFixingNowFixWindow alias", () => {
       const config = {
         version: 1,
         gates: {
           draft: {
-            blockCleanOnFindingSeverities: ["high", "medium", "low", "question", "nit", "must-fix", "worth-fixing-now", "nice-to-have", "defer"],
+            blockCleanOnFindingSeverities: ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"],
             worthFixingNowFixWindow: 5,
           },
         },
       };
       assert.equal(FileConfigSchema.safeParse(config).success, true);
+    });
+
+    // #1592 follow-up: question/nit never block by severity — a config
+    // blocking on either would fight the disposition pass, which
+    // simultaneously auto-resolves them (question: answered/never-deferred;
+    // nit: deferred immediately) regardless of what blocks a clean verdict.
+    test("GateConfig rejects question/nit in blockCleanOnFindingSeverities (non-defect categories never block by severity)", () => {
+      for (const severity of ["question", "nit"]) {
+        const result = FileConfigSchema.safeParse({
+          version: 1,
+          gates: { draft: { blockCleanOnFindingSeverities: [severity] } },
+        });
+        assert.equal(result.success, false, severity);
+      }
     });
 
     test("GateConfig rejects invalid blockCleanOnFindingSeverities tokens", () => {

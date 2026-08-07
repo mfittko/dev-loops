@@ -255,7 +255,7 @@
               "default": [
                 "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -264,8 +264,6 @@
                   "high",
                   "medium",
                   "low",
-                  "question",
-                  "nit",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",
@@ -446,7 +444,7 @@
               "default": [
                 "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -455,8 +453,6 @@
                   "high",
                   "medium",
                   "low",
-                  "question",
-                  "nit",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",
@@ -637,7 +633,7 @@
               "default": [
                 "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -646,8 +642,6 @@
                   "high",
                   "medium",
                   "low",
-                  "question",
-                  "nit",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",

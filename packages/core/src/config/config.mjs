@@ -224,11 +224,17 @@ const GateConfig = z.strictObject({
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
+  // Defect severities only (high/medium/low, plus their pre-rename spellings)
+  // — "question"/"nit" are non-defect categories that never block a clean
+  // verdict by severity: a question's own answered/never-deferred contract
+  // and a nit's immediate-defer disposition already decide its fate, so
+  // admitting either here would let a config block on a severity the
+  // disposition pass simultaneously auto-resolves.
   blockCleanOnFindingSeverities: z
-    .array(z.enum(["high", "medium", "low", "question", "nit", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
+    .array(z.enum(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
     .min(1)
     .default(["high"])
-    .describe("Finding severities that block a clean gate verdict. \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
+    .describe("Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
   // Per-gate medium fix window (#1581): an open medium finding stays in the
   // in-gate fix loop through this many rounds of THIS gate's chain and is
   // deferred (replied-to + resolved) from the next round on. Defaults to 3
