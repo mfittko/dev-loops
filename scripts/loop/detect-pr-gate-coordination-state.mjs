@@ -24,6 +24,7 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -148,13 +149,6 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
   }
   return options;
 }
-function parseRequestedReviewersPayload(text) {
-  const payload = parseJsonText(text, { label: "gh requested reviewers" });
-  const users = Array.isArray(payload?.users) ? payload.users : [];
-  return {
-    requested: users.some((user) => isCopilotLogin(user?.login)),
-  };
-}
 export function parseGitStatusConflictFiles(text) {
   if (typeof text !== "string" || text.length === 0) {
     return [];
@@ -177,18 +171,6 @@ export function parseGitStatusConflictFiles(text) {
     }
   }
   return conflictFiles;
-}
-async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  const result = await runChild(
-    ghCommand,
-    ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseRequestedReviewersPayload(result.stdout);
 }
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
@@ -562,7 +544,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
-  const requestedReviewers = await fetchRequestedReviewers(options, runtime);
+  // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
+  // to preserve the gh call order existing tests expect; the reconciliation (timeline
+  // fetch) is deferred to after reviewSummary is computed (#1588).
+  const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
   const gateEvidence = await detectCheckpointEvidence(options, runtime);
@@ -576,9 +561,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
-  const reviewRequestStatus = requestedReviewers.requested
-    ? "requested"
-    : (reviewSummary.hasPendingReviewOnCurrentHead ? "already-requested" : "none");
+  const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
+    { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
+    runtime,
+  );
   const snapshot = buildSnapshotFromPrFacts({
     prData,
     prNumber: options.pr,

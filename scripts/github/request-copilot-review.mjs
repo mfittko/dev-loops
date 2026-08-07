@@ -20,6 +20,7 @@ import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { readSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
+import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -186,6 +187,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     copilotReviewPresent: reviewSummary.copilotReviewPresent,
     hasCopilotPendingReviewOnCurrentHead: reviewSummary.hasPendingReviewOnCurrentHead,
     hasCopilotSubmittedReviewOnCurrentHead: reviewSummary.hasSubmittedReviewOnCurrentHead,
+    latestSubmittedReviewOnCurrentHeadAt: reviewSummary.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviewSummary.completedCopilotReviewRounds,
   };
 }
@@ -257,6 +259,7 @@ async function fetchCopilotReviewState(options, runtime) {
     copilotReviewPresent: reviews.copilotReviewPresent,
     hasPendingReviewOnCurrentHead: reviews.hasCopilotPendingReviewOnCurrentHead,
     hasSubmittedReviewOnCurrentHead: reviews.hasCopilotSubmittedReviewOnCurrentHead,
+    latestSubmittedReviewOnCurrentHeadAt: reviews.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviews.completedCopilotReviewRounds,
   };
 }
@@ -267,6 +270,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
     copilotReviewPresent = false,
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
+    latestSubmittedReviewOnCurrentHeadAt = null,
   } = priorReviewState;
   if (typeof options.sameHeadCleanConverged === "boolean") {
     return options.sameHeadCleanConverged;
@@ -280,10 +284,19 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       runtime,
     );
     const parsedThreads = parseReviewThreads(threadsPayload);
+    const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        copilotRequested: requested,
+      },
+      runtime,
+    );
     const snapshot = buildSnapshotFromPrFacts({
       prData,
       prNumber: options.pr,
-      copilotReviewRequestStatus: hasPendingReviewOnCurrentHead || requested ? "requested" : "none",
+      copilotReviewRequestStatus,
       copilotReviewPresent,
       copilotReviewOnCurrentHead: hasSubmittedReviewOnCurrentHead,
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
@@ -307,6 +320,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
     copilotReviewPresent = false,
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
+    latestSubmittedReviewOnCurrentHeadAt = null,
   } = priorReviewState;
   if (prData === null) {
     return { eligible: false, interpretation: null };
@@ -317,10 +331,19 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       runtime,
     );
     const parsedThreads = parseReviewThreads(threadsPayload);
+    const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        copilotRequested: requested,
+      },
+      runtime,
+    );
     const snapshot = buildSnapshotFromPrFacts({
       prData,
       prNumber: options.pr,
-      copilotReviewRequestStatus: hasPendingReviewOnCurrentHead || requested ? "requested" : "none",
+      copilotReviewRequestStatus,
       copilotReviewPresent,
       copilotReviewOnCurrentHead: hasSubmittedReviewOnCurrentHead,
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,

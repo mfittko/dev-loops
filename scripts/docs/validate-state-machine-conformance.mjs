@@ -431,6 +431,15 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // signal (not derived from `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright
 // whenever a Copilot review request is still outstanding on the current head — asserted at gate
 // *entry*, mirroring the verdict-post predicate instead of only duplicating it after the fact.
+//
+// #1588: the `requested` (unsettled) case below pins the #1190 guard's refusal — it stays. The
+// `none` (settled) case pins the clean-current-head-review -> pre_approval_gate routing. The
+// detector-level reconciliation (`resolveCopilotReviewRequestStatus` in
+// `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for the
+// #1584 trap state (lingering `requested` status whose request predates the latest same-head
+// submitted review). Before #1588, `detect-pr-gate-coordination-state.mjs` mapped `requested`
+// unconditionally and the guard dead-ended the loop into `stop` even though all pre-approval
+// preconditions were met.
 verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
   // Even a caller that reports sameHeadCleanConverged: true (e.g. a stale/racy
   // interpretation) must still be refused while a Copilot review request is

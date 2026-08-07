@@ -2122,3 +2122,118 @@ test("formal-request guard does not re-block the round_cap_reached clean-grant s
     "the round_cap_reached clean grant must not be rewritten to request_copilot_review",
   );
 });
+
+test("detect-pr-gate-coordination-state routes to pre_approval_gate when a lingering requested status is settled by a clean current-head review (#1588)", async () => {
+  // Reproduces the #1584 trap: all pre_approval_gate preconditions met (CI green,
+  // 0 unresolved threads, clean submitted Copilot review on the current head),
+  // but GitHub's requested_reviewers still lists Copilot (a lingering `requested`
+  // status). Before #1588, detect-pr-gate-coordination-state.mjs mapped
+  // `requested → "requested"` unconditionally, and applyUnsettledCopilotReviewEntryGuard
+  // (#1190) discarded the RUN_PRE_APPROVAL_GATE grant, dead-ending the loop into
+  // `stop`. The shared reconciliation helper settles the stale request (its
+  // timestamp predates the latest same-head submitted review) to `none`, so the
+  // loop proceeds to pre_approval_gate.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-1588-converged-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 1584,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "deadbeef12345678",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [
+            {
+              // Clean submitted Copilot review on the current head
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              commit: { oid: "deadbeef12345678" },
+              submittedAt: "2026-06-01T10:30:00Z",
+            },
+          ],
+        }),
+      },
+      {
+        // GitHub's requested_reviewers still lists Copilot (lingering — not yet cleared)
+        assertArgs: ["api", "repos/owner/repo/pulls/1584/requested_reviewers"],
+        stdout: jsonLine({ users: [{ login: "copilot-pull-request-reviewer[bot]" }], teams: [] }),
+      },
+      {
+        // Review threads: 0 unresolved
+        assertArgs: ["api", "graphql", "pr=1584"],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+      },
+      {
+        // Head check (detectCheckpointEvidence)
+        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "deadbeef12345678" }),
+      },
+      {
+        // Clean draft_gate evidence on the current head
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/1584/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 70,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: deadbeef12345678",
+              "Verdict: clean",
+              "Findings summary: Draft gate passed.",
+              "Next action: Mark ready for review.",
+            ].join("\n"),
+            html_url: "https://example.test/comment/70",
+            updated_at: "2026-06-01T10:00:00Z",
+          },
+        ]]),
+      },
+      {
+        // PR reviews stream (detectCheckpointEvidence also fetches reviews)
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/1584/reviews?per_page=100"],
+        stdout: jsonLine([]),
+      },
+      {
+        // Timeline for fetchLatestCopilotReviewRequestAt: the review_requested
+        // event predates the submitted review (stale request → settles to "none")
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: '{"login":"copilot-pull-request-reviewer[bot]","created_at":"2026-06-01T09:00:00Z"}\n',
+      },
+      {
+        // Timeline for fetchCopilotEverFormallyRequested: Copilot WAS formally
+        // requested (so the #613 guard does NOT fire — pre_approval_gate proceeds)
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: 'copilot-pull-request-reviewer[bot]\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "1584"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+
+    // The lingering requested status is reconciled to "none" (stale request
+    // settled by the clean current-head review), so the interpreter reaches
+    // ready_to_rerequest_review (not waiting_for_copilot_review, which is what
+    // an unreconciled "requested" status would produce).
+    assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
+
+    // The loop routes to pre_approval_gate, not a dead-end stop.
+    assert.equal(parsed.gateBoundary, "pre_approval_gate_needed");
+    assert.equal(parsed.nextAction, "run_pre_approval_gate");
+    assert.ok(
+      parsed.allowedNextActions.includes("run_pre_approval_gate"),
+      "run_pre_approval_gate must be an allowed next action",
+    );
+    assert.ok(
+      !parsed.forbiddenActions.includes("run_pre_approval_gate"),
+      "run_pre_approval_gate must NOT be forbidden — the settled request must not trap the loop",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
