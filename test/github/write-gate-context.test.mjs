@@ -26,6 +26,7 @@ import {
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
+  resolveFanoutDispatch,
   resolvePrSpecContext,
   readGateContext,
   renderBriefingPrefix,
@@ -3912,4 +3913,71 @@ test("CLI main: an explicit --angles override still resolves angleScopes from lo
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// #1601 — fan-out dispatch plan (groups + wave plan + knobs) emission
+// ---------------------------------------------------------------------------
+
+test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounded-concurrency wave plan", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false });
+  assert.deepEqual(plan.groups, [
+    { name: "group:a+b", angles: ["a", "b"] },
+    { name: "group:c+d", angles: ["c", "d"] },
+    { name: "e", angles: ["e"] },
+  ]);
+  assert.equal(plan.maxAnglesPerGroup, 2);
+  assert.equal(plan.maxConcurrent, 2);
+  // 5 groups... 3 dispatch units, cap 2 → 2 waves [2, 1]
+  assert.equal(plan.wavePlan.length, 2);
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [2, 1]);
+  assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d"]);
+  assert.deepEqual(plan.wavePlan[1].map((u) => u.name), ["e"]);
+});
+
+test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle restoration)", () => {
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["a", "b"] }] } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c"], { fullLabel: true });
+  // gate:full → configured group matched first, leftover "c" auto-chunked (singleton).
+  assert.deepEqual(plan.groups, [
+    { name: "g", angles: ["a", "b"] },
+    { name: "c", angles: ["c"] },
+  ]);
+  // default maxConcurrent 4 → one wave of 2 units.
+  assert.equal(plan.maxConcurrent, 4);
+  assert.equal(plan.wavePlan.length, 1);
+  assert.equal(plan.wavePlan[0].length, 2);
+});
+
+test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (auto-chunk singletons, cap 4)", () => {
+  const plan = resolveFanoutDispatch(null, "draft", ["a", "b"], {});
+  // no configured groups, default N=3 → one chunk of 2.
+  assert.deepEqual(plan.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
+  assert.equal(plan.maxAnglesPerGroup, 3);
+  assert.equal(plan.maxConcurrent, 4);
+  assert.equal(plan.wavePlan.length, 1);
+});
+
+test("#1601 buildGateContextArtifact records the fanout dispatch plan when supplied", () => {
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { maxConcurrent: 1 } } }, "draft", ["a", "b"], {});
+  const artifact = buildGateContextArtifact({
+    repo: "a/b", pr: 5, gate: "draft_gate", headSha: "abc1234",
+    angles: ["a", "b"],
+    fanoutDispatch: plan,
+  });
+  assert.equal(artifact.fanout.maxConcurrent, 1);
+  assert.equal(artifact.fanout.maxAnglesPerGroup, 3);
+  assert.deepEqual(artifact.fanout.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
+  // cap 1 → 1 unit per wave → one wave.
+  assert.equal(artifact.fanout.wavePlan.length, 1);
+  assert.equal(artifact.fanout.wavePlan[0].length, 1);
+});
+
+test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is supplied (backward compatible)", () => {
+  const artifact = buildGateContextArtifact({
+    repo: "a/b", pr: 5, gate: "draft_gate", headSha: "abc1234",
+    angles: ["scope"],
+  });
+  assert.equal("fanout" in artifact, false);
 });

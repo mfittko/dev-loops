@@ -28,6 +28,50 @@
  * LEGACY_SEVERITY_ALIASES / normalizeSeverity).
  */
 
+import { scheduleParallelWaves } from "./queue-parallel.mjs";
+
+/**
+ * Schedule fan-out dispatch units into bounded-concurrency waves (issue #1601).
+ *
+ * Reuses the existing wave scheduler `scheduleParallelWaves`
+ * (packages/core/src/loop/queue-parallel.mjs, originally the queue-mode parallel
+ * scheduler): each wave holds at most `maxConcurrent` dispatch units, and the
+ * conductor dispatches wave-by-wave — awaiting a free slot (wave completion)
+ * before launching the next — instead of fire-all-then-retry. This replaces
+ * the unbounded concurrent fan-out that 429-stormed multi-angle gate rounds
+ * (issue #1588 drive: 5–6 reviewers 429'd per round).
+ *
+ * Pure: same input always yields the same wave plan (deterministic order, so
+ * the wave plan a reviewer's gate-context artifact records is byte-stable
+ * across fresh reviewer spawns for the same head+config).
+ *
+ * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output
+ * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 4, min 1)
+ * @returns {{ name: string, angles: string[] }[][]} waves of dispatch units (at most `maxConcurrent` per wave)
+ */
+export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
+  const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  if (groups.length === 0) return [];
+  return scheduleParallelWaves(groups, cap);
+}
+
+/**
+ * Adaptive 429-backoff concurrency (issue #1601): halve the active batch before
+ * escalating to foreground one-at-a-time fallback. On a 429, the conductor
+ * recomputes the wave plan with `backoffMaxConcurrent(maxConcurrent)` and
+ * retries the failed wave; if a single-unit wave still 429s, it falls back to
+ * foreground (one-at-a-time) dispatch. The backoff is recorded in the round's
+ * provenance (see skills/docs/gate-review-sub-loop-contract.md). Pure; never
+ * returns 0 (a backoff from 1 stays 1 → foreground fallback owns that path).
+ * @param {number} maxConcurrent
+ * @returns {number}
+ */
+export function backoffMaxConcurrent(maxConcurrent) {
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  return Math.max(1, Math.floor(cap / 2));
+}
+
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each
@@ -289,11 +333,13 @@ export function countFreshDispatchUnits(perAngle) {
  * honored when every fresh angle it covers is a member of the SAME
  * configured dispatch unit — a fabricated `group` label spanning angles the
  * table splits apart (or never groups at all) no longer passes.
- * `resolveFanoutGroups` itself already collapses to one-angle-per-unit
- * singletons for `gates.fanout.mode: per-angle` and for a `gate:full` round
- * (`fullLabel: true`), so passing its output here also rejects ANY shared
- * identity in those modes — no separate mode flag needed. Omitting
- * `resolvedGroups` entirely keeps today's fully permissive behavior (any one
+ * `resolveFanoutGroups` itself emits one-angle-per-unit singletons for
+ * `gates.fanout.mode: per-angle` (bypasses configured groups), so passing its
+ * output here rejects ANY shared identity in that mode — no separate mode flag
+ * needed. As of #1601 (ADR 0048) `gate:full` dispatches GROUPED (fullLabel is a
+ * no-op for dispatch shape), so a shared identity within an auto-chunked
+ * dispatch unit is honored exactly as for a configured group.
+ * Omitting `resolvedGroups` entirely keeps today's fully permissive behavior (any one
  * shared non-null `group` value is accepted, unchecked against config) — both
  * call sites already load config, so they should always supply it; this
  * default only preserves callers (and old ledgers) that don't.
@@ -607,6 +653,12 @@ export function toFindingsLogShape(findings) {
 
 /**
  * Plan how a resolved angle set fans out across the reviewer cap. Pure.
+ *
+ * SUPERSEDED by `scheduleFanoutWaves` (#1601, ADR 0048): the gate fan-out
+ * conductor now dispatches wave-by-wave at most `gates.fanout.maxConcurrent`
+ * (M) dispatch units per wave, using the wave plan emitted by
+ * `write-gate-context.mjs`. This helper is kept only for back-compat (zero
+ * non-test callers) and no longer participates in the dispatch path.
  *
  * When `angles.length <= maxReviewers`, all reviewers run in a single parallel
  * batch (no degradation). When it exceeds the cap, the overflow is split into

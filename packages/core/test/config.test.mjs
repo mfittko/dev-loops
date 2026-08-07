@@ -32,6 +32,10 @@ import {
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
   resolveFanoutGroups,
+  resolveMaxAnglesPerGroup,
+  resolveFanoutMaxConcurrent,
+  DEFAULT_MAX_ANGLES_PER_GROUP,
+  DEFAULT_FANOUT_MAX_CONCURRENT,
   resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
@@ -3341,29 +3345,102 @@ test("resolveFanoutGroups: mode per-angle opts into one group per angle regardle
   ]);
 });
 
-test("resolveFanoutGroups: gate:full label escalates to per-angle even under grouped config", () => {
+test("resolveFanoutGroups: gate:full no longer restores per-angle — dispatches grouped (ADR 0047 superseded by 0048, #1601)", () => {
   const config = fanoutConfig([{ name: "docs-surface", angles: ["docs", "link-check"] }]);
   const result = resolveFanoutGroups(config, "draft", ["docs", "link-check"], { fullLabel: true });
+  // gate:full forces the full angle set UPSTREAM (resolveGateTier); dispatch
+  // shape is GROUPED here — the configured group wins, no per-angle restoration.
   assert.deepEqual(result, [
-    { name: "docs", angles: ["docs"] },
-    { name: "link-check", angles: ["link-check"] },
+    { name: "docs-surface", angles: ["docs", "link-check"] },
   ]);
 });
 
-test("resolveFanoutGroups: absent gates.fanout config falls back to the grouped default with no configured groups (every angle a singleton)", () => {
+test("resolveFanoutGroups: gate:full dispatches grouped with auto-chunked leftovers (#1601)", () => {
+  // gate:full + no configured groups: the full angle set is auto-chunked into
+  // units of ≤ maxAnglesPerGroup (default 3) — NOT per-angle singletons.
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d"], { fullLabel: true });
+  assert.deepEqual(result, [
+    { name: "group:a+b+c", angles: ["a", "b", "c"] },
+    { name: "d", angles: ["d"] },
+  ]);
+});
+
+test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 3, #1601)", () => {
   const result = resolveFanoutGroups({ version: 1 }, "draft", ["scope", "docs"]);
+  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤3).
   assert.deepEqual(result, [
+    { name: "group:scope+docs", angles: ["scope", "docs"] },
+  ]);
+});
+
+test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe before auto-chunking (#1601)", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
+  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤3).
+  assert.deepEqual(result, [
+    { name: "group:docs+scope", angles: ["docs", "scope"] },
+  ]);
+});
+
+test("resolveFanoutGroups: maxAnglesPerGroup chunks leftovers into units of ≤N (#1601 determinism)", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2 } } };
+  // 5 leftover angles, N=2 → 3 units [a,b],[c,d],[e]. Deterministic order, stable names.
+  assert.deepEqual(resolveFanoutGroups(config, "draft", ["a", "b", "c", "d", "e"]), [
+    { name: "group:a+b", angles: ["a", "b"] },
+    { name: "group:c+d", angles: ["c", "d"] },
+    { name: "e", angles: ["e"] },
+  ]);
+});
+
+test("resolveFanoutGroups: maxAnglesPerGroup: 1 and mode: per-angle both yield singletons with NO configured groups (#1601)", () => {
+  // With no configured groups, both produce one singleton unit per angle.
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1 } } }, "draft", ["scope", "docs"]);
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle" } } }, "draft", ["scope", "docs"]);
+  assert.deepEqual(n1, [
+    { name: "scope", angles: ["scope"] },
+    { name: "docs", angles: ["docs"] },
+  ]);
+  assert.deepEqual(pa, [
     { name: "scope", angles: ["scope"] },
     { name: "docs", angles: ["docs"] },
   ]);
 });
 
-test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe to one singleton unit", () => {
-  const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
-  assert.deepEqual(result, [
-    { name: "docs", angles: ["docs"] },
+test("resolveFanoutGroups: per-angle and maxAnglesPerGroup: 1 DIVERGE when a configured multi-angle group matches (#1601 — not exact equivalents)", () => {
+  // per-angle bypasses configured groups (pure singletons); N=1 honors configured
+  // groups (matched first, never split) then singletons the leftovers. They are
+  // NOT equivalent when a configured multi-angle group matches a resolved angle.
+  const groups = [{ name: "docs-surface", angles: ["docs", "link-check"] }];
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle", groups } } }, "draft", ["docs", "link-check", "scope"]);
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1, groups } } }, "draft", ["docs", "link-check", "scope"]);
+  // per-angle: 3 singletons (configured group bypassed).
+  assert.deepEqual(pa.map((g) => g.angles.length), [1, 1, 1]);
+  // N=1: configured group intact (2 angles, 1 unit) + leftover singleton.
+  assert.deepEqual(n1, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
     { name: "scope", angles: ["scope"] },
   ]);
+});
+
+test("resolveFanoutGroups: configured groups matched first, never split by maxAnglesPerGroup (#1601)", () => {
+  // A configured group of 4 angles stays ONE unit even when N=2 (the knob only
+  // chunks the leftover ungrouped pool).
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, groups: [{ name: "big", angles: ["a", "b", "c", "d"] }] } } };
+  const result = resolveFanoutGroups(config, "draft", ["a", "b", "c", "d", "e", "f"]);
+  assert.deepEqual(result, [
+    { name: "big", angles: ["a", "b", "c", "d"] },
+    { name: "group:e+f", angles: ["e", "f"] },
+  ]);
+});
+
+test("resolveFanoutGroups: single leftover angle keeps the pre-#1601 singleton name (collision → angle:<name>)", () => {
+  const config = fanoutConfig([{ name: "docs", angles: ["link-check"] }]);
+  // "docs" is a leftover colliding with the emitted group name "docs".
+  const result = resolveFanoutGroups(config, "draft", ["link-check", "docs"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["link-check"] },
+    { name: "angle:docs", angles: ["docs"] },
+  ]);
+  assert.equal(new Set(result.map((g) => g.name)).size, result.length);
 });
 
 test("resolveFanoutGroups: an angle named in two configured groups is claimed by the first (first-group-wins dedup)", () => {
@@ -3391,35 +3468,48 @@ test("resolveFanoutGroups: empty resolvedAngles resolves to []", () => {
 
 test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups entry (never zod-validated — a hand-built config, or the raw merged object loadDevLoopConfig returns on ANY validation failure)", () => {
   const angles = ["docs", "scope"];
-  // A null entry (e.g. an empty YAML list item) is skipped.
+  // A null entry (e.g. an empty YAML list item) is skipped; "scope" is the sole leftover → singleton.
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, null] } } }, "draft", angles),
     [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
   );
-  // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group.
+  // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group;
+  // both angles fall through to the leftover auto-chunk pool (≤3 → one unit).
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
-    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
   );
-  // A missing/blank `name` drops the group; its angles fall through to singletons.
+  // A missing/blank `name` drops the group; its angles fall through to the auto-chunk pool.
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ angles: ["docs"] }] } } }, "draft", angles),
-    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
   );
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "  ", angles: ["docs"] }] } } }, "draft", angles),
-    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
   );
   // A non-array `groups` resolves as if no groups were configured.
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: "not-an-array" } } }, "draft", angles),
-    [{ name: "docs", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
   );
-  // Two groups sharing a name: the second is dropped, its angles fall through.
+  // Two groups sharing a name: the second is dropped, "scope" is the sole leftover → singleton.
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, { name: "g", angles: ["scope"] }] } } }, "draft", angles),
     [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
   );
+});
+
+test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config override + defensive fallback (#1601)", () => {
+  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 3);
+  assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 4);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 5 } } }), 5);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
+  // Defensive: non-integer / sub-1 fall back to defaults.
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 3);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 3);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 0 } } }), 4);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 4);
 });
 
 test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {

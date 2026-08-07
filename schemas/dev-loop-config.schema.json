@@ -717,7 +717,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "Cap on parallel gate fan-out reviewers; overflow runs in sequential batches."
+          "description": "SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."
         },
         "postFindingsComments": {
           "type": "boolean",
@@ -740,7 +740,7 @@
           "properties": {
             "mode": {
               "default": "grouped",
-              "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle dispatches one reviewer per angle.",
+              "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split).",
               "type": "string",
               "enum": [
                 "grouped",
@@ -748,7 +748,7 @@
               ]
             },
             "groups": {
-              "description": "Static named angle groups consulted in grouped mode. An angle absent from every group resolves as its own singleton group.",
+              "description": "Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup).",
               "type": "array",
               "items": {
                 "type": "object",
@@ -774,6 +774,18 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "maxAnglesPerGroup": {
+              "default": 3,
+              "description": "Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxConcurrent": {
+              "default": 4,
+              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves).",
+              "type": "integer",
+              "minimum": 1
             }
           },
           "additionalProperties": false,

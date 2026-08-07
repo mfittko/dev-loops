@@ -34,7 +34,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleScope, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
+import { scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -1424,6 +1425,33 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {object} options — parsed CLI options shape
  * @returns {object}
  */
+/**
+ * Resolve the fan-out dispatch plan for a gate round (issue #1601): the
+ * dispatch units (`resolveFanoutGroups`), the bounded-concurrency wave plan
+ * (`scheduleFanoutWaves` via `scheduleParallelWaves`), and the two knobs
+ * (`maxAnglesPerGroup`, `maxConcurrent`). The conductor dispatches
+ * wave-by-wave from this plan instead of fire-all-then-retry.
+ *
+ * Pure composition over the exported config/loop resolvers — this helper owns
+ * no angle resolution (it consumes the already-resolved `resolvedAngles`) and
+ * no I/O. `config` may be null (a `--angles` override with no loaded config);
+ * in that case grouping degrades to auto-chunked singletons under the built-in
+ * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to 4/3.
+ *
+ * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
+ * @param {"draft"|"preApproval"} configGate
+ * @param {string[]} resolvedAngles
+ * @param {{ fullLabel?: boolean }} [options]
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number }}
+ */
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false } = {}) {
+  const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
+  const maxConcurrent = resolveFanoutMaxConcurrent(config);
+  const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
+  const wavePlan = scheduleFanoutWaves(groups, maxConcurrent);
+  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent };
+}
+
 export function buildGateContextArtifact(options) {
   const artifact = {
     repo: options.repo,
@@ -1500,6 +1528,16 @@ export function buildGateContextArtifact(options) {
   // actually produced/recorded a prefix (writeGateContext does, always).
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
+  }
+  // Issue #1601: the fan-out dispatch plan — dispatch units (groups), the
+  // bounded-concurrency wave plan, and the two knobs (maxAnglesPerGroup,
+  // maxConcurrent). The conductor dispatches wave-by-wave from this plan
+  // (see skills/docs/gate-review-sub-loop-contract.md). Only present when the
+  // caller actually computed it (buildGateContext/CLI main do, for a non-empty
+  // angle set); a bare buildGateContextArtifact call that never resolved it
+  // leaves it out entirely — backward compatible artifact shape.
+  if (options.fanoutDispatch && typeof options.fanoutDispatch === "object") {
+    artifact.fanout = options.fanoutDispatch;
   }
   return artifact;
 }
@@ -1951,6 +1989,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     { repoRoot },
   );
 
+  // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+  // knobs) so the artifact carries it for the conductor to dispatch
+  // wave-by-wave. Computed from the same config + resolved angles.
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false });
+
   const writeResult = await writeGateContext(
     {
       repo: input.repo,
@@ -1960,6 +2003,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       angles: resolvedAngles,
       rationale,
       angleScopes,
+      fanoutDispatch,
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
@@ -2373,6 +2417,12 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );
+      // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+      // knobs) from the same loaded config + resolved angles + gate:full label,
+      // so the artifact carries the wave plan the conductor dispatches
+      // wave-by-wave. Independent of --angles vs dynamic resolution and of
+      // --prefix-file (config is a local file read).
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
