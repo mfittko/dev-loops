@@ -91,6 +91,21 @@ When a user triggers the dev loop, the main agent must immediately dispatch the
 and all subsequent implementation steps. The main agent never runs `dev-loops loop startup`
 directly.
 
+## Async dispatch posture (Pi)
+
+When the main agent dispatches the `dev-loop` async subagent in an interactive session, it MUST
+return control to the user after dispatch and MUST NOT call `subagent_wait` to block on
+completion. Pi wakes the session when the async run completes or needs-attention.
+
+The only exception is **run-to-completion**: the user explicitly asked for results reported back
+before continuing, or a skill must finish within a single turn. In that case the main agent may
+wait for the subagent's result before returning control.
+
+Calling `subagent_wait` merely to wait out an async dispatch freezes the interactive session for
+the full run duration (often 30+ minutes per dev-loop drive) and defeats async dispatch. The Pi
+platform default already says return control; do not call `subagent_wait` merely to wait. This
+clause reinforces that for the `dev-loop` dispatch pattern specifically.
+
 ## Enforcement posture
 
 - Under **Pi**, this contract is enforced by convention and review.

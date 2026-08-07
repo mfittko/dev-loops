@@ -28,6 +28,8 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 The main agent must **always** dispatch the `dev-loop` async subagent for any dev-loop work.
 Do not run `dev-loops loop startup` or any startup resolver in the main agent.
 For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs an async run-id marker: the Pi runtime injects `PI_SUBAGENT_RUN_ID` into each async subagent's child env, or the main agent mints and propagates the neutral `DEVLOOPS_RUN_ID` before dispatch; under the Claude Code harness the requirement is relaxed automatically (no marker needed). The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
+
+After dispatching the async subagent in an interactive session, return control to the user — do NOT call `subagent_wait` to block on completion. Pi wakes the session on completion or needs-attention. The only exception is **run-to-completion** (the user explicitly asked for results reported back before continuing, or a skill must finish in one turn). Calling `subagent_wait` merely to wait freezes the interactive session for the full run duration and defeats async dispatch; the Pi platform default already says return control. This reinforces that default for the `dev-loop` dispatch pattern specifically. See [Async dispatch posture](../docs/main-agent-contract.md#async-dispatch-posture-pi) in the Main Agent Contract.
 <!-- /pi-only -->
 
 ### Resolve authoritative state
