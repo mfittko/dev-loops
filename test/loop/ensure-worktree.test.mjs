@@ -462,6 +462,101 @@ test("ensure: a fork workflow's --base on a different remote still finds an exis
   }
 });
 
+// WFN regression: the fork-workflow test above only proves fallback-to-origin
+// (upstream never has the branch, so candidates.find() lands on origin no
+// matter the array order — a REVERSED branchRemoteCandidates would survive
+// unnoticed). This proves the PRIORITY order too: when BOTH remotes have the
+// branch at genuinely different tips, the base remote (first in priority)
+// wins, not origin.
+test("ensure: when BOTH the base remote and origin have the branch, the base remote (priority order) wins", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    origin.originGit("branch", "issue-4008");
+    origin.originGit("checkout", "-q", "issue-4008");
+    origin.originGit("commit", "-q", "--allow-empty", "-m", "origin-side work");
+    origin.originGit("checkout", "-q", "main");
+    const originSha = origin.originGit("rev-parse", "issue-4008").trim();
+
+    upstream.originGit("branch", "issue-4008");
+    upstream.originGit("checkout", "-q", "issue-4008");
+    upstream.originGit("commit", "-q", "--allow-empty", "-m", "upstream-side work");
+    upstream.originGit("checkout", "-q", "main");
+    const upstreamSha = upstream.originGit("rev-parse", "issue-4008").trim();
+    assert.notEqual(originSha, upstreamSha, "the two remotes must genuinely differ at the same branch name");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 4008, branch: "issue-4008", base: "upstream/main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "upstream/issue-4008", "the base remote (priority order) must win over origin");
+    assert.equal(git("-C", res.path, "rev-parse", "HEAD").trim(), upstreamSha);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "issue-4008@{upstream}").trim(), "upstream/issue-4008");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// WFN regression (#8 in a prior round, now the empty-after-normalization
+// fallback was added for --branch but not --base): "origin/" stays truthy
+// and used to reach git as the invalid ref "origin/".
+test("ensure: a prefix-only --base ('origin/') is treated as unset, falling back to the auto-detected default", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 5001, base: "origin/" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(res.base, "origin/main");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// NTH: --branch stripping a configured-remote prefix (not just "origin/") had
+// no direct test — only the algorithm's "origin/" case was covered.
+test("ensure: --branch strips a NON-origin configured-remote prefix (upstream/feature-x) too", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5002, branch: "upstream/feature-x" });
+    assert.equal(res.ok, true);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "feature-x");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// NTH: --prune's own load-bearing effect had no direct test — a stale
+// remote-tracking ref for a since-deleted branch must not survive the fetch
+// and get tracked as if the branch still existed.
+test("ensure: --prune drops a stale remote-tracking ref for a since-deleted branch, falling back to created-from-base", async () => {
+  const origin = makeOriginRepo();
+  try {
+    origin.originGit("branch", "issue-5003");
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    assert.match(git("rev-parse", "--verify", "--quiet", "refs/remotes/origin/issue-5003").trim(), /\w/);
+
+    // Delete the branch on the remote entirely — the clone's remote-tracking
+    // ref is now stale.
+    origin.originGit("branch", "-D", "issue-5003");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5003 });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base", "a --prune fetch must drop the stale ref, not track a deleted branch");
+  } finally {
+    origin.cleanup();
+  }
+});
+
 // WFN regression: passing an explicit --branch on BOTH arms never exercised
 // --pr's OWN default-branch derivation ("pr-<n>") — the one actual behavior
 // difference between --pr and --issue. Neither arm takes an explicit

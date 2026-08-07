@@ -36,15 +36,18 @@ underlying mechanism, not the operator interface.
 
 <!-- rule: WORKTREE-CREATE-PROVISION -->
 `WORKTREE-CREATE-PROVISION`: Creating or reusing a loop-owned worktree MUST use
-this lifecycle entrypoint. It resolves the canonical namespaced path, `git
-fetch`es the base remote, creates the worktree if absent (or reuses it if one
-already exists at that exact path — idempotent; a different branch at the path
-is reported as a conflict rather than clobbered), then provisions it (below) in
-the same step:
+this lifecycle entrypoint. It resolves the canonical namespaced path, best-effort
+`git fetch --prune`es every candidate remote (see branch resolution below —
+the one `--base` names, then `origin` when it differs; run on BOTH the create
+path and an already-existing-worktree reuse, so a divergence report answers
+from freshly-fetched refs rather than whatever was last fetched), creates the
+worktree if absent (or reuses it if one already exists at that exact path —
+idempotent; a different branch at the path is reported as a conflict rather
+than clobbered), then provisions it (below) in the same step:
 
 ```sh
 node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
-  [--branch <name>] [--base <ref, default origin/main>]
+  [--branch <name>] [--base <ref, default the repo's auto-detected default branch>]
 ```
 
 Branch resolution on the create path is three-way, reported via `branchOrigin`:

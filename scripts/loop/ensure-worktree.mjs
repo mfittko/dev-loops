@@ -68,7 +68,12 @@ Required:
   --issue <n>       Issue number (resolves the canonical path).
   --pr <n>          PR number (resolves the canonical path).
 Optional:
-  --branch <name>   Branch to create/check out (default: <kind>-<n>).
+  --branch <name>   Branch to create/check out (default: <kind>-<n>). A
+                     configured-remote-prefixed value ("upstream/foo", only
+                     when "upstream" is a remote THIS machine has configured)
+                     is stripped to the bare name — same remote-vs-bare-branch
+                     handling as --base, so the stripping depends on which
+                     remotes are configured locally, not the value alone.
   --base <ref>      Base ref for a new worktree (default: origin/<repo's
                      auto-detected default branch — origin/HEAD, else
                      main/master; .devloops workflow.baseBranch, when
@@ -529,8 +534,13 @@ export async function ensureWorktree(
   // --base/--branch are refs/names an operator (or a config value) may hand
   // in with incidental whitespace — trimmed up front so every use below (the
   // "origin/" prefix match inside resolveRemoteAndBranch included) sees the
-  // same value.
+  // same value. A PREFIX-ONLY --base ("origin/", "refs/heads/") normalizes to
+  // empty — treated as UNSET (falls through to auto-detect below), matching
+  // resolveBaseBranch's own documented prefix-only-is-unset contract for a
+  // configured workflow.baseBranch value, rather than reaching git as the
+  // invalid ref "origin/" ("fatal: invalid reference: origin/").
   if (typeof base === "string") base = base.trim();
+  if (typeof base === "string" && normalizeToBareBranch(base).length === 0) base = undefined;
   const kind = issue !== undefined ? "issue" : "pr";
   const number = issue !== undefined ? issue : pr;
   const target = resolveWorktreePath({ repoRoot: root, kind, number });
