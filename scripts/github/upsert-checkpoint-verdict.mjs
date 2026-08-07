@@ -100,7 +100,7 @@ Required:
                                             finding's disposition is "disputed" or
                                             "operator_acknowledged"; every other
                                             disposition (missing, "accepted-for-fix",
-                                            "deferred", or an unrecognized string)
+                                            "deferred", "needs-answer", or an unrecognized string)
                                             still trips this check.
   --next-action <text>
 Optional:
@@ -592,7 +592,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
 // if this set ever drifts to include a value VALID_DISPOSITIONS does not (a
 // typo here), rather than drifting the other way (fail-open) as a derived set
 // would. Anything outside this set — missing, "accepted-for-fix", "deferred",
-// or an unrecognized/typo'd string — must still count as blocking.
+// "needs-answer", or an unrecognized/typo'd string — must still count as blocking.
 const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
 for (const disposition of RESOLVED_DISPOSITIONS) {
   if (!VALID_DISPOSITIONS.has(disposition)) {
@@ -1584,7 +1584,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // ("disputed"/"operator_acknowledged", write-gate-findings-log.mjs's
   // sanctioned vocabulary for a blocking finding the fix cycle/operator has
   // already closed out without changing its severity). Every other value —
-  // missing, "accepted-for-fix", "deferred", or an unrecognized/typo'd string
+  // missing, "accepted-for-fix", "deferred", "needs-answer", or an unrecognized/typo'd string
   // — counts as still unresolved, so an arbitrary disposition can never
   // silently exempt a blocking finding.
   if (
