@@ -3864,6 +3864,14 @@ test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only compani
     assert.ok(!variantText.includes("src/a.mjs"), "docs-only variant excludes non-doc hunks");
     assert.ok(!variantText.includes("const x = 2;"));
     assert.ok(variantText.includes(result.prefixPath), "links back to the full briefing prefix so the angle can always widen (AC1)");
+    // #1603: the writeGateContext → renderScopedBriefingVariant wiring threads
+    // worktreeRoot into the on-disk scoped variant, so the source-read
+    // invariant lands in real dispatched scoped briefings — not just direct
+    // unit calls. Pin the wiring so removing the call-site thread silently
+    // drops the invariant from the dispatch path.
+    assert.ok(variantText.includes("## Reviewer source-read invariant"), "scoped variant carries the source-read invariant (#1603)");
+    assert.ok(variantText.includes("git show HEAD:<path>"), "scoped variant carries the git-show verification step (#1603)");
+    assert.ok(variantText.includes(path.resolve(repoRoot)), "scoped variant names the worktree source path (#1603)");
 
     // The full prefix is untouched and still carries everything.
     const fullPrefixText = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
@@ -3913,6 +3921,10 @@ test("buildGateContext (AC3): a changed-files-scoped angle's companion carries t
     assert.ok(variantText.includes("const x = 99;"), "the full diff is carried");
     assert.ok(!variantText.includes("Adjacent files"), "no adjacent-code section in the changed-files variant");
     assert.ok(variantText.includes(result.prefixPath), "links back to the full prefix");
+    // #1603: pin the writeGateContext → scoped-variant wiring for the
+    // changed-files scope too.
+    assert.ok(variantText.includes("## Reviewer source-read invariant"), "changed-files scoped variant carries the source-read invariant (#1603)");
+    assert.ok(variantText.includes("git show HEAD:<path>"), "changed-files scoped variant carries the git-show verification step (#1603)");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
