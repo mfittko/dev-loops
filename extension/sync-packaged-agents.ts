@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
 
 /**
+ * The project-local agents directory, relative to the session's project root.
+ * Pi resolves project role agents from here with precedence over the global
+ * `~/.agents/` (#1606): when a repo symlinks `.pi/agents` -> the package source
+ * (the dev-loops repo dogfooding convention), the dispatch reads the raw neutral
+ * templates and Pi strict-rejects `search`/`execute`. The project-local sync
+ * replaces that symlink with a real directory of Pi-valid copies.
+ */
+const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
+
+/**
  * Pi tool-name map — mirrors the Claude `TOOL_NAME_MAP`
  * (`packages/core/src/claude/asset-generation.mjs`) but maps the harness-neutral
  * agent tool vocabulary to Pi builtins. Applied at session-start sync time so
@@ -88,6 +98,75 @@ export function renderPiAgent(raw: string): string {
 }
 
 /**
+ * Write Pi-valid rendered copies of every packaged `agents/*.agent.md` into
+ * `destDir` (created if missing). Shared by the global `~/.agents/` sync and the
+ * project-local `.pi/agents/` sync (#1606) so both targets get identical Pi-valid
+ * rewrites from the same neutral source.
+ */
+function writeSyncedAgents(sourceRoot: string, destDir: string) {
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
+      continue;
+    }
+    const raw = fs.readFileSync(path.join(sourceRoot, entry.name), "utf8");
+    fs.writeFileSync(path.join(destDir, entry.name), renderPiAgent(raw));
+  }
+}
+
+/**
+ * Sync the project-local `.pi/agents/` directory with Pi-valid copies (#1606).
+ *
+ * When `.pi/agents` is a **symlink** (the dev-loops repo dev convention:
+ * `.pi/agents -> ../agents`, dogfooding the package source), the Pi `subagent`
+ * tool resolves project role agents from here with precedence over the global
+ * `~/.agents/`, so the dispatch reads the raw neutral templates and Pi
+ * strict-rejects `search`/`execute`. The sync replaces the symlink with a REAL
+ * directory of Pi-valid rendered copies — it does NOT write through the symlink
+ * (writing through would overwrite the neutral source and break Claude asset
+ * generation; the source must keep `search`/`execute` per #1086).
+ *
+ * When `.pi/agents` is already a real directory, its packaged-agent files are
+ * refreshed in place (same overwrite semantics as the global `~/.agents/` sync).
+ *
+ * When `.pi/agents` is **absent**, the sync is a no-op: consumer repos without a
+ * project `.pi/agents` entry resolve from the global `~/.agents/` (already
+ * Pi-valid after `syncPackagedAgents`) and stay unaffected.
+ */
+export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
+  const projectAgentsDir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.lstatSync(projectAgentsDir);
+  } catch {
+    // Absent — consumer repo relies on the global ~/.agents/ (no project shadow).
+    return;
+  }
+  if (stat.isSymbolicLink()) {
+    // Render all Pi-valid copies into a TEMP directory FIRST, so a read/render
+    // failure never leaves the project without `.pi/agents`. Only once the
+    // replacement content is known-good do we unlink the symlink and atomically
+    // rename the prepared directory into place (#1607 Copilot review: never
+    // remove the symlink before the replacement is prepared). rmSync on a
+    // symlink unlinks the link only; the neutral source target stays untouched.
+    const tmpDir = path.join(path.dirname(projectAgentsDir), `.pi-agents.tmp-${process.pid}`);
+    fs.rmSync(tmpDir, { force: true, recursive: true });
+    try {
+      writeSyncedAgents(sourceRoot, tmpDir);
+    } catch (err) {
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+      throw err;
+    }
+    fs.rmSync(projectAgentsDir, { force: true });
+    fs.renameSync(tmpDir, projectAgentsDir);
+  } else {
+    // Real directory: refresh packaged-agent files in place (same overwrite
+    // semantics as the global ~/.agents/ sync).
+    writeSyncedAgents(sourceRoot, projectAgentsDir);
+  }
+}
+
+/**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
  * files stay harness-neutral (role agents keep `search`/`execute`; the dev-loop
@@ -95,32 +174,35 @@ export function renderPiAgent(raw: string): string {
  * remapped. Best-effort: callers swallow errors so a sync failure never breaks
  * session start.
  *
- * #1604 dispatch note: this rewrites the GLOBAL `~/.agents/` copies. In a repo
- * that symlinks `.pi/agents` -> `../agents` (e.g. this repo dogfooding its own
- * agents), the Pi `subagent` tool resolves project agents from `.pi/agents/`
- * (the source) with precedence over `~/.agents/`, so the source templates
- * themselves must be Pi-valid-neutral. Keeping `search`/`execute` is safe because
- * they map to real Pi builtins (`bash`) here; the source-level `agent`/`todo`
- * drop on the dev-loop entrypoint is the only source change needed. This sync
- * stays load-bearing for consumer repos with no project `.pi/agents` symlink.
+ * #1606: when `projectRoot` is supplied (the session's project cwd), the sync
+ * ALSO targets the project-local `.pi/agents/` directory with symlink-safety —
+ * replacing a `.pi/agents -> ../agents` symlink with a real directory of Pi-valid
+ * copies so project-local agent resolution no longer reads the raw source. This
+ * fixes the dev-loops repo's own dispatch (the project symlink bypassed the global
+ * sync). Consumer repos without a `.pi/agents` entry are unaffected (no-op).
  */
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
   targetRoot = path.join(os.homedir(), ".agents"),
+  projectRoot,
+}: {
+  sourceRoot?: string;
+  targetRoot?: string;
+  projectRoot?: string;
 } = {}) {
   if (!fs.existsSync(sourceRoot)) {
     return;
   }
 
-  fs.mkdirSync(targetRoot, { recursive: true });
+  writeSyncedAgents(sourceRoot, targetRoot);
 
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
-      continue;
+  if (projectRoot) {
+    // Best-effort project-local sync — never break the (already-completed) global sync.
+    try {
+      syncProjectAgentsDir(projectRoot, sourceRoot);
+    } catch {
+      // Swallowed: a project-local sync failure (e.g. permission) must not surface
+      // from the session_start best-effort path.
     }
-
-    const raw = fs.readFileSync(path.join(sourceRoot, entry.name), "utf8");
-    fs.writeFileSync(path.join(targetRoot, entry.name), renderPiAgent(raw));
   }
 }
-

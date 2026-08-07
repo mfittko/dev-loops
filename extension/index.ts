@@ -39,7 +39,7 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
     try {
-      syncPackagedAgents();
+      syncPackagedAgents({ projectRoot: ctx.cwd });
     } catch {
       // Best-effort agent sync — do not break session start
     }
