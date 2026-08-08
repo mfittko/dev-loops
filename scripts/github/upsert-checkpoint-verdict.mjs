@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -1264,10 +1264,11 @@ export function buildCoordinationEvaluatorInput({
 async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, config }, { env, ghCommand, repoRoot, runChild }) {
   let hasFullLabel = false;
   let baseRef = null;
-  // Light-mode facts (#1174) only matter for an inline candidate under active
+  // Light-mode facts only matter for an inline candidate under active
   // enforcement; fetched lazily so a fanout_fanin post (the common path) pays
-  // no extra gh call.
-  if (executionMode === "inline_single_agent" && resolveRequireFanoutEvidence(config)) {
+  // no extra gh call, and so does an inline post once light mode itself is
+  // off (no facts could ever change the outcome).
+  if (executionMode === "inline_single_agent" && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null) {
     try {
       const prFacts = await runGhJson(
         ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefOid,labels"],

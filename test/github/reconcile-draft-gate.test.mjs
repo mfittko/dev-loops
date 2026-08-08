@@ -45,8 +45,8 @@ async function writeGhStub(tempDir, entries) {
 }
 
 // These tests are about the reconcile tool's draft-transition/CI/error
-// mechanics, not fan-out evidence — the reconciling post is inline by design
-// (#891) — and use a bare tempDir as repoRoot (schema default:
+// mechanics, not fan-out evidence — the reconciling post is inline by
+// design — and use a bare tempDir as repoRoot (schema default:
 // requireFanoutEvidence: true). Disable it so the reconciling post is not
 // itself refused as under-qualified inline evidence.
 async function disableFanoutEvidence(tempDir) {
@@ -302,8 +302,8 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
       "version: 1",
       "gates:",
       // This is a manual recovery tool test about the requireCi skip, not fan-out
-      // evidence — the reconciling post is inline by design (#891), so disable
-      // fan-out evidence enforcement to isolate the behavior under test.
+      // evidence — the reconciling post is inline by design, so disable fan-out
+      // evidence enforcement to isolate the behavior under test.
       "  requireFanoutEvidence: false",
       "  draft:",
       "    angles:",
@@ -731,6 +731,109 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
     });
     assert.equal(await readGhCallCount(tempDir), 15);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The reconcile tool only ever posts an INLINE verdict; over the light-mode
+// threshold, upsertCheckpointVerdict's post-time fan-out enforcement now
+// refuses that post. This must fail with actionable guidance (not a bare
+// "inline gate verdicts are not accepted") AND restore the PR to ready rather
+// than stranding it in draft.
+test("reconcile-draft-gate refuses a non-light-mode PR with actionable fan-out guidance, and restores ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-fanout-refused-"));
+
+  try {
+    // requireFanoutEvidence defaults to true, and the shipped default also
+    // enables localImplementation.lightMode — explicitly disable lightMode so
+    // no inline verdict can ever qualify (this tempDir is not a git repo, so
+    // leaving lightMode on would make the post-time check shell out to a real
+    // `git diff` that fails loudly against two fake SHAs). Deliberately unlike
+    // the success test above (which disables fan-out evidence entirely to
+    // isolate the draft-transition/CI mechanics it tests).
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 2\n    maxLines: 100\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc123456789"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: '[]\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: '[]\n',
+      },
+      {
+        assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"],
+        stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["owner=owner", "name=repo", "number=17", "pullRequest(number: $number)"],
+        stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":false}}}}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["pullRequestId=PR_kwDOScHU78000017", "convertPullRequestToDraft"],
+        stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc123456789"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: '[]\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: '[]\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      // Rollback: a refused post must not strand the PR in draft. No POST
+      // entry is given at all — an unexpected review post would consume THIS
+      // entry instead, fail argument validation, and surface a different
+      // error, so its presence here also proves no verdict was ever posted.
+      {
+        assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
+        stdout: "",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    // The underlying reason (the shared merge-time predicate's wording) stays intact...
+    assert.match(payload.error, /requireFanoutEvidence is enabled but executionMode is "inline_single_agent"/);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+    // ...and actionable guidance names the real recovery path.
+    assert.match(payload.error, /reconcile-draft-gate only completes for a PR under the light-mode threshold/);
+    assert.match(payload.error, /--execution-mode fanout_fanin/);
+    assert.match(payload.error, /findings-log ledger/);
+    // Every staged entry (including the rollback `pr ready`) was consumed —
+    // proves the rollback ran and no extra/POST call happened.
+    assert.equal(await readGhCallCount(tempDir), 14);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -4816,9 +4816,10 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
   try {
-    // requireFanoutEvidence: true with no localImplementation.lightMode
-    // configured at all — no inline verdict can ever qualify (lightMode stays
-    // false), so this is the plain "over-threshold" refusal shape.
+    // requireFanoutEvidence: true; no explicit base-ref/label mock entry is
+    // staged below, so the light-facts fetch (the shipped default enables
+    // lightMode) gets an unusable response and scope stays un-derivable —
+    // fails closed exactly like an over-threshold PR would.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
 
     for (const verdict of ["clean", "findings_present", "blocked"]) {
