@@ -6,6 +6,9 @@ import {
   RETROSPECTIVE_QUALIFYING_GATES,
   isQualifyingAsyncCompletion,
   evaluateRetrospectiveGate,
+  normalizeCheckpointCycleIdentity,
+  checkpointCycleIdentitiesMatch,
+  resolveCheckpointStateFromArtifact,
 } from "../src/loop/retrospective-checkpoint.mjs";
 
 import {
@@ -378,4 +381,140 @@ test("evaluateRetrospectiveGate: fail-closed reconcile result keeps stable routi
 test("evaluateRetrospectiveGate: called with no arguments returns a fail-closed reconcile result", () => {
   const result = evaluateRetrospectiveGate();
   assert.equal(result.routeKind, "needs_reconcile");
+});
+
+// ---------------------------------------------------------------------------
+// normalizeCheckpointCycleIdentity — cycle identity normalization
+// ---------------------------------------------------------------------------
+
+const VALID_IDENTITY = { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: "abc123" };
+
+test("normalizeCheckpointCycleIdentity: accepts a well-formed identity", () => {
+  assert.deepEqual(normalizeCheckpointCycleIdentity(VALID_IDENTITY), VALID_IDENTITY);
+});
+
+test("normalizeCheckpointCycleIdentity: trims repo and mergeCommit", () => {
+  const result = normalizeCheckpointCycleIdentity({ repo: " mfittko/dev-loops ", prNumber: 1613, mergeCommit: " abc123 " });
+  assert.deepEqual(result, VALID_IDENTITY);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a missing repo", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ prNumber: 1613, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "", prNumber: 1613, mergeCommit: "abc123" }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a non-positive-integer prNumber", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 0, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: -1, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1.5, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: "1613", mergeCommit: "abc123" }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a missing mergeCommit", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1613, mergeCommit: "" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1613 }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for null/undefined/non-object input", () => {
+  assert.equal(normalizeCheckpointCycleIdentity(null), null);
+  assert.equal(normalizeCheckpointCycleIdentity(undefined), null);
+  assert.equal(normalizeCheckpointCycleIdentity("mfittko/dev-loops#1613"), null);
+});
+
+// ---------------------------------------------------------------------------
+// checkpointCycleIdentitiesMatch
+// ---------------------------------------------------------------------------
+
+test("checkpointCycleIdentitiesMatch: identical identities match", () => {
+  assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY }), true);
+});
+
+test("checkpointCycleIdentitiesMatch: repo comparison is case-insensitive", () => {
+  assert.equal(
+    checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, repo: "MFITTKO/DEV-LOOPS" }),
+    true,
+  );
+});
+
+test("checkpointCycleIdentitiesMatch: a different PR number does not match", () => {
+  assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, prNumber: 1 }), false);
+});
+
+test("checkpointCycleIdentitiesMatch: a different merge commit does not match", () => {
+  assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, mergeCommit: "def456" }), false);
+});
+
+test("checkpointCycleIdentitiesMatch: an invalid identity on either side never matches", () => {
+  assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, null), false);
+  assert.equal(checkpointCycleIdentitiesMatch(null, VALID_IDENTITY), false);
+  assert.equal(checkpointCycleIdentitiesMatch(undefined, undefined), false);
+});
+
+// ---------------------------------------------------------------------------
+// resolveCheckpointStateFromArtifact — durable artifact -> scoped state
+// ---------------------------------------------------------------------------
+
+test("resolveCheckpointStateFromArtifact: absent artifact resolves to NONE", () => {
+  assert.equal(resolveCheckpointStateFromArtifact(null), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+  assert.equal(resolveCheckpointStateFromArtifact(undefined), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+});
+
+test("resolveCheckpointStateFromArtifact: a non-object artifact fails closed to NONE (no requirement observed)", () => {
+  assert.equal(resolveCheckpointStateFromArtifact("not an object"), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+});
+
+test("resolveCheckpointStateFromArtifact: state 'required' resolves to MISSING regardless of identity", () => {
+  const artifact = { state: "required", triggeredAt: "2026-08-08T00:00:00.000Z", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: { ...VALID_IDENTITY, prNumber: 9999 } }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: state 'skipped' resolves to SKIPPED regardless of identity", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: { ...VALID_IDENTITY, prNumber: 9999 } }),
+    RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: matching-complete resolves to COMPLETE (identity round-trip)", () => {
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: VALID_IDENTITY }),
+    RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: complete with no known latest identity is trusted as COMPLETE", () => {
+  // No fresh qualifying completion was observed this call, so there is
+  // nothing to compare against — the recorded completion stands.
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE);
+});
+
+test("resolveCheckpointStateFromArtifact: stale-complete (mismatched identity) resolves to MISSING — fail-closed backstop", () => {
+  const staleArtifact = { state: "complete", completedAt: "2026-08-06T01:00:38.000Z", notes: "old cycle", identity: VALID_IDENTITY };
+  const newerIdentity = { ...VALID_IDENTITY, prNumber: 1620, mergeCommit: "def456" };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(staleArtifact, { latestQualifyingIdentity: newerIdentity }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: complete with no recorded identity at all fails closed to MISSING against a known latest identity", () => {
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok" };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: VALID_IDENTITY }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: state 'none' resolves to NONE", () => {
+  assert.equal(resolveCheckpointStateFromArtifact({ state: "none" }), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+});
+
+test("resolveCheckpointStateFromArtifact: an unrecognized state fails closed to MISSING", () => {
+  assert.equal(resolveCheckpointStateFromArtifact({ state: "bogus_unknown_state" }), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
 });

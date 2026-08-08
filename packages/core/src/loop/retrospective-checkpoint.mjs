@@ -92,6 +92,100 @@ export function isQualifyingAsyncCompletion(routingResult) {
 }
 
 /**
+ * Normalizes a dev-loop cycle identity — the minimum facts that pin a
+ * checkpoint record to one specific qualifying completion: repo, PR number,
+ * and merge commit. Returns null when any field is missing or malformed, so a
+ * partial/garbled identity can never be mistaken for a valid one.
+ *
+ * @param {unknown} identity
+ * @returns {{repo: string, prNumber: number, mergeCommit: string}|null}
+ */
+export function normalizeCheckpointCycleIdentity(identity) {
+  if (!identity || typeof identity !== "object") {
+    return null;
+  }
+  const repo = typeof identity.repo === "string" ? identity.repo.trim() : "";
+  const prNumber = Number.isInteger(identity.prNumber) && identity.prNumber > 0 ? identity.prNumber : null;
+  const mergeCommit = typeof identity.mergeCommit === "string" ? identity.mergeCommit.trim() : "";
+  if (repo.length === 0 || prNumber === null || mergeCommit.length === 0) {
+    return null;
+  }
+  return { repo, prNumber, mergeCommit };
+}
+
+/**
+ * True when two cycle identities refer to the same dev-loop cycle. Either
+ * side may be raw/unnormalized; both are normalized before comparison. An
+ * invalid (or absent) identity on either side never matches.
+ *
+ * @param {unknown} a
+ * @param {unknown} b
+ * @returns {boolean}
+ */
+export function checkpointCycleIdentitiesMatch(a, b) {
+  const normalizedA = normalizeCheckpointCycleIdentity(a);
+  const normalizedB = normalizeCheckpointCycleIdentity(b);
+  if (!normalizedA || !normalizedB) {
+    return false;
+  }
+  return normalizedA.repo.toLowerCase() === normalizedB.repo.toLowerCase()
+    && normalizedA.prNumber === normalizedB.prNumber
+    && normalizedA.mergeCommit === normalizedB.mergeCommit;
+}
+
+/**
+ * Resolves the RETROSPECTIVE_CHECKPOINT_STATE for a durable checkpoint
+ * artifact, scoped to a specific dev-loop cycle identity (issue: a one-time
+ * `complete` checkpoint must not satisfy every later qualifying cycle
+ * forever).
+ *
+ * A `complete` artifact whose recorded `identity` does not match
+ * `latestQualifyingIdentity` (when the caller has one to compare against)
+ * cannot discharge that newer cycle — it fails closed to MISSING. This is the
+ * backstop for a bypassed/missed arming step; arming (writing a fresh
+ * `required` record for the new identity) is the primary mechanism and keeps
+ * the two in sync so this branch is rarely the one doing the work.
+ *
+ * `required`/`skipped`/`none` are not scoped by this comparison: `required`
+ * already maps to MISSING regardless of identity (an outstanding requirement
+ * blocks the gate no matter which cycle triggered it), and `skipped` is
+ * accepted as an explicit reasoned escape hatch scoped to whichever cycle the
+ * operator recorded.
+ *
+ * @param {object|null|undefined} artifact - Parsed checkpoint JSON, or
+ *   null/undefined when the durable artifact is absent.
+ * @param {object} [options]
+ * @param {unknown} [options.latestQualifyingIdentity] - Identity of the most
+ *   recently observed qualifying completion this call, or null/absent when
+ *   none is known.
+ * @returns {"none"|"complete"|"skipped"|"missing"}
+ */
+export function resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity = null } = {}) {
+  if (artifact === null || artifact === undefined || typeof artifact !== "object") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
+  }
+  const rawState = typeof artifact.state === "string" ? artifact.state.trim().toLowerCase() : null;
+  if (rawState === "skipped") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
+  }
+  if (rawState === "required" || rawState === "missing") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+  }
+  if (rawState === "none") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
+  }
+  if (rawState === "complete") {
+    const normalizedLatest = normalizeCheckpointCycleIdentity(latestQualifyingIdentity);
+    if (normalizedLatest && !checkpointCycleIdentitiesMatch(artifact.identity, normalizedLatest)) {
+      return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+    }
+    return RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
+  }
+  // Malformed/unrecognized durable state — fail closed.
+  return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+}
+
+/**
  * Enforcement gate for the required post-run behavioral retrospective.
  *
  * Evaluates whether a proposed dev-loop routing result should proceed or be

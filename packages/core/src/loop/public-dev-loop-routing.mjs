@@ -1,6 +1,10 @@
 import {
   evaluateRetrospectiveGate,
   normalizeRetrospectiveCheckpointState,
+  isQualifyingAsyncCompletion,
+  normalizeCheckpointCycleIdentity,
+  checkpointCycleIdentitiesMatch,
+  resolveCheckpointStateFromArtifact,
 } from "./retrospective-checkpoint.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -31,6 +35,17 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 
 export * from "./public-dev-loop-routing-contract.mjs";
+
+// Re-exported so script-layer callers (e.g. resolve-dev-loop-startup.mjs) can
+// classify a qualifying async completion and scope a checkpoint to a cycle
+// identity through the public routing surface, without retrospective-checkpoint.mjs
+// itself becoming a public package export (see skills/docs/retrospective-checkpoint-contract.md).
+export {
+  isQualifyingAsyncCompletion,
+  normalizeCheckpointCycleIdentity,
+  checkpointCycleIdentitiesMatch,
+  resolveCheckpointStateFromArtifact,
+};
 
 const COPILOT_ISSUE_ASSIGNEE = "copilot-swe-agent";
 
