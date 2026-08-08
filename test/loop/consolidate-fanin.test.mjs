@@ -1388,11 +1388,13 @@ test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an 
       artifact: { angle: "scope", verdict: "blocked", findings: [] },
       detailPattern: /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
     },
-    // #1592: incidental whitespace/casing around a RECOGNIZED severity is no
-    // longer invalid (normalizeSeverity trims+lowercases before the alias
-    // lookup — see the sibling "a severity with incidental whitespace..."
-    // test in gate-fanin.test.mjs), and an unrecognized severity token is now
-    // caught earlier, by this CLI's OWN artifact-shape floor (a distinct,
+    // #1592: incidental whitespace around a RECOGNIZED severity is no longer
+    // invalid (normalizeSeverity trims — but does NOT lowercase — before the
+    // alias lookup; see gate-fanin.test.mjs's own
+    // normalizeSeverity("HIGH") === "HIGH" pin, and the sibling "a severity
+    // with incidental whitespace..." test in gate-fanin.test.mjs), and an
+    // unrecognized severity token is now caught earlier, by this CLI's OWN
+    // artifact-shape floor (a distinct,
     // unwrapped Error — not routed through consolidateFanin's "fan-in is
     // blocked" wrapper), which is exactly what a stricter shared floor should
     // do. This variant instead exercises a malformation the floor does NOT
