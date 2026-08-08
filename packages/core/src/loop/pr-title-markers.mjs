@@ -16,18 +16,29 @@
  * Builds a status-marker tester for a bare word like "WIP" or "DRAFT".
  *
  * A status marker asserts, on its own, that the PR is unfinished: bracketed
- * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), a trailing
- * tag set off by a real dash character (`Fix login flow — WIP`, an em/en
- * dash — never a plain hyphen, see below), or the entire title with nothing
- * else attached (a bare standalone `DRAFT`). A plain `\bWORD\b` match also
- * hits the same word inside a compound noun phrase that names a component
- * instead — `draft-gate`, `draft_gate`, `draft gate`, `wip-branch` — because
- * a hyphen, underscore, or space is itself a word boundary. None of those
- * forms satisfy any construction below, so a component name is left
- * unflagged while a real status claim still is. "swipe"/"wiped"/"drafting"
- * already fail every construction because there is no boundary between the
- * marker word and the letters that follow it; a hyphen-prefixed compound
- * like "re-draft" DOES create such a boundary (`\b` sees the hyphen).
+ * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), or the
+ * entire title with nothing else attached (a bare standalone `DRAFT`). A
+ * plain `\bWORD\b` match also hits the same word inside a compound noun
+ * phrase that names a component instead — `draft-gate`, `draft_gate`,
+ * `draft gate`, `wip-branch` — because a hyphen, underscore, or space is
+ * itself a word boundary. None of those forms satisfy any construction
+ * below, so a component name is left unflagged while a real status claim
+ * still is. "swipe"/"wiped"/"drafting" already fail every construction
+ * because there is no boundary between the marker word and the letters that
+ * follow it; a hyphen-prefixed compound like "re-draft" DOES create such a
+ * boundary (`\b` sees the hyphen).
+ *
+ * A trailing tag set off by a dash (`Fix login flow — WIP`) is deliberately
+ * NOT its own construction, even though it reads as a real status claim.
+ * Any dash-based construction narrow enough to close a title's tag also
+ * reopens the compound-noun false positive whenever the joiner is a
+ * different dash character (`Handle en dash–draft–gate naming`), and any fix
+ * for that narrows the construction until it drops real status claims that
+ * were previously caught (`Fix login flow — WIP.`, `— WIP (rebasing)`). The
+ * bracket/paren/colon/standalone set stays free of both failure modes, so a
+ * dash-set-off marker is left unflagged; `WIP:`/`DRAFT:` remains one
+ * keystroke away and stays flagged, the same trade already accepted for
+ * `WIP foo bar`.
  *
  * The bracket/paren/colon constructions all require the opening delimiter
  * (`[`, `(`, or the marker word itself for colon) to sit at the start of the
@@ -49,27 +60,14 @@
  * another character — so a scheme/tag/ref that merely starts with the
  * marker word (`draft://`, `draft:latest`, `wip:branch`) is read as an
  * unrelated identifier, not a status claim.
- *
- * The trailing-dash construction deliberately requires an em dash (—) or en
- * dash (–), never a plain ASCII hyphen: a spaced hyphen (`WIP - add
- * feature`) is a common, low-signal general-purpose separator that reads as
- * ordinary title punctuation, while a typographic dash set specifically
- * around the marker word is a much stronger, unambiguous status-tag signal.
- * It also requires the tag to CLOSE — the marker word must be followed by
- * the end of the title or another dash, never by other words — so a
- * dash-introduced clause that merely CONTAINS the marker word as part of a
- * longer phrase or compound (`Rework the pipeline — draft-gate override`,
- * `Refactor — draft gate coordination`, `Retry — wip branch pipeline`) is
- * read as ordinary prose, not a standalone status tag.
  */
 function statusMarkerTester(word) {
   const bracket = new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i");
   const paren = new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i");
   const colon = new RegExp(`(?:^|\\s)${word}\\s*:(?:\\s|$)`, "i");
   const standalone = new RegExp(`^\\s*${word}\\s*$`, "i");
-  const dashTrailing = new RegExp(`[–—]\\s*${word}\\s*(?:$|[–—])`, "i");
   return (title) => bracket.test(title) || paren.test(title) || colon.test(title)
-    || standalone.test(title) || dashTrailing.test(title);
+    || standalone.test(title);
 }
 
 /**

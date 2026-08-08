@@ -139,15 +139,13 @@ Documented pattern — **write, verify, then merge alone**:
 
 The PR title is a contract surface, so a merge-blocking marker in the title is enforced
 deterministically (`findBlockingTitleMarkers` in `@dev-loops/core/loop/pr-title-markers`), not
-just reviewed. `WIP` and `DRAFT` only count as blocking when the title uses one of five
+just reviewed. `WIP` and `DRAFT` only count as blocking when the title uses one of four
 sanctioned constructions — a genuine status claim, not a plain word match:
 
 - bracketed: `[WIP]`, `[draft]`
 - parenthesized: `(wip)`, `(DRAFT)`
 - colon-suffixed: `WIP: add feature`, `draft: new module`
 - standalone (the entire title, nothing else): `WIP`, `draft`
-- trailing, set off by a real em/en dash (never a plain hyphen — a spaced hyphen is
-  ordinary title punctuation): `Fix login flow — WIP`, `– DRAFT – new module`
 
 A hyphen, underscore, or space joining the marker word into a compound noun phrase names a
 component instead of asserting status, and is exempt from every construction —
@@ -155,6 +153,19 @@ component instead of asserting status, and is exempt from every construction —
 scope that happens to share the marker word, e.g. `fix(draft): support x`. `DO NOT MERGE`
 (flexible whitespace between the words) and `🚧` (anywhere in the title) are matched directly,
 with no compound-noun exemption — case-insensitive throughout.
+
+A dash-set-off trailing tag (`Fix login flow — WIP`) is deliberately not a construction: no
+dash-based rule closes the tag without also reopening the compound-noun false positive for a
+different dash character, so it stays unflagged; `WIP:`/`DRAFT:` remains one keystroke away.
+
+The bracket/paren/colon constructions require their opening delimiter to sit at the start of the
+title or right after whitespace — never directly after a letter, `/`, or `-`. This anchoring is
+what exempts a conventional-commit scope, a path segment, and a scoped label from matching, and it
+is also why a marker preceded by other punctuation with no space (`Fix bug,(draft)`,
+`Fix login(wip)`) stays unflagged: the anchor is whitespace-only, not punctuation-only. The colon
+construction additionally requires the colon to close the tag — followed by whitespace or
+end-of-title, never another character — so `draft:latest` and `wip:branch` read as an identifier,
+not a status claim.
 
 - At the **draft → ready-for-review** transition: `ready-for-review` refuses `gh pr ready` while the
   title carries a marker.

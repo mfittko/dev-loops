@@ -54,9 +54,21 @@ const CASES = [
   // used to flag it.
   { title: "WIP foo bar", expect: [] },
   { title: "DRAFT some title", expect: [] },
-  // A plain ASCII hyphen (as opposed to an em/en dash, see below) is a
-  // common general-purpose title separator, not a status-tag delimiter.
+  // A dash-set-off trailing tag (hyphen, en dash, or em dash) is not its
+  // own construction — see the module comment for why — so it stays
+  // unflagged; `WIP:`/`DRAFT:` remains one keystroke away.
   { title: "WIP - add feature", expect: [] },
+  { title: "Fix login flow — WIP", expect: [] },
+  { title: "– DRAFT – new module", expect: [] },
+  { title: "Fix login flow — WIP.", expect: [] },
+  { title: "— WIP, needs tests", expect: [] },
+  { title: "— WIP (rebasing)", expect: [] },
+  { title: "Fix login — DRAFT!", expect: [] },
+  // A dash joiner other than a plain hyphen must not re-admit the
+  // compound-noun false positive either.
+  { title: "Handle en dash–draft–gate naming", expect: [] },
+  { title: "Rename review—draft—mode config", expect: [] },
+  { title: "Migrate to RFC 8259–draft", expect: [] },
 
   // A conventional-commit scope naming a component that happens to share the
   // marker word is a component name, not a status claim — the bracket/paren
@@ -84,16 +96,10 @@ const CASES = [
   { title: "wip:branch", expect: [] },
   { title: "draft://", expect: [] },
 
-  // A trailing marker set off by a real em/en dash IS a separable status
-  // claim and is now flagged.
-  { title: "Fix login flow — WIP", expect: ["WIP"] },
-  { title: "– DRAFT – new module", expect: ["DRAFT"] },
-
-  // The trailing-dash construction must CLOSE the tag (end of title or
-  // another dash) — a dash-introduced clause that merely CONTAINS the marker
-  // word as part of a longer phrase or a hyphen-joined compound noun stays
-  // unflagged, the same false-positive class the bracket/paren/colon
-  // constructions already guard against.
+  // A dash-introduced clause that merely CONTAINS the marker word as part
+  // of a longer phrase or a hyphen-joined compound noun stays unflagged,
+  // the same false-positive class the bracket/paren/colon constructions
+  // already guard against.
   { title: "Rework the pipeline — draft-gate override", expect: [] },
   { title: "Refactor — draft gate coordination", expect: [] },
   { title: "Bound the findings comment — draft-gate + pre-approval-gate parity", expect: [] },
