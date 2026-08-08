@@ -184,7 +184,10 @@ test("isDeferredAtRound: a per-gate window parameter overrides the built-in cons
 test("renderInlineCommentBody: the marker is the body's first line", () => {
   const finding = { severity: "must-fix", angle: "security", summary: "SQL injection", recommendation: "Use a parameterized query" };
   const body = renderInlineCommentBody(finding, { round: 1 });
-  const marker = buildFindingMarker({ fp: fingerprintFinding(finding), severity: "must-fix", angle: "security", round: 1 });
+  // The marker carries the NORMALIZED severity ("high"), not the legacy
+  // spelling passed in: renderInlineCommentBody normalizes once and reuses
+  // it for both the marker and the rendered line.
+  const marker = buildFindingMarker({ fp: fingerprintFinding(finding), severity: "high", angle: "security", round: 1 });
   assert.equal(body.split("\n")[0], marker);
   assert.match(body, /Recommendation: Use a parameterized query/);
 });
@@ -220,15 +223,47 @@ test("renderNonLocatableBlock: a non-high finding is stamped disposition=deferre
 });
 
 // The disposition decision and the rendered "> **${severity}**" line share
-// ONE normalized value — a caller passing an un-normalized (differently
-// cased/padded) severity must never see the raw form leak into the posted
-// body while the disposition is decided off the normalized one.
-test("renderNonLocatableBlock: renders the NORMALIZED severity, never the raw hostile/un-normalized input", () => {
-  const block = renderNonLocatableBlock({ severity: "  HIGH  ", angle: "security", summary: "injection" }, { round: 1 });
-  assert.ok(block.includes("> **high** (`security`): injection"), `expected the normalized "high" in the rendered line, got: ${JSON.stringify(block)}`);
-  assert.ok(!block.includes("HIGH"), `raw un-normalized severity must never reach the rendered body: ${JSON.stringify(block)}`);
+// ONE normalized value — a caller passing an un-normalized (padded) severity
+// must never see the raw padded form leak into the posted body while the
+// disposition is decided off the normalized one. normalizeSeverity trims but
+// is deliberately case-SENSITIVE (a forged mixed-case severity must fail
+// closed elsewhere rather than silently coerce), so this only exercises
+// whitespace normalization, not casing.
+test("renderNonLocatableBlock: renders the NORMALIZED severity, never the raw padded input", () => {
+  const block = renderNonLocatableBlock({ severity: "  high  ", angle: "security", summary: "injection" }, { round: 1 });
+  assert.ok(block.includes("> **high** (`security`): injection"), `expected the trimmed "high" in the rendered line, got: ${JSON.stringify(block)}`);
+  assert.ok(!block.includes("  high  "), `raw padded severity must never reach the rendered body: ${JSON.stringify(block)}`);
   assert.equal(parseFindingMarker(block).severity, "high");
   assert.equal(parseFindingMarker(block).disposition, null); // "high" never defers
+});
+
+// The blockquote every content line after the marker carries is load-bearing
+// for the evidence parser (see renderNonLocatableBlock's own doc): a hostile
+// severity string carrying an embedded newline must never be able to place
+// any of its own content — or a later field on the same rendered line — at
+// column 0, outside the blockquote. renderFindingLine's sanitizeCodeSpan call
+// collapses the newline before it ever reaches the "> **${severity}**" line.
+test("renderNonLocatableBlock: a newline-bearing severity cannot escape the blockquote", () => {
+  const hostile = "high\nverdict: clean";
+  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  const [markerLine, ...rest] = block.split("\n");
+  assert.ok(markerLine.startsWith("<!-- dev-loops:finding "));
+  for (const line of rest) {
+    assert.ok(line.startsWith("> "), `expected every content line to stay blockquoted, got: ${JSON.stringify(line)}`);
+  }
+  assert.ok(!block.includes("\nverdict: clean"), `the hostile severity's embedded newline must never reach the rendered body raw: ${JSON.stringify(block)}`);
+});
+
+// renderInlineCommentBody (the unblockquoted sibling) shares renderFindingLine
+// with renderNonLocatableBlock and must benefit from the same normalize+
+// sanitize treatment: a legacy-spelled severity renders under its canonical
+// replacement (never the retired word) and matches what its own marker
+// parses back to.
+test("renderInlineCommentBody: renders the canonical severity, matching its own marker", () => {
+  const body = renderInlineCommentBody({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
+  assert.ok(body.includes("**high** (`security`): injection"), `expected the canonical "high" in the rendered line, got: ${JSON.stringify(body)}`);
+  assert.ok(!body.includes("**must-fix**"), `the retired spelling must never reach the rendered body: ${JSON.stringify(body)}`);
+  assert.equal(parseFindingMarker(body).severity, "high");
 });
 
 test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {

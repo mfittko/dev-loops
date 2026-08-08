@@ -184,9 +184,23 @@ export function collectFingerprints(text, set) {
 // One deterministic, round-trip-parseable line rendering a finding's
 // severity/angle/summary. Shared by inline comments (unblockquoted — inline
 // review comments are never scanned by the evidence checker) and body-filed
-// blocks (blockquoted by the caller).
+// blocks (blockquoted by the caller). `severity` is normalized (a legacy
+// spelling renders under its canonical replacement) AND sanitized through the
+// same sanitizeCodeSpan the verdict renderer (upsert-checkpoint-verdict.mjs's
+// sanitizeStructuredCodeSpan, an alias of this exact function) already uses
+// for its own severity field — angle and summary are sanitized here, and an
+// un-sanitized severity is the one field that could otherwise carry a raw
+// newline into this line, which matters most for the blockquoted
+// (renderNonLocatableBlock) caller: a newline inside "> **${severity}**"
+// would put every following field on its own un-blockquoted line, escaping
+// the blockquote this function's own callers document as load-bearing for
+// the evidence parser. normalizeSeverity alone is NOT that sanitizer — it
+// only maps a legacy spelling to its canonical name, it does not strip a
+// hostile character — so it is applied here in addition to, never instead
+// of, sanitizeCodeSpan.
 function renderFindingLine({ severity, angle, summary }) {
-  return `**${severity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
+  const safeSeverity = sanitizeCodeSpan(normalizeSeverity(severity));
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
 }
 
 function renderRecommendationLine(recommendation) {
@@ -199,9 +213,14 @@ function hasRecommendation(finding) {
 
 export function renderInlineCommentBody(finding, { round }) {
   const fp = fingerprintFinding(finding);
+  // Normalized ONCE and reused for both the marker and the rendered line
+  // (mirrors renderNonLocatableBlock below): a legacy-spelled severity must
+  // never render its retired spelling here while its own marker parses back
+  // as the canonical one.
+  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const lines = [
-    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round }),
-    renderFindingLine(finding),
+    buildFindingMarker({ fp, severity, angle: finding.angle, round }),
+    renderFindingLine({ ...finding, severity }),
   ];
   if (hasRecommendation(finding)) {
     lines.push(renderRecommendationLine(finding.recommendation));
@@ -234,12 +253,13 @@ export function renderInlineCommentBody(finding, { round }) {
 export function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
   // Normalized ONCE and reused for both the disposition decision and the
-  // rendered line: rendering the RAW value on the "> **${severity}**" line
-  // (whose blockquote is load-bearing for the evidence parser) while
-  // deciding disposition off the normalized one would let an un-normalized
-  // or hostile severity string reach the posted body unnormalized, even
-  // though every sanctioned caller only ever passes a VALID_SEVERITIES
-  // member here.
+  // marker: deciding disposition off a raw, un-normalized legacy spelling
+  // would misclassify it (e.g. "must-fix" !== "high"). The rendered
+  // "> **${severity}**" line goes through renderFindingLine below, which
+  // normalizes AND sanitizes severity again on its own — normalization alone
+  // is not a sanitizer, so this outer normalize is not what keeps a hostile
+  // (e.g. newline-bearing) severity out of the posted body; that guarantee
+  // lives in renderFindingLine's own sanitizeCodeSpan call.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const disposition = severity === "high" ? undefined : "deferred";
   const lines = [
