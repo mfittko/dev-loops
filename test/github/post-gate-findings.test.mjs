@@ -592,19 +592,18 @@ test("postGateFindings updates the same per-gate comment when re-run with a diff
   }
 });
 
-test("postGateFindings searches for its existing comment using the SAME sanitized gate the render itself embeds in the marker (regression: an un-sanitized search marker would re-create a duplicate)", async () => {
+test("postGateFindings searches for its existing comment using the SAME normalized gate the render itself embeds in the marker (regression: an un-normalized search marker would re-create a duplicate)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
   const repoRoot = await optedInRepoRoot();
   try {
-    // A gate value sanitizeInline changes but that does not collide with a
-    // real known gate (see the dedicated collision-rejection test above) — a
-    // value the render seam still accepts, just not byte-identical to what
-    // was passed in.
-    const rawGate = "draft_gate[extra]";
-    const sanitizedGate = sanitizeInline(rawGate);
-    assert.notEqual(sanitizedGate, rawGate, "fixture assumption: this gate value must actually require sanitization");
+    // A whitespace-padded spelling of a real known gate: the render
+    // normalizes it (trim + lowercase) before embedding it in the marker,
+    // just not byte-identical to what was passed in.
+    const rawGate = " draft_gate\n";
+    const normalizedGate = rawGate.trim().toLowerCase();
+    assert.notEqual(normalizedGate, rawGate, "fixture assumption: this gate value must actually require normalization");
     const findings = parseFindings(FINDINGS_JSON);
-    const existingBody = renderFindingsCommentBody({ gate: sanitizedGate, headSha: "abc1234", findings });
+    const existingBody = renderFindingsCommentBody({ gate: normalizedGate, headSha: "abc1234", findings });
     const existingComment = { id: 99, html_url: "https://github.com/owner/repo/pull/42#issuecomment-99", body: existingBody, user: { login: AUTHENTICATED_LOGIN } };
     const { env, ghPath } = await writeGhStub(tmpDir, [
       userEntry(),
@@ -612,7 +611,7 @@ test("postGateFindings searches for its existing comment using the SAME sanitize
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
         stdout: JSON.stringify([[existingComment]]) + "\n",
       },
-      // No mutation entry: an unsanitized search marker would miss this
+      // No mutation entry: an un-normalized search marker would miss this
       // existing comment and call create instead, overflowing the stub.
     ]);
     const result = await postGateFindings(
@@ -780,6 +779,23 @@ test("renderFindingsCommentBody renders Question and Nit group labels", () => {
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   assert.ok(body.includes("Question (1)"));
   assert.ok(body.includes("Nit (1)"));
+});
+
+test("renderFindingsCommentBody never renders a heading for a severity with zero findings in this round", async () => {
+  const { SEVERITY_ORDER } = await import("@dev-loops/core/loop/gate-fanin");
+  const findings = parseFindings(JSON.stringify([
+    { severity: "high", angle: "scope", summary: "only one finding this round" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("High (1)"));
+  // Every other severity's label must be entirely absent — without the
+  // empty-group skip, each would still render its own "#### <Label> (0)"
+  // heading with nothing under it.
+  for (const sev of SEVERITY_ORDER) {
+    if (sev === "high") continue;
+    const label = sev.charAt(0).toUpperCase() + sev.slice(1);
+    assert.ok(!body.includes(`#### ${label} (0)`), `expected no "#### ${label} (0)" heading, got body: ${body}`);
+  }
 });
 
 // A low/nit finding with no explicit disposition defaults to "deferred".
@@ -1198,6 +1214,21 @@ test("renderBoundedFindingsCommentBody rejects a findings element missing angle/
   );
 });
 
+test("renderBoundedFindingsCommentBody rejects an angle/summary that is non-empty raw but sanitizes to nothing, instead of rendering an empty code span/prose run", () => {
+  // "```" survives the raw non-empty check (trim().length > 0) but
+  // sanitizeCodeSpan/sanitizeInline strip every backtick, leaving "" — the
+  // render uses the SANITIZED value, so an unvalidated raw-only check would
+  // let this through and render `- \`\`: ` / `- \`x\`: `.
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "```", summary: "x" }] }),
+    /findings\[0\]\.angle sanitizes to an empty code span/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "scope", summary: "```" }] }),
+    /findings\[0\]\.summary sanitizes to an empty string/,
+  );
+});
+
 test("renderBoundedFindingsCommentBody reports the invalid element's OWN index in a multi-element array, not always findings[0]", () => {
   // Every other per-element validation test above uses a single-element
   // array, so each always reports index 0 regardless of whether the guard
@@ -1283,6 +1314,17 @@ test("renderBoundedFindingsCommentBody rejects a non-string/blank disposition in
   );
 });
 
+test("renderBoundedFindingsCommentBody rejects a disposition that is non-empty raw but sanitizes to nothing, instead of rendering the empty italic run \" — __\"", () => {
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "low", angle: "scope", summary: "x", disposition: "```" }],
+    }),
+    /findings\[0\]\.disposition sanitizes to an empty string/,
+  );
+});
+
 test("renderBoundedFindingsCommentBody accepts a null or empty-string disposition unchanged (regression: previously-valid falsy input must not now throw)", () => {
   for (const disposition of [null, ""]) {
     const { body } = renderBoundedFindingsCommentBody({
@@ -1303,7 +1345,7 @@ test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha i
   );
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "  ", headSha: "abc1234", findings }),
-    /gate must be a non-empty string/,
+    /gate must be one of: draft_gate, pre_approval_gate/,
   );
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: undefined, findings }),
@@ -1315,7 +1357,7 @@ test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha i
   );
 });
 
-test("renderBoundedFindingsCommentBody sanitizes gate/headSha so neither can forge or break the comment's identity marker", () => {
+test("renderBoundedFindingsCommentBody sanitizes headSha so it cannot forge a different gate's identity marker", () => {
   const findings = [{ severity: "high", angle: "scope", summary: "x" }];
   // A newline-bearing headSha must not forge a line-start marker for a
   // DIFFERENT gate: findMarkedComment matches on line-start text, so an
@@ -1332,45 +1374,42 @@ test("renderBoundedFindingsCommentBody sanitizes gate/headSha so neither can for
     bodyWithForgedHeadSha.split("\n")[0].startsWith(buildFindingsMarker({ gate: "draft_gate" })),
     "the comment's own genuine draft_gate marker must still open the body",
   );
-  // A gate value containing "-->" must not make buildFindingsMarker's own
-  // output span multiple lines — that would break the exact-marker-match
-  // idempotency findMarkedComment relies on.
+});
+
+test("renderBoundedFindingsCommentBody rejects a gate value that would otherwise make buildFindingsMarker's own output span multiple lines, instead of neutralizing it", () => {
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  // A gate value containing "-->" (and its own embedded newlines) is not a
+  // KNOWN_GATES member, so it is rejected outright — the marker's
+  // single-line idempotency guarantee no longer depends on sanitizing an
+  // open-ended free-text gate value.
   const forgedGate = "draft_gate -->\n### Injected\n<!-- x";
   const rawForgedMarker = buildFindingsMarker({ gate: forgedGate });
-  assert.ok(rawForgedMarker.includes("\n"), "fixture assumption: the unsanitized marker must actually span multiple lines to reproduce the bug");
-  const { body: bodyWithForgedGate } = renderBoundedFindingsCommentBody({ gate: forgedGate, headSha: "abc1234", findings });
-  const firstLine = bodyWithForgedGate.split("\n")[0];
-  assert.ok(
-    firstLine.startsWith("<!-- dev-loops:gate-findings gate=") && firstLine.endsWith("-->"),
-    `the rendered identity marker must stay a single line, got: ${JSON.stringify(firstLine)}`,
-  );
-  // The forged gate's embedded "### Injected" must never land as its own
-  // standalone line: an unsanitized gate would carry its own literal
-  // newlines straight into the body, so "### Injected" (the gate's own
-  // second embedded line) would surface as a genuine, independently
-  // rendered Markdown heading rather than harmless mid-line text inside the
-  // (now single-line) marker/heading.
-  assert.ok(
-    !bodyWithForgedGate.split("\n").includes("### Injected"),
-    "the forged gate's own embedded newline must never produce a standalone injected line",
+  assert.ok(rawForgedMarker.includes("\n"), "fixture assumption: an unnormalized marker would span multiple lines if this gate were ever rendered");
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: forgedGate, headSha: "abc1234", findings }),
+    /gate must be one of: draft_gate, pre_approval_gate/,
   );
 });
 
-test("renderBoundedFindingsCommentBody rejects a gate that only sanitizes into a DIFFERENT, real gate's marker identity, instead of colliding with it", () => {
+test("renderBoundedFindingsCommentBody accepts a whitespace-padded spelling of a known gate and normalizes it (trim + lowercase, matching normalizeGate)", () => {
   const findings = [{ severity: "high", angle: "scope", summary: "x" }];
-  // A backtick is stripped outright (not encoded) by sanitizeInline, so this
-  // malformed gate sanitizes to the exact bytes of the real "draft_gate" —
-  // reproducing two reviewers' independently-found marker collision.
-  const collidingGate = "draft`_gate";
-  assert.notEqual(collidingGate, "draft_gate", "fixture assumption: the raw value must differ from the real gate it collides with");
-  assert.throws(
-    () => renderBoundedFindingsCommentBody({ gate: collidingGate, headSha: "abc1234", findings }),
-    /sanitizes to the different, real gate/,
-  );
-  // The genuine "draft_gate" itself (already a fixed point of sanitization)
-  // must still render, producing its own distinct, un-collided marker.
-  const { body } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-  assert.ok(body.split("\n")[0].startsWith(buildFindingsMarker({ gate: "draft_gate" })));
+  for (const paddedGate of [" draft_gate", "draft_gate\n", " DRAFT_GATE ", "Draft_Gate"]) {
+    const { body } = renderBoundedFindingsCommentBody({ gate: paddedGate, headSha: "abc1234", findings });
+    assert.ok(
+      body.split("\n")[0].startsWith(buildFindingsMarker({ gate: "draft_gate" })),
+      `expected ${JSON.stringify(paddedGate)} to normalize to the same draft_gate marker`,
+    );
+  }
+});
+
+test("renderBoundedFindingsCommentBody rejects a gate outside the known two-value vocabulary", () => {
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  for (const badGate of ["bogus_gate", "draft`_gate", "draft_gate[extra]", ""]) {
+    assert.throws(
+      () => renderBoundedFindingsCommentBody({ gate: badGate, headSha: "abc1234", findings }),
+      /gate must be one of: draft_gate, pre_approval_gate/,
+    );
+  }
 });
 
 test("renderBoundedFindingsCommentBody keys its drop set by position, not object identity, so a repeated finding reference drops exactly as many slots as counted", () => {

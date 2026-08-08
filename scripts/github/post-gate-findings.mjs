@@ -55,8 +55,8 @@ function parseError(message) {
 }
 
 // The one gate vocabulary this module knows about. Shared by normalizeGate
-// (CLI --gate parsing) and validateAndSanitizeRenderInputs's marker-collision
-// guard below, so the two can never name a different set of "real" gates.
+// (CLI --gate parsing) and validateAndSanitizeRenderInputs's own membership
+// check below, so the two can never name a different set of "real" gates.
 const KNOWN_GATES = new Set(["draft_gate", "pre_approval_gate"]);
 
 function normalizeGate(value) {
@@ -349,6 +349,9 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
   }
   for (const sev of SEVERITY_ORDER) {
     const group = grouped.get(sev);
+    // Skip an empty severity group entirely: without this, every severity
+    // that has zero findings for this round would still render its own
+    // "#### <Label> (0)" heading with nothing under it.
     if (group.length === 0) continue;
     lines.push(`#### ${SEVERITY_LABELS[sev]} (${group.length})`);
     for (const finding of group) {
@@ -430,9 +433,11 @@ function describeInvalidValue(value) {
 // renderBoundedFindingsCommentBody renders, in ONE place, so a value newly
 // added to what gets rendered can never bypass validation by omission — four
 // consecutive review rounds each added one more one-off guard here before
-// this consolidation. Returns the SANITIZED gate/headSha (the comment's
-// identity-key fields, rendered as bare prose — see sanitizeInline above);
-// findings are validated only here, since their own free-text fields
+// this consolidation. Returns the comment's identity-key fields ready to
+// render: gate NORMALIZED (trim + lowercase, constrained to KNOWN_GATES —
+// never sanitized, since it is a closed two-value vocabulary, not free
+// text) and headSha SANITIZED (see sanitizeInline above; it is not a closed
+// set); findings are validated only here, since their own free-text fields
 // (summary/angle/files/disposition) are sanitized later, at render time, by
 // renderFindingsCommentBody itself.
 function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) {
@@ -440,29 +445,20 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
   // undefined/blank value would render `gate=undefined` and thereafter match
   // (and keep updating) that bogus marker on every later run. headSha is
   // rendered directly into the body ("Reviewed head: ...") with the same
-  // failure mode. Both are SANITIZED here, not just checked for
-  // non-emptiness: an unsanitized newline-bearing headSha can forge a
-  // line-start marker for a DIFFERENT gate (findMarkedComment matches on
-  // line-start text, breaking that gate's comment), and an unsanitized gate
-  // containing "-->" can make buildFindingsMarker's own output span multiple
-  // lines, breaking the exact-marker-match idempotency it exists to provide.
-  if (typeof gate !== "string" || gate.trim().length === 0) {
+  // failure mode. headSha is SANITIZED (not just checked for non-emptiness):
+  // an unsanitized newline-bearing headSha can forge a line-start marker for
+  // a DIFFERENT gate (findMarkedComment matches on line-start text, breaking
+  // that gate's comment). gate is instead normalized (trim + lowercase, the
+  // same transform normalizeGate applies to the CLI's own --gate) and
+  // required to be one of KNOWN_GATES: with only two possible values there is
+  // no collision surface between them left to sanitize away, so gate never
+  // needs sanitizeInline at render time the way headSha does.
+  if (typeof gate !== "string") {
     throw new Error(`renderBoundedFindingsCommentBody: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
   }
-  // gate's sanitization (below, at the return statement) is itself lossy
-  // (e.g. a backtick is stripped outright, not encoded) — a malformed gate
-  // value can sanitize to the SAME marker text as a genuinely different,
-  // real gate (`` "draft`_gate" `` sanitizes to "draft_gate"), letting two
-  // distinct gates collide onto one comment, since buildFindingsMarker keys
-  // solely on this sanitized value. Reject that specific collision class up
-  // front: a value that only sanitizes into a KNOWN gate name by way of
-  // being malformed (never equal to it to begin with) must never be treated
-  // as that gate. A gate that sanitizes to something else entirely (not a
-  // real gate name) is still sanitized, not rejected — it cannot collide
-  // with a real gate's marker, only ever with its own would-be raw self.
-  const sanitizedGateForCollisionCheck = sanitizeInline(gate);
-  if (sanitizedGateForCollisionCheck !== gate && KNOWN_GATES.has(sanitizedGateForCollisionCheck)) {
-    throw new Error(`renderBoundedFindingsCommentBody: gate ${describeInvalidValue(gate)} sanitizes to the different, real gate ${JSON.stringify(sanitizedGateForCollisionCheck)}'s own marker identity — refusing to let a malformed gate collide with it`);
+  const normalizedGate = gate.trim().toLowerCase();
+  if (!KNOWN_GATES.has(normalizedGate)) {
+    throw new Error(`renderBoundedFindingsCommentBody: gate must be one of: ${[...KNOWN_GATES].join(", ")}, got ${describeInvalidValue(gate)}`);
   }
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     throw new Error(`renderBoundedFindingsCommentBody: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
@@ -486,26 +482,47 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
     }
     // angle/summary are rendered directly into the comment (as a code span /
     // bare prose respectively); an unvalidated caller passing neither would
-    // otherwise post the literal string "undefined" into a PR comment.
+    // otherwise post the literal string "undefined" into a PR comment. The
+    // render uses the SANITIZED value (sanitizeCodeSpan/sanitizeInline below),
+    // never the raw one, so a raw value that is non-empty but sanitizes to
+    // nothing (e.g. a bare "```") must be rejected here too — checking only
+    // the raw string would let it through and render an empty code span /
+    // empty prose run.
     if (typeof finding.angle !== "string" || finding.angle.trim().length === 0) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].angle must be a non-empty string, got ${describeInvalidValue(finding.angle)}`);
+    }
+    if (sanitizeCodeSpan(finding.angle).length === 0) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].angle sanitizes to an empty code span, got ${describeInvalidValue(finding.angle)}`);
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
     }
+    if (sanitizeInline(finding.summary).length === 0) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary sanitizes to an empty string, got ${describeInvalidValue(finding.summary)}`);
+    }
     // disposition is rendered directly into the comment (bare prose, for any
     // truthy value, when present — see renderFindingsCommentBody's own `?:`
-    // truthiness check); null/"" are already falsy there, so they render as
-    // "no disposition" today exactly like undefined, and must keep passing
-    // through unrejected. Only a non-string value OTHER than null (an
-    // object/number/boolean/array/symbol) or a truthy-but-blank string
-    // ("   ") would otherwise post "[object Object]"/"42"/"true"/an empty
-    // italic run into the comment, so only those are rejected here.
+    // truthiness check). Only undefined/null/"" are exempted by name below;
+    // every OTHER non-string-or-blank value (0, false, NaN included — they
+    // are just as falsy at render time as null/"", but are not exempted
+    // here) falls through to the typeof-string check and is rejected, since
+    // it would otherwise post junk ("[object Object]"/"42"/"true") into the
+    // comment.
     if (
       finding.disposition !== undefined && finding.disposition !== null && finding.disposition !== ""
       && (typeof finding.disposition !== "string" || finding.disposition.trim().length === 0)
     ) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].disposition must be a non-empty string when present, got ${describeInvalidValue(finding.disposition)}`);
+    }
+    // The render uses the SANITIZED disposition (sanitizeInline), never the
+    // raw one, so a non-blank string that sanitizes to nothing (e.g. a bare
+    // "```") must be rejected too — otherwise it would render the empty
+    // italic run " — __".
+    if (
+      typeof finding.disposition === "string" && finding.disposition.trim().length > 0
+      && sanitizeInline(finding.disposition).length === 0
+    ) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].disposition sanitizes to an empty string, got ${describeInvalidValue(finding.disposition)}`);
     }
     // files entries are rendered directly as code-span file refs (see
     // renderFindingsCommentBody); an unvalidated element would otherwise post
@@ -525,7 +542,7 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
   if (!Number.isInteger(maxChars) || maxChars <= 0) {
     throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive integer, got ${describeInvalidValue(maxChars)}`);
   }
-  return { gate: sanitizeInline(gate), headSha: sanitizeInline(headSha) };
+  return { gate: normalizedGate, headSha: sanitizeInline(headSha) };
 }
 
 // Renders the findings comment body, degrading ONE FINDING AT A TIME (never a
@@ -755,10 +772,13 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
       findingsCount: findings.length,
     };
   }
-  // Sanitized the same way renderBoundedFindingsCommentBody sanitizes gate
-  // before embedding it in the body's own marker, so this comment-search
-  // marker and the one actually rendered into desiredBody always agree.
-  const marker = buildFindingsMarker({ gate: sanitizeInline(options.gate) });
+  // Normalized the same way renderBoundedFindingsCommentBody normalizes gate
+  // (trim + lowercase, then required to be a KNOWN_GATES member) before
+  // embedding it in the body's own marker, so this comment-search marker and
+  // the one actually rendered into desiredBody always agree — true only
+  // because gate is constrained to that closed, two-value vocabulary; a
+  // free-text field would need its own sanitizeInline call here instead.
+  const marker = buildFindingsMarker({ gate: normalizeGate(options.gate) });
   // Fails closed (throws) when the round cannot be rendered within GitHub's
   // comment limit even with every finding dropped, nor with only its single
   // most-urgent finding kept, rather than reporting a false success below.
