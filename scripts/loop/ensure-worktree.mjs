@@ -380,9 +380,10 @@ function branchFromBase(base) {
 
 /**
  * Split a base ref into the remote it actually names and the bare branch —
- * the ONE place that answers "which remote is this base on". `origin/` and
- * `refs/*` prefixes are ALWAYS stripped first (normalizeToBareBranch, an
- * unconditional string reduction — no remote lookup involved). What remains
+ * the ONE place that answers "which remote is this base on". The three
+ * prefixes `refs/remotes/origin/`, `refs/heads/`, and `origin/` are ALWAYS
+ * stripped first (normalizeToBareBranch, an unconditional string reduction —
+ * no remote lookup involved; any other prefix survives). What remains
  * is only EVER further split into remote/branch when its first segment
  * genuinely names a configured remote (`git remote`); a bare slashed branch
  * (the shape `workflow.baseBranch` documents — "main" or "spike/foo", or an
