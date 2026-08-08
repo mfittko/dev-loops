@@ -167,6 +167,8 @@ construction additionally requires the colon to close the tag — followed by wh
 end-of-title, never another character — so `draft:latest` and `wip:branch` read as an identifier,
 not a status claim.
 
+This is enforced at two points:
+
 - At the **draft → ready-for-review** transition: `ready-for-review` refuses `gh pr ready` while the
   title carries a marker.
 - At the **pre-approval gate boundary and final approval** (for non-draft PRs): the gate coordinator

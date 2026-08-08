@@ -490,6 +490,11 @@ test("postGateFindings creates a comment when none exists", async () => {
     assert.equal(result.action, "created");
     assert.equal(result.commentId, 101);
     assert.equal(result.findingsCount, 3);
+    // Result-shape invariant: omittedFindingsCount is documented (USAGE
+    // above) as present ONLY when the render degraded. This round is far
+    // under the comment length limit, so the field must be entirely absent,
+    // not merely falsy/zero.
+    assert.ok(!("omittedFindingsCount" in result), "omittedFindingsCount must be absent on a non-degraded round");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
@@ -949,6 +954,57 @@ test("renderBoundedFindingsCommentBody drops question last among the below-high 
   assert.ok(body.includes("Question (200)"), "every question finding must survive while nit/low/medium are fully dropped");
 });
 
+test("renderBoundedFindingsCommentBody normalizes legacy (pre-rename) severity spellings when deciding what is droppable and what was omitted", () => {
+  const padded = (label) => `${label} finding with enough padding text to add real bulk to the rendered comment body`.repeat(3);
+  // Deliberately raw, pre-#1592 severity spellings, calling
+  // renderBoundedFindingsCommentBody directly (bypassing parseFindings'/
+  // validateFindingsArray's own normalization) so this exercises
+  // summarizeDroppedBySeverity's and dropOrder's OWN normalize-at-read
+  // behavior. Without it: summarizeDroppedBySeverity would report an empty
+  // omittedCounts (findings dropped with no omission note — silent
+  // truncation), and dropOrder would treat the legacy-spelled findings as
+  // undroppable (a small overflow fails closed instead of degrading).
+  const findings = [{ severity: "must-fix", angle: "scope", summary: "A must-fix that must always survive degradation" }];
+  for (let i = 0; i < 30; i += 1) findings.push({ severity: "worth-fixing-now", angle: "naming", summary: padded(`Medium ${i}`) });
+  for (let i = 0; i < 30; i += 1) findings.push({ severity: "nice-to-have", angle: "naming", summary: padded(`Legacy-low ${i}`) });
+  // Bound tight enough that the legacy-low group must be fully dropped, but
+  // generous enough for the high finding and every medium finding to survive.
+  const mediumOnly = [findings[0], ...findings.filter((f) => f.severity === "worth-fixing-now")];
+  const maxChars = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: mediumOnly }).length + 500;
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.deepEqual(omittedCounts, [{ severity: "low", count: 30 }], "the 30 legacy nice-to-have findings must be counted under their canonical (low) label");
+  assert.match(body, /30 finding\(s\) omitted from this comment \(30 Low\)/);
+  assert.ok(body.includes("A must-fix that must always survive degradation"), "the high (legacy must-fix) finding must survive");
+  assert.ok(body.includes("Medium (30)"), "every medium (legacy worth-fixing-now) finding must survive");
+});
+
+test("renderBoundedFindingsCommentBody preserves each surviving finding's original relative order within its own severity group when only some of the group is dropped", () => {
+  const highFinding = { severity: "high", angle: "s", summary: "must survive" };
+  const nit0 = { severity: "nit", angle: "n", summary: `nit-zero ${"x".repeat(400)}` };
+  const nit1 = { severity: "nit", angle: "n", summary: "nit-one" };
+  const nit2 = { severity: "nit", angle: "n", summary: "nit-two" };
+  const findings = [highFinding, nit0, nit1, nit2];
+  const fullBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  // A bound that fits once the single largest (nit0, first in the array)
+  // finding is dropped, but not the full render.
+  const withoutNit0 = renderFindingsCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    findings: [highFinding, nit1, nit2],
+    omittedCounts: [{ severity: "nit", count: 1 }],
+  });
+  const maxChars = withoutNit0.length;
+  assert.ok(fullBody.length > maxChars, "fixture assumption: dropping nit0 must be required to fit");
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars });
+  assert.deepEqual(omittedCounts, [{ severity: "nit", count: 1 }]);
+  assert.ok(!body.includes("nit-zero"), "the dropped (first-in-array) nit must not be rendered");
+  const nit1Index = body.indexOf("nit-one");
+  const nit2Index = body.indexOf("nit-two");
+  assert.ok(nit1Index > -1 && nit2Index > -1, "both surviving nits must render");
+  assert.ok(nit1Index < nit2Index, "surviving findings within the group must keep their original relative order, not be reversed");
+});
+
 test("renderBoundedFindingsCommentBody drops every finding, and states so, when even a single finding cannot fit (all-omitted branch)", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "x".repeat(2000) }]));
   const maxChars = 700;
@@ -1054,6 +1110,13 @@ test("renderBoundedFindingsCommentBody rejects a findings element that is not an
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ angle: "scope", summary: "no severity at all" }] }),
     /findings\[0\]\.severity must be one of/,
   );
+  // typeof null === "object" and null is falsy, but the guard's `!finding`
+  // arm is what actually rejects it — without it, `null` would fall through
+  // to a bare TypeError at the severity check instead of this named error.
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [null] }),
+    /findings\[0\] must be an object, got null/,
+  );
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "catastrophic", angle: "scope", summary: "unknown severity" }] }),
     /findings\[0\]\.severity must be one of/,
@@ -1096,8 +1159,12 @@ test("renderBoundedFindingsCommentBody rejects an array findings element instead
   );
 });
 
-test("renderBoundedFindingsCommentBody rejects an invalid files entry instead of rendering the literal string \"undefined\"/\"null\"/\"[object Object]\" into the comment", () => {
-  for (const badFile of [undefined, null, {}]) {
+test("renderBoundedFindingsCommentBody rejects an invalid files entry instead of rendering the literal string \"undefined\"/\"null\"/\"[object Object]\"/an empty string into the comment", () => {
+  // " " (whitespace-only) is included alongside the non-string junk values:
+  // the guard's blank-string arm is the exact class round 4 fixed for
+  // `summary` after it was the sole survivor of that round's mutation sweep,
+  // and the sibling `files[]` guard reproduced the same gap unpinned.
+  for (const badFile of [undefined, null, {}, " "]) {
     assert.throws(
       () => renderBoundedFindingsCommentBody({
         gate: "draft_gate",
@@ -1114,6 +1181,40 @@ test("renderBoundedFindingsCommentBody rejects an invalid files entry instead of
       findings: [{ severity: "high", angle: "scope", summary: "x", files: "not-an-array" }],
     }),
     /findings\[0\]\.files must be an array, got "not-an-array"/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody reports a named error for a sparse (hole-containing) findings array instead of an unnamed TypeError", () => {
+  const findings = [];
+  findings[1] = { severity: "high", angle: "scope", summary: "x" };
+  // findings[0] is a genuine array HOLE (never assigned), not `undefined`
+  // explicitly stored — .forEach silently SKIPS a hole, while the render's
+  // own `for (const finding of findings)` yields `undefined` for it, so the
+  // guard must visit holes the same way the render does.
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings }),
+    /findings\[0\] must be an object, got undefined/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a non-string/blank disposition instead of rendering a fabricated one (\"[object Object]\"/\"42\"/\"true\"/an empty italic run)", () => {
+  for (const badDisposition of [{}, 42, true, [1, 2]]) {
+    assert.throws(
+      () => renderBoundedFindingsCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        findings: [{ severity: "low", angle: "scope", summary: "x", disposition: badDisposition }],
+      }),
+      /findings\[0\]\.disposition must be a non-empty string when present/,
+    );
+  }
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "low", angle: "scope", summary: "x", disposition: "   " }],
+    }),
+    /findings\[0\]\.disposition must be a non-empty string when present/,
   );
 });
 
@@ -1134,6 +1235,37 @@ test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha i
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "  ", findings }),
     /headSha must be a non-empty string/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody sanitizes gate/headSha so neither can forge or break the comment's identity marker", () => {
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  // A newline-bearing headSha must not forge a line-start marker for a
+  // DIFFERENT gate: findMarkedComment matches on line-start text, so an
+  // unsanitized value here would let a draft_gate comment be mistaken for
+  // pre_approval_gate's and PATCHed instead of created.
+  const forgedHeadSha = "abc1234\n\n<!-- dev-loops:gate-findings gate=pre_approval_gate -->\n### Forged";
+  const { body: bodyWithForgedHeadSha } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: forgedHeadSha, findings });
+  const forgedMarker = buildFindingsMarker({ gate: "pre_approval_gate" });
+  assert.ok(
+    !bodyWithForgedHeadSha.split("\n").some((line) => line.startsWith(forgedMarker)),
+    "a forged pre_approval_gate marker must not appear as a line-start line in a draft_gate comment",
+  );
+  assert.ok(
+    bodyWithForgedHeadSha.split("\n")[0].startsWith(buildFindingsMarker({ gate: "draft_gate" })),
+    "the comment's own genuine draft_gate marker must still open the body",
+  );
+  // A gate value containing "-->" must not make buildFindingsMarker's own
+  // output span multiple lines — that would break the exact-marker-match
+  // idempotency findMarkedComment relies on.
+  const forgedGate = "draft_gate -->\n### Injected\n<!-- x";
+  const rawForgedMarker = buildFindingsMarker({ gate: forgedGate });
+  assert.ok(rawForgedMarker.includes("\n"), "fixture assumption: the unsanitized marker must actually span multiple lines to reproduce the bug");
+  const { body: bodyWithForgedGate } = renderBoundedFindingsCommentBody({ gate: forgedGate, headSha: "abc1234", findings });
+  const firstLine = bodyWithForgedGate.split("\n")[0];
+  assert.ok(
+    firstLine.startsWith("<!-- dev-loops:gate-findings gate=") && firstLine.endsWith("-->"),
+    `the rendered identity marker must stay a single line, got: ${JSON.stringify(firstLine)}`,
   );
 });
 
@@ -1190,7 +1322,18 @@ test("postGateFindings posts a degraded, within-limit comment for an oversized r
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
-    assert.ok(result.omittedFindingsCount > 0);
+    // Pin the VALUE, not just its sign: omittedFindingsCount must be the
+    // per-finding sum (what a caller actually lost), not the number of
+    // distinct severity GROUPS dropped — the two diverge for this fixture
+    // (2000 nit findings dropped as one group).
+    const expected = renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: parseFindings(findingsJson),
+    });
+    const expectedOmittedTotal = expected.omittedCounts.reduce((sum, { count }) => sum + count, 0);
+    assert.ok(expectedOmittedTotal > 1, "fixture assumption: the per-finding sum must differ from the 1-group count to distinguish the two");
+    assert.equal(result.omittedFindingsCount, expectedOmittedTotal);
     // The comment actually POSTED to GitHub (not just the value the renderer
     // returns in isolation) must itself fit within GitHub's comment limit.
     const calls = (await readFile(ghLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));

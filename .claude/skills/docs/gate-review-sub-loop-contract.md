@@ -840,8 +840,9 @@ low-priority findings as it takes to fit — never posting an over-limit body, t
 occasionally settle on dropping a few more findings than the true minimum — naming what was omitted
 in the posted
 comment and pointing at the disposition ledger (always complete, never bounded) as the full
-record; a round that cannot fit even with only one finding surviving fails the post closed
-rather than reporting success. Do not assume this comment alone carries every finding of a large
+record; a round that cannot fit even with every finding dropped, nor with only its single
+least-urgent finding kept, fails the post closed rather than reporting success. Do not assume
+this comment alone carries every finding of a large
 round — the ledger is the one surface with that guarantee.
 
 Because the findings ride the verdict review itself, they occupy the same post-verdict,
