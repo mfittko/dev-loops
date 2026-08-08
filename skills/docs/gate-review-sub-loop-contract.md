@@ -1133,7 +1133,11 @@ decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER t
 fixer replies with an answer (promoting the finding to a defect severity when the answer reveals
 one, or escalating to the author when the fixer cannot answer it) and resolves the thread once
 answered; an unanswered question stays unresolved through the same round cap/escalation path a
-high finding uses, since `isDeferredAtRound` never selects it for auto-deferral. A nit thread is
+high finding uses, since `isDeferredAtRound` never selects it for auto-deferral (mechanically
+enforced and tested). Which of the three replies a fixer sends — a plain answer, a
+promoting-to-defect-severity answer, or an escalation to the author — is a per-thread fixer
+judgment call, not a state machine this codebase drives or unit-tests; only the never-
+auto-deferred invariant above is. A nit thread is
 deferred immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no triage cycle
 (unlike low, it is never handed to the fixer as a fix/triage target); the closing sweep
 defer-closes it regardless of whether the fixer looked at it. GATE-CLOSE requires 0 unresolved

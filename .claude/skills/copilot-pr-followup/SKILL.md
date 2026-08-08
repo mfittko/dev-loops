@@ -240,7 +240,7 @@ question is likewise unresolved feedback.
    - high: blocks gate; always fixed
    - medium: blocks gate when `blockCleanOnFindingSeverities` includes it; a LOCATABLE finding is also fixed through round 3 of the gate's chain even when not blocking (then deferred), while a NON-LOCATABLE one is deferred immediately (`GATE-EXEC-BLOCKING-ONLY-FIX` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#phase-4--fix))
    - low / non-blocking / disagree (defer is the fixer's disposition for these, not a severity)
-   - question: never blocks or defers; answer it (promoting to a defect severity if the answer reveals one, or escalating to the author when unanswerable) — an unanswered question is unresolved feedback like a high finding
+   - question: never deferred; answer it (promoting to a defect severity if the answer reveals one, or escalating to the author when unanswerable) — an unanswered question blocks gate-close exactly like an open defect (unresolved feedback, same as a high finding), so it is never a thread to sweep past unanswered
    - nit: cosmetic, non-defect; deferred immediately, no fixer action
 4. apply only the accepted narrow fixes
 5. run the smallest validation that honestly proves the fix
