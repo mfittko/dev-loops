@@ -33,14 +33,17 @@ The authoritative classification function is `isQualifyingAsyncCompletion(routin
 
 ## Checkpoint states
 
-A fresh session can determine the status of the required retrospective by reading `.pi/dev-loop-retrospective-checkpoint.json`:
+A fresh session can determine the status of the required retrospective by reading `.pi/dev-loop-retrospective-checkpoint.json` and comparing its `identity` (when present) against the latest qualifying completion the caller derives live (see "Cycle scoping" below):
 
 | File state | Mapped checkpoint state | Meaning |
 |---|---|---|
 | File absent | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | No qualifying completion has occurred; no requirement |
 | `{ "state": "required" }` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Qualifying completion detected; retrospective pending |
-| `{ "state": "complete" }` | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded; requirement satisfied |
-| `{ "state": "skipped" }` | `RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED` | Explicitly skipped with reason; requirement satisfied |
+| `{ "state": "complete", "identity": {...} }`, identity matches the latest qualifying completion (or none is known this call) | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded for the current cycle; requirement satisfied |
+| `{ "state": "complete", "identity": {...} }`, identity does NOT match the latest qualifying completion | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Stale completion; a newer qualifying cycle has not been discharged |
+| `{ "state": "skipped", "identity": {...} }`, identity matches the latest qualifying completion (or none is known this call) | `RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED` | Explicitly skipped with reason for the current cycle; requirement satisfied |
+| `{ "state": "skipped", "identity": {...} }`, identity does NOT match the latest qualifying completion | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Stale skip; a newer qualifying cycle has not been discharged |
+| File present but malformed (not a JSON object, or an unrecognized `state`) | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Present-but-broken artifact fails closed — never treated as "nothing observed" |
 
 ## Enforcement gate
 
@@ -190,29 +193,29 @@ advisory reflection whose findings reach the conductor via the envelope.
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion
 
 <!-- rule: RETRO-CHECKPOINT-CYCLE-SCOPED -->
-`requireRetrospective` is not a one-time gate: a `complete` (or `skipped`) checkpoint MUST be scoped to the exact qualifying completion it discharges, not treated as satisfying every later one forever. The durable artifact carries an `identity` — at minimum `{ repo, prNumber, mergeCommit }` — alongside its `state`, and both arming and completion write that identity so a later reader can tell WHICH cycle it covers.
+`requireRetrospective` is not a one-time gate: a `complete` (or `skipped`) checkpoint MUST be scoped to the exact qualifying completion it discharges, not treated as satisfying every later one forever. The durable artifact carries an `identity` — at minimum `{ repo, prNumber, mergeCommit }` — alongside its `state`.
 
-- **Arming.** `resolve-dev-loop-startup.mjs` detects a qualifying completion (a merged run whose resolved gate is in `RETROSPECTIVE_QUALIFYING_GATES`) and automatically writes `state: "required"` with `triggeredAt` and the cycle `identity` — no manual `checkpoint-contract` invocation is required for the gate to fire. Arming is idempotent: it is a no-op once the durable artifact's `identity` already matches the observed completion, so re-resolving an already-discharged merged PR never re-blocks it.
-- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--state`/`--notes`/`--reason`) SHOULD carry forward the same `identity` the `required` record armed, so the artifact states which cycle it discharged. `skipped` is scoped the same way — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
-- **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) treats a `complete` checkpoint whose recorded `identity` does not match the latest observed qualifying completion as `MISSING`, not `COMPLETE` — even if arming was somehow bypassed for the newer cycle. Arming is the primary mechanism; this is the backstop for when it is not.
-- **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never has this artifact written for it — the arming step itself checks the config before touching disk.
+- **Derivation, at read time, on every evaluation.** There is no write-time "arming" step. `resolve-dev-loop-startup.mjs` queries GitHub directly for the identity of the latest qualifying completion (`resolveLatestQualifyingCompletionIdentity`: the most recently merged PR whose assignees include Copilot — both qualifying gates, `copilot_pr_followup` and `issue_intake`, culminate in such a merge) every time the gate is evaluated, and compares it against the checkpoint's recorded `identity`. Nothing has to remember to write `state: "required"` for the gate to fire correctly, so there is no seam that can be skipped, hit from the wrong working directory, triggered by a read-only preview, or raced.
+- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity` — the full merge commit oid (`gh pr view --json mergeCommit --jq .mergeCommit.oid`), not an abbreviated/short sha — so a later derivation can tell which cycle it discharged. An identity-less `complete`/`skipped` record is trusted only as long as no newer qualifying completion is observed; the moment one is, it fails closed to `MISSING`. `skipped` is scoped exactly like `complete` — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
+- **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) treats a `complete`/`skipped` checkpoint whose recorded `identity` does not match the latest observed qualifying completion as `MISSING`, not `COMPLETE`/`SKIPPED`. It also treats a present-but-malformed artifact (not a JSON object, or an unrecognized `state`) as `MISSING` — only a genuinely absent file resolves to `NONE`.
+- **Fail-closed on query failure.** When `workflow.requireRetrospective` is `true` and the live derivation query itself fails (offline, `gh` error, malformed payload, repo undetectable), the checkpoint state resolves to `MISSING` rather than silently passing through as if no qualifying completion existed.
+- **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never performs the live derivation query — the checkpoint file (if one happens to exist) is still honored, but no extra GitHub call is made and no cycle-scoping comparison against a "latest" identity is possible without one.
 
 ## Durable artifact format
 
-The checkpoint file is written by two mechanisms:
+`resolve-dev-loop-startup.mjs` never writes this file — it only reads it and derives the comparison live (see "Cycle scoping" above). The file is written by:
 
-- **`resolve-dev-loop-startup.mjs`** (authoritative, deterministic): arms `state: "required"` automatically at the qualifying-completion seam described above.
-- **`.pi/extensions/dev-loop-behavioral-review.ts`** (best-effort, Pi-harness-specific): fires when it observes the standard async `dev-loop` completion message and writes the same `required` marker as a secondary trigger. Its message-based detection does not carry a cycle identity.
+- **`.pi/extensions/dev-loop-behavioral-review.ts`** (best-effort, Pi-harness-specific): fires when it observes the standard async `dev-loop` completion message and writes a `required` marker. Its message-based detection does not carry a cycle identity, which is fine — `required` maps to `MISSING` regardless of identity.
+- **`scripts/loop/checkpoint-contract.mjs`** (operator/skill-driven): records `complete`/`skipped`/`required`/`none`, carrying the cycle identity via `--repo`/`--pr`/`--merge-commit` when writing `complete` or `skipped` (MUST — see "Cycle scoping" above).
 
-Completion/skip are written by the operator or skill, optionally via `scripts/loop/checkpoint-contract.mjs`'s `--repo`/`--pr`/`--merge-commit` flags to carry the cycle identity forward.
+`mergeCommit` MUST be the full commit oid (`gh pr view --json mergeCommit --jq .mergeCommit.oid`), not an abbreviated/short sha — the live derivation always compares against the full oid, so a short sha can never match and the checkpoint would appear permanently stale.
 
-### On a qualifying completion (written automatically)
+### The `required` marker (written by the extension, best-effort)
 
 ```json
 {
   "state": "required",
-  "triggeredAt": "2026-05-29T16:00:00.000Z",
-  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
+  "triggeredAt": "2026-05-29T16:00:00.000Z"
 }
 ```
 
@@ -229,7 +232,7 @@ and an advisory PR comment (issue #1077, Reading B):
   "state": "complete",
   "completedAt": "2026-05-29T16:30:00.000Z",
   "notes": "Loop followed working agreement; minor drift on thread resolution.",
-  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" }
 }
 ```
 
@@ -240,7 +243,7 @@ and an advisory PR comment (issue #1077, Reading B):
   "state": "skipped",
   "skippedAt": "2026-05-29T16:30:00.000Z",
   "reason": "Trivial documentation-only change; no post-run audit needed.",
-  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" }
 }
 ```
 
@@ -249,7 +252,7 @@ and an advisory PR comment (issue #1077, Reading B):
 | Artifact | Location |
 |---|---|
 | Checkpoint state machine (identity, cycle scoping) | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; not part of the public package exports surface — its classification/identity helpers are re-exported through `public-dev-loop-routing.mjs` for script-layer callers) |
-| Automatic arming seam | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`) |
+| Read-time derivation (queries the latest qualifying completion, compares identity) | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`, `resolveLatestQualifyingCompletionIdentity`) |
 | Manual write CLI (identity-aware) | `scripts/loop/checkpoint-contract.mjs` |
 | Internal-tooling verifier (findings-producer) | `scripts/loop/check-retro-tooling.mjs` (+ `test/loop/check-retro-tooling.test.mjs`) |
 | Advisory findings envelope field | `packages/core/src/loop/handoff-envelope.mjs` — `retrospectiveFindings` |

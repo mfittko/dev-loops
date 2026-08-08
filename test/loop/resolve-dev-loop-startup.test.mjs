@@ -2266,40 +2266,32 @@ test("runCli --input STRIPS an injected canonicalSpecSource (injection guard, en
 });
 
 // ---------------------------------------------------------------------------
-// Automatic retrospective-checkpoint arming (cycle-scoped requireRetrospective)
+// Retrospective checkpoint gate — derived at READ time, on every evaluation
+// (cycle-scoped requireRetrospective). There is no write-time "arming" step:
+// the latest qualifying completion is queried fresh each call (injected here
+// via `resolveLatestQualifyingCompletion`, the real implementation's own gh
+// query in production) and compared against the durable checkpoint's
+// identity — nothing is ever written back.
 // ---------------------------------------------------------------------------
 
 const RETROSPECTIVE_CONFIG = { workflow: { requireRetrospective: true } };
 
-// A merged-PR, Copilot-owned input — the shape buildAutoResolvedInput's --pr
-// path produces once `gh pr view` reports mergedAt. `artifactState: "merged"`
-// paired with `status: "active"` is intentionally the shape the pure
-// evaluator itself flags as needing reconcile (see resolve-dev-loop-startup.mjs's
-// arming comment) — the arming step under test observes the merge and the
-// qualifying gate independently of what this exact call's OWN bundleKind
-// resolves to, which is why the assertions below check a SEPARATE, unrelated
-// subsequent call rather than this one's bundleKind.
-function qualifyingMergedPrInput({ pr, mergeCommit }) {
-  return {
-    intent: "continue_on_pr",
-    artifactState: "merged",
-    mergeCommit,
-    loopState: "pr_followup_start",
-    currentState: {
-      target: { kind: "pr", pr },
-      ownership: "copilot",
-      nextActor: "user",
-      status: "active",
-      authorization: "authorized",
-    },
-    targetPreference: "prefer_github_first",
-  };
+function writeCheckpoint(tempDir, checkpoint) {
+  const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
+  mkdirSync(path.dirname(checkpointPath), { recursive: true });
+  writeFileSync(checkpointPath, `${JSON.stringify(checkpoint, null, 2)}\n`, "utf8");
 }
 
-// A self-consistent, unrelated local_implementation input — used to observe
-// whether the retrospective checkpoint blocks a SUBSEQUENT, unrelated
-// start/resume (the gate's real-world effect), decoupled from whatever the
-// merge-detection call itself resolves to.
+function readCheckpointIfPresent(tempDir) {
+  try {
+    return JSON.parse(readFileSync(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// A self-consistent local_implementation input — the "next start" the
+// retrospective gate does or doesn't block.
 function unrelatedLocalInput() {
   return {
     currentState: {
@@ -2314,212 +2306,221 @@ function unrelatedLocalInput() {
   };
 }
 
-function readCheckpoint(tempDir) {
-  return JSON.parse(readFileSync(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
+// Stub standing in for the real gh-backed resolveLatestQualifyingCompletionIdentity.
+function fixedLatestQualifyingCompletion(identity) {
+  return () => identity;
 }
 
-test("buildResolveDevLoopStartupResult arms the retrospective checkpoint on a qualifying merged completion — no manual CLI call required", () => {
+test("buildResolveDevLoopStartupResult: THE ORIGINAL BUG, fixed — a complete checkpoint from an older cycle produces needs_reconcile once a newer qualifying merge is observed, with no arming step ever run", () => {
   const tempDir = stampRepoWithOrigin();
   try {
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9001, mergeCommit: "deadbeef" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    const checkpoint = readCheckpoint(tempDir);
-    assert.equal(checkpoint.state, "required");
-    assert.equal(checkpoint.identity.repo, "mfittko/dev-loops");
-    assert.equal(checkpoint.identity.prNumber, 9001);
-    assert.equal(checkpoint.identity.mergeCommit, "deadbeef");
-
-    // The gate now fires on the NEXT, unrelated start/resume — automatically,
-    // with no manual `checkpoint-contract --state required` call anywhere.
-    const subsequent = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
-    assert.equal(subsequent.bundleKind, "needs_reconcile");
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("removing the arming step breaks this test: no checkpoint file is written for a qualifying merged completion", () => {
-  // A direct mutation-style guard for the DoD requirement: if the arming
-  // block in buildResolveDevLoopStartupResult is deleted or short-circuited,
-  // this file is never created and the read below throws.
-  const tempDir = stampRepoWithOrigin();
-  try {
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9099, mergeCommit: "f00dbabe" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    assert.doesNotThrow(() => readCheckpoint(tempDir));
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("buildResolveDevLoopStartupResult: identity round-trip — completing the retrospective for the armed cycle un-blocks subsequent starts", () => {
-  const tempDir = stampRepoWithOrigin();
-  try {
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9002, mergeCommit: "cafef00d" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    assert.equal(readCheckpoint(tempDir).state, "required");
-
-    // Complete the retrospective, carrying forward the SAME identity the
-    // armed record carries — the artifact now states which cycle it covers.
-    const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
-    writeFileSync(checkpointPath, `${JSON.stringify({
-      state: "complete",
-      completedAt: "2026-08-08T01:00:00.000Z",
-      notes: "followed the working agreement",
-      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
-    }, null, 2)}\n`, "utf8");
-
-    const subsequent = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
-    assert.notEqual(subsequent.bundleKind, "needs_reconcile");
-
-    // Re-resolving the SAME already-discharged merged PR must not re-arm it.
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9002, mergeCommit: "cafef00d" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    assert.equal(readCheckpoint(tempDir).state, "complete");
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("buildResolveDevLoopStartupResult: a NEW qualifying completion re-arms over a stale complete for a different cycle (fail-closed backstop)", () => {
-  const tempDir = stampRepoWithOrigin();
-  try {
-    const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
-    mkdirSync(path.dirname(checkpointPath), { recursive: true });
-    writeFileSync(checkpointPath, `${JSON.stringify({
+    // A `complete` checkpoint discharging an OLD cycle (#1577). Nothing in
+    // this test ever writes `state: "required"` anywhere — there is no
+    // arming mechanism left to have run.
+    const staleCheckpoint = {
       state: "complete",
       completedAt: "2026-08-06T01:00:38.000Z",
       notes: "old cycle",
       identity: { repo: "mfittko/dev-loops", prNumber: 1577, mergeCommit: "oldsha1" },
-    }, null, 2)}\n`, "utf8");
+    };
+    writeCheckpoint(tempDir, staleCheckpoint);
 
-    // A newer qualifying completion (a different PR/merge) must not be
-    // satisfied by the stale complete recorded for #1577.
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 1610, mergeCommit: "newsha1" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    const checkpoint = readCheckpoint(tempDir);
-    assert.equal(checkpoint.state, "required");
-    assert.equal(checkpoint.identity.prNumber, 1610);
+    // This call derives the latest qualifying completion directly (the stub
+    // stands in for the live gh query) — a newer merge (#1610) the stale
+    // complete never discharged.
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(),
+      cwd: tempDir,
+      config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion({
+        repo: "mfittko/dev-loops", prNumber: 1610, mergeCommit: "newsha1",
+      }),
+    });
 
-    const subsequent = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
-    assert.equal(subsequent.bundleKind, "needs_reconcile");
+    assert.equal(result.bundleKind, "needs_reconcile");
+    // The checkpoint on disk is byte-identical to what was seeded — a
+    // read-time derivation never writes anything back.
+    assert.deepEqual(readCheckpointIfPresent(tempDir), staleCheckpoint);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("buildResolveDevLoopStartupResult: skipped is scoped to one cycle — a new qualifying completion re-arms past it", () => {
+test("buildResolveDevLoopStartupResult: a complete checkpoint matching the latest qualifying completion passes through", () => {
   const tempDir = stampRepoWithOrigin();
   try {
-    const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
-    mkdirSync(path.dirname(checkpointPath), { recursive: true });
-    writeFileSync(checkpointPath, `${JSON.stringify({
+    writeCheckpoint(tempDir, {
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "followed the working agreement",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+    });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(),
+      cwd: tempDir,
+      config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion({
+        repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d",
+      }),
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: a complete checkpoint is trusted when this call observes no qualifying completion at all", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "ok",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+    });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(),
+      cwd: tempDir,
+      config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion(null),
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: skipped is cycle-scoped exactly like complete — a newer qualifying completion is not covered by an old skip", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
       state: "skipped",
       skippedAt: "2026-08-06T01:00:38.000Z",
       reason: "trivial docs change",
       identity: { repo: "mfittko/dev-loops", prNumber: 1577, mergeCommit: "oldsha1" },
-    }, null, 2)}\n`, "utf8");
-
-    // Re-resolving an unrelated start with no new merge observed stays
-    // skipped — the explicit escape hatch holds for its own cycle.
-    const sameCycleResult = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
-    assert.notEqual(sameCycleResult.bundleKind, "needs_reconcile");
-
-    // A genuinely NEW qualifying completion re-arms past the old skip.
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 1620, mergeCommit: "newsha2" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG },
-    );
-    const checkpoint = readCheckpoint(tempDir);
-    assert.equal(checkpoint.state, "required");
-    assert.equal(checkpoint.identity.prNumber, 1620);
-
-    const subsequent = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
-    assert.equal(subsequent.bundleKind, "needs_reconcile");
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("buildResolveDevLoopStartupResult: requireRetrospective unset is a no-op — no checkpoint file is ever written", () => {
-  const tempDir = stampRepoWithOrigin();
-  try {
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9003, mergeCommit: "abc123" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: {} } },
-    );
-    assert.throws(() => readCheckpoint(tempDir));
-
-    // An unrelated subsequent start/resume is unaffected either.
-    const subsequent = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: { workflow: {} } });
-    assert.notEqual(subsequent.bundleKind, "needs_reconcile");
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("buildResolveDevLoopStartupResult: requireRetrospective false behaves identically to unset — no arming", () => {
-  const tempDir = stampRepoWithOrigin();
-  try {
-    buildResolveDevLoopStartupResult(
-      qualifyingMergedPrInput({ pr: 9004, mergeCommit: "abc124" }),
-      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: false } } },
-    );
-    assert.throws(() => readCheckpoint(tempDir));
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("resolve-dev-loop-startup.mjs --pr end-to-end: arms the retrospective checkpoint from a live gh-reported merge", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-merge-arm-e2e-"));
-  try {
-    await initRepoWithOrigin(tempDir);
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
-    const ghStub = await writeGhStubHelper(tempDir, [
-      {
-        assertArgs: ["pr", "view", "9005"],
-        stdout: JSON.stringify({
-          state: "MERGED",
-          mergedAt: "2026-08-08T00:00:00Z",
-          mergeCommit: { oid: "feedface" },
-          assignees: [{ login: "copilot-swe-agent" }],
-          closingIssuesReferences: [],
-          body: "",
-        }),
-      },
-    ], { matchMode: "claims" });
-    const result = await runNode(["--pr", "9005"], {
-      cwd: tempDir,
-      env: { ...ghStub.env, ...resolverTestEnv() },
     });
-    assert.equal(result.code, 0, result.stderr);
 
-    const checkpoint = readCheckpoint(tempDir);
-    assert.equal(checkpoint.state, "required");
-    assert.equal(checkpoint.identity.repo, "mfittko/dev-loops");
-    assert.equal(checkpoint.identity.prNumber, 9005);
-    assert.equal(checkpoint.identity.mergeCommit, "feedface");
+    // Same cycle still observed — the explicit skip holds.
+    const sameCycle = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion({
+        repo: "mfittko/dev-loops", prNumber: 1577, mergeCommit: "oldsha1",
+      }),
+    });
+    assert.notEqual(sameCycle.bundleKind, "needs_reconcile");
+
+    // A genuinely new qualifying completion is not covered by the old skip.
+    const newCycle = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion({
+        repo: "mfittko/dev-loops", prNumber: 1620, mergeCommit: "newsha2",
+      }),
+    });
+    assert.equal(newCycle.bundleKind, "needs_reconcile");
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("buildAutoResolvedInput: --pr mode carries a null mergeCommit for an open (unmerged) PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-merge-commit-open-"));
+test("buildResolveDevLoopStartupResult: no checkpoint file and no qualifying completion observed passes through (NONE)", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion(null),
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: a present-but-non-object checkpoint file fails closed (not NONE)", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, "not an object");
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion(null),
+    });
+    assert.equal(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: an unparseable checkpoint file fails closed", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
+    mkdirSync(path.dirname(checkpointPath), { recursive: true });
+    writeFileSync(checkpointPath, "not valid json{{{", "utf8");
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: fixedLatestQualifyingCompletion(null),
+    });
+    assert.equal(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("removing the read-time derivation breaks this test: a query failure fails closed instead of passing through", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: () => { throw new Error("simulated offline"); },
+    });
+    assert.equal(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: requireRetrospective unset does no query at all — completely unaffected", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: { workflow: {} },
+      resolveLatestQualifyingCompletion: () => { throw new Error("must never be called when requireRetrospective is off"); },
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: requireRetrospective false behaves identically to unset — no query", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: false } },
+      resolveLatestQualifyingCompletion: () => { throw new Error("must never be called when requireRetrospective is false"); },
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: THE ORIGINAL BUG, fixed — a stale complete checkpoint blocks a fresh PR continuation once a newer qualifying merge is derived from a live gh query, with no arming step ever run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-derive-e2e-"));
   try {
     await initRepoWithOrigin(tempDir);
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    await mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    const staleCheckpoint = {
+      state: "complete",
+      completedAt: "2026-08-06T01:00:38.000Z",
+      notes: "old cycle",
+      identity: { repo: "mfittko/dev-loops", prNumber: 1577, mergeCommit: "oldsha1" },
+    };
+    await writeFile(
+      path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"),
+      `${JSON.stringify(staleCheckpoint, null, 2)}\n`,
+      "utf8",
+    );
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "9006"],
@@ -2527,10 +2528,16 @@ test("buildAutoResolvedInput: --pr mode carries a null mergeCommit for an open (
           state: "OPEN",
           mergedAt: null,
           mergeCommit: null,
-          assignees: [{ login: "copilot-swe-agent" }],
+          assignees: [],
           closingIssuesReferences: [],
           body: "",
         }),
+      },
+      {
+        assertArgs: ["pr", "list", "--state", "merged"],
+        stdout: JSON.stringify([
+          { number: 1610, mergedAt: "2026-08-08T00:00:00Z", mergeCommit: { oid: "newsha1" }, assignees: [{ login: "copilot-swe-agent" }] },
+        ]),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "9006"], {
@@ -2538,8 +2545,51 @@ test("buildAutoResolvedInput: --pr mode carries a null mergeCommit for an open (
       env: { ...ghStub.env, ...resolverTestEnv() },
     });
     assert.equal(result.code, 0, result.stderr);
-    // No merge observed — no checkpoint gets armed even with the option to.
-    assert.throws(() => readCheckpoint(tempDir));
+    const parsed = JSON.parse(result.stdout.trim());
+    // #1610 is a NEWER qualifying completion than the stale #1577 complete —
+    // derived live from `gh pr list`, never from anything having written
+    // `state: "required"` to disk.
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.match(parsed.nextAction ?? JSON.stringify(parsed), /retrospective/i);
+
+    // No write occurred: the checkpoint on disk is untouched.
+    const checkpoint = JSON.parse(await readFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
+    assert.deepEqual(checkpoint, staleCheckpoint);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: no qualifying merge observed live is a pass-through — an unmerged PR continues normally", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-derive-none-e2e-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "9007"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          mergeCommit: null,
+          assignees: [],
+          closingIssuesReferences: [],
+          body: "",
+        }),
+      },
+      {
+        assertArgs: ["pr", "list", "--state", "merged"],
+        stdout: JSON.stringify([]),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "9007"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv() },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.notEqual(parsed.bundleKind, "needs_reconcile");
+    await assert.rejects(readFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

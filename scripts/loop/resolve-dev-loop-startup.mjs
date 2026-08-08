@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   resolveAuthoritativeStartupResumeBundle,
-  isQualifyingAsyncCompletion,
   normalizeCheckpointCycleIdentity,
-  checkpointCycleIdentitiesMatch,
   resolveCheckpointStateFromArtifact,
 } from "@dev-loops/core/loop/public-dev-loop-routing";
-import { buildRetrospectiveCheckpointPayload, CHECKPOINT_FILE } from "./checkpoint-contract.mjs";
+import { CHECKPOINT_FILE } from "./checkpoint-contract.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -301,6 +299,56 @@ function ghJson(args, cwd) {
   } catch (err) {
     throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+// Recent-history window for the latest-qualifying-completion query below.
+// ponytail: bounded scan, not full history — raise this (or add pagination)
+// if a qualifying merge ever needs to reach further back than this.
+const LATEST_QUALIFYING_COMPLETION_SCAN_LIMIT = 30;
+/**
+ * Query GitHub directly, at read time, for the identity of the most recently
+ * merged PR whose assignees include Copilot — the query-time equivalent of
+ * "the latest qualifying async completion" (RETROSPECTIVE_QUALIFYING_GATES).
+ * Both qualifying gates (copilot_pr_followup, issue_intake) culminate in a
+ * merged PR still carrying the Copilot assignee, so this single query stands
+ * in for replaying either gate's historical routing decision.
+ *
+ * This replaces the prior write-time "arming" mechanism entirely: instead of
+ * something having to observe and record a qualifying completion when it
+ * happens, the gate re-derives the answer itself on every evaluation — the
+ * seam that could never be missed (never re-resolved, worktree-relative, or
+ * hit from a read-only preview) because there is no seam, only a query.
+ *
+ * Returns null when no qualifying merge is found in the scan window (a real
+ * "nothing to report" answer — NONE is still a legitimate outcome). Throws on
+ * any gh/parse failure so the caller can fail closed instead of silently
+ * treating a broken query as "no qualifying completion".
+ *
+ * @param {{repo: string, cwd: string}} params
+ * @returns {{repo: string, prNumber: number, mergeCommit: string}|null}
+ */
+export function resolveLatestQualifyingCompletionIdentity({ repo, cwd }) {
+  const prs = ghJson([
+    "pr", "list", "--repo", repo, "--state", "merged",
+    "--limit", String(LATEST_QUALIFYING_COMPLETION_SCAN_LIMIT),
+    "--json", "number,mergedAt,mergeCommit,assignees",
+  ], cwd);
+  if (!Array.isArray(prs)) {
+    throw new Error("gh pr list --state merged returned a non-array payload");
+  }
+  let latest = null;
+  for (const pr of prs) {
+    const assignees = Array.isArray(pr?.assignees) ? pr.assignees : [];
+    if (!assignees.some((assignee) => isCopilotLogin(assignee?.login))) continue;
+    const mergedAtMs = typeof pr?.mergedAt === "string" ? Date.parse(pr.mergedAt) : NaN;
+    const mergeCommitOid = typeof pr?.mergeCommit?.oid === "string" ? pr.mergeCommit.oid : null;
+    if (!Number.isFinite(mergedAtMs) || !Number.isInteger(pr?.number) || mergeCommitOid === null) continue;
+    if (latest === null || mergedAtMs > latest.mergedAtMs) {
+      latest = { mergedAtMs, prNumber: pr.number, mergeCommit: mergeCommitOid };
+    }
+  }
+  return latest === null
+    ? null
+    : normalizeCheckpointCycleIdentity({ repo, prNumber: latest.prNumber, mergeCommit: latest.mergeCommit });
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -951,7 +999,14 @@ export function summarizeCanonicalState(bundle) {
       : false,
   };
 }
-export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required", config } = {}) {
+export function buildResolveDevLoopStartupResult(input, {
+  adapter = createPiAdapter(),
+  env,
+  cwd,
+  asyncStartMode = "required",
+  config,
+  resolveLatestQualifyingCompletion = resolveLatestQualifyingCompletionIdentity,
+} = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
   // A configured workflow.baseBranch (#1368) is surfaced in the worktree
@@ -973,70 +1028,50 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   // result, mirroring planFileIntakeState/spikeIntakeState.
   const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
   input = routingInput;
+  // Retrospective checkpoint gate. The durable checkpoint file (if present)
+  // is always honored — unchanged from before cycle-scoping existed. Cycle
+  // scoping itself (deriving the latest qualifying completion so a stale
+  // `complete`/`skipped` cannot satisfy a newer cycle forever) is derived
+  // entirely at READ time, on every evaluation, so there is no write-time
+  // "arming" seam to miss (never re-resolved after merge, never
+  // cwd-relative, never a read-only preview's side effect, never racy).
+  // Gated on workflow.requireRetrospective so a repo that never opts into
+  // cycle scoping never pays for the extra GitHub query — the plain
+  // checkpoint file read below is unaffected either way.
   const checkpointPath = path.join(effectiveCwd, CHECKPOINT_FILE);
   let durableCheckpoint = null;
   let checkpointReadFailed = false;
   try {
-    const checkpointText = readFileSync(checkpointPath, "utf8");
-    durableCheckpoint = JSON.parse(checkpointText);
+    durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
   } catch (err) {
     if (err?.code !== "ENOENT") {
       checkpointReadFailed = true;
     }
   }
-  // Automatic retrospective-checkpoint arming: a merged run whose resolved
-  // gate is a qualifying GitHub-first async completion (copilot_pr_followup /
-  // issue_intake) arms the checkpoint for the NEXT start/resume, scoped to
-  // this exact cycle's identity (repo + PR + merge commit). The qualifying
-  // gate is classified by peeking the routing decision for this same
-  // ownership/target shape in its PRE-completion form (artifactState "open"
-  // for a PR target, matching what buildAutoResolvedInput's --pr path always
-  // carries while the PR is Copilot-owned): the pure evaluator rejects
-  // artifactState "merged" paired with an "active" canonical status as
-  // self-contradictory (isArtifactStateCompatible), so a real merge can never
-  // itself resolve to a "route" result — the peek classifies WHICH gate this
-  // ownership/target shape would have routed through, and the live
-  // artifactState (read separately, from gh) confirms the PR actually merged.
-  // Mirrors the ownership-gate peek pattern already used in
-  // buildAutoResolvedInput above. A no-op when the identity already matches
-  // the durable artifact (required or complete), so re-resolving an
-  // already-discharged merged PR never re-arms/re-blocks it. Gated on
-  // workflow.requireRetrospective so a repo that never opts in never has this
-  // artifact written for it.
-  let qualifyingIdentity = null;
-  if (resolveWorkflowConfig(config, "requireRetrospective") === true && !checkpointReadFailed) {
-    const peekArtifactState = input.currentState?.target?.kind === "pr" ? "open" : "not_applicable";
-    const peekedRouting = resolveAuthoritativeStartupResumeBundle({ ...input, artifactState: peekArtifactState });
-    if (isQualifyingAsyncCompletion(peekedRouting) && input.artifactState === "merged") {
-      qualifyingIdentity = normalizeCheckpointCycleIdentity({
-        repo: detectRepoSlug(effectiveCwd),
-        prNumber: peekedRouting.canonicalState?.target?.pr ?? null,
-        mergeCommit: typeof input.mergeCommit === "string" ? input.mergeCommit : null,
-      });
-      if (qualifyingIdentity && !checkpointCycleIdentitiesMatch(durableCheckpoint?.identity, qualifyingIdentity)) {
-        try {
-          const armed = buildRetrospectiveCheckpointPayload({ state: "required", identity: qualifyingIdentity });
-          mkdirSync(path.dirname(checkpointPath), { recursive: true });
-          writeFileSync(checkpointPath, `${JSON.stringify(armed, null, 2)}\n`, "utf8");
-          durableCheckpoint = armed;
-        } catch {
-          // Best-effort write. A failed arm leaves the prior durable state in
-          // place; the identity-mismatch backstop below still fails a stale
-          // `complete` closed to MISSING for this newly observed identity.
-        }
+  // A query failure (offline, gh error, malformed payload) fails closed:
+  // this repo opted into cycle scoping, and the gate cannot be evaluated
+  // honestly without knowing whether a newer qualifying cycle exists, so it
+  // must not silently pass through as if none did.
+  let latestQualifyingIdentity = null;
+  let queryFailed = false;
+  if (resolveWorkflowConfig(config, "requireRetrospective") === true) {
+    const repo = detectRepoSlug(effectiveCwd);
+    if (!repo) {
+      queryFailed = true;
+    } else {
+      try {
+        latestQualifyingIdentity = resolveLatestQualifyingCompletion({ repo, cwd: effectiveCwd });
+      } catch {
+        queryFailed = true;
       }
     }
   }
-  if (checkpointReadFailed) {
-    input = { ...input, retrospectiveCheckpointState: "missing" };
-  } else {
-    input = {
-      ...input,
-      retrospectiveCheckpointState: resolveCheckpointStateFromArtifact(durableCheckpoint, {
-        latestQualifyingIdentity: qualifyingIdentity,
-      }),
-    };
-  }
+  input = {
+    ...input,
+    retrospectiveCheckpointState: (checkpointReadFailed || queryFailed)
+      ? "missing"
+      : resolveCheckpointStateFromArtifact(durableCheckpoint, { latestQualifyingIdentity }),
+  };
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {

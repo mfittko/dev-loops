@@ -882,7 +882,7 @@
         },
         "requireRetrospective": {
           "type": "boolean",
-          "description": "Require a retrospective checkpoint before a loop completes."
+          "description": "Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."
         },
         "requireDraftFirst": {
           "type": "boolean",

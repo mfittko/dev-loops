@@ -18,10 +18,13 @@
  * next start/resume when this marker shows `state: "required"`.
  *
  * Completing the retrospective:
- * After running the review below, record the outcome by writing
- * `.pi/dev-loop-retrospective-checkpoint.json` with one of:
- *   { "state": "complete", "completedAt": "<ISO timestamp>", "notes": "<summary>" }
- *   { "state": "skipped",  "skippedAt":  "<ISO timestamp>", "reason": "<reason>"  }
+ * After running the review below, record the outcome via
+ * `scripts/loop/checkpoint-contract.mjs`, carrying the cycle identity
+ * (`--repo <owner/name> --pr <n> --merge-commit <sha>`) so the gate can tell
+ * WHICH cycle this discharges — a stale, identity-less record cannot satisfy
+ * a newer qualifying completion:
+ *   --state complete --notes "<summary>" --repo <owner/name> --pr <n> --merge-commit <sha>
+ *   --state skipped  --reason "<reason>" --repo <owner/name> --pr <n> --merge-commit <sha>
  */
 
 import fs from "node:fs";
@@ -47,14 +50,18 @@ Check:
 
 Keep it concise and honest — this is not a formality.
 
-After completing this review, record the outcome by writing
-\`.pi/dev-loop-retrospective-checkpoint.json\` with:
-  { "state": "complete", "completedAt": "<ISO timestamp>", "notes": "<one-line summary>" }
+After completing this review, record the outcome via checkpoint-contract.mjs,
+carrying the cycle identity (repo + PR number + merge commit) so a later
+reader can tell WHICH cycle it discharged:
+  node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete \\
+    --notes "<one-line summary>" --repo <owner/name> --pr <n> --merge-commit <sha>
 or, to explicitly skip:
-  { "state": "skipped", "skippedAt": "<ISO timestamp>", "reason": "<reason>" }
+  node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped \\
+    --reason "<reason>" --repo <owner/name> --pr <n> --merge-commit <sha>
 
-Until that file is written with state "complete" or "skipped", the next
-dev-loop start/resume will fail closed at the retrospective gate.
+Until that file is written with state "complete" or "skipped" carrying the
+current cycle's identity, the next dev-loop start/resume will fail closed at
+the retrospective gate.
 `.trim();
 
 function isDevLoopCompletion(content: unknown): boolean {
