@@ -302,8 +302,15 @@ function fitFindingsToRenderBudget(findingsJson) {
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
   const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
+  // Normalized defensively, same as angleWorstSeverityRank's sibling
+  // normalization above: findingsJson is always consolidateFanin's own
+  // OUTPUT (already normalized) through every call site today, but this
+  // function must not silently drop a differently-spelled severity from the
+  // breakdown/representative selection (or, worse, leak a legacy spelling
+  // into the posted marker text) if that upstream guarantee ever lapses.
   for (const f of a.findings) {
-    if (Object.hasOwn(bySeverity, f.severity)) bySeverity[f.severity] += 1;
+    const severity = normalizeSeverity(f.severity);
+    if (Object.hasOwn(bySeverity, severity)) bySeverity[severity] += 1;
   }
   // Represent the angle by its own highest-severity dropped finding — same
   // severity+disposition pairing consolidateFanin already derived, so the
@@ -311,7 +318,7 @@ function buildAngleMarker(a, verbose) {
   // severity-derived disposition (accepted-for-fix for a blocking severity,
   // needs-answer for question, deferred otherwise).
   const representative = SEVERITY_ORDER
-    .map((s) => a.findings.find((f) => f.severity === s))
+    .map((s) => a.findings.find((f) => normalizeSeverity(f.severity) === s))
     .find(Boolean) ?? a.findings[0];
   // Built from SEVERITY_ORDER (not hand-listed severity names) so a severity
   // added there is automatically included in the breakdown instead of being
@@ -324,7 +331,7 @@ function buildAngleMarker(a, verbose) {
   return {
     angle: a.angle,
     verdict: a.verdict,
-    findings: [{ severity: representative.severity, summary, disposition: representative.disposition }],
+    findings: [{ severity: normalizeSeverity(representative.severity), summary, disposition: representative.disposition }],
   };
 }
 
@@ -627,7 +634,7 @@ export function parseConsolidateFaninCliArgs(argv) {
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
   }
-  // --carried-angles is proof-carrying, not a bare trust-me list (must-fix
+  // --carried-angles is proof-carrying, not a bare trust-me list (high-severity
   // regression: a mandatory angle or a fabricated name could otherwise mint a
   // clean per-angle entry with no reviewer ever having run). It REQUIRES
   // --carry-forward-plan (the evidence it is checked against, below) and
@@ -681,7 +688,7 @@ export function parseConsolidateFaninCliArgs(argv) {
 // findings shape, so this stays a thin floor rather than a second copy of
 // consolidateFanin()'s validation.
 //
-// must-fix (input-validation): "carriedFromHead" is a PRODUCER field this CLI
+// high (input-validation): "carriedFromHead" is a PRODUCER field this CLI
 // stamps itself, inside the --carried-angles block below, on a synthetic entry
 // IT constructs — never a field a per-angle findings artifact is entitled to
 // self-declare. Without this check, --findings-dir/<any *.json> is the least
@@ -915,7 +922,7 @@ export async function consolidateGateFanin(options) {
   // artifact named `<angle>-delta-at-...` or spelled with different case
   // still suppresses the synthetic upsert rather than duplicating the angle.
   //
-  // must-fix (gate-evidence/correctness): --carried-angles is NOT trusted bare.
+  // high (gate-evidence/correctness): --carried-angles is NOT trusted bare.
   // Every name is checked against TWO independent sources of truth before it is
   // allowed to mint a clean entry — parseConsolidateFaninCliArgs already
   // requires both to be present alongside --carried-angles, and a programmatic
