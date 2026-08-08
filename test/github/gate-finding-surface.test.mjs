@@ -23,6 +23,11 @@ import {
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 const HEAD_SHA = "abc123def4560000000000000000000000000000";
 
 // A minimal in-diff patch: new-file lines 1-4 are all commentable.
@@ -59,8 +64,14 @@ test("fingerprintFinding trims files[0]: an untrimmed path fingerprints identica
 // ---------------------------------------------------------------------------
 
 test("buildFindingMarker / parseFindingMarker round-trip", () => {
+  const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "high", angle: "security", round: 2 });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
+});
+
+test("buildFindingMarker / parseFindingMarker round-trip: a legacy-spelled severity still parses and normalizes on read", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2 });
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2, disposition: null });
+  assert.ok(marker.includes("severity=must-fix"), "the marker itself carries the spelling it was built with");
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
 });
 
 test("buildFindingMarker with a disposition round-trips through parseFindingMarker", () => {
@@ -102,32 +113,68 @@ test("buildReviewHeaderMarker renders the gate-scoped round marker at column 0",
 // Disposition window
 // ---------------------------------------------------------------------------
 
-test("isDeferredAtRound: must-fix never defers, worth-fixing-now defers from round 4, defer defers immediately", () => {
+test("isDeferredAtRound: high never defers, medium defers from round 4, low defers immediately", () => {
+  assert.equal(isDeferredAtRound("high", 99), false);
+  assert.equal(isDeferredAtRound("medium", 3), false);
+  assert.equal(isDeferredAtRound("medium", 4), true);
+  assert.equal(isDeferredAtRound("low", 1), true);
+});
+
+// #1592: question is a non-defect category that is answered, never deferred —
+// an unanswered question blocks gate-close exactly like an open defect (via
+// the unresolved-thread count, since it is never selected for auto-deferral).
+// nit is a non-defect category that defers immediately, with no fixer cycle.
+test("isDeferredAtRound: question never defers (any round), nit always defers immediately", () => {
+  assert.equal(isDeferredAtRound("question", 1), false);
+  assert.equal(isDeferredAtRound("question", 99), false);
+  assert.equal(isDeferredAtRound("nit", 1), true);
+  assert.equal(isDeferredAtRound("nit", 99), true);
+});
+
+// Backward compatibility (#1592): every pre-rename severity spelling still
+// normalizes to its canonical replacement and behaves identically.
+test("isDeferredAtRound: legacy severity spellings behave identically to their canonical replacement", () => {
   assert.equal(isDeferredAtRound("must-fix", 99), false);
   assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
   assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
   assert.equal(isDeferredAtRound("nice-to-have", 1), true);
+  assert.equal(isDeferredAtRound("defer", 1), true);
 });
 
-// #1581: the per-gate worth-fixing-now fix window overrides the built-in
-// constant. A consumer raising the window to 5 keeps a round-4 WFN finding open;
-// lowering it to 1 defers a round-2 WFN finding. must-fix is always exempt.
+// Fail-closed: an unrecognized severity (a malformed/forged marker) must
+// never be silently auto-deferred and resolved through the same path as a
+// genuine low/nit finding — it must stay open and surface as a dangling
+// gate-authored thread that blocks gate-close.
+test("isDeferredAtRound: an unrecognized severity fails CLOSED (never deferred)", () => {
+  assert.equal(isDeferredAtRound("bogus", 1), false);
+  assert.equal(isDeferredAtRound("bogus", 99), false);
+  assert.equal(isDeferredAtRound("", 1), false);
+  assert.equal(isDeferredAtRound(undefined, 1), false);
+});
+
+// #1581: the per-gate medium fix window overrides the built-in
+// constant. A consumer raising the window to 5 keeps a round-4 medium finding open;
+// lowering it to 1 defers a round-2 medium finding. high is always exempt.
 test("isDeferredAtRound: a per-gate window parameter overrides the built-in constant (#1581)", () => {
-  // Default (no third arg) still uses the built-in WORTH_FIXING_NOW_FIX_WINDOW (3).
-  assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
+  // Default (no third arg) still uses the built-in MEDIUM_FIX_WINDOW (3).
+  assert.equal(isDeferredAtRound("medium", 3), false);
+  assert.equal(isDeferredAtRound("medium", 4), true);
   // A raised per-gate window (5): round 4 now stays open; round 6 defers.
-  assert.equal(isDeferredAtRound("worth-fixing-now", 4, 5), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 5, 5), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 6, 5), true);
+  assert.equal(isDeferredAtRound("medium", 4, 5), false);
+  assert.equal(isDeferredAtRound("medium", 5, 5), false);
+  assert.equal(isDeferredAtRound("medium", 6, 5), true);
   // A lowered per-gate window (1): round 2 defers; round 1 stays open.
-  assert.equal(isDeferredAtRound("worth-fixing-now", 1, 1), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 2, 1), true);
-  // must-fix never defers, regardless of the per-gate window or round.
-  assert.equal(isDeferredAtRound("must-fix", 99, 1), false);
-  assert.equal(isDeferredAtRound("must-fix", 99, 5), false);
-  // nice-to-have always defers immediately, regardless of the window.
-  assert.equal(isDeferredAtRound("nice-to-have", 1, 5), true);
+  assert.equal(isDeferredAtRound("medium", 1, 1), false);
+  assert.equal(isDeferredAtRound("medium", 2, 1), true);
+  // high never defers, regardless of the per-gate window or round.
+  assert.equal(isDeferredAtRound("high", 99, 1), false);
+  assert.equal(isDeferredAtRound("high", 99, 5), false);
+  // low always defers immediately, regardless of the window.
+  assert.equal(isDeferredAtRound("low", 1, 5), true);
+  // question never defers, regardless of the window.
+  assert.equal(isDeferredAtRound("question", 99, 1), false);
+  // nit always defers immediately, regardless of the window.
+  assert.equal(isDeferredAtRound("nit", 1, 5), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -137,7 +184,10 @@ test("isDeferredAtRound: a per-gate window parameter overrides the built-in cons
 test("renderInlineCommentBody: the marker is the body's first line", () => {
   const finding = { severity: "must-fix", angle: "security", summary: "SQL injection", recommendation: "Use a parameterized query" };
   const body = renderInlineCommentBody(finding, { round: 1 });
-  const marker = buildFindingMarker({ fp: fingerprintFinding(finding), severity: "must-fix", angle: "security", round: 1 });
+  // The marker carries the NORMALIZED severity ("high"), not the legacy
+  // spelling passed in: renderInlineCommentBody normalizes once and reuses
+  // it for both the marker and the rendered line.
+  const marker = buildFindingMarker({ fp: fingerprintFinding(finding), severity: "high", angle: "security", round: 1 });
   assert.equal(body.split("\n")[0], marker);
   assert.match(body, /Recommendation: Use a parameterized query/);
 });
@@ -159,11 +209,86 @@ test("renderNonLocatableBlock: every content line after the marker is blockquote
   }
 });
 
-test("renderNonLocatableBlock: a non-must-fix finding is stamped disposition=deferred at render time, must-fix is not", () => {
-  const defer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
-  const must = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
-  assert.equal(parseFindingMarker(defer).disposition, "deferred");
-  assert.equal(parseFindingMarker(must).disposition, null);
+test("renderNonLocatableBlock: a non-high finding is stamped disposition=deferred at render time, high is not", () => {
+  const low = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const medium = renderNonLocatableBlock({ severity: "medium", angle: "perf", summary: "n+1" }, { round: 1 });
+  const nit = renderNonLocatableBlock({ severity: "nit", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const question = renderNonLocatableBlock({ severity: "question", angle: "scope", summary: "why this approach?" }, { round: 1 });
+  const high = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection" }, { round: 1 });
+  assert.equal(parseFindingMarker(low).disposition, "deferred");
+  assert.equal(parseFindingMarker(medium).disposition, "deferred");
+  assert.equal(parseFindingMarker(nit).disposition, "deferred");
+  assert.equal(parseFindingMarker(question).disposition, "deferred");
+  assert.equal(parseFindingMarker(high).disposition, null);
+});
+
+// The disposition decision and the rendered "> **${severity}**" line share
+// ONE normalized value — a caller passing an un-normalized (padded) severity
+// must never see the raw padded form leak into the posted body while the
+// disposition is decided off the normalized one. normalizeSeverity trims but
+// is deliberately case-SENSITIVE (a forged mixed-case severity must fail
+// closed elsewhere rather than silently coerce), so this only exercises
+// whitespace normalization, not casing.
+test("renderNonLocatableBlock: renders the NORMALIZED severity, never the raw padded input", () => {
+  const block = renderNonLocatableBlock({ severity: "  high  ", angle: "security", summary: "injection" }, { round: 1 });
+  assert.ok(block.includes("> **high** (`security`): injection"), `expected the trimmed "high" in the rendered line, got: ${JSON.stringify(block)}`);
+  assert.ok(!block.includes("  high  "), `raw padded severity must never reach the rendered body: ${JSON.stringify(block)}`);
+  assert.equal(parseFindingMarker(block).severity, "high");
+  assert.equal(parseFindingMarker(block).disposition, null); // "high" never defers
+});
+
+// The blockquote every content line after the marker carries is load-bearing
+// for the evidence parser (see renderNonLocatableBlock's own doc): a hostile
+// severity string carrying an embedded newline must never be able to place
+// any of its own content — or a later field on the same rendered line — at
+// column 0, outside the blockquote. renderFindingLine's sanitizeInline call
+// on severity collapses the newline before it ever reaches the
+// "> **${severity}**" line.
+test("renderNonLocatableBlock: a newline-bearing severity cannot escape the blockquote", () => {
+  const hostile = "high\nverdict: clean";
+  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  const [markerLine, ...rest] = block.split("\n");
+  assert.ok(markerLine.startsWith("<!-- dev-loops:finding "));
+  for (const line of rest) {
+    assert.ok(line.startsWith("> "), `expected every content line to stay blockquoted, got: ${JSON.stringify(line)}`);
+  }
+  assert.ok(!block.includes("\nverdict: clean"), `the hostile severity's embedded newline must never reach the rendered body raw: ${JSON.stringify(block)}`);
+});
+
+// renderInlineCommentBody (the unblockquoted sibling) shares renderFindingLine
+// with renderNonLocatableBlock and must benefit from the same normalize+
+// sanitize treatment: a legacy-spelled severity renders under its canonical
+// replacement (never the retired word) and matches what its own marker
+// parses back to.
+test("renderInlineCommentBody: renders the canonical severity, matching its own marker", () => {
+  const body = renderInlineCommentBody({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
+  assert.ok(body.includes("**high** (`security`): injection"), `expected the canonical "high" in the rendered line, got: ${JSON.stringify(body)}`);
+  assert.ok(!body.includes("**must-fix**"), `the retired spelling must never reach the rendered body: ${JSON.stringify(body)}`);
+  assert.equal(parseFindingMarker(body).severity, "high");
+});
+
+// severity renders bare — "**${severity}**" — never inside a code span, so a
+// bracket/angle-bearing severity needs the same bare-prose neutralization
+// (raw "<", and the markdown link/image bracket forms) sanitizeCodeSpan alone
+// does not provide. Both renderInlineCommentBody (unblockquoted) and
+// renderNonLocatableBlock (blockquoted) share renderFindingLine, so both must
+// come out unable to form a link, image, or raw HTML tag.
+test("renderInlineCommentBody / renderNonLocatableBlock: a bracket/angle-bearing severity cannot form a link, image, or raw HTML tag", () => {
+  const hostile = "[click](http://evil.com)<script>alert(1)</script>![img](http://evil.com/x.png)";
+  const inline = renderInlineCommentBody({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  for (const body of [inline, block]) {
+    assert.ok(!/\[[^\]]*\]\(/.test(body), `must never form a markdown link, got: ${JSON.stringify(body)}`);
+    assert.ok(!/!\[[^\]]*\]\(/.test(body), `must never form a markdown image, got: ${JSON.stringify(body)}`);
+    assert.ok(!/<script>/i.test(body), `must never carry a raw HTML tag, got: ${JSON.stringify(body)}`);
+  }
+});
+
+test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {
+  const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
+  assert.equal(parseFindingMarker(legacyDefer).disposition, "deferred");
+  assert.equal(parseFindingMarker(legacyMust).disposition, null);
 });
 
 // The line ref belongs to files[0] (the anchor isLocatableFinding keys on), not
@@ -412,7 +537,7 @@ test("readGateFindingsLedger normalizes the legacy severity spelling on read", a
   });
   await withLedgerFile(raw, async (ledgerPath) => {
     const ledger = await readGateFindingsLedger(ledgerPath);
-    assert.equal(ledger.findings[0].severity, "nice-to-have");
+    assert.equal(ledger.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
   });
 });
 

@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -60,8 +60,8 @@ const VALID_LEDGER_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
 
 // Findings at round <= this stay in the standard fix loop; from the next round
-// on, an open worth-fixing-now finding is deferred instead of re-fixed in-gate.
-export const WORTH_FIXING_NOW_FIX_WINDOW = 3;
+// on, an open medium finding is deferred instead of re-fixed in-gate.
+export const MEDIUM_FIX_WINDOW = 3;
 
 // ---------------------------------------------------------------------------
 // Markers
@@ -85,19 +85,27 @@ function slugForMarker(value) {
 }
 
 // True when a finding at `severity`, reconciled against the CURRENT round, is
-// disposed as deferred: must-fix never defers; worth-fixing-now defers only
-// once the chain is past the in-gate fix window; nice-to-have always defers
-// immediately. Governs the THREAD disposition pass ONLY — a locatable
-// finding's round-gated fix window, decided through its own resolvable review
-// thread. Body-filed finding rendering (renderNonLocatableBlock) deliberately
-// does NOT call this: a body-filed finding never gets a thread to fix through,
-// so it is stamped deferred unconditionally at render time, regardless of round
-// (see that function's own comment).
-export function isDeferredAtRound(severity, round, worthFixingNowFixWindow = WORTH_FIXING_NOW_FIX_WINDOW) {
+// disposed as deferred: high never defers; medium defers only once the chain
+// is past the in-gate fix window; low always defers immediately; question
+// never defers (it is answered, not deferred — an unanswered question blocks
+// gate-close as an unresolved thread, exactly like an open defect); nit always
+// defers immediately, with no fixer cycle. An unrecognized severity fails
+// CLOSED (false, never auto-deferred): a malformed/forged marker must surface
+// as a dangling gate-authored thread that blocks gate-close, never get
+// silently stamped `disposition=deferred` and resolved through the same path
+// as a genuine low/nit finding. Governs the THREAD disposition pass
+// ONLY — a locatable finding's round-gated fix window, decided through its own
+// resolvable review thread. Body-filed finding rendering
+// (renderNonLocatableBlock) deliberately does NOT call this: a body-filed
+// finding never gets a thread to fix through, so it is stamped deferred
+// unconditionally at render time, regardless of round (see that function's own
+// comment).
+export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
-  if (sev === "must-fix") return false;
-  if (sev === "worth-fixing-now") return round > worthFixingNowFixWindow;
-  return true; // "nice-to-have" (and any legacy spelling of it)
+  if (!VALID_SEVERITIES.has(sev)) return false;
+  if (sev === "high" || sev === "question") return false;
+  if (sev === "medium") return round > mediumFixWindow;
+  return true; // "low" or "nit" (and any legacy spelling of either)
 }
 
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
@@ -176,9 +184,25 @@ export function collectFingerprints(text, set) {
 // One deterministic, round-trip-parseable line rendering a finding's
 // severity/angle/summary. Shared by inline comments (unblockquoted — inline
 // review comments are never scanned by the evidence checker) and body-filed
-// blocks (blockquoted by the caller).
+// blocks (blockquoted by the caller). `severity` is normalized (a legacy
+// spelling renders under its canonical replacement) AND sanitized. It renders
+// bare — "**${severity}**", never inside a code span — so it needs the same
+// bare-prose sanitizer (sanitizeInline) the verdict renderer's
+// sanitizeStructuredInline alias already applies to its own bare-prose
+// fields, not sanitizeCodeSpan (which leaves a raw `<` and the markdown
+// link/image bracket forms live): angle is wrapped in a code span below and
+// keeps sanitizeCodeSpan, summary already uses sanitizeInline. Sanitizing
+// severity also closes the blockquoted (renderNonLocatableBlock) caller's own
+// newline hazard: a newline inside "> **${severity}**" would put every
+// following field on its own un-blockquoted line, escaping the blockquote
+// this function's own callers document as load-bearing for the evidence
+// parser. normalizeSeverity alone is NOT that sanitizer — it only maps a
+// legacy spelling to its canonical name, it does not neutralize a hostile
+// character — so it is applied here in addition to, never instead of,
+// sanitizeInline.
 function renderFindingLine({ severity, angle, summary }) {
-  return `**${severity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
+  const safeSeverity = sanitizeInline(normalizeSeverity(severity));
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
 }
 
 function renderRecommendationLine(recommendation) {
@@ -191,9 +215,14 @@ function hasRecommendation(finding) {
 
 export function renderInlineCommentBody(finding, { round }) {
   const fp = fingerprintFinding(finding);
+  // Normalized ONCE and reused for both the marker and the rendered line
+  // (mirrors renderNonLocatableBlock below): a legacy-spelled severity must
+  // never render its retired spelling here while its own marker parses back
+  // as the canonical one.
+  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const lines = [
-    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round }),
-    renderFindingLine(finding),
+    buildFindingMarker({ fp, severity, angle: finding.angle, round }),
+    renderFindingLine({ ...finding, severity }),
   ];
   if (hasRecommendation(finding)) {
     lines.push(renderRecommendationLine(finding.recommendation));
@@ -210,23 +239,34 @@ export function renderInlineCommentBody(finding, { round }) {
 //
 // A body-filed finding never gets a resolvable thread (it lives in a review
 // body, not a review comment) and so never passes through the thread
-// disposition pass (which is where a THREADED worth-fixing-now finding gets
-// its round<=3 in-gate fix window before deferring). A body-filed finding has
+// disposition pass (which is where a THREADED medium finding gets its
+// round<=3 in-gate fix window before deferring). A body-filed finding has
 // no such window to begin with — there is no thread to fix it through — so it
 // is deferred BY CONSTRUCTION, at render time, regardless of round: every
-// non-must-fix severity (worth-fixing-now, nice-to-have) is stamped
-// disposition=deferred the moment it is posted. must-fix stays unstamped
-// (the ledger blocks a clean verdict on it; it is never body-filed as an
-// accepted outcome). This is what keeps the finding from being suppressed by
-// its own fingerprint (fingerprintFinding, matched back on a later run via
-// collectFingerprints) while tracked nowhere else (fingerprint suppression +
-// zero surface = permanent silent loss).
+// non-high severity (medium, low, nit) is stamped disposition=deferred the
+// moment it is posted. high stays unstamped (the ledger blocks a clean
+// verdict on it; it is never body-filed as an accepted outcome). A question is
+// also stamped deferred here for the same structural reason (no thread to
+// answer it through) — the answered/never-deferred contract only applies to a
+// LOCATABLE question's own resolvable thread. This is what keeps the finding
+// from being suppressed by its own fingerprint (fingerprintFinding, matched
+// back on a later run via collectFingerprints) while tracked nowhere else
+// (fingerprint suppression + zero surface = permanent silent loss).
 export function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
-  const disposition = finding.severity === "must-fix" ? undefined : "deferred";
+  // Normalized ONCE and reused for both the disposition decision and the
+  // marker: deciding disposition off a raw, un-normalized legacy spelling
+  // would misclassify it (e.g. "must-fix" !== "high"). The rendered
+  // "> **${severity}**" line goes through renderFindingLine below, which
+  // normalizes AND sanitizes severity again on its own — normalization alone
+  // is not a sanitizer, so this outer normalize is not what keeps a hostile
+  // (e.g. newline-bearing) severity out of the posted body; that guarantee
+  // lives in renderFindingLine's own sanitizeInline call on severity.
+  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
+  const disposition = severity === "high" ? undefined : "deferred";
   const lines = [
-    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round, disposition }),
-    `> ${renderFindingLine(finding)}`,
+    buildFindingMarker({ fp, severity, angle: finding.angle, round, disposition }),
+    `> ${renderFindingLine({ ...finding, severity })}`,
   ];
   if (hasRecommendation(finding)) {
     lines.push(`> ${renderRecommendationLine(finding.recommendation)}`);
@@ -280,8 +320,11 @@ export function buildCommentableLineSet(files) {
 }
 
 export function isLocatableFinding(finding, commentableSet) {
-  if (!Array.isArray(finding.files) || finding.files.length === 0) return false;
-  if (!Number.isInteger(finding.line) || finding.line < 1) return false;
+  // hasLocatableShape (@dev-loops/core/loop/gate-fanin) is the shared shape
+  // floor every producer/consumer of the locatable/non-locatable distinction
+  // uses; this adds the one thing only a caller holding the diff can check —
+  // whether that file:line actually falls inside it.
+  if (!hasLocatableShape(finding)) return false;
   return commentableSet.has(`${finding.files[0]}:${finding.line}`);
 }
 
@@ -426,8 +469,8 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
 /**
  * Count unresolved GATE-AUTHORED review threads — threads whose first comment
  * was authored by the gate's own login (`login`) and carries a parseable
- * `dev-loops:finding` marker (any severity: must-fix, worth-fixing-now, OR
- * nice-to-have). This is the gate-close predicate #1585 wires into
+ * `dev-loops:finding` marker (any severity: high, medium, low, question, OR
+ * nit). This is the gate-close predicate #1585 wires into
  * `fetchDraftGateEvidence`: a clean verdict alone no longer satisfies the
  * gate — every gate-authored thread must be resolved (fix-closed by the fixer
  * or defer-closed by the disposition pass) first.
@@ -519,7 +562,7 @@ export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
  * disagree about what counts as evidence.
  *
  * #1585: a clean verdict is NO LONGER sufficient to satisfy the gate. Every
- * gate-authored review thread (must-fix, worth-fixing-now, AND nice-to-have)
+ * gate-authored review thread (high, medium, low, question, AND nit)
  * must be resolved first — the fixer triages every gate-authored finding
  * (fix-if-cheap-in-the-same-commit, else defer) and the disposition pass
  * (close-gate-findings) defer-closes what remains — so the gate-close
@@ -646,7 +689,7 @@ export async function updateGateReview({ repo, pr, reviewId, body }, { env, ghCo
 // review, while historical rounds (and any hand-posted verdict) live on the
 // issue-comment stream, so a verdict for the SAME head can exist on both.
 // Deduping by head means that duplication can never inflate the round and end
-// the worth-fixing-now fix window early. A body that matches the header literal
+// the medium fix window early. A body that matches the header literal
 // but carries no parseable reviewed-head line contributes nothing — it cannot
 // be a genuine verdict for any distinguishable head, so it must not count.
 const REVIEWED_HEAD_SHA_RE = /^\*\*Reviewed head SHA:\*\*\s*`([0-9a-f]{7,64})`\s*$/m;

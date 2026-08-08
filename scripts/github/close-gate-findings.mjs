@@ -6,7 +6,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
-  WORTH_FIXING_NOW_FIX_WINDOW,
+  MEDIUM_FIX_WINDOW,
   countUnresolvedGateAuthoredThreads,
   fetchThreadsWithFullBodies,
   isDeferredAtRound,
@@ -24,13 +24,15 @@ Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO comment
 and NO review of its own: the round's single visible surface is the one PR review
 upsert-checkpoint-verdict.mjs already posted (verdict-marker body + inline finding
 comments). Here, every unresolved gate-authored finding thread is reconciled
-against the current round: must-fix always stays open (it never defers, forcing
-per-gate continuation until the gate round cap escalates); worth-fixing-now stays
-open through this gate's configured worth-fixing-now fix window (default
-${WORTH_FIXING_NOW_FIX_WINDOW}, set per gate via gates.<gate>.worthFixingNowFixWindow)
+against the current round: high always stays open (it never defers, forcing
+per-gate continuation until the gate round cap escalates); medium stays
+open through this gate's configured medium fix window (default
+${MEDIUM_FIX_WINDOW}, set per gate via gates.<gate>.mediumFixWindow)
 and is replied-to + resolved ("deferred at gate close") from the next round on;
-nice-to-have is replied-to + resolved at gate close (after the Phase 5 fixer
-triage; #1585). A deferred thread's marker is
+low is replied-to + resolved at gate close (after the Phase 5 fixer
+triage; #1585). question always stays open too — it is answered, never deferred,
+so an unanswered question blocks gate-close exactly like an open defect; nit is
+replied-to + resolved immediately, with no fixer cycle. A deferred thread's marker is
 stamped \`disposition=deferred\` before it is resolved, so the deferral disposition
 lives on the thread itself and in the durable tmp ledger.
 
@@ -72,14 +74,18 @@ function parseError(message) {
 // Disposition pass
 // ---------------------------------------------------------------------------
 
-// The window/disposition reason named in the reply: a worth-fixing-now thread
-// deferred because it stayed open past the in-gate fix window vs. a
-// nice-to-have finding that is never fix-windowed at all.
-function windowReason(severity, worthFixingNowFixWindow) {
-  if (severity === "worth-fixing-now") {
-    return `stayed open past this gate's round-${worthFixingNowFixWindow} worth-fixing-now fix window`;
+// The window/disposition reason named in the reply: a medium thread deferred
+// because it stayed open past the in-gate fix window vs. a low finding that is
+// never fix-windowed at all, vs. a nit that never enters the fixer cycle to
+// begin with.
+function windowReason(severity, mediumFixWindow) {
+  if (severity === "medium") {
+    return `stayed open past this gate's round-${mediumFixWindow} medium fix window`;
   }
-  return "nice-to-have findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer; #1585)";
+  if (severity === "nit") {
+    return "nit findings are deferred immediately at gate close, with no fixer cycle";
+  }
+  return "low findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer; #1585)";
 }
 
 // Every deferral reply is distinct by construction through the thread's own
@@ -88,16 +94,16 @@ function windowReason(severity, worthFixingNowFixWindow) {
 // reply body even when a caller batches several deferrals in one pass — unlike
 // a FIX-closing reply (COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER), nothing here
 // names a "fix" because nothing was fixed.
-function dispositionMessage({ fp, severity, angle, round, worthFixingNowFixWindow }) {
-  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${windowReason(severity, worthFixingNowFixWindow)}; the deferral is recorded on this thread's marker and in the durable findings ledger.`;
+function dispositionMessage({ fp, severity, angle, round, mediumFixWindow }) {
+  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${windowReason(severity, mediumFixWindow)}; the deferral is recorded on this thread's marker and in the durable findings ledger.`;
 }
 
 // Every currently-unresolved gate-authored thread, whether newly posted this
 // round or carried open from an earlier one, is reconciled against the
-// CURRENT round — not the round recorded on its own marker. A worth-fixing-now
+// CURRENT round — not the round recorded on its own marker. A medium
 // finding first raised at round 1 and still open when the chain reaches round
 // 4 is deferred then, exactly like one raised fresh at round 4.
-function selectDispositionTargets(threads, round, login, worthFixingNowFixWindow) {
+function selectDispositionTargets(threads, round, login, mediumFixWindow) {
   const targets = [];
   for (const thread of threads) {
     if (thread.isResolved) continue;
@@ -111,7 +117,7 @@ function selectDispositionTargets(threads, round, login, worthFixingNowFixWindow
     if (thread.author !== login) continue;
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue; // author matches, but carries no parseable finding marker
-    if (!isDeferredAtRound(marker.severity, round, worthFixingNowFixWindow)) continue;
+    if (!isDeferredAtRound(marker.severity, round, mediumFixWindow)) continue;
     // commentId is null whenever list-review-threads.mjs could not resolve a
     // finite databaseId for the thread's first comment. Reject it here, named
     // by threadId, rather than let it reach stampDeferredDisposition and
@@ -126,7 +132,7 @@ function selectDispositionTargets(threads, round, login, worthFixingNowFixWindow
 }
 
 // Stamp `disposition=deferred` onto the thread's line-1 marker before the
-// resolve, so a deferred thread is distinguishable from a worth-fixing-now
+// resolve, so a deferred thread is distinguishable from a medium
 // thread the fix loop resolved with a fixing commit. The already-stamped guard
 // parses the marker's own `disposition` field (not a free-text
 // `/disposition=deferred/` body search): a finding whose own summary or
@@ -156,15 +162,15 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
 // fetched alongside `threads` (fetchThreadsWithFullBodies) — reused here as
 // the reply-target validation snapshot rather than re-fetching it, since it is
 // already fresh (fetched immediately before this pass runs).
-async function runDispositionPass({ repo, pr, round, threads, snapshot, login, worthFixingNowFixWindow }, { env, ghCommand }) {
-  const targets = selectDispositionTargets(threads, round, login, worthFixingNowFixWindow);
+async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow }, { env, ghCommand }) {
+  const targets = selectDispositionTargets(threads, round, login, mediumFixWindow);
   if (targets.length === 0) {
     return { deferredResolved: 0 };
   }
   let deferredResolved = 0;
   for (const target of targets) {
     await stampDeferredDisposition({ repo, commentId: target.commentId }, { env, ghCommand });
-    const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, worthFixingNowFixWindow });
+    const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow });
     await replyAndMaybeResolve(
       { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
       { env, ghCommand },
@@ -247,36 +253,38 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const issueComments = await listIssueComments({ repo, pr }, gh);
   const round = await resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot, repoRoot });
 
-  // 3. Resolve this gate's per-gate worth-fixing-now fix window (#1581): the
+  // 3. Resolve this gate's per-gate medium fix window (#1581): the
   // disposition pass honors the configured window instead of the hardcoded
   // constant. loadDevLoopConfig never throws; on schema-validation failure it
   // returns the merged (possibly unvalidated) config with a non-empty errors
-  // array. When that happens, fall back to the built-in WORTH_FIXING_NOW_FIX_WINDOW
+  // array. When that happens, fall back to the built-in MEDIUM_FIX_WINDOW
   // (window 3) so an unloadable/broken config fails open to the historic behavior
   // rather than trusting an unvalidated value.
   const { config, errors } = await loadDevLoopConfig({ repoRoot });
   const gateConfigKey = GATE_CONFIG_KEY[gate] ?? gate;
-  const worthFixingNowFixWindow =
+  const mediumFixWindow =
     errors.length > 0
-      ? WORTH_FIXING_NOW_FIX_WINDOW
-      : resolveGateConfig(config, gateConfigKey).worthFixingNowFixWindow;
+      ? MEDIUM_FIX_WINDOW
+      : resolveGateConfig(config, gateConfigKey).mediumFixWindow;
 
   // 4. Thread snapshot for the disposition pass. A carried-open thread from an
   // earlier round must be reconciled against THIS round regardless of whether
   // this round posted anything of its own.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
   const { deferredResolved } = await runDispositionPass(
-    { repo, pr, round, threads, snapshot, login, worthFixingNowFixWindow },
+    { repo, pr, round, threads, snapshot, login, mediumFixWindow },
     gh,
   );
 
   // #1585: report gate-authored threads still unresolved AFTER the defer pass.
-  // The defer pass resolves exactly the deferrable subset (nice-to-haves and
-  // out-of-window worth-fixing-now threads — the targets selectDispositionTargets
-  // returned, counted by deferredResolved), so the remaining unresolved
+  // The defer pass resolves exactly the deferrable subset (low, nit, and
+  // out-of-window medium threads — the targets selectDispositionTargets
+  // returned, counted by deferredResolved; question is never a target, since
+  // isDeferredAtRound never selects it), so the remaining unresolved
   // gate-authored count is the pre-defer total minus that resolved count —
-  // i.e. must-fix the fixer has not yet fix-closed, in-window worth-fixing-now,
-  // or any gate-authored thread the fixer triaged but did not yet close. The
+  // i.e. high the fixer has not yet fix-closed, in-window medium, an
+  // unanswered question, or any gate-authored thread the fixer triaged but did
+  // not yet close. The
   // gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses to
   // mark ready while this is non-zero, so a clean verdict can never again leave
   // a gate-authored thread dangling. Computed in-memory from the pre-defer

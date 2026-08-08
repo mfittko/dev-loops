@@ -3,8 +3,8 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
-// Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
-import { SEVERITY_ORDER, VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+// Severity vocabulary and its most-urgent-first ordering are owned by gate-fanin.
+import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -38,11 +38,10 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 
-const SEVERITY_LABELS = {
-  "must-fix": "Must fix",
-  "worth-fixing-now": "Worth fixing now",
-  "nice-to-have": "Nice to have",
-};
+// Derived from SEVERITY_ORDER (never hand-copied) so a severity added there
+// is automatically labeled — a hand-copied map would silently render
+// "#### undefined (N)" for any severity it forgot.
+const SEVERITY_LABELS = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, s.charAt(0).toUpperCase() + s.slice(1)]));
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -84,7 +83,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     f = { ...f, severity: normalizeSeverity(f.severity) };
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
       throw parseError(`${flagLabel}[${i}].angle is required`);
@@ -97,16 +96,22 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
-    if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
-      entry.disposition = f.disposition.trim();
-    } else if (f.severity === "nice-to-have") {
-      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
-      // non-blocking nice-to-have finding with no explicit disposition defaults
-      // to "deferred" rather than rendering with no disposition suffix.
-      entry.disposition = "deferred";
-    }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
+    }
+    if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
+      entry.disposition = f.disposition.trim();
+    } else if (isDefaultDeferrableSeverity(f.severity)) {
+      // Routes through the SAME shared rule (deriveDisposition,
+      // @dev-loops/core/loop/gate-fanin) every producer uses: a LOCATABLE
+      // question (hasLocatableShape) defaults to "needs-answer", non-locatable
+      // to "deferred" — see that function's own doc for the full rule. This
+      // shape carries no `line` field at all (see USAGE above), so a question
+      // here can never be proven locatable and always resolves to "deferred".
+      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
+      // producer and write-gate-findings-log.mjs's own validator both route
+      // through, so the two can never restate it out of sync.
+      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     return entry;
   });
@@ -304,7 +309,11 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
     grouped.set(sev, []);
   }
   for (const finding of findings) {
-    grouped.get(finding.severity).push(finding);
+    // Normalize defensively: this function's real caller (resolveFindings /
+    // validateFindingsArray, above) always normalizes first, but a legacy
+    // severity spelling reaching this grouping loop unnormalized must still
+    // render under its canonical group rather than throw.
+    grouped.get(normalizeSeverity(finding.severity)).push(finding);
   }
   for (const sev of SEVERITY_ORDER) {
     const group = grouped.get(sev);

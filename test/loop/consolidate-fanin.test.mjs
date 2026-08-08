@@ -14,6 +14,12 @@ import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { runNode } from "../_helpers.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
+
 // Drive the REAL renderer upsert-checkpoint-verdict.mjs itself uses — the
 // structured findings sub-block is what enforcePostedCommentLimit bounds at
 // 2000 chars (and throws above), not the whole comment body (which also
@@ -203,7 +209,7 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
           { angle: "scope", verdict: "clean", findingCount: 0 },
         ],
       );
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "nice-to-have": 0 });
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 1, low: 0, question: 0, nit: 0 });
       assert.equal(result.findings.length, 2);
       for (const finding of result.findings) {
         assert.ok(typeof finding.angle === "string" && finding.angle.length > 0);
@@ -248,10 +254,10 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
         findingsJson: [{
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
+          findings: [{ severity: "high", summary: "x", disposition: "accepted-for-fix" }],
         }],
-        findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
-        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 },
+        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        severityCounts: { high: 1, medium: 0, low: 0, question: 0, nit: 0 },
         overallVerdict: "findings_present",
       });
     },
@@ -304,7 +310,7 @@ test("consolidateGateFanin echoes verdict, severityCounts, and both written arti
       const ledgerPath = path.join(dir, "out", "ledger.json");
       const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
       assert.equal(result.overallVerdict, "findings_present");
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
       assert.equal(result.out, outPath);
       assert.equal(result.ledgerOut, ledgerPath);
       // Both echoed paths are real, already-written files — a caller never
@@ -332,7 +338,7 @@ test("consolidate-fanin CLI: one invocation with --out/--ledger-out/--jq writes 
           ["--findings-dir", dir, "--out", outPath, "--ledger-out", ledgerPath, "--jq", ".severityCounts"],
         );
         assert.equal(cliResult.code, 0, cliResult.stderr);
-        assert.deepEqual(JSON.parse(cliResult.stdout), { "must-fix": 1, "worth-fixing-now": 0, "nice-to-have": 0 });
+        assert.deepEqual(JSON.parse(cliResult.stdout), { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
         assert.ok(JSON.parse(await readFile(outPath, "utf8")));
         assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
       } finally {
@@ -1097,7 +1103,7 @@ test("consolidateGateFanin derives a deferred disposition for nice-to-have findi
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
       assert.equal(result.findings.length, 1);
-      assert.equal(result.findings[0].severity, "nice-to-have");
+      assert.equal(result.findings[0].severity, "low"); // "nice-to-have" input normalizes to canonical "low"
       assert.equal(result.findings[0].disposition, "deferred");
     },
   );
@@ -1160,7 +1166,7 @@ test("consolidateGateFanin includes a symlinked *.json artifact (not silently dr
 
     const result = await consolidateGateFanin({ findingsDir: dir });
     assert.equal(result.overallVerdict, "findings_present");
-    assert.equal(result.severityCounts["must-fix"], 1);
+    assert.equal(result.severityCounts.high, 1); // "must-fix" input normalizes to canonical "high"
     assert.ok(result.angles.some((a) => a.angle === "correctness"), "symlinked angle must be present, not dropped");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1382,13 +1388,22 @@ test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an 
       artifact: { angle: "scope", verdict: "blocked", findings: [] },
       detailPattern: /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
     },
-    "padded-severity": {
-      artifact: {
-        angle: "scope",
-        verdict: "findings_present",
-        findings: [{ severity: " must-fix ", summary: "padded" }],
-      },
-      detailPattern: /scope: angle 'scope' has a finding with invalid severity/,
+    // #1592: incidental whitespace around a RECOGNIZED severity is no longer
+    // invalid (normalizeSeverity trims — but does NOT lowercase — before the
+    // alias lookup; see gate-fanin.test.mjs's own
+    // normalizeSeverity("HIGH") === "HIGH" pin, and the sibling "a severity
+    // with incidental whitespace..." test in gate-fanin.test.mjs), and an
+    // unrecognized severity token is now caught earlier, by this CLI's OWN
+    // artifact-shape floor (a distinct,
+    // unwrapped Error — not routed through consolidateFanin's "fan-in is
+    // blocked" wrapper), which is exactly what a stricter shared floor should
+    // do. This variant instead exercises a malformation the floor does NOT
+    // check but consolidateFanin's OWN validation does — a mismatched
+    // verdict/findings-count pair — so this test still pins two DISTINCT
+    // "fan-in is blocked" detail messages.
+    "findings-present-with-no-findings": {
+      artifact: { angle: "scope", verdict: "findings_present", findings: [] },
+      detailPattern: /scope: angle 'scope' reported findings_present but has no findings/,
     },
   };
   for (const [name, { artifact: badArtifact, detailPattern }] of Object.entries(variants)) {
@@ -1692,7 +1707,9 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // just a count) for a specific finding.
     const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
     assert.equal(result.findings.length, totalFindings);
-    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, "nice-to-have": 1 });
+    // Legacy-spelled input ("worth-fixing-now"/"must-fix"/"nice-to-have")
+    // normalizes to the canonical output vocabulary.
+    assert.deepEqual(result.severityCounts, { high: 1, medium: totalFindings - 2, low: 1, question: 0, nit: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
     assert.deepEqual(writtenLedger, result.findings);
     assert.equal(writtenLedger.length, totalFindings);
@@ -1720,20 +1737,21 @@ test("a fan-in too large to render at minimum summary length still writes a comp
       assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
       assert.match(marker, /— in the disposition ledger/);
       if (angle === MIXED_ANGLE) {
-        // Highest-severity-wins: must-fix beats worth-fixing-now/defer, and
+        // Highest-severity-wins: high beats medium/low, and
         // the marker's own disposition matches that severity's derivation
         // (accepted-for-fix — the default blockCleanOnFindingSeverities is
-        // ["must-fix"]).
-        assert.match(marker, /must-fix: 1/);
-        assert.match(marker, /worth-fixing-now: 28/);
-        assert.match(marker, /nice-to-have: 1/);
-        assert.equal(section.findings[0].severity, "must-fix");
+        // ["high"]). Legacy-spelled input ("must-fix"/"worth-fixing-now"/
+        // "nice-to-have") normalizes to the canonical output vocabulary.
+        assert.match(marker, /high: 1/);
+        assert.match(marker, /medium: 28/);
+        assert.match(marker, /low: 1/);
+        assert.equal(section.findings[0].severity, "high");
         assert.equal(section.findings[0].disposition, "accepted-for-fix");
       } else {
-        assert.match(marker, /must-fix: 0/);
-        assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
-        assert.match(marker, /nice-to-have: 0/);
-        assert.equal(section.findings[0].severity, "worth-fixing-now");
+        assert.match(marker, /high: 0/);
+        assert.match(marker, new RegExp(`medium: ${FINDINGS_PER_ANGLE}`));
+        assert.match(marker, /low: 0/);
+        assert.equal(section.findings[0].severity, "medium");
         assert.equal(section.findings[0].disposition, "deferred");
       }
     }
@@ -1825,7 +1843,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     // "correctness" keeps its REAL finding (severity + file + line), not a marker.
     const correctnessFinding = byAngle.get("correctness").findings[0];
-    assert.equal(correctnessFinding.severity, "must-fix");
+    assert.equal(correctnessFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(correctnessFinding.file, "foo.mjs");
     assert.equal(correctnessFinding.line, 12);
     // Full, UN-shrunk text — not just a startsWith prefix, which a
@@ -1884,7 +1902,7 @@ test("a narrow angle whose real findings render cheaper than its own bare marker
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "must-fix");
+    assert.equal(narrowFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(narrowFinding.summary, "x", "the narrow angle's real (un-shrunk, un-marked) summary must survive");
     assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "the narrow angle must not be marker-collapsed even though it never entered the upgrade loop");
     assertRendersWithoutThrowing(result.findingsJson);
@@ -1928,7 +1946,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "worth-fixing-now");
+    assert.equal(narrowFinding.severity, "medium"); // "worth-fixing-now" input normalizes to canonical "medium"
     assert.ok(narrowFinding.summary.length < originalSummary.length, "the original, un-shrunk summary must not have survived (too long to fit)");
     assert.ok(originalSummary.startsWith(narrowFinding.summary.replace(/ …$/, "")), "the emitted summary must be a truncated PREFIX of the original real text");
     assert.ok(narrowFinding.summary.endsWith(" …"), "a truncated-real candidate ends with the plain ellipsis suffix, distinguishing it from an omitted-count marker");
@@ -1988,7 +2006,14 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
 // above.
 test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 20;
+  // #1592: the canonical severity spellings (e.g. "medium") are shorter than
+  // the pre-rename ones (e.g. "worth-fixing-now"), so a per-angle count
+  // calibrated to the OLD word lengths could tip a single angle's verbose
+  // marker back under the render budget. 23 (rather than 20) angles keeps
+  // this fixture calibrated to the ALL-BARE tier under the new spellings —
+  // still over budget for even a single verbose marker, but not yet over
+  // budget for the withheld tier (see the sibling test right below this one).
+  const ANGLE_COUNT = 23;
   const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
@@ -2016,7 +2041,11 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
 // ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
 // reverted behavior) would spend the verbose budget on defer-only angles and
 // leave the must-fix angle bare. Reverting the severity-first ordering back
-// to plain index order fails this test.
+// to plain index order fails this test. Both severities are LEGACY spellings
+// ("must-fix"/"nice-to-have") — this also pins angleWorstSeverityRank
+// ranking correctly on a legacy-spelled artifact (consolidateFanin
+// normalizes on the way in, so this exercises the same end-to-end path a
+// live pre-rename reviewer artifact would take).
 test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const DEFER_ANGLE_COUNT = 13;
@@ -2058,6 +2087,57 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
 
     // Sanity: this fixture really does force at least one angle to bare —
     // otherwise the test would pass even with the old, unfixed ordering.
+    const bareCount = [...byAngle.values()].filter(
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
+    ).length;
+    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
+  });
+});
+
+// #1592: SEVERITY_ORDER ranks "question" ahead of "medium" (both defer/
+// answer eventually, but a question keeps gate-close blocked the same way a
+// defect does) — angleWorstSeverityRank must give the scarce verbose-marker
+// budget to a question-carrying angle before a medium-only one, mirroring the
+// must-fix-vs-defer-only case above.
+test("the question-carrying angle wins the scarce verbose-marker budget over medium-only angles", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const MEDIUM_ANGLE_COUNT = 13;
+  const files = {};
+  for (let i = 0; i < MEDIUM_ANGLE_COUNT; i++) {
+    files[`d${String(i).padStart(2, "0")}.json`] = {
+      angle: `medium-angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "medium",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  files["z-question.json"] = {
+    angle: "question-angle",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "question",
+      summary: `finding question-${j} ${"z".repeat(150)}`,
+      file: "src/fquestion.mjs",
+      line: j + 1,
+    })),
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const questionSummary = byAngle.get("question-angle").findings[0].summary;
+    assert.match(
+      questionSummary,
+      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
+      "the question-carrying angle must keep the verbose breakdown",
+    );
+
     const bareCount = [...byAngle.values()].filter(
       (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
     ).length;

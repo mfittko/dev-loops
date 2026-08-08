@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -100,7 +100,7 @@ Required:
                                             finding's disposition is "disputed" or
                                             "operator_acknowledged"; every other
                                             disposition (missing, "accepted-for-fix",
-                                            "deferred", or an unrecognized string)
+                                            "deferred", "needs-answer", or an unrecognized string)
                                             still trips this check.
   --next-action <text>
 Optional:
@@ -146,11 +146,11 @@ Optional:
                                             refinement.maxCopilotRounds) instead of
                                             refinement.maxCopilotRounds alone.
   --findings-severity-counts <json>         JSON object mapping severity to count
-                                             (e.g. '{"must-fix":0,"worth-fixing-now":0}').
+                                             (e.g. '{"high":0,"medium":0}').
                                              Required for --verdict clean when
                                              blockCleanOnFindingSeverities is configured.
                                              Also, when given alongside --findings-json, its
-                                             known-severity (must-fix/worth-fixing-now/nice-to-have)
+                                             known-severity (high/medium/low/question/nit)
                                              values are SUMMED and used as the posted
                                              "Findings summary:" total whenever that sum is
                                              HIGHER than --findings-json's own (possibly
@@ -592,7 +592,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
 // if this set ever drifts to include a value VALID_DISPOSITIONS does not (a
 // typo here), rather than drifting the other way (fail-open) as a derived set
 // would. Anything outside this set — missing, "accepted-for-fix", "deferred",
-// or an unrecognized/typo'd string — must still count as blocking.
+// "needs-answer", or an unrecognized/typo'd string — must still count as blocking.
 const RESOLVED_DISPOSITIONS = new Set(["disputed", "operator_acknowledged"]);
 for (const disposition of RESOLVED_DISPOSITIONS) {
   if (!VALID_DISPOSITIONS.has(disposition)) {
@@ -652,20 +652,14 @@ function normalizeStructuredFinding(f) {
   }
   return entry;
 }
-// Map a severity to its sort rank. Known severities follow
-// SEVERITY_ORDER (must-fix → worth-fixing-now → nice-to-have);
-// unknown/missing severities map to a LARGE rank so they sort LAST, never
-// before must-fix. (indexOf alone would give an unknown severity rank -1,
-// floating it ABOVE must-fix and hiding the highest-priority items below it.)
-function severitySortRank(severity) {
-  const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
-  return idx === -1 ? SEVERITY_ORDER.length : idx;
-}
-// Sort findings by severity (must-fix first, unknown/missing last) for
+// Sort findings by severity (high first, unknown/missing last) for
 // deterministic output, preserving input order within a severity.
+// severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule this
+// and consolidate-fanin.mjs's angleWorstSeverityRank both share, so the two
+// can never drift on how an unknown severity ranks.
 function sortStructuredFindings(findings) {
   findings.sort(
-    (a, b) => severitySortRank(a.severity) - severitySortRank(b.severity),
+    (a, b) => severityRank(a.severity) - severityRank(b.severity),
   );
   return findings;
 }
@@ -836,7 +830,7 @@ export function renderStructuredFindings(angles) {
     // severity/verdict/disposition are enum labels, never prose — rendered
     // inside a backtick code span (like the angle label and file ref already
     // are) rather than bare, so a reviewer-supplied value crafted to look like
-    // markdown link/image syntax (e.g. a severity of `must-fix](url)`) cannot
+    // markdown link/image syntax (e.g. a severity of `high](url)`) cannot
     // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
     // strips any backtick from the value first, so the span it is wrapped in
     // below can never be prematurely closed by the value's own content.
@@ -1518,7 +1512,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   ) {
     if (!options.findingsSeverityCounts) {
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
+        `Cannot set verdict "clean" for ${options.gate}: --findings-severity-counts is required to verify that no unresolved blocking severities remain (example: --findings-severity-counts '{"high":0,"medium":0,"low":0,"question":0,"nit":0}') (blocking: [${activeGateConfig.blockCleanOnFindingSeverities.join(", ")}]).`,
       );
     }
     const missingBlockingKeys = activeGateConfig.blockCleanOnFindingSeverities.filter(
@@ -1584,7 +1578,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // ("disputed"/"operator_acknowledged", write-gate-findings-log.mjs's
   // sanctioned vocabulary for a blocking finding the fix cycle/operator has
   // already closed out without changing its severity). Every other value —
-  // missing, "accepted-for-fix", "deferred", or an unrecognized/typo'd string
+  // missing, "accepted-for-fix", "deferred", "needs-answer", or an unrecognized/typo'd string
   // — counts as still unresolved, so an arbitrary disposition can never
   // silently exempt a blocking finding.
   if (

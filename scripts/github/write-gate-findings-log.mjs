@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -47,7 +47,11 @@ function normalizeVerdict(value) {
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
 // RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
 // disposition vocabulary instead of hand-copying it out of sync.
-export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "disputed", "operator_acknowledged"]);
+// "needs-answer" is the disposition a "question" severity finding gets
+// (@dev-loops/core/loop/gate-fanin's consolidateFanin): a question is
+// answered, never deferred or fixed, so it needs its own disposition rather
+// than being forced into "deferred" like every other non-blocking finding.
+export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
@@ -61,7 +65,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     const severity = normalizeSeverity(f.severity);
     if (!severity || !VALID_SEVERITIES.has(severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: must-fix, worth-fixing-now, nice-to-have`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}`);
     }
     f = { ...f, severity };
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
@@ -75,31 +79,47 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
-    if ("disposition" in f) {
-      if (typeof f.disposition !== "string" || f.disposition.trim().length === 0) {
-        throw parseError(`${flagLabel}[${i}].disposition must be a non-empty string`);
-      }
-      const disp = f.disposition.trim();
-      if (!VALID_DISPOSITIONS.has(disp)) {
-        throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, disputed, operator_acknowledged`);
-      }
-      entry.disposition = disp;
-    } else if (f.severity === "nice-to-have") {
-      // A non-blocking nice-to-have finding with no explicit disposition
-      // defaults to "deferred" so a hand-authored (or consolidate-fanin.mjs-
-      // produced) array need not repeat the obvious disposition for every
-      // lowest-tier entry. Explicit dispositions (including an explicit
-      // "deferred") always keep the validation above unchanged.
-      entry.disposition = "deferred";
-    }
     if (Array.isArray(f.files)) {
-      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
+      // Trimmed, not just filtered: an untrimmed files[0] (e.g. " src/a.mjs ")
+      // would still count as locatable-SHAPED (hasLocatableShape only checks
+      // non-empty, not exact form) while every downstream consumer that keys
+      // on the raw value (the diff's commentable-line set lookup, the posted
+      // review `path`, renderNonLocatableBlock's Location line) compares
+      // against the TRIMMED form — an untrimmed entry would derive
+      // "needs-answer"/locatable here yet never actually match a real
+      // in-diff position later, silently downgrading it back to
+      // non-locatable at a different layer instead of agreeing everywhere.
+      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
     }
     if ("line" in f) {
       if (!Number.isInteger(f.line) || f.line < 1) {
         throw parseError(`${flagLabel}[${i}].line must be a positive integer`);
       }
       entry.line = f.line;
+    }
+    if ("disposition" in f) {
+      if (typeof f.disposition !== "string" || f.disposition.trim().length === 0) {
+        throw parseError(`${flagLabel}[${i}].disposition must be a non-empty string`);
+      }
+      const disp = f.disposition.trim();
+      if (!VALID_DISPOSITIONS.has(disp)) {
+        throw parseError(`${flagLabel}[${i}].disposition must be one of: ${[...VALID_DISPOSITIONS].join(", ")}`);
+      }
+      entry.disposition = disp;
+    } else if (isDefaultDeferrableSeverity(f.severity)) {
+      // A non-blocking low/nit finding with no explicit disposition defaults
+      // to "deferred" so a hand-authored (or consolidate-fanin.mjs-produced)
+      // array need not repeat the obvious disposition for every lowest-tier
+      // entry. A question routes through the SAME shared rule
+      // (deriveDisposition, @dev-loops/core/loop/gate-fanin) every other
+      // producer uses: LOCATABLE (hasLocatableShape) defaults to
+      // "needs-answer", non-locatable to "deferred" — see that function's
+      // own doc for the full rule. Explicit dispositions (including an
+      // explicit "deferred") always keep the validation above unchanged.
+      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
+      // producer and post-gate-findings.mjs's own validator both route
+      // through, so the two can never restate it out of sync.
+      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     if ("resolvedIn" in f) {
       if (typeof f.resolvedIn !== "string" || f.resolvedIn.trim().length === 0) {

@@ -13,6 +13,11 @@ import {
 import { buildFindingMarker, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 const SCRIPT_PATH = path.join(process.cwd(), "scripts/github/close-gate-findings.mjs");
 const REPO = "owner/repo";
 const PR = 42;
@@ -488,6 +493,51 @@ test("an unresolved nice-to-have thread is replied-to + resolved immediately, at
   ));
 });
 
+// #1592: a nit thread defer-closes immediately at round 1, exactly like a
+// low finding, but with its own window-reason text (no fixer cycle at all).
+test("an unresolved nit thread is replied-to + resolved immediately, at round 1", async () => {
+  const nitBody = `${buildFindingMarker({ fp: "9999999999999999", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_NIT", path: "src/naming.mjs", line: 4, commentId: 6250, body: nitBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      getReviewCommentEntry(6250, nitBody),
+      patchReviewCommentEntry(6250),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6250/replies`, "--input", "-"],
+        assertStdinIncludes: ["severity nit", "nit findings are deferred immediately at gate close, with no fixer cycle"],
+        stdout: `${JSON.stringify({ id: 7150, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7150` })}\n`,
+      },
+      resolveThreadEntry("THREAD_NIT"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// #1592: a question thread is NEVER auto-defer-closed — it is answered, never
+// deferred — so it must still count as unresolved after the disposition pass
+// runs (isDeferredAtRound never selects it as a target).
+test("an unresolved question thread is never auto-defer-closed (still blocks gate-close)", async () => {
+  const questionBody = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
+  const thread = threadNode({ id: "THREAD_QUESTION", path: "src/scope.mjs", line: 4, commentId: 6260, body: questionBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries stubbed: the disposition pass must never call
+    // them for a question thread — withGhStub fails the test if an
+    // unexpected gh invocation is made.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 // A pre-rename thread stamped severity=defer normalizes on read: the posted
 // deferral reply names the canonical tier, never the retired spelling.
 test("a legacy severity=defer marker posts a reply in the canonical vocabulary", async () => {
@@ -500,7 +550,7 @@ test("a legacy severity=defer marker posts a reply in the canonical vocabulary",
       patchReviewCommentEntry(6300),
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity nice-to-have", "nice-to-have findings are deferred at gate close after the fixer triaged them"],
+        assertStdinIncludes: ["severity low", "low findings are deferred at gate close after the fixer triaged them"],
         assertStdinNotIncludes: ["severity defer,", "defer-severity"],
         stdout: `${JSON.stringify({ id: 7200, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7200` })}\n`,
       },

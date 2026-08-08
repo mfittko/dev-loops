@@ -253,14 +253,17 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",
@@ -268,9 +271,13 @@
                 ]
               }
             },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
             "worthFixingNowFixWindow": {
-              "default": 3,
-              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
               "minimum": 0
             },
@@ -435,14 +442,17 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",
@@ -450,9 +460,13 @@
                 ]
               }
             },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
             "worthFixingNowFixWindow": {
-              "default": 3,
-              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
               "minimum": 0
             },
@@ -617,14 +631,17 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict. \"defer\" is the deprecated legacy spelling of \"nice-to-have\" (deferral is a fixer disposition, not a severity); consumers normalize it.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
                   "nice-to-have",
@@ -632,9 +649,13 @@
                 ]
               }
             },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
             "worthFixingNowFixWindow": {
-              "default": 3,
-              "description": "Per-gate worth-fixing-now fix window: an open worth-fixing-now finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. must-fix is exempt (never defers). Default 3.",
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
               "minimum": 0
             },

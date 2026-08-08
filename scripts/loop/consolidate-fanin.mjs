@@ -20,7 +20,7 @@
  *   }
  * `disposition` on an input finding is IGNORED — consolidateFanin() always
  * DERIVES it from severity (accepted-for-fix for a blocking severity,
- * deferred otherwise). It is accepted on the input shape only so a reviewer's
+ * needs-answer for a LOCATABLE question, deferred otherwise). It is accepted on the input shape only so a reviewer's
  * own artifact schema round-trips without a separate strip step. A
  * reviewer-provided `recommendation` IS carried through to both output shapes
  * unchanged (truncated only if it exceeds the length cap below).
@@ -57,7 +57,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -85,7 +85,7 @@ Optional:
                                  from a fresh verdict at the reviewed head.
   --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
                                  worktree's config and applies gates.<gate>.blockCleanOnFindingSeverities
-                                 to the overall verdict (default when omitted: ["must-fix"]). When given,
+                                 to the overall verdict (default when omitted: ["high"]). When given,
                                  a config that could not be fully loaded/validated FAILS CLOSED (exit 1)
                                  rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
@@ -151,7 +151,7 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
-    "severityCounts": { "must-fix", "worth-fixing-now", "nice-to-have" },
+    "severityCounts": { "high", "medium", "low", "question", "nit" },
     "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true,
     "out"?: "<path>", "ledgerOut"?: "<path>" }
   "out"/"ledgerOut" echo the --out/--ledger-out path back onto the result ONLY when this call actually
@@ -173,7 +173,7 @@ Output (stdout, JSON):
   --findings-file, and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
   true, unbudgeted totals across every finding, independent of any marking applied to "findingsJson"
   below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
-  blocking severity, deferred otherwise) — an input finding's own "disposition" is never honored,
+  blocking severity, needs-answer for a LOCATABLE question, deferred otherwise) — an input finding's own "disposition" is never honored,
   including on a budget-marker finding (below). A reviewer-provided "recommendation" is carried
   through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars,
   or "file" longer than 300 chars, is truncated with a plain " …" suffix (never a "[truncated N
@@ -302,16 +302,23 @@ function fitFindingsToRenderBudget(findingsJson) {
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
   const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
+  // Normalized defensively, same as angleWorstSeverityRank's sibling
+  // normalization above: findingsJson is always consolidateFanin's own
+  // OUTPUT (already normalized) through every call site today, but this
+  // function must not silently drop a differently-spelled severity from the
+  // breakdown/representative selection (or, worse, leak a legacy spelling
+  // into the posted marker text) if that upstream guarantee ever lapses.
   for (const f of a.findings) {
-    if (Object.hasOwn(bySeverity, f.severity)) bySeverity[f.severity] += 1;
+    const severity = normalizeSeverity(f.severity);
+    if (Object.hasOwn(bySeverity, severity)) bySeverity[severity] += 1;
   }
   // Represent the angle by its own highest-severity dropped finding — same
   // severity+disposition pairing consolidateFanin already derived, so the
   // marker's "disposition" still matches every other findingsJson finding's
   // severity-derived disposition (accepted-for-fix for a blocking severity,
-  // deferred otherwise).
+  // needs-answer for a LOCATABLE question, deferred otherwise).
   const representative = SEVERITY_ORDER
-    .map((s) => a.findings.find((f) => f.severity === s))
+    .map((s) => a.findings.find((f) => normalizeSeverity(f.severity) === s))
     .find(Boolean) ?? a.findings[0];
   // Built from SEVERITY_ORDER (not hand-listed severity names) so a severity
   // added there is automatically included in the breakdown instead of being
@@ -324,7 +331,7 @@ function buildAngleMarker(a, verbose) {
   return {
     angle: a.angle,
     verdict: a.verdict,
-    findings: [{ severity: representative.severity, summary, disposition: representative.disposition }],
+    findings: [{ severity: normalizeSeverity(representative.severity), summary, disposition: representative.disposition }],
   };
 }
 
@@ -341,15 +348,21 @@ function buildAngleMarker(a, verbose) {
 // never revisited: it already holds its ideal (real, unmarked) shape. Every
 // upgrade is kept only while the WHOLE round still renders. Returns
 // { commentFindingsJson, withheldOut }.
-// The angle's own worst (most blocking) severity among its real findings, as
-// a SEVERITY_ORDER index (0 = must-fix, lower is more severe); a clean angle
-// (no findings) ranks last. Used only to ORDER the greedy upgrade below by
+// The angle's own worst (most urgent) severity among its real findings, as a
+// SEVERITY_ORDER index (0 = high, lower is more urgent); a clean angle (no
+// findings) ranks last. Used only to ORDER the greedy upgrade below by
 // decision value, never to change which findings a marker represents.
 function angleWorstSeverityRank(a) {
   let best = SEVERITY_ORDER.length;
   for (const f of a.findings) {
-    const idx = SEVERITY_ORDER.indexOf(f.severity);
-    if (idx !== -1 && idx < best) best = idx;
+    // severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule
+    // this and upsert-checkpoint-verdict.mjs's rendering both share — it
+    // normalizes first, so an un-normalized legacy-spelled severity (e.g.
+    // "must-fix") ranks by its canonical spelling instead of falling through
+    // to the unknown-severity rank (which would starve the angle of the
+    // scarce verbose-marker budget it should have won).
+    const rank = severityRank(f.severity);
+    if (rank < best) best = rank;
   }
   return best;
 }
@@ -393,7 +406,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
     return { commentFindingsJson: [], withheldOut: true };
   }
   // Upgrade angles to the verbose breakdown in order of blocking severity
-  // (must-fix carriers first), not artifact-index/filename order — the
+  // (high carriers first), not artifact-index/filename order — the
   // scarce comment budget must land on the angles whose omitted findings
   // carry the most decision weight, not on whichever angle happens to sort
   // first alphabetically. Ties break by index, so the order stays
@@ -411,7 +424,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
     // mutated that array in place trying to fit the whole round, so by the
     // time we get here every summary is already crushed to the minimum
     // length; offering that as "real" would let a marker-tier round replace
-    // a must-fix angle's readable finding with an unreadable 31-char stub
+    // a high-severity angle's readable finding with an unreadable 31-char stub
     // even when ~1750 chars of budget are unused) — then the shrunk form,
     // then the verbose marker, keeping the first candidate that still lets
     // the WHOLE round render; fall back to bare when none fit.
@@ -432,7 +445,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
 
 // Bound to write-gate-findings-log.mjs's OWN carriedFromHead validation
 // (--provenance.perAngle[].carriedFromHead) so the two provenance surfaces
-// agree on what a head SHA is (worth-fixing-now: a prior version accepted any
+// agree on what a head SHA is (note: a prior version accepted any
 // non-empty string here and stamped it verbatim into "angles"/"findingsJson").
 const CARRIED_FROM_HEAD_RE = /^[0-9a-f]{7,64}$/i;
 
@@ -622,7 +635,7 @@ export function parseConsolidateFaninCliArgs(argv) {
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
   }
-  // --carried-angles is proof-carrying, not a bare trust-me list (must-fix
+  // --carried-angles is proof-carrying, not a bare trust-me list (high-severity
   // regression: a mandatory angle or a fabricated name could otherwise mint a
   // clean per-angle entry with no reviewer ever having run). It REQUIRES
   // --carry-forward-plan (the evidence it is checked against, below) and
@@ -676,7 +689,7 @@ export function parseConsolidateFaninCliArgs(argv) {
 // findings shape, so this stays a thin floor rather than a second copy of
 // consolidateFanin()'s validation.
 //
-// must-fix (input-validation): "carriedFromHead" is a PRODUCER field this CLI
+// high (input-validation): "carriedFromHead" is a PRODUCER field this CLI
 // stamps itself, inside the --carried-angles block below, on a synthetic entry
 // IT constructs — never a field a per-angle findings artifact is entitled to
 // self-declare. Without this check, --findings-dir/<any *.json> is the least
@@ -706,7 +719,7 @@ function validateArtifactShape(raw, sourceLabel) {
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
       if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))) {
-        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected must-fix|worth-fixing-now|nice-to-have)`);
+        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected ${SEVERITY_ORDER.join("|")})`);
       }
     });
   }
@@ -864,8 +877,8 @@ export async function consolidateGateFanin(options) {
 
   // Load this worktree's config to resolve the gate's configured blocking
   // severities when --gate is supplied, so the overall verdict honors e.g. a
-  // repo that also blocks clean on worth-fixing-now. Without --gate, keep
-  // consolidateFanin's own ["must-fix"] default (no config side effects).
+  // repo that also blocks clean on medium. Without --gate, keep
+  // consolidateFanin's own ["high"] default (no config side effects).
   // --repo-root anchors this explicitly (default process.cwd()) so the overall
   // verdict is deterministic regardless of the CLI's invocation directory.
   // Loaded HERE (before the --carried-angles block below) because that block
@@ -885,7 +898,7 @@ export async function consolidateGateFanin(options) {
     // loadDevLoopConfig never throws: on a parse/validation failure it still
     // returns `config` merged from the shipped defaults, silently REPLACING
     // this worktree's real gates.<gate>.blockCleanOnFindingSeverities with
-    // ["must-fix"]. Since --gate was given specifically to honor that
+    // ["high"]. Since --gate was given specifically to honor that
     // config, a failed load must fail closed here rather than silently
     // emitting a verdict computed from the wrong severities.
     if (Array.isArray(errors) && errors.length > 0) {
@@ -910,7 +923,7 @@ export async function consolidateGateFanin(options) {
   // artifact named `<angle>-delta-at-...` or spelled with different case
   // still suppresses the synthetic upsert rather than duplicating the angle.
   //
-  // must-fix (gate-evidence/correctness): --carried-angles is NOT trusted bare.
+  // high (gate-evidence/correctness): --carried-angles is NOT trusted bare.
   // Every name is checked against TWO independent sources of truth before it is
   // allowed to mint a clean entry — parseConsolidateFaninCliArgs already
   // requires both to be present alongside --carried-angles, and a programmatic

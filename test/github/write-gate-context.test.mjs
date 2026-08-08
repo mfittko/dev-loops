@@ -34,6 +34,10 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 
+// #1592: a few fixtures below use pre-rename severity spellings
+// ("must-fix"/"worth-fixing-now"/"nice-to-have") as generic example diff text
+// (collapsePureSubstitutionRuns fixtures) or backward-compat INPUT — not
+// stale fixture drift; do not mass-rewrite them to the canonical spelling.
 const contextGuardPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
 const briefingCheckerPath = path.resolve("scripts/github/verify-briefing-prefixes.mjs");
 
@@ -2561,7 +2565,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "## Reviewer source-read invariant",
       "",
-      `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${path.resolve(repoRoot)}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false must-fix findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
+      `Read skill/doc source files under review from the WORKTREE SOURCE, not from installed skill layouts. The worktree checkout at the reviewed head is \`${path.resolve(repoRoot)}\`. Resolve skill/doc paths (e.g. \`skills/<name>/SKILL.md\`, \`docs/...\`) as RELATIVE paths from that worktree cwd, never from \`.pi/skills/\`, \`~/.pi/agent/\`, or any other installed copy — installed copies lag the PR under review, so reading them produces false high-severity findings against text the PR already fixed. Before citing any skill/doc line in a finding, verify the cited text matches \`git show HEAD:<path>\` (the worktree source at the reviewed head), not a stale installed copy. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per "Skill asset path resolution".`,
       "",
       "## Reviewer token discipline",
       "",

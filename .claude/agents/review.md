@@ -46,7 +46,7 @@ Follow those owners, then return your findings via the structured artifact below
     "verdict": "clean" | "findings_present",
     "headSha": "<reviewed head SHA from the briefing>",
     "findings": [
-      { "severity": "must-fix" | "worth-fixing-now" | "nice-to-have", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
+      { "severity": "high" | "medium" | "low" | "question" | "nit", "file": "<path>", "line": 42, "summary": "<concise>", "recommendation": "<concise fix>" }
     ],
     "contextWidened": ["<path-that-moved-judgment>", "..."]
   }
@@ -54,7 +54,7 @@ Follow those owners, then return your findings via the structured artifact below
 
   The `headSha` stamp is REQUIRED: it is the exact head SHA the briefing names, and fan-in (`consolidate-fanin --head-sha`) fails closed on a missing or mismatched stamp (`GATE-EXEC-ARTIFACT-HEAD-STAMP`).
 
-  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`must-fix` | `worth-fixing-now` | `nice-to-have`). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list only the adjacent files/modules that actually moved your judgment on this angle, never every file you opened (omit or leave empty when nothing you opened moved your judgment, including when you reviewed only `changedFiles`) — absence means "not consulted", never "consulted and clean" (see the [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)).
+  `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`high` | `medium` | `low` for defects, `question` | `nit` for non-defects — a `question` is answered, never deferred, and an unanswered one blocks gate-close like a defect; a `nit` is cosmetic and deferred immediately with no fixer cycle). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list only the adjacent files/modules that actually moved your judgment on this angle, never every file you opened (omit or leave empty when nothing you opened moved your judgment, including when you reviewed only `changedFiles`) — absence means "not consulted", never "consulted and clean" (see the [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)).
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 
@@ -74,7 +74,7 @@ When NOT given an angle scope, behave exactly as the full-PR review agent descri
 - Read the PR description before reviewing code.
 - Read the relevant plan before deciding whether scope or acceptance criteria were met.
 - Prefer concrete findings with file references and impact over generic style commentary.
-- Distinguish clearly between must-fix findings, lower-severity risks, and informational gaps.
+- Distinguish clearly between high-severity findings, lower-severity risks, and informational gaps.
 - If the PR description omits required sections, is too thin to ground review without reconstructing intent from commits, or includes verdict status, evidence, or changelog content, treat that as a first-class review issue.
 - The review verdict MUST carry the acceptance-criteria and definition-of-done assessment in explicit markdown verification tables, including status plus concise evidence for each row.
 - For follow-up reviews on the same PR, do not repost full AC/DoD tables: include only delta rows where status or supporting evidence changed, and explicitly note when there are no AC/DoD deltas.

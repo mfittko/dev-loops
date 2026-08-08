@@ -11,6 +11,11 @@ import {
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // A repo config with a fully controlled, minimal angle contract (independent
 // of the shipped extension defaults) so mandatory-angle / pool assertions
 // below are exact.
@@ -191,7 +196,7 @@ test("writeGateFindingsLog writes valid JSON log", async () => {
     assert.equal(parsed.verdict, "findings_present");
     assert.ok(parsed.loggedAt);
     assert.equal(parsed.findings.length, 2);
-    assert.equal(parsed.findings[0].severity, "must-fix");
+    assert.equal(parsed.findings[0].severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(parsed.findings[0].angle, "scope");
     assert.deepEqual(parsed.findings[0].files, ["src/a.mjs"]);
   } finally {
@@ -620,6 +625,80 @@ test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have findi
       findings: JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit", disposition: "bad-value" }]),
     });
   }, /disposition must be one of/);
+});
+
+// #1592: a LOCATABLE question (real file + positive-integer line) is
+// answered, never deferred — it gets its own disposition ("needs-answer"),
+// because it gets a resolvable review thread to answer through.
+test("writeGateFindingsLog derives a needs-answer disposition for a LOCATABLE question finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-locatable-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "1111111111111111111100000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?", files: ["src/a.mjs"], line: 12 }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-1111111111111111111100000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "needs-answer");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// A NON-LOCATABLE question (no file/line) has no resolvable thread to answer
+// through — it is deferred by construction, exactly like every other
+// non-blocking severity's default.
+test("writeGateFindingsLog derives a deferred disposition for a NON-LOCATABLE question finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-nonlocatable-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "2222222222222222222200000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?" }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-2222222222222222222200000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "deferred");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Copilot review (PR #1610): files[] entries were filtered for emptiness but
+// stored UNTRIMMED — a padded path (" src/a.mjs ") still counted as
+// locatable-SHAPED (deriving "needs-answer"), but every downstream consumer
+// that keys on the raw stored value (the diff's commentable-line lookup, the
+// posted review `path`, renderNonLocatableBlock's Location line) compares
+// against the TRIMMED form, so it would never actually match a real in-diff
+// position — locatability and disposition must agree with what gets stored.
+test("writeGateFindingsLog trims a padded files[] entry so it matches downstream locatable checks", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-padded-path-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "3333333333333333333300000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?", files: [" src/a.mjs "], line: 12 }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-3333333333333333333300000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.deepEqual(parsed.findings[0].files, ["src/a.mjs"]);
+    assert.equal(parsed.findings[0].disposition, "needs-answer");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // --- Fan-out provenance (AC1) ---
@@ -1218,7 +1297,7 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
   }
 });
 
-test("a legacy defer-severity finding normalizes to nice-to-have in the written log", async () => {
+test("a legacy defer-severity finding normalizes to low in the written log", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-legacy-"));
   try {
     const result = await writeGateFindingsLog({
@@ -1231,7 +1310,7 @@ test("a legacy defer-severity finding normalizes to nice-to-have in the written 
       tmpRoot: tmpDir,
     });
     const parsed = JSON.parse(await readFile(result.path, "utf8"));
-    assert.equal(parsed.findings[0].severity, "nice-to-have");
+    assert.equal(parsed.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
     assert.equal(parsed.findings[0].disposition, "deferred");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

@@ -15,6 +15,11 @@ import {
   renderFindingsCommentBody,
 } from "../../scripts/github/post-gate-findings.mjs";
 
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // postGateFindings resolves the authenticated `gh` viewer's login (the
 // author-scoping trust boundary for findMarkedComment) as its first gh call
 // whenever gates.postFindingsComments does not short-circuit it. Every
@@ -285,9 +290,9 @@ test("renderFindingsCommentBody groups by severity and renders file refs", () =>
   assert.ok(body.includes("Reviewed head: abc1234"));
   assert.ok(!body.includes("`abc1234`"));
   // Severity group headings, most-blocking first.
-  const mustIdx = body.indexOf("Must fix (1)");
-  const worthIdx = body.indexOf("Worth fixing now (1)");
-  const deferIdx = body.indexOf("Nice to have (1)");
+  const mustIdx = body.indexOf("High (1)");
+  const worthIdx = body.indexOf("Medium (1)");
+  const deferIdx = body.indexOf("Low (1)");
   assert.ok(mustIdx >= 0 && worthIdx >= 0 && deferIdx >= 0);
   assert.ok(mustIdx < worthIdx && worthIdx < deferIdx);
   // Angle as code literal, summary as prose, disposition rendered.
@@ -701,9 +706,53 @@ test("renderFindingsCommentBody states that only the latest round is shown (#AC2
 
 test("a legacy defer-severity finding parses, normalizes, and renders the new label", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]));
-  assert.equal(findings[0].severity, "nice-to-have");
+  assert.equal(findings[0].severity, "low");
   assert.equal(findings[0].disposition, "deferred");
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-  assert.ok(body.includes("Nice to have (1)"));
+  assert.ok(body.includes("Low (1)"));
   assert.ok(!body.includes("[`defer`]"));
+});
+
+// Every pre-rename severity spelling still parses and renders under its
+// canonical label — the full sweep, not just "defer".
+test("every legacy severity spelling parses, normalizes, and renders under its canonical label", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "must-fix", angle: "security", summary: "sql injection" },
+    { severity: "worth-fixing-now", angle: "perf", summary: "n+1 query" },
+    { severity: "nice-to-have", angle: "naming", summary: "casing nit" },
+  ]));
+  assert.deepEqual(findings.map((f) => f.severity), ["high", "medium", "low"]);
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("High (1)"));
+  assert.ok(body.includes("Medium (1)"));
+  assert.ok(body.includes("Low (1)"));
+});
+
+// #1592: the two non-defect categories render under their own labels too.
+test("renderFindingsCommentBody renders Question and Nit group labels", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "question", angle: "scope", summary: "why this approach?" },
+    { severity: "nit", angle: "naming", summary: "casing nit" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("Question (1)"));
+  assert.ok(body.includes("Nit (1)"));
+});
+
+// A low/nit finding with no explicit disposition defaults to "deferred".
+// This shape carries no `line` field at all, so a question here can never be
+// proven LOCATABLE — it defaults to "deferred" too (never "needs-answer",
+// which is reserved for a locatable question elsewhere in the pipeline —
+// see write-gate-findings-log.mjs/consolidateFanin, which do carry `line`).
+test("parseFindings defaults disposition: low/nit/question all default to deferred (no line field in this shape)", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "low", angle: "naming", summary: "a" },
+    { severity: "nit", angle: "naming", summary: "b" },
+    { severity: "question", angle: "scope", summary: "c" },
+  ]));
+  assert.deepEqual(findings.map((f) => f.disposition), ["deferred", "deferred", "deferred"]);
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  const questionLine = body.split("\n").find((line) => line.includes("`scope`"));
+  assert.ok(questionLine, "expected a rendered line for the scope (question) finding");
+  assert.ok(questionLine.includes("deferred"), `question finding line should render "deferred" (non-locatable, this shape has no line field): ${questionLine}`);
 });

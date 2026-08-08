@@ -17,6 +17,11 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // The header literal and its matcher are OWNED by packages/core: the shared
 // summarizers' machine-artifact filter has to recognize the same line the
 // producer renders.
@@ -843,7 +848,7 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1298,7 +1303,7 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1388,7 +1393,7 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1473,7 +1478,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
     assert.equal(result.ghCallCount(), 8);
@@ -1775,7 +1780,7 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-101",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1869,7 +1874,7 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       warning: "A gate comment for \`draft_gate\` already exists on a different head SHA \`def5678000000000000000000000000000000000\` (comment 202). The old comment is stale for the current head.",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1962,7 +1967,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-202",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -2194,10 +2199,10 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
-    // draft_gate blocks on must-fix only (worth-fixing-now is recorded but
+    // draft_gate blocks on high only (medium is recorded but
     // non-blocking here); assert the exact bracketed list so this fails if
-    // worth-fixing-now ever becomes blocking again for draft_gate.
-    assert.match(payload.error, /blocking severities \[must-fix\]\./);
+    // medium ever becomes blocking again for draft_gate.
+    assert.match(payload.error, /blocking severities \[high\]\./);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2279,7 +2284,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /findings-json.*own per-angle findings show unresolved findings/);
-    assert.match(payload.error, /must-fix/);
+    assert.match(payload.error, /high/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2457,7 +2462,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /own per-angle findings show unresolved findings/);
-    assert.match(payload.error, /must-fix/);
+    assert.match(payload.error, /high/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2495,7 +2500,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /own per-angle findings show unresolved findings/);
-    assert.match(payload.error, /must-fix/);
+    assert.match(payload.error, /high/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2529,9 +2534,9 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     // The error text embeds a static example payload alongside the
     // config-derived "(blocking: [...])" tail; assert the tail, which is
     // the part that actually reflects draft_gate's configured blocking set
-    // (must-fix only — worth-fixing-now would match the example text
+    // (high only — medium would match the example text
     // regardless of what is configured).
-    assert.match(payload.error, /\(blocking: \[must-fix\]\)/);
+    assert.match(payload.error, /\(blocking: \[high\]\)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2554,8 +2559,9 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
       "--verdict", "clean",
       "--findings-summary", "all clear",
       "--next-action", "mark ready",
-      // draft_gate blocks on must-fix only, so omitting must-fix (not
-      // worth-fixing-now) is what exercises "missing a blocking key" here.
+      // draft_gate blocks on high only, so omitting high (not
+      // medium) is what exercises "missing a blocking key" here. Legacy
+      // spellings as input (backward compat): still normalize correctly.
       "--findings-severity-counts", '{"worth-fixing-now":0,"nice-to-have":0}',
     ], { env });
 
@@ -2564,7 +2570,7 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /must include explicit counts for all configured blocking severities/);
-    assert.match(payload.error, /must-fix/);
+    assert.match(payload.error, /high/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3361,8 +3367,8 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
         angle: "correctness",
         verdict: "findings_present",
         findings: [
-          { severity: "must-fix", summary: "off-by-one in loop bound", file: "src/loop.mjs", line: 42, disposition: "accepted-for-fix" },
-          { severity: "worth-fixing-now", summary: "missing null guard" },
+          { severity: "high", summary: "off-by-one in loop bound", file: "src/loop.mjs", line: 42, disposition: "accepted-for-fix" },
+          { severity: "medium", summary: "missing null guard" },
         ],
       },
       {
@@ -3377,8 +3383,8 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
   // severity/verdict/disposition render inside backtick code spans (enum
   // labels, never prose — see sanitizeStructuredCodeSpan).
   assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _`accepted-for-fix`_\n/);
-  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing null guard\n/);
+  assert.match(body, /\n {2}- \[`high`\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`medium`\] missing null guard\n/);
   assert.match(body, /\n- `acceptance-criteria` → `clean`/);
   // Newlines are preserved (not collapsed to a run-on line).
   assert.ok(body.split("\n").length > 8, "structured body should be multi-line");
@@ -3748,7 +3754,7 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
     ],
   });
   assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`must-fix`\] bad bound \(`x\.mjs:3`\)\n/);
+  assert.match(body, /\n {2}- \[`high`\] bad bound \(`x\.mjs:3`\)\n/); // "must-fix" input normalizes to canonical "high"
   assert.match(body, /\n- `tests` → `clean`/);
   assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 1 finding \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
@@ -3865,14 +3871,16 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
       { severity: "must-fix", summary: "no-angle finding" },
     ],
   });
-  // Findings are NOT dropped: grouped per angle.
+  // Findings are NOT dropped: grouped per angle. Legacy-spelled input
+  // ("must-fix"/"worth-fixing-now"/"nice-to-have") normalizes to the
+  // canonical output vocabulary.
   assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`must-fix`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
-  assert.match(body, /\n {2}- \[`worth-fixing-now`\] missing guard\n/);
+  assert.match(body, /\n {2}- \[`high`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
+  assert.match(body, /\n {2}- \[`medium`\] missing guard\n/);
   assert.match(body, /\n- `style` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`nice-to-have`\] naming nit\n/);
+  assert.match(body, /\n {2}- \[`low`\] naming nit\n/);
   assert.match(body, /\n- `general` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`must-fix`\] no-angle finding\n/);
+  assert.match(body, /\n {2}- \[`high`\] no-angle finding\n/);
   // 3 angles (correctness, style, general), 4 findings total — none dropped.
   assert.match(body, /\*\*Findings summary:\*\* 3 angles reviewed; 4 findings \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
@@ -3955,6 +3963,38 @@ test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never b
   );
 });
 
+// #1592: SEVERITY_ORDER ranks "question" right after "high" (both keep
+// gate-close blocked — a high via the fix loop, a question via never
+// auto-deferring) — ahead of "medium"/"low" (both eventually defer).
+test("renderGateReviewCommentBody sorts a question finding between high and medium (#1592)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "correctness",
+        verdict: "findings_present",
+        findings: [
+          { severity: "medium", summary: "medium finding" },
+          { severity: "question", summary: "why this approach finding" },
+          { severity: "high", summary: "critical finding" },
+        ],
+      },
+    ],
+  });
+  const order = ["critical finding", "why this approach finding", "medium finding"];
+  let cursor = -1;
+  for (const summary of order) {
+    const idx = body.indexOf(summary);
+    assert.ok(idx > cursor, `"${summary}" should appear after the previous entry (high, then question, then medium)`);
+    cursor = idx;
+  }
+});
+
 test("renderGateReviewCommentBody throws when a non-empty payload mixes recognized and unrecognized items (no silent drop) (Copilot review)", () => {
   // One recognizable per-angle entry plus one unrecognized item. Before the fix
   // the unrecognized item was silently filtered out (findings could be hidden).
@@ -4002,9 +4042,10 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
     ],
   });
   // Both angle-less entries render under `general` — findings are NOT dropped.
+  // Legacy-spelled input normalizes to the canonical output vocabulary.
   assert.match(body, /\n- `general` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`must-fix`\] angle-less nested finding\n/);
-  assert.match(body, /\n {2}- \[`worth-fixing-now`\] blank-angle nested finding\n/);
+  assert.match(body, /\n {2}- \[`high`\] angle-less nested finding\n/);
+  assert.match(body, /\n {2}- \[`medium`\] blank-angle nested finding\n/);
   // The structured digest is used; the free-text fallback is NOT rendered.
   assert.match(body, /per-angle breakdown below/);
   assert.doesNotMatch(body, /must NOT be rendered/);
@@ -4446,7 +4487,7 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
         assertStdinIncludes: [
           "**Execution mode:** fanout_fanin",
           "- `correctness` → `findings_present`",
-          "  - [`must-fix`] broken edge case (`a.mjs:7`)",
+          "  - [`high`] broken edge case (`a.mjs:7`)", // "must-fix" input normalizes to canonical "high"
           "- `coverage` → `clean`",
           "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
@@ -5258,7 +5299,7 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
   const angles = normalizeStructuredFindings([
     { angle: "docs", verdict: "findings_present", findings: [{ severity: "defer", summary: "legacy entry" }] },
   ]);
-  assert.equal(angles[0].findings[0].severity, "nice-to-have");
+  assert.equal(angles[0].findings[0].severity, "low"); // "defer" normalizes to canonical "low"
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
     headSha: "abc1234000000000000000000000000000000000",
@@ -5268,6 +5309,6 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
     executionMode: "fanout_fanin",
     structuredFindings: angles,
   });
-  assert.ok(body.includes("[`nice-to-have`]"));
+  assert.ok(body.includes("[`low`]"));
   assert.ok(!body.includes("[`defer`]"));
 });

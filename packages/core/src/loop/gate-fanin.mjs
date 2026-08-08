@@ -19,13 +19,18 @@
  *   }
  *
  * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
- * VALID_SEVERITIES / normalizeSeverity):
- *   "must-fix" | "worth-fixing-now" | "nice-to-have"
+ * VALID_SEVERITIES / normalizeSeverity), aligned to the Copilot review
+ * severity scale:
+ *   "high" | "medium" | "low" (defects) | "question" | "nit" (non-defects)
  * Severity is the reviewer's advisory weight only. Deferral is a DISPOSITION
  * (derived at fan-in for non-blocking findings, finalized per thread by the
- * fix cycle / gate close), never a severity — the legacy severity spelling
- * "defer" is accepted on read and normalized to "nice-to-have" (see
- * LEGACY_SEVERITY_ALIASES / normalizeSeverity).
+ * fix cycle / gate close), never a severity — the pre-rename severity
+ * spellings ("must-fix", "worth-fixing-now", "nice-to-have", "defer") are
+ * accepted on read and normalized to their canonical replacement (see
+ * LEGACY_SEVERITY_ALIASES / normalizeSeverity). "question" and "nit" are
+ * non-defect categories: a question is answered (never deferred) and an
+ * unanswered one blocks gate-close like any unresolved thread; a nit is
+ * deferred immediately, with no fixer cycle.
  */
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
@@ -76,10 +81,14 @@ export function backoffMaxConcurrent(maxConcurrent) {
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each
 // hand-copying its own list (and its own load-time drift guard) — ORDER is
-// part of the contract here (most blocking first), not just membership, so a
-// consumer that only checked membership against a Set could accept a
-// silently reordered copy.
-export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
+// part of the contract here, not just membership, so a consumer that only
+// checked membership against a Set could accept a silently reordered copy.
+// Ranked by gate-close urgency, not just defect-severity: "question" sits
+// right after "high" because BOTH force gate-close to stay blocked (a high
+// finding via the fix loop, a question via never being auto-deferred) — it
+// outranks "medium"/"low", which both eventually defer. "nit" trails last:
+// it defers immediately, with no fixer cycle at all.
+export const SEVERITY_ORDER = ["high", "question", "medium", "low", "nit"];
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
@@ -87,21 +96,62 @@ export const SEVERITY_ORDER = ["must-fix", "worth-fixing-now", "nice-to-have"];
 export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 
-// Pre-rename spelling of the lowest tier. Old ledgers, markers, and configs
-// still carry it; every read boundary normalizes through this map and no
-// writer ever emits it again.
-export const LEGACY_SEVERITY_ALIASES = Object.freeze({ defer: "nice-to-have" });
+// Pre-rename spellings. Old ledgers, markers, and configs still carry them;
+// every read boundary normalizes through this map. Every SANCTIONED producer
+// (consolidateFanin, write-gate-findings-log.mjs, post-gate-findings.mjs)
+// normalizes before a severity reaches a marker/ledger, so a freshly posted
+// marker carries only a canonical spelling in practice — but this map is a
+// read-side normalizer, not a write-side enforcement boundary:
+// buildFindingMarker (_gate-finding-surface.mjs) is a thin text builder that
+// emits whatever severity string it is given, verbatim (a legacy-spelled
+// marker built directly, e.g. for round-trip test fixtures, still parses
+// correctly via normalizeSeverity on read).
+export const LEGACY_SEVERITY_ALIASES = Object.freeze({
+  "must-fix": "high",
+  "worth-fixing-now": "medium",
+  "nice-to-have": "low",
+  defer: "low",
+});
 
 /**
  * Map a legacy severity spelling to its canonical name; unknown values pass
- * through unchanged (the caller's validation still rejects them).
+ * through trimmed (the caller's validation still rejects them) — a
+ * non-string passes through unchanged. Trimming BEFORE the alias lookup
+ * (rather than requiring every caller to do it first) is what keeps every
+ * call site of this function agreeing on the same value for the same
+ * incidentally-whitespace-varied input: consolidate-fanin.mjs's own floor
+ * validation trims before calling this, while gate-fanin's `consolidateFanin`
+ * does not — two call sites trimming inconsistently is exactly how an
+ * untrimmed "high " passed one gate's validation and then failed the
+ * other's. Deliberately case-SENSITIVE (no lowercasing): every sanctioned
+ * writer (slugForMarker, config authoring, this module's own producers)
+ * already emits lowercase, so a forged/hand-edited mixed-case value (e.g.
+ * "NIT") must fail VALID_SEVERITIES validation and dangle fail-closed rather
+ * than being silently coerced into a real severity that then auto-defers.
  * @param {unknown} severity
  * @returns {unknown}
  */
 export function normalizeSeverity(severity) {
-  return typeof severity === "string" && Object.hasOwn(LEGACY_SEVERITY_ALIASES, severity)
-    ? LEGACY_SEVERITY_ALIASES[severity]
-    : severity;
+  if (typeof severity !== "string") return severity;
+  const normalized = severity.trim();
+  return Object.hasOwn(LEGACY_SEVERITY_ALIASES, normalized) ? LEGACY_SEVERITY_ALIASES[normalized] : normalized;
+}
+
+/**
+ * Map a (possibly legacy-spelled/untrimmed) severity to its SEVERITY_ORDER
+ * index — the ONE rank rule every sort/ordering consumer
+ * (consolidate-fanin.mjs's `angleWorstSeverityRank`,
+ * upsert-checkpoint-verdict.mjs's severity-grouped rendering) shares, so the
+ * two can never drift on how an unknown severity ranks. An unrecognized
+ * severity (after normalization) ranks LAST (`SEVERITY_ORDER.length`, never
+ * -1) so it always sorts after every known severity instead of floating
+ * above "high" the way a raw, unmapped `indexOf` would.
+ * @param {unknown} severity
+ * @returns {number}
+ */
+export function severityRank(severity) {
+  const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
+  return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
 
 /**
@@ -120,6 +170,75 @@ export function normalizeSeverityCounts(counts) {
   }
   return normalized;
 }
+
+/**
+ * A finding is LOCATABLE-SHAPED when it names a real file (via `file` or
+ * `files[0]`) and a positive-integer `line` — the ONE shared shape check
+ * every producer/consumer of the locatable/non-locatable distinction keys
+ * on, whether the finding is the raw per-angle `{file, line}` shape
+ * (consolidateFanin's own input) or the ledger's `{files, line}` shape
+ * (write-gate-findings-log.mjs / post-gate-findings.mjs). This is NECESSARY
+ * but not SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
+ * (scripts/github/_gate-finding-surface.mjs) additionally requires the
+ * file:line to fall inside the reviewed diff, which only that caller
+ * (holding the diff's commentable-line set) can check — this function is
+ * its shared shape floor, not a replacement for it.
+ * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
+ * @returns {boolean}
+ */
+export function hasLocatableShape(finding) {
+  const file = typeof finding?.file === "string"
+    ? finding.file
+    : (Array.isArray(finding?.files) ? finding.files[0] : undefined);
+  return typeof file === "string" && file.trim().length > 0
+    && Number.isInteger(finding?.line) && /** @type {number} */ (finding.line) >= 1;
+}
+
+/**
+ * Derive the ledger disposition for a finding at `severity` — the ONE rule
+ * every producer (consolidateFanin, write-gate-findings-log.mjs,
+ * post-gate-findings.mjs) shares, so the three can never drift on what a
+ * severity/locatability combination resolves to. A LOCATABLE `question` is
+ * answered, never fixed or deferred — it gets its own disposition
+ * ("needs-answer") regardless of `isBlocking` (a question can never be
+ * blocking in practice — blockCleanOnFindingSeverities is restricted to
+ * defect severities — but this stays severity-first rather than
+ * isBlocking-first so that invariant is enforced here too, not just at the
+ * config boundary). A NON-LOCATABLE question has no resolvable thread to
+ * answer through — it is body-filed and deferred by construction, exactly
+ * like every other non-`high` body-filed finding
+ * (GATE-EXEC-DEFERRAL-RECORD). Every other severity ignores `locatable`
+ * entirely: `isBlocking` alone decides accepted-for-fix vs deferred.
+ * @param {string} severity — already normalized
+ * @param {{ isBlocking?: boolean, locatable?: boolean }} [options]
+ * @returns {"accepted-for-fix"|"deferred"|"needs-answer"}
+ */
+export function deriveDisposition(severity, { isBlocking = false, locatable = false } = {}) {
+  if (severity === "question") return locatable ? "needs-answer" : "deferred";
+  return isBlocking ? "accepted-for-fix" : "deferred";
+}
+
+/**
+ * Does `severity` (already normalized) have a default disposition that
+ * `deriveDisposition` can resolve WITHOUT `isBlocking` context? "low" and
+ * "nit" always defer regardless of any gate's `blockCleanOnFindingSeverities`
+ * config, and "question" resolves off `locatable` alone — so a caller with no
+ * `isBlocking` context (write-gate-findings-log.mjs / post-gate-findings.mjs's
+ * CLI validators, which accept a bare `--findings` array with no config in
+ * scope) can still fill in a default disposition for these three, and only
+ * these three, when the caller left it unset. "high" and "medium" are
+ * excluded: whether either blocks a clean verdict depends on config, which
+ * only a caller holding `blockCleanOnFindingSeverities` can know — guessing
+ * "deferred" for one of those here would be wrong for a repo that configures
+ * it as blocking. Shared by both CLI validators (see `deriveDisposition`) so
+ * the two can never restate this guard out of sync.
+ * @param {string} severity — already normalized
+ * @returns {boolean}
+ */
+export function isDefaultDeferrableSeverity(severity) {
+  return severity === "low" || severity === "nit" || severity === "question";
+}
+
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -508,7 +627,7 @@ function validateAngleResult(result) {
     }
     const finding = /** @type {Record<string, unknown>} */ (f);
     if (typeof finding.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(finding.severity))) {
-      return `angle '${r.angle}' has a finding with invalid severity (expected must-fix|worth-fixing-now|nice-to-have)`;
+      return `angle '${r.angle}' has a finding with invalid severity (expected ${SEVERITY_ORDER.join("|")})`;
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       return `angle '${r.angle}' has a finding without a summary`;
@@ -538,7 +657,7 @@ function validateAngleResult(result) {
  *
  * @param {object} input
  * @param {Array<unknown>} input.angleResults — per-angle review artifacts
- * @param {string[]} [input.blockCleanOnFindingSeverities] — blocking severities (default ["must-fix"])
+ * @param {string[]} [input.blockCleanOnFindingSeverities] — blocking severities (default ["high"])
  * @returns {{
  *   verdict: "clean"|"findings_present"|"blocked",
  *   findings: Array<{severity: string, angle: string, summary: string, file?: string, line?: number, recommendation?: string, disposition: string}>,
@@ -549,11 +668,12 @@ function validateAngleResult(result) {
 export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities } = {}) {
   const results = Array.isArray(angleResults) ? angleResults : [];
   // Config values normalize through the same alias map as finding severities,
-  // so a legacy config spelling ("defer") still blocks the renamed tier.
+  // so a legacy config spelling ("must-fix", "defer", …) still blocks the
+  // renamed tier.
   const blocking = new Set(
     (Array.isArray(blockCleanOnFindingSeverities) && blockCleanOnFindingSeverities.length > 0
       ? blockCleanOnFindingSeverities
-      : ["must-fix"]
+      : ["high"]
     ).map((s) => normalizeSeverity(s)),
   );
 
@@ -580,9 +700,9 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
           severity,
           angle,
           summary: String(f.summary).trim(),
-          // Blocking findings default to accepted-for-fix; non-blocking default
-          // to deferred. The fix cycle / operator can override the disposition.
-          disposition: isBlocking ? "accepted-for-fix" : "deferred",
+          // See deriveDisposition's own doc for the full rule; the fix cycle
+          // / operator can override the disposition afterward.
+          disposition: deriveDisposition(severity, { isBlocking, locatable: hasLocatableShape(f) }),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;
