@@ -751,23 +751,33 @@ test("renderFindingsCommentBody renders Question and Nit group labels", () => {
 // Sanitisation parity with upsert-checkpoint-verdict.mjs's renderer
 // ---------------------------------------------------------------------------
 
-// The two known bypasses, run through BOTH gate finding renderers with the
-// exact same crafted payload: a `must-fix](url)` link-injection form in
-// severity/disposition, and a stray backtick in `summary` that used to shift
-// CommonMark's left-to-right backtick pairing and unwrap a later field's own
-// code span. Both renderers import the identical sanitizeInline/sanitizeCodeSpan
-// pair from this file (post-gate-findings.mjs) rather than each keeping a copy
-// (see upsert-checkpoint-verdict.mjs's own comment on its sanitizeStructured*
-// aliases), so this one test fails if EITHER renderer stops sanitizing —
-// whether by a regression in the shared functions or by either file reverting
-// to its own duplicate copy.
-test("both gate finding renderers neutralize the same crafted link-injection and backtick-unbalance payload (parity guard)", async () => {
+// The two known bypasses, run through BOTH gate finding renderers. Both
+// renderers import the identical sanitizeInline/sanitizeCodeSpan pair from
+// this file (post-gate-findings.mjs) rather than each keeping a copy (see
+// upsert-checkpoint-verdict.mjs's own comment on its sanitizeStructured*
+// aliases), so these tests fail if EITHER renderer stops sanitizing — whether
+// by a regression in the shared functions or by either file reverting to its
+// own duplicate copy.
+//
+// The exact crafted VALUES differ per renderer because the two renderers wrap
+// severity/disposition differently: post-gate-findings.mjs renders `summary`
+// AND `disposition` as bare prose on the same list line (so the classic
+// bypass can split across the two), while upsert-checkpoint-verdict.mjs wraps
+// severity/disposition in their own backtick code spans — already inert to
+// link/image syntax regardless of sanitization, since a code span is parsed
+// before link/image syntax (see sanitizeCodeSpan's own doc comment) — leaving
+// `summary` as its ONLY bare-prose field. A payload built only from a
+// severity/disposition value shaped like `must-fix](url)` would sit inside
+// upsert-checkpoint-verdict.mjs's own code-span backticks and can never form a
+// live link there no matter what the sanitizer does, so asserting against
+// that shape would pass vacuously for that renderer — the payload for each
+// renderer targets a field that is actually exercised there.
+test("both gate finding renderers neutralize a link-injection payload built entirely from bare-prose fields (parity guard: sanitizeInline / sanitizeStructuredInline)", async () => {
   const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
 
-  // Link-injection form: a severity/disposition value shaped like the closing
-  // half of a markdown link, which used to complete into a live link when
-  // paired with an unescaped `[` (a literal bracket the old severity-in-brackets
-  // rendering supplied, or a `[` surviving elsewhere on the same line).
+  // post-gate-findings.mjs: a dangling `[` in `summary` completes into a live
+  // link when combined with `](url)` supplied by `disposition`, another bare
+  // field rendered on the same line.
   const linkInjectionFindings = parseFindings(JSON.stringify([
     {
       severity: "high",
@@ -779,9 +789,11 @@ test("both gate finding renderers neutralize the same crafted link-injection and
   const postGateBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: linkInjectionFindings });
   assert.ok(
     !/\[[^\]]*\]\(https:\/\/evil\.example\)/.test(postGateBody),
-    "post-gate-findings.mjs must never render a live markdown link from a crafted severity/disposition value combined with an earlier dangling `[`",
+    "post-gate-findings.mjs must never render a live markdown link from a crafted summary/disposition pair",
   );
 
+  // upsert-checkpoint-verdict.mjs: the entire payload has to live inside
+  // `summary`, its only bare-prose field.
   const verdictBody = renderGateReviewCommentBody({
     gate: "draft_gate",
     headSha: "abc1234000000000000000000000000000000000",
@@ -794,21 +806,25 @@ test("both gate finding renderers neutralize the same crafted link-injection and
         angle: "renderer-security",
         verdict: "findings_present",
         findings: [
-          { severity: "must-fix](https://evil.example)", summary: "See [details for more info" },
+          { severity: "high", summary: "See [details for more info](https://evil.example) trailing" },
         ],
       },
     ],
   });
   assert.ok(
-    !/(?<!`)\[[^\]]*\]\(https:\/\/evil\.example\)(?!`)/.test(verdictBody),
-    "upsert-checkpoint-verdict.mjs must never render a live markdown link from a crafted severity/disposition value combined with an earlier dangling `[`",
+    !/\[[^\]]*\]\(https:\/\/evil\.example\)/.test(verdictBody),
+    "upsert-checkpoint-verdict.mjs must never render a live markdown link from a crafted `summary` value",
   );
+});
 
-  // Backtick-unbalance form: a stray backtick in `summary` that could shift
-  // CommonMark's left-to-right backtick pairing and steal a LATER field's own
-  // opening code-span delimiter, leaving that field's crafted `](url)` to
-  // combine with an EARLIER unescaped `[` into a live link instead of inert
-  // code text.
+test("both gate finding renderers neutralize a backtick-unbalance payload that would otherwise unwrap a later field's code span (parity guard: sanitizeCodeSpan / sanitizeStructuredCodeSpan)", async () => {
+  const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
+
+  // A stray backtick in `summary` (bare prose) can shift CommonMark's
+  // left-to-right backtick pairing and steal a LATER field's own opening
+  // code-span delimiter, leaving that field's crafted `](url)` to combine
+  // with an EARLIER unescaped `[` into a live link instead of inert code
+  // text.
   const backtickFindings = parseFindings(JSON.stringify([
     {
       severity: "high",
@@ -822,6 +838,28 @@ test("both gate finding renderers neutralize the same crafted link-injection and
   // value: no earlier stray backtick stole its opening delimiter.
   assert.match(backtickBody, /`a\.mjs\]\(https:\/\/evil\.example\)`/);
   assert.ok(!backtickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
+
+  // Same shape against upsert-checkpoint-verdict.mjs's structured renderer:
+  // `summary` is bare prose, `file` is rendered inside its own code span.
+  const verdictBacktickBody = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "renderer-security",
+        verdict: "findings_present",
+        findings: [
+          { severity: "high", summary: "guard [missing for ` value", file: "a.mjs](https://evil.example)" },
+        ],
+      },
+    ],
+  });
+  assert.match(verdictBacktickBody, /`a\.mjs\]\(https:\/\/evil\.example\)`/);
+  assert.ok(!verdictBacktickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
 });
 
 // ---------------------------------------------------------------------------
@@ -851,6 +889,61 @@ test("renderBoundedFindingsCommentBody degrades a too-large ledger into a posted
   assert.ok(body.includes("A must-fix that must always survive degradation"));
 });
 
+test("renderBoundedFindingsCommentBody drops only as many low-priority findings as it takes for a round only slightly over the limit (proportional, not whole-group)", () => {
+  const findings = parseFindings(JSON.stringify(buildOversizedFindings({ nitCount: 50 })));
+  const unbounded = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  const maxChars = unbounded.length - 10; // only 10 chars over the limit
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.ok(body.includes("A must-fix that must always survive degradation"), "the high-severity finding must survive a small overflow");
+  const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
+  assert.ok(
+    omittedTotal > 0 && omittedTotal < 50,
+    `expected only SOME of the 50 nit findings to be dropped for a 10-char overflow, got ${omittedTotal}`,
+  );
+  assert.ok(omittedCounts.every(({ severity }) => severity === "nit"), "a 10-char overflow must never spill into a more-urgent group");
+});
+
+test("renderBoundedFindingsCommentBody drops question last of the four droppable severities (nit/low/medium fully dropped before question is touched)", () => {
+  const padded = (label) => `${label} finding with enough padding text to add real bulk to the rendered comment body`.repeat(3);
+  const findings = [{ severity: "high", angle: "scope", summary: "A must-fix that must always survive degradation" }];
+  for (let i = 0; i < 200; i += 1) findings.push({ severity: "nit", angle: "naming", summary: padded(`Nit ${i}`) });
+  for (let i = 0; i < 200; i += 1) findings.push({ severity: "low", angle: "naming", summary: padded(`Low ${i}`) });
+  for (let i = 0; i < 200; i += 1) findings.push({ severity: "medium", angle: "naming", summary: padded(`Medium ${i}`) });
+  for (let i = 0; i < 200; i += 1) findings.push({ severity: "question", angle: "naming", summary: padded(`Question ${i}`) });
+  const parsed = parseFindings(JSON.stringify(findings));
+  // Bound tight enough that nit/low/medium must ALL be dropped, but generous
+  // enough for the high finding plus every question finding to survive.
+  const questionOnly = parseFindings(JSON.stringify([findings[0], ...findings.filter((f) => f.severity === "question")]));
+  const maxChars = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: questionOnly }).length + 500;
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: parsed, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.deepEqual(
+    omittedCounts.map(({ severity }) => severity),
+    ["nit", "low", "medium"],
+    "nit/low/medium must be dropped in that order, with question surviving fully",
+  );
+  assert.ok(omittedCounts.every(({ count }) => count === 200), "each of the three droppable groups must be dropped in full before question is touched");
+  assert.ok(body.includes("Question (200)"), "every question finding must survive while nit/low/medium are fully dropped");
+});
+
+test("renderBoundedFindingsCommentBody drops every finding, and states so, when even a single finding cannot fit (all-omitted branch)", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "x".repeat(2000) }]));
+  const maxChars = 700;
+  const zeroFindingsNote = renderFindingsCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    findings: [],
+    omittedCounts: [{ severity: "high", count: 1 }],
+    maxChars,
+  });
+  assert.ok(zeroFindingsNote.length <= maxChars, "fixture assumption: the fully-degraded (zero-findings) note itself must fit within maxChars");
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.deepEqual(omittedCounts, [{ severity: "high", count: 1 }]);
+  assert.match(body, /none survived the comment length bound/);
+});
+
 test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded render cannot fit", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
   assert.throws(
@@ -859,12 +952,29 @@ test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded
   );
 });
 
+test("renderBoundedFindingsCommentBody rejects a non-array findings input", () => {
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: null }),
+    /findings must be an array/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a non-positive/NaN maxChars instead of silently degrading forever", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
+  for (const badMaxChars of [null, NaN, 0, -1]) {
+    assert.throws(
+      () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: badMaxChars }),
+      /maxChars must be a positive finite number/,
+    );
+  }
+});
+
 test("postGateFindings posts a degraded, within-limit comment for an oversized round instead of failing to post", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
   const repoRoot = await optedInRepoRoot();
   try {
     const findingsJson = JSON.stringify(buildOversizedFindings());
-    const { env, ghPath } = await writeGhStub(tmpDir, [
+    const { env, ghPath, ghLogPath } = await writeGhStub(tmpDir, [
       userEntry(),
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
@@ -875,7 +985,7 @@ test("postGateFindings posts a degraded, within-limit comment for an oversized r
         assertArgContains: ["dev-loops:gate-findings"],
         stdout: JSON.stringify({ id: 202, html_url: "https://github.com/owner/repo/pull/42#issuecomment-202" }) + "\n",
       },
-    ]);
+    ], { logCalls: true });
     const result = await postGateFindings(
       { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: findingsJson },
       { env, ghCommand: ghPath, repoRoot },
@@ -883,6 +993,13 @@ test("postGateFindings posts a degraded, within-limit comment for an oversized r
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     assert.ok(result.omittedFindingsCount > 0);
+    // The comment actually POSTED to GitHub (not just the value the renderer
+    // returns in isolation) must itself fit within GitHub's comment limit.
+    const calls = (await readFile(ghLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const createCallArgs = calls.find((args) => args.some((a) => typeof a === "string" && a.startsWith("body=")));
+    assert.ok(createCallArgs, "expected a gh call carrying the posted comment body");
+    const postedBody = createCallArgs.find((a) => a.startsWith("body=")).slice("body=".length);
+    assert.ok(postedBody.length <= GITHUB_COMMENT_MAX_CHARS, `posted body must fit within GitHub's comment limit (got ${postedBody.length})`);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });

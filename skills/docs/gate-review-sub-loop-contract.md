@@ -834,7 +834,9 @@ default false / opt-in) and no-ops with a `skipped` result unless a repo explici
 it on. A repo that does opt in accepts duplicated finding text on a second surface for
 every reader; nothing in the gate flow requires it. This comment is itself bounded by
 GitHub's per-comment character limit: a round large enough to approach that limit degrades
-by dropping whole severity groups, least-urgent first, naming what was omitted in the posted
+by dropping individual findings, least-urgent first (across every less-urgent severity before
+touching a more-urgent one), so a round only slightly over the limit loses only as many
+low-priority findings as it takes to fit, naming what was omitted in the posted
 comment and pointing at the disposition ledger (always complete, never bounded) as the full
 record; a round that cannot fit even with every finding omitted fails the post closed rather
 than reporting success. Do not assume this comment alone carries every finding of a large

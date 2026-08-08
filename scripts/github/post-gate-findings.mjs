@@ -16,9 +16,11 @@ per gate: there is exactly one comment per gate, updated in place on each run
 (the reviewed head is shown in the body) instead of duplicating it.
 
 The disposition ledger (write-gate-findings-log.mjs) is the durable source of truth and is
-written regardless of this comment, and the round's verdict review already carries every
-finding — this comment is an opt-in SECOND surface. It no-ops unless gates.postFindingsComments
-is set to true in config.
+written regardless of this comment; this comment is an opt-in SECOND surface, not guaranteed
+to carry every finding of a large round on its own — a round large enough to exceed GitHub's
+per-comment character limit degrades by dropping least-urgent findings first, naming what was
+omitted and pointing back at the ledger for the complete record. It no-ops unless
+gates.postFindingsComments is set to true in config.
 
 Required:
   --repo <owner/name>
@@ -30,12 +32,16 @@ Required:
   --findings-file <path>           Read the --findings JSON array from a file instead of an
                                    inline argument (mutually exclusive with --findings; identical validation)
 Output (stdout, JSON):
-  { "ok": true, "action": "created"|"updated"|"noop"|"skipped", ... }
+  { "ok": true, "action": "created"|"updated"|"noop"|"skipped",
+    "omittedFindingsCount": <number> (present only when the render degraded to fit
+    GitHub's comment length limit), ... }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure
+  1  Argument error, gh failure, or the round cannot be rendered within the comment
+     length limit even with every finding omitted (fails closed rather than posting
+     a truncated or partial record)
   2  Invalid --jq filter`.trim();
 
 // Derived from SEVERITY_ORDER (never hand-copied) so a severity added there
@@ -293,7 +299,7 @@ export function sanitizeInline(value) {
 // number rather than a second hand-copied literal.
 export const GITHUB_COMMENT_MAX_CHARS = 65536;
 
-export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [] }) {
+export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [], maxChars = GITHUB_COMMENT_MAX_CHARS }) {
   const marker = buildFindingsMarker({ gate });
   const lines = [
     marker,
@@ -308,8 +314,12 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
   if (omittedCounts.length > 0) {
     const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
     const breakdown = omittedCounts.map(({ severity, count }) => `${count} ${SEVERITY_LABELS[severity]}`).join(", ");
+    // Names the bound actually applied (maxChars), not the GitHub default
+    // constant — a caller that passes a non-default maxChars (e.g. a test, or
+    // a future stricter bound) must never post an explanation that disagrees
+    // with the limit it was actually rendered against.
     lines.push(
-      `**Note:** ${omittedTotal} finding(s) omitted from this comment (${breakdown}) — the full round exceeded GitHub's ${GITHUB_COMMENT_MAX_CHARS}-character comment limit. This gate round's disposition ledger (written by write-gate-findings-log.mjs) always carries the complete, unbounded record.`,
+      `**Note:** ${omittedTotal} finding(s) omitted from this comment (${breakdown}) — the full round exceeded this comment's ${maxChars}-character limit. This gate round's disposition ledger (written by write-gate-findings-log.mjs) always carries the complete, unbounded record.`,
       "",
     );
   }
@@ -375,39 +385,94 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
-// Least-urgent-first: the order whole severity groups are dropped when a
-// round's rendered comment would exceed GitHub's comment limit. The reverse
-// of SEVERITY_ORDER (most-urgent-first).
+// Least-urgent-first: the order individual findings are dropped when a
+// round's rendered comment would exceed GitHub's comment limit — every
+// finding in a less-urgent severity group is dropped before any finding in a
+// more-urgent one. The reverse of SEVERITY_ORDER (most-urgent-first).
 const DROP_LEAST_URGENT_FIRST = [...SEVERITY_ORDER].reverse();
 
-// Renders the findings comment body, degrading through whole severity groups
-// (never a partial group, and never a silently truncated field) when the full
-// render would exceed GitHub's comment length limit. Every omission is named
-// in the posted comment itself, with a pointer to the disposition ledger — the
-// one surface that is never length-bounded. Throws (fails closed) when even
-// the emptiest render — the header plus the omission note covering every
-// finding — still cannot fit, so a round that truly cannot be posted is never
-// reported as a success.
-export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
-  let remaining = findings;
-  let omittedCounts = [];
-  let body = renderFindingsCommentBody({ gate, headSha, findings: remaining });
-  if (body.length <= maxChars) {
-    return { body, omittedCounts };
+// Groups an ordered list of dropped findings into the `omittedCounts` shape
+// (`[{ severity, count }]`, least-urgent-first, zero-count severities
+// omitted) the comment's omission note renders from.
+function summarizeDroppedBySeverity(dropped) {
+  const counts = new Map();
+  for (const finding of dropped) {
+    const severity = normalizeSeverity(finding.severity);
+    counts.set(severity, (counts.get(severity) ?? 0) + 1);
   }
-  for (const severity of DROP_LEAST_URGENT_FIRST) {
-    const dropped = remaining.filter((f) => normalizeSeverity(f.severity) === severity);
-    if (dropped.length === 0) continue;
-    remaining = remaining.filter((f) => normalizeSeverity(f.severity) !== severity);
-    omittedCounts = [...omittedCounts, { severity, count: dropped.length }];
-    body = renderFindingsCommentBody({ gate, headSha, findings: remaining, omittedCounts });
-    if (body.length <= maxChars) {
-      return { body, omittedCounts };
+  return DROP_LEAST_URGENT_FIRST
+    .filter((severity) => counts.has(severity))
+    .map((severity) => ({ severity, count: counts.get(severity) }));
+}
+
+// Renders the findings comment body, degrading ONE FINDING AT A TIME (never a
+// whole group at once, and never a silently truncated field) when the full
+// render would exceed GitHub's comment length limit — least-urgent finding
+// first, across every less-urgent severity group before touching a
+// more-urgent one. Dropping proportionately (rather than whole groups) means
+// a round only slightly over the limit loses only as many low-priority
+// findings as it takes to fit, instead of every finding in whichever group is
+// dropped first — the most urgent findings always survive as long as ANY
+// finding would fit. Every omission is named in the posted comment itself,
+// with a pointer to the disposition ledger — the one surface that is never
+// length-bounded. Throws (fails closed) when even the emptiest render — the
+// header plus the omission note covering every finding — still cannot fit, so
+// a round that truly cannot be posted is never reported as a success.
+export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
+  if (!Array.isArray(findings)) {
+    throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${typeof findings}`);
+  }
+  if (!Number.isFinite(maxChars) || maxChars <= 0) {
+    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive finite number, got ${JSON.stringify(maxChars)}`);
+  }
+  const body = renderFindingsCommentBody({ gate, headSha, findings, maxChars });
+  if (body.length <= maxChars) {
+    return { body, omittedCounts: [] };
+  }
+  // Least-urgent-first candidate order for individual removal, preserving
+  // each finding's original relative order within its own severity group.
+  const dropOrder = DROP_LEAST_URGENT_FIRST.flatMap(
+    (severity) => findings.filter((f) => normalizeSeverity(f.severity) === severity),
+  );
+  // Renders the body with the first `k` (least-urgent-first) findings of
+  // dropOrder removed.
+  function renderWithDropped(k) {
+    const dropSet = new Set(dropOrder.slice(0, k));
+    const remaining = findings.filter((f) => !dropSet.has(f));
+    const omittedCounts = summarizeDroppedBySeverity(dropOrder.slice(0, k));
+    return { body: renderFindingsCommentBody({ gate, headSha, findings: remaining, omittedCounts, maxChars }), omittedCounts };
+  }
+  const n = dropOrder.length;
+  const fullyDropped = renderWithDropped(n);
+  if (fullyDropped.body.length > maxChars) {
+    throw new Error(
+      `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding omitted; refusing to post a truncated or partial record.`,
+    );
+  }
+  // Binary-search the minimal drop count that fits, rather than dropping one
+  // finding at a time and re-rendering after each — O(log n) renders instead
+  // of O(n), each still O(n) work, so O(n log n) instead of O(n^2) for a
+  // large round. This assumes the rendered length is non-increasing as more
+  // low-priority findings are dropped: each drop removes a whole finding's
+  // own rendered text (at minimum its list-item prefix), while the omission
+  // note only ever grows by a few characters (a count crossing a power of
+  // ten) — a change small enough that the assumption holds for every
+  // realistic finding shape. `fits(n)` is already confirmed true above, so
+  // the search always has a valid upper bound to converge to.
+  let lo = 1;
+  let hi = n;
+  let best = fullyDropped;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = renderWithDropped(mid);
+    if (candidate.body.length <= maxChars) {
+      best = candidate;
+      hi = mid;
+    } else {
+      lo = mid + 1;
     }
   }
-  throw new Error(
-    `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding omitted; refusing to post a truncated or partial record.`,
-  );
+  return best;
 }
 
 // Shared by every sibling GitHub script that reads a `--paginate --slurp`
