@@ -422,8 +422,20 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   if (!Array.isArray(findings)) {
     throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${typeof findings}`);
   }
-  if (!Number.isFinite(maxChars) || maxChars <= 0) {
-    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive finite number, got ${JSON.stringify(maxChars)}`);
+  findings.forEach((finding, i) => {
+    if (!finding || typeof finding !== "object") {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}] must be an object, got ${finding === null ? "null" : typeof finding}`);
+    }
+    if (!SEVERITY_ORDER.includes(normalizeSeverity(finding.severity))) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${JSON.stringify(finding.severity)}`);
+    }
+  });
+  if (!Number.isInteger(maxChars) || maxChars <= 0) {
+    // Number/String report the value faithfully for every input this guard
+    // rejects (NaN, Infinity, a fraction) — unlike JSON.stringify, which
+    // renders NaN/Infinity as the misleading literal "null".
+    const reported = typeof maxChars === "number" ? String(maxChars) : JSON.stringify(maxChars);
+    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive integer, got ${reported}`);
   }
   const body = renderFindingsCommentBody({ gate, headSha, findings, maxChars });
   if (body.length <= maxChars) {
@@ -431,20 +443,36 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   }
   // Least-urgent-first candidate order for individual removal, preserving
   // each finding's original relative order within its own severity group.
+  // Indices, not the finding objects themselves: an identity-keyed Set would
+  // collapse every slot holding the SAME object reference into a single
+  // drop no matter how many of those slots `k` asks to remove, under-dropping
+  // (and under-counting the omission note) whenever a findings array repeats
+  // a reference.
   const dropOrder = DROP_LEAST_URGENT_FIRST.flatMap(
-    (severity) => findings.filter((f) => normalizeSeverity(f.severity) === severity),
+    (severity) => findings
+      .map((_, i) => i)
+      .filter((i) => normalizeSeverity(findings[i].severity) === severity),
   );
   // Renders the body with the first `k` (least-urgent-first) findings of
-  // dropOrder removed.
+  // dropOrder removed, by index.
   function renderWithDropped(k) {
-    const dropSet = new Set(dropOrder.slice(0, k));
-    const remaining = findings.filter((f) => !dropSet.has(f));
-    const omittedCounts = summarizeDroppedBySeverity(dropOrder.slice(0, k));
+    const droppedIndexes = dropOrder.slice(0, k);
+    const dropSet = new Set(droppedIndexes);
+    const remaining = findings.filter((_, i) => !dropSet.has(i));
+    const omittedCounts = summarizeDroppedBySeverity(droppedIndexes.map((i) => findings[i]));
     return { body: renderFindingsCommentBody({ gate, headSha, findings: remaining, omittedCounts, maxChars }), omittedCounts };
   }
   const n = dropOrder.length;
   const fullyDropped = renderWithDropped(n);
-  if (fullyDropped.body.length > maxChars) {
+  // Dropping the very LAST remaining finding is the one step whose render can
+  // grow instead of shrink: the zero-findings branch of
+  // renderFindingsCommentBody adds its own "none survived" sentence, which
+  // can outweigh the few characters that single finding's own line would
+  // have cost. So `fits(n)` alone is not a reliable "nothing fits" probe —
+  // the genuinely minimal fitting render can be `n - 1` (one finding
+  // surviving) even when `n` (zero survive) does not fit.
+  const almostFullyDropped = n > 0 ? renderWithDropped(n - 1) : fullyDropped;
+  if (fullyDropped.body.length > maxChars && almostFullyDropped.body.length > maxChars) {
     throw new Error(
       `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding omitted; refusing to post a truncated or partial record.`,
     );
@@ -453,15 +481,13 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   // finding at a time and re-rendering after each — O(log n) renders instead
   // of O(n), each still O(n) work, so O(n log n) instead of O(n^2) for a
   // large round. This assumes the rendered length is non-increasing as more
-  // low-priority findings are dropped: each drop removes a whole finding's
-  // own rendered text (at minimum its list-item prefix), while the omission
-  // note only ever grows by a few characters (a count crossing a power of
-  // ten) — a change small enough that the assumption holds for every
-  // realistic finding shape. `fits(n)` is already confirmed true above, so
-  // the search always has a valid upper bound to converge to.
+  // low-priority findings are dropped, for every step EXCEPT the last (see
+  // above) — so the search only ranges up to whichever of `n`/`n - 1` is
+  // confirmed to fit, never past it.
+  const hiBound = fullyDropped.body.length <= maxChars ? n : n - 1;
   let lo = 1;
-  let hi = n;
-  let best = fullyDropped;
+  let hi = hiBound;
+  let best = hiBound === n ? fullyDropped : almostFullyDropped;
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
     const candidate = renderWithDropped(mid);

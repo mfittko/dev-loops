@@ -835,8 +835,18 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
   ]));
   const backtickBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: backtickFindings });
   // The file ref's own code span still forms intact around the WHOLE crafted
-  // value: no earlier stray backtick stole its opening delimiter.
-  assert.match(backtickBody, /`a\.mjs\]\(https:\/\/evil\.example\)`/);
+  // value: no earlier stray backtick stole its opening delimiter. A bare
+  // substring match on the closed span alone would pass even if an earlier
+  // unstripped backtick had already shifted CommonMark's pairing (the field
+  // would still literally CONTAIN that substring, just not as its own
+  // matched span) — assert PAIRING directly instead: an EVEN number of
+  // backticks must precede the span's own opening delimiter, so it starts a
+  // fresh pair rather than continuing one left open earlier in the line.
+  const fileRefSpan = "`a.mjs](https://evil.example)`";
+  const fileRefIndex = backtickBody.indexOf(fileRefSpan);
+  assert.ok(fileRefIndex > -1, "expected the file ref's own code span in the rendered body");
+  const precedingBackticks = (backtickBody.slice(0, fileRefIndex).match(/`/g) ?? []).length;
+  assert.equal(precedingBackticks % 2, 0, "an even number of backticks must precede the file ref's own opening delimiter (odd means an earlier stray backtick shifted the pairing)");
   assert.ok(!backtickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
 
   // Same shape against upsert-checkpoint-verdict.mjs's structured renderer:
@@ -858,7 +868,10 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
       },
     ],
   });
-  assert.match(verdictBacktickBody, /`a\.mjs\]\(https:\/\/evil\.example\)`/);
+  const verdictFileRefIndex = verdictBacktickBody.indexOf(fileRefSpan);
+  assert.ok(verdictFileRefIndex > -1, "expected the file ref's own code span in the rendered body");
+  const verdictPrecedingBackticks = (verdictBacktickBody.slice(0, verdictFileRefIndex).match(/`/g) ?? []).length;
+  assert.equal(verdictPrecedingBackticks % 2, 0, "an even number of backticks must precede the file ref's own opening delimiter (odd means an earlier stray backtick shifted the pairing)");
   assert.ok(!verdictBacktickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
 });
 
@@ -883,7 +896,13 @@ test("renderBoundedFindingsCommentBody degrades a too-large ledger into a posted
   assert.ok(omittedCounts.length > 0, "expected at least one severity group to be dropped");
   assert.equal(omittedCounts[0].severity, "nit", "least-urgent severity is dropped first");
   // Omission is NAMED with a pointer to the durable record — never silent.
-  assert.match(body, /finding\(s\) omitted from this comment/);
+  // Assert the omission note's actual TEXT, not just that some sentence
+  // fragment is present: the applied limit (not a hand-copied constant that
+  // could drift from the maxChars this render actually used) and the
+  // per-severity breakdown label (derived from SEVERITY_LABELS, not
+  // hand-copied — a broken derivation would render "undefined" here).
+  assert.match(body, new RegExp(`finding\\(s\\) omitted from this comment \\(${omittedCounts[0].count} Nit\\)`));
+  assert.match(body, new RegExp(`this comment's ${GITHUB_COMMENT_MAX_CHARS}-character limit`));
   assert.match(body, /disposition ledger/);
   // The high finding is never dropped while a less-urgent group is available to drop instead.
   assert.ok(body.includes("A must-fix that must always survive degradation"));
@@ -897,11 +916,12 @@ test("renderBoundedFindingsCommentBody drops only as many low-priority findings 
   assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
   assert.ok(body.includes("A must-fix that must always survive degradation"), "the high-severity finding must survive a small overflow");
   const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
-  assert.ok(
-    omittedTotal > 0 && omittedTotal < 50,
-    `expected only SOME of the 50 nit findings to be dropped for a 10-char overflow, got ${omittedTotal}`,
-  );
+  assert.equal(omittedTotal, 2, `expected exactly the 2 least-urgent nit findings needed to absorb a 10-char overflow, got ${omittedTotal}`);
   assert.ok(omittedCounts.every(({ severity }) => severity === "nit"), "a 10-char overflow must never spill into a more-urgent group");
+  // Names the NON-DEFAULT limit actually applied (this test's own `maxChars`,
+  // not the GitHub default constant) and the per-severity breakdown label.
+  assert.match(body, new RegExp(`finding\\(s\\) omitted from this comment \\(2 Nit\\)`));
+  assert.match(body, new RegExp(`this comment's ${maxChars}-character limit`));
 });
 
 test("renderBoundedFindingsCommentBody drops question last of the four droppable severities (nit/low/medium fully dropped before question is touched)", () => {
@@ -944,6 +964,33 @@ test("renderBoundedFindingsCommentBody drops every finding, and states so, when 
   assert.match(body, /none survived the comment length bound/);
 });
 
+test("renderBoundedFindingsCommentBody posts the fitting single-survivor render instead of failing closed when dropping the very last finding makes the render LONGER (the zero-findings sentence can outgrow a tiny finding's own line)", () => {
+  const highFinding = { severity: "high", angle: "s", summary: "x" };
+  const nitCount = 50;
+  const findings = [highFinding];
+  for (let i = 0; i < nitCount; i += 1) {
+    findings.push({ severity: "nit", angle: "n", summary: `nit ${i} padding text here to add bulk`.repeat(2) });
+  }
+  const parsed = parseFindings(JSON.stringify(findings));
+  const highOnly = parsed.filter((f) => f.severity === "high");
+  const nitOmitted = [{ severity: "nit", count: nitCount }];
+  const allOmitted = [{ severity: "high", count: 1 }, { severity: "nit", count: nitCount }];
+  // The render with every nit dropped but the sole high finding still
+  // rendered (one survivor), versus dropping that last survivor too (zero
+  // findings, the "none survived" sentence).
+  const oneSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: highOnly, omittedCounts: nitOmitted });
+  const zeroSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [], omittedCounts: allOmitted });
+  assert.ok(zeroSurvivorBody.length > oneSurvivorBody.length, "fixture assumption: dropping the very last finding must make the render LONGER, not shorter, to reproduce the bug");
+  // A maxChars that fits the one-survivor render exactly, but not the
+  // (longer) zero-survivor render — a probe of only `k = n` (drop
+  // everything) would wrongly conclude nothing fits and fail closed.
+  const maxChars = oneSurvivorBody.length;
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: parsed, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.deepEqual(omittedCounts, nitOmitted, "must stop at dropping every nit and keep the sole surviving high finding, not drop it too");
+  assert.ok(body.includes("`s`"), "the sole surviving high finding must still be rendered");
+});
+
 test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded render cannot fit", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
   assert.throws(
@@ -959,14 +1006,67 @@ test("renderBoundedFindingsCommentBody rejects a non-array findings input", () =
   );
 });
 
-test("renderBoundedFindingsCommentBody rejects a non-positive/NaN maxChars instead of silently degrading forever", () => {
+test("renderBoundedFindingsCommentBody rejects a non-positive/non-integer maxChars instead of silently degrading forever, and reports the rejected value faithfully", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
-  for (const badMaxChars of [null, NaN, 0, -1]) {
+  for (const badMaxChars of [null, NaN, 0, -1, 10.5]) {
     assert.throws(
       () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: badMaxChars }),
-      /maxChars must be a positive finite number/,
+      /maxChars must be a positive integer/,
     );
   }
+  // JSON.stringify renders NaN/Infinity as the literal "null", misreporting
+  // the actual value — the error message must name the real value instead.
+  for (const [badMaxChars, expectedText] of [[NaN, "NaN"], [Infinity, "Infinity"], [10.5, "10.5"]]) {
+    assert.throws(
+      () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: badMaxChars }),
+      new RegExp(`got ${expectedText}$`),
+    );
+  }
+});
+
+test("renderBoundedFindingsCommentBody rejects a findings element that is not an object, or carries an unknown/missing severity, with a named error instead of a bare TypeError", () => {
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: ["not an object"] }),
+    /findings\[0\] must be an object/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ angle: "scope", summary: "no severity at all" }] }),
+    /findings\[0\]\.severity must be one of/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "catastrophic", angle: "scope", summary: "unknown severity" }] }),
+    /findings\[0\]\.severity must be one of/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody keys its drop set by position, not object identity, so a repeated finding reference drops exactly as many slots as counted", () => {
+  // The SAME object reference occupies three slots. An identity-keyed drop
+  // set collapses all three references into one Set entry, so dropping just
+  // ONE of them (k=1) would remove all three at once instead of only one.
+  const repeatedNit = { severity: "nit", angle: "naming", summary: "x".repeat(500) };
+  const findings = [
+    { severity: "high", angle: "scope", summary: "A must-fix that must always survive degradation" },
+    repeatedNit,
+    repeatedNit,
+    repeatedNit,
+  ];
+  // The render with exactly the FIRST repeated slot dropped (2 of the 3
+  // repeated references still rendered, 1 omitted) — the exact fitting size
+  // a correct index-keyed drop of k=1 must land on.
+  const singleDroppedBody = renderFindingsCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    findings: [findings[0], repeatedNit, repeatedNit],
+    omittedCounts: [{ severity: "nit", count: 1 }],
+  });
+  const maxChars = singleDroppedBody.length;
+  const unbounded = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(unbounded.length > maxChars, "fixture assumption: the full (undropped) render must exceed maxChars to force degradation");
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars });
+  assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
+  assert.deepEqual(omittedCounts, [{ severity: "nit", count: 1 }], "exactly ONE of the three repeated-reference slots must be counted as omitted");
+  const survivingNitLines = body.split("\n").filter((line) => line.includes("`naming`")).length;
+  assert.equal(survivingNitLines, 2, "exactly two of the three repeated-reference nit slots must still render, not zero");
 });
 
 test("postGateFindings posts a degraded, within-limit comment for an oversized round instead of failing to post", async () => {
@@ -1002,6 +1102,30 @@ test("postGateFindings posts a degraded, within-limit comment for an oversized r
     assert.ok(postedBody.length <= GITHUB_COMMENT_MAX_CHARS, `posted body must fit within GitHub's comment limit (got ${postedBody.length})`);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("postGateFindings rejects (fails closed) instead of reporting a false success when the round cannot be rendered within the comment limit even fully degraded", async () => {
+  // Fail-closed is otherwise only exercised on the renderer directly, with a
+  // synthetic tiny maxChars — never at the postGateFindings seam, where a
+  // caller that swallowed or mis-propagated the throw would report a false
+  // "ok: true" success instead of failing the post. The reviewed-head line is
+  // fixed header content, never dropped by degradation, so a headSha this
+  // long overflows GitHub's comment limit on its own, even with every finding
+  // omitted — no synthetic maxChars override needed, exercising the real
+  // GITHUB_COMMENT_MAX_CHARS default this seam actually posts against.
+  const repoRoot = await optedInRepoRoot();
+  try {
+    const hugeHeadSha = "a".repeat(GITHUB_COMMENT_MAX_CHARS + 1);
+    await assert.rejects(
+      () => postGateFindings(
+        { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: hugeHeadSha, findings: FINDINGS_JSON },
+        { env: process.env, ghCommand: "gh-must-never-be-invoked", repoRoot },
+      ),
+      /cannot be rendered within/,
+    );
+  } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

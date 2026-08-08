@@ -70,10 +70,35 @@ const CASES = [
   // colon-suffixed status tag.
   { title: "re-draft: cleanup", expect: [] },
 
+  // A colon-suffixed scoped label naming a component is not a status claim —
+  // the colon construction's opening anchor excludes a preceding `/`, same
+  // exemption class as the bracket/paren anchoring above.
+  { title: "feat/draft: x", expect: [] },
+  { title: "app/draft: page", expect: [] },
+  { title: "docs/wip: notes", expect: [] },
+
+  // A colon that does not CLOSE the tag (immediately followed by another
+  // character, not whitespace or end-of-title) is a scheme/tag/ref, not a
+  // status claim.
+  { title: "draft:latest", expect: [] },
+  { title: "wip:branch", expect: [] },
+  { title: "draft://", expect: [] },
+
   // A trailing marker set off by a real em/en dash IS a separable status
   // claim and is now flagged.
   { title: "Fix login flow — WIP", expect: ["WIP"] },
   { title: "– DRAFT – new module", expect: ["DRAFT"] },
+
+  // The trailing-dash construction must CLOSE the tag (end of title or
+  // another dash) — a dash-introduced clause that merely CONTAINS the marker
+  // word as part of a longer phrase or a hyphen-joined compound noun stays
+  // unflagged, the same false-positive class the bracket/paren/colon
+  // constructions already guard against.
+  { title: "Rework the pipeline — draft-gate override", expect: [] },
+  { title: "Refactor — draft gate coordination", expect: [] },
+  { title: "Bound the findings comment — draft-gate + pre-approval-gate parity", expect: [] },
+  { title: "Improve tooling — wip-branch cleanup", expect: [] },
+  { title: "Retry — wip branch pipeline", expect: [] },
 ];
 
 for (const { title, expect } of CASES) {
