@@ -1029,7 +1029,10 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `--ledger-out <path>` writes exactly this shape — pass that path straight to
 `--findings-file` on both tools, no hand extraction. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
-`disposition` gets `deferred` derived automatically by both tools.
+`disposition` gets `deferred` derived automatically by both tools. A
+`question` finding with no `disposition` is derived the same way, but the
+value depends on whether the finding is locatable: `needs-answer` when it
+names an in-diff `file:line`, `deferred` otherwise.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional
