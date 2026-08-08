@@ -219,6 +219,18 @@ test("renderNonLocatableBlock: a non-high finding is stamped disposition=deferre
   assert.equal(parseFindingMarker(high).disposition, null);
 });
 
+// The disposition decision and the rendered "> **${severity}**" line share
+// ONE normalized value — a caller passing an un-normalized (differently
+// cased/padded) severity must never see the raw form leak into the posted
+// body while the disposition is decided off the normalized one.
+test("renderNonLocatableBlock: renders the NORMALIZED severity, never the raw hostile/un-normalized input", () => {
+  const block = renderNonLocatableBlock({ severity: "  HIGH  ", angle: "security", summary: "injection" }, { round: 1 });
+  assert.ok(block.includes("> **high** (`security`): injection"), `expected the normalized "high" in the rendered line, got: ${JSON.stringify(block)}`);
+  assert.ok(!block.includes("HIGH"), `raw un-normalized severity must never reach the rendered body: ${JSON.stringify(block)}`);
+  assert.equal(parseFindingMarker(block).severity, "high");
+  assert.equal(parseFindingMarker(block).disposition, null); // "high" never defers
+});
+
 test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {
   const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
   const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });

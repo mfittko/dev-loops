@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -233,10 +233,18 @@ export function renderInlineCommentBody(finding, { round }) {
 // (fingerprint suppression + zero surface = permanent silent loss).
 export function renderNonLocatableBlock(finding, { round }) {
   const fp = fingerprintFinding(finding);
-  const disposition = normalizeSeverity(finding.severity) === "high" ? undefined : "deferred";
+  // Normalized ONCE and reused for both the disposition decision and the
+  // rendered line: rendering the RAW value on the "> **${severity}**" line
+  // (whose blockquote is load-bearing for the evidence parser) while
+  // deciding disposition off the normalized one would let an un-normalized
+  // or hostile severity string reach the posted body unnormalized, even
+  // though every sanctioned caller only ever passes a VALID_SEVERITIES
+  // member here.
+  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
+  const disposition = severity === "high" ? undefined : "deferred";
   const lines = [
-    buildFindingMarker({ fp, severity: finding.severity, angle: finding.angle, round, disposition }),
-    `> ${renderFindingLine(finding)}`,
+    buildFindingMarker({ fp, severity, angle: finding.angle, round, disposition }),
+    `> ${renderFindingLine({ ...finding, severity })}`,
   ];
   if (hasRecommendation(finding)) {
     lines.push(`> ${renderRecommendationLine(finding.recommendation)}`);
@@ -290,8 +298,11 @@ export function buildCommentableLineSet(files) {
 }
 
 export function isLocatableFinding(finding, commentableSet) {
-  if (!Array.isArray(finding.files) || finding.files.length === 0) return false;
-  if (!Number.isInteger(finding.line) || finding.line < 1) return false;
+  // hasLocatableShape (@dev-loops/core/loop/gate-fanin) is the shared shape
+  // floor every producer/consumer of the locatable/non-locatable distinction
+  // uses; this adds the one thing only a caller holding the diff can check —
+  // whether that file:line actually falls inside it.
+  if (!hasLocatableShape(finding)) return false;
   return commentableSet.has(`${finding.files[0]}:${finding.line}`);
 }
 

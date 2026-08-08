@@ -97,8 +97,15 @@ export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval
 export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
 
 // Pre-rename spellings. Old ledgers, markers, and configs still carry them;
-// every read boundary normalizes through this map and no writer ever emits
-// them again.
+// every read boundary normalizes through this map. Every SANCTIONED producer
+// (consolidateFanin, write-gate-findings-log.mjs, post-gate-findings.mjs)
+// normalizes before a severity reaches a marker/ledger, so a freshly posted
+// marker carries only a canonical spelling in practice — but this map is a
+// read-side normalizer, not a write-side enforcement boundary:
+// buildFindingMarker (_gate-finding-surface.mjs) is a thin text builder that
+// emits whatever severity string it is given, verbatim (a legacy-spelled
+// marker built directly, e.g. for round-trip test fixtures, still parses
+// correctly via normalizeSeverity on read).
 export const LEGACY_SEVERITY_ALIASES = Object.freeze({
   "must-fix": "high",
   "worth-fixing-now": "medium",
@@ -142,6 +149,54 @@ export function normalizeSeverityCounts(counts) {
   }
   return normalized;
 }
+
+/**
+ * A finding is LOCATABLE-SHAPED when it names a real file (via `file` or
+ * `files[0]`) and a positive-integer `line` — the ONE shared shape check
+ * every producer/consumer of the locatable/non-locatable distinction keys
+ * on, whether the finding is the raw per-angle `{file, line}` shape
+ * (consolidateFanin's own input) or the ledger's `{files, line}` shape
+ * (write-gate-findings-log.mjs / post-gate-findings.mjs). This is NECESSARY
+ * but not SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
+ * (scripts/github/_gate-finding-surface.mjs) additionally requires the
+ * file:line to fall inside the reviewed diff, which only that caller
+ * (holding the diff's commentable-line set) can check — this function is
+ * its shared shape floor, not a replacement for it.
+ * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
+ * @returns {boolean}
+ */
+export function hasLocatableShape(finding) {
+  const file = typeof finding?.file === "string"
+    ? finding.file
+    : (Array.isArray(finding?.files) ? finding.files[0] : undefined);
+  return typeof file === "string" && file.trim().length > 0
+    && Number.isInteger(finding?.line) && /** @type {number} */ (finding.line) >= 1;
+}
+
+/**
+ * Derive the ledger disposition for a finding at `severity` — the ONE rule
+ * every producer (consolidateFanin, write-gate-findings-log.mjs,
+ * post-gate-findings.mjs) shares, so the three can never drift on what a
+ * severity/locatability combination resolves to. A LOCATABLE `question` is
+ * answered, never fixed or deferred — it gets its own disposition
+ * ("needs-answer") regardless of `isBlocking` (a question can never be
+ * blocking in practice — blockCleanOnFindingSeverities is restricted to
+ * defect severities — but this stays severity-first rather than
+ * isBlocking-first so that invariant is enforced here too, not just at the
+ * config boundary). A NON-LOCATABLE question has no resolvable thread to
+ * answer through — it is body-filed and deferred by construction, exactly
+ * like every other non-`high` body-filed finding
+ * (GATE-EXEC-DEFERRAL-RECORD). Every other severity ignores `locatable`
+ * entirely: `isBlocking` alone decides accepted-for-fix vs deferred.
+ * @param {string} severity — already normalized
+ * @param {{ isBlocking?: boolean, locatable?: boolean }} [options]
+ * @returns {"accepted-for-fix"|"deferred"|"needs-answer"}
+ */
+export function deriveDisposition(severity, { isBlocking = false, locatable = false } = {}) {
+  if (severity === "question") return locatable ? "needs-answer" : "deferred";
+  return isBlocking ? "accepted-for-fix" : "deferred";
+}
+
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
@@ -599,35 +654,13 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
         const isBlocking = blocking.has(severity);
         if (isBlocking) blockingCount += 1;
         bySeverity[severity] += 1;
-        // LOCATABLE: a real file + a positive-integer line — the same shape
-        // isLocatableFinding (_gate-finding-surface.mjs) keys on (that
-        // function also checks the file:line is in-diff, which is unknown at
-        // fan-in time; this is the necessary-but-not-sufficient proxy
-        // available here). Only a locatable finding ever gets its own
-        // resolvable review thread.
-        const isLocatable = typeof f.file === "string" && f.file.trim().length > 0
-          && Number.isInteger(f.line) && f.line >= 1;
         const entry = {
           severity,
           angle,
           summary: String(f.summary).trim(),
-          // Blocking findings default to accepted-for-fix; non-blocking defect
-          // findings (low/nit, or medium outside the blocking set) default to
-          // deferred. A LOCATABLE question is never deferred — it is
-          // answered, not fixed or dropped — so it gets its own disposition
-          // ("needs-answer", in write-gate-findings-log.mjs's
-          // VALID_DISPOSITIONS) regardless of blocking status (a "question"
-          // can never be blocking in practice — blockCleanOnFindingSeverities
-          // is restricted to defect severities — but this stays severity-first
-          // rather than isBlocking-first so that invariant is enforced here
-          // too, not just at the config boundary). A NON-LOCATABLE question
-          // has no resolvable thread to answer through — it is body-filed and
-          // deferred by construction, exactly like every other non-high
-          // body-filed finding (GATE-EXEC-DEFERRAL-RECORD). The fix cycle /
-          // operator can override the disposition.
-          disposition: severity === "question"
-            ? (isLocatable ? "needs-answer" : "deferred")
-            : (isBlocking ? "accepted-for-fix" : "deferred"),
+          // See deriveDisposition's own doc for the full rule; the fix cycle
+          // / operator can override the disposition afterward.
+          disposition: deriveDisposition(severity, { isBlocking, locatable: hasLocatableShape(f) }),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;

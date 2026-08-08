@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, fanoutReviewerPairingError, freshAngleNames, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -88,13 +88,6 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.line = f.line;
     }
-    // A finding is LOCATABLE when it names a real file and a positive-integer
-    // line — the same shape isLocatableFinding (_gate-finding-surface.mjs)
-    // keys on (that function also checks the file:line is in-diff, which
-    // this write-time floor cannot know; this is the necessary-but-not-
-    // sufficient proxy available here). Only a locatable finding can ever
-    // get its own resolvable review thread to answer/fix through.
-    const isLocatable = Array.isArray(entry.files) && entry.files.length > 0 && Number.isInteger(entry.line) && entry.line >= 1;
     if ("disposition" in f) {
       if (typeof f.disposition !== "string" || f.disposition.trim().length === 0) {
         throw parseError(`${flagLabel}[${i}].disposition must be a non-empty string`);
@@ -104,22 +97,17 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, needs-answer, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
-    } else if (f.severity === "low" || f.severity === "nit") {
-      // A non-blocking low/nit finding with no explicit disposition
-      // defaults to "deferred" so a hand-authored (or consolidate-fanin.mjs-
-      // produced) array need not repeat the obvious disposition for every
-      // lowest-tier entry. Explicit dispositions (including an explicit
-      // "deferred") always keep the validation above unchanged.
-      entry.disposition = "deferred";
-    } else if (f.severity === "question") {
-      // A LOCATABLE question with no explicit disposition defaults to
-      // "needs-answer" — never "deferred" (a question is answered, not
-      // dropped) — because it gets its own resolvable review thread to
-      // answer through. A NON-LOCATABLE question has no such thread (it is
-      // body-filed, per GATE-EXEC-DEFERRAL-RECORD / renderNonLocatableBlock)
-      // and so is deferred by construction, exactly like every other
-      // non-high body-filed finding.
-      entry.disposition = isLocatable ? "needs-answer" : "deferred";
+    } else if (f.severity === "low" || f.severity === "nit" || f.severity === "question") {
+      // A non-blocking low/nit finding with no explicit disposition defaults
+      // to "deferred" so a hand-authored (or consolidate-fanin.mjs-produced)
+      // array need not repeat the obvious disposition for every lowest-tier
+      // entry. A question routes through the SAME shared rule
+      // (deriveDisposition, @dev-loops/core/loop/gate-fanin) every other
+      // producer uses: LOCATABLE (hasLocatableShape) defaults to
+      // "needs-answer", non-locatable to "deferred" — see that function's
+      // own doc for the full rule. Explicit dispositions (including an
+      // explicit "deferred") always keep the validation above unchanged.
+      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     if ("resolvedIn" in f) {
       if (typeof f.resolvedIn !== "string" || f.resolvedIn.trim().length === 0) {

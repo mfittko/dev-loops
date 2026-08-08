@@ -4,7 +4,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 // Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
-import { SEVERITY_ORDER, VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -38,13 +38,10 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 
-const SEVERITY_LABELS = {
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-  question: "Question",
-  nit: "Nit",
-};
+// Derived from SEVERITY_ORDER (never hand-copied) so a severity added there
+// is automatically labeled — a hand-copied map would silently render
+// "#### undefined (N)" for any severity it forgot.
+const SEVERITY_LABELS = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, s.charAt(0).toUpperCase() + s.slice(1)]));
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -99,24 +96,19 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
-    if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
-      entry.disposition = f.disposition.trim();
-    } else if (f.severity === "low" || f.severity === "nit") {
-      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
-      // non-blocking low/nit finding with no explicit disposition defaults
-      // to "deferred" rather than rendering with no disposition suffix.
-      entry.disposition = "deferred";
-    } else if (f.severity === "question") {
-      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: only a
-      // LOCATABLE question (real file + positive-integer line) defaults to
-      // "needs-answer" — it gets a resolvable review thread to answer
-      // through. This shape carries no `line` field at all (see USAGE
-      // above), so locatability can never be proven here; default to
-      // "deferred", matching the non-locatable/body-filed treatment.
-      entry.disposition = "deferred";
-    }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
+    }
+    if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
+      entry.disposition = f.disposition.trim();
+    } else if (f.severity === "low" || f.severity === "nit" || f.severity === "question") {
+      // Routes through the SAME shared rule (deriveDisposition,
+      // @dev-loops/core/loop/gate-fanin) every producer uses: a LOCATABLE
+      // question (hasLocatableShape) defaults to "needs-answer", non-locatable
+      // to "deferred" — see that function's own doc for the full rule. This
+      // shape carries no `line` field at all (see USAGE above), so a question
+      // here can never be proven locatable and always resolves to "deferred".
+      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     return entry;
   });
