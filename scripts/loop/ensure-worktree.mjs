@@ -606,8 +606,8 @@ export async function ensureWorktree(
     // detached and local-branch reuse outcomes below.
     const summary = await provision({ worktreePath: target, repoRoot: root });
     if (!existing.branch) {
-      // DETACHED HEAD (e.g. ui-review's pinPrHead uses `git worktree add
-      // --detach`): there is no local branch here to associate a divergence
+      // DETACHED HEAD (e.g. ui-review's pinPrHead runs `git checkout --detach`
+      // inside the worktree): there is no local branch here to associate a divergence
       // report with — report the honest origin instead of fabricating
       // "reused-local" (or a diverged report) for a branch this worktree
       // isn't even on.

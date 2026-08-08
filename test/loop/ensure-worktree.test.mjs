@@ -265,7 +265,7 @@ test("ensure: an already-existing worktree being reused reports a divergence on 
 });
 
 // WFN: a DETACHED-HEAD worktree at the path (this repo's ui-review
-// pinPrHead creates those via `git worktree add --detach`) used to pass the
+// pinPrHead detaches one via `git checkout --detach`) used to pass the
 // `existing.branch &&` conflict guard and get labeled "reused-local" —
 // even a fabricated diverged report — for a branch it is not even on.
 test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabricating reused-local/diverged", async () => {
