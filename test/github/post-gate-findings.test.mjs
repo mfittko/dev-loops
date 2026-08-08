@@ -897,11 +897,13 @@ test("renderBoundedFindingsCommentBody degrades a too-large ledger into a posted
   assert.equal(omittedCounts[0].severity, "nit", "least-urgent severity is dropped first");
   // Omission is NAMED with a pointer to the durable record — never silent.
   // Assert the omission note's actual TEXT, not just that some sentence
-  // fragment is present: the applied limit (not a hand-copied constant that
-  // could drift from the maxChars this render actually used) and the
-  // per-severity breakdown label (derived from SEVERITY_LABELS, not
-  // hand-copied — a broken derivation would render "undefined" here).
-  assert.match(body, new RegExp(`finding\\(s\\) omitted from this comment \\(${omittedCounts[0].count} Nit\\)`));
+  // fragment is present: the leading omitted-total count, the applied limit
+  // (not a hand-copied constant that could drift from the maxChars this
+  // render actually used), and the per-severity breakdown label (derived
+  // from SEVERITY_LABELS, not hand-copied — a broken derivation would render
+  // "undefined" here).
+  const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
+  assert.match(body, new RegExp(`${omittedTotal} finding\\(s\\) omitted from this comment \\(${omittedCounts[0].count} Nit\\)`));
   assert.match(body, new RegExp(`this comment's ${GITHUB_COMMENT_MAX_CHARS}-character limit`));
   assert.match(body, /disposition ledger/);
   // The high finding is never dropped while a less-urgent group is available to drop instead.
@@ -924,7 +926,7 @@ test("renderBoundedFindingsCommentBody drops only as many low-priority findings 
   assert.match(body, new RegExp(`this comment's ${maxChars}-character limit`));
 });
 
-test("renderBoundedFindingsCommentBody drops question last of the four droppable severities (nit/low/medium fully dropped before question is touched)", () => {
+test("renderBoundedFindingsCommentBody drops question last among the below-high severities (nit/low/medium fully dropped before question is touched)", () => {
   const padded = (label) => `${label} finding with enough padding text to add real bulk to the rendered comment body`.repeat(3);
   const findings = [{ severity: "high", angle: "scope", summary: "A must-fix that must always survive degradation" }];
   for (let i = 0; i < 200; i += 1) findings.push({ severity: "nit", angle: "naming", summary: padded(`Nit ${i}`) });
@@ -1002,7 +1004,14 @@ test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded
 test("renderBoundedFindingsCommentBody rejects a non-array findings input", () => {
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: null }),
-    /findings must be an array/,
+    /findings must be an array, got null/,
+  );
+  // typeof null === "object", so a naive typeof-only report would say "got
+  // object" here — inconsistent with the per-element guard below, which
+  // already special-cases null. Both must report "null".
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: {} }),
+    /findings must be an array, got object/,
   );
 });
 
@@ -1022,6 +1031,18 @@ test("renderBoundedFindingsCommentBody rejects a non-positive/non-integer maxCha
       new RegExp(`got ${expectedText}$`),
     );
   }
+  // JSON.stringify throws a TypeError on a BigInt (instead of the intended
+  // "must be a positive integer" error) and silently stringifies a Symbol to
+  // "undefined" (instead of naming the symbol) — both must be reported
+  // faithfully, not crash or misreport.
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: 10n }),
+    /maxChars must be a positive integer, got 10n$/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: Symbol("x") }),
+    /maxChars must be a positive integer, got Symbol\(x\)$/,
+  );
 });
 
 test("renderBoundedFindingsCommentBody rejects a findings element that is not an object, or carries an unknown/missing severity, with a named error instead of a bare TypeError", () => {
@@ -1036,6 +1057,31 @@ test("renderBoundedFindingsCommentBody rejects a findings element that is not an
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "catastrophic", angle: "scope", summary: "unknown severity" }] }),
     /findings\[0\]\.severity must be one of/,
+  );
+  // A BigInt/Symbol severity must not crash the reporter (JSON.stringify
+  // throws on the former, silently reports "undefined" for the latter).
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: 5n, angle: "scope", summary: "bigint severity" }] }),
+    /findings\[0\]\.severity must be one of.*got 5n$/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: Symbol("bad"), angle: "scope", summary: "symbol severity" }] }),
+    /findings\[0\]\.severity must be one of.*got Symbol\(bad\)$/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a findings element missing angle/summary instead of rendering the literal string \"undefined\" into the comment", () => {
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", summary: "no angle" }] }),
+    /findings\[0\]\.angle must be a non-empty string, got undefined/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "  " }] }),
+    /findings\[0\]\.angle must be a non-empty string/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "scope" }] }),
+    /findings\[0\]\.summary must be a non-empty string, got undefined/,
   );
 });
 

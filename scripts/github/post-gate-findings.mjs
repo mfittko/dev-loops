@@ -40,8 +40,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error, gh failure, or the round cannot be rendered within the comment
-     length limit even with every finding omitted (fails closed rather than posting
-     a truncated or partial record)
+     length limit even with only one finding surviving (fails closed rather than
+     posting a truncated or partial record)
   2  Invalid --jq filter`.trim();
 
 // Derived from SEVERITY_ORDER (never hand-copied) so a severity added there
@@ -405,6 +405,21 @@ function summarizeDroppedBySeverity(dropped) {
     .map((severity) => ({ severity, count: counts.get(severity) }));
 }
 
+// Reports an arbitrary invalid value in an error message. Never JSON.stringify:
+// it throws a TypeError on a BigInt and silently renders a Symbol as the
+// string "undefined" (JSON.stringify(Symbol()) === undefined), both worse
+// than the value an error message exists to name. `null` is reported as
+// "null", matching the per-element guards that already special-case it,
+// rather than the "object" typeof would give.
+function describeInvalidValue(value) {
+  if (value === null) return "null";
+  const type = typeof value;
+  if (type === "string") return JSON.stringify(value);
+  if (type === "bigint") return `${value}n`;
+  if (type === "object" || type === "function") return type;
+  return String(value); // number, boolean, undefined, symbol
+}
+
 // Renders the findings comment body, degrading ONE FINDING AT A TIME (never a
 // whole group at once, and never a silently truncated field) when the full
 // render would exceed GitHub's comment length limit — least-urgent finding
@@ -420,22 +435,27 @@ function summarizeDroppedBySeverity(dropped) {
 // a round that truly cannot be posted is never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
   if (!Array.isArray(findings)) {
-    throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${typeof findings}`);
+    throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${describeInvalidValue(findings)}`);
   }
   findings.forEach((finding, i) => {
     if (!finding || typeof finding !== "object") {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}] must be an object, got ${finding === null ? "null" : typeof finding}`);
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}] must be an object, got ${describeInvalidValue(finding)}`);
     }
     if (!SEVERITY_ORDER.includes(normalizeSeverity(finding.severity))) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${JSON.stringify(finding.severity)}`);
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(finding.severity)}`);
+    }
+    // angle/summary are rendered directly into the comment (as a code span /
+    // bare prose respectively); an unvalidated caller passing neither would
+    // otherwise post the literal string "undefined" into a PR comment.
+    if (typeof finding.angle !== "string" || finding.angle.trim().length === 0) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].angle must be a non-empty string, got ${describeInvalidValue(finding.angle)}`);
+    }
+    if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
+      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
     }
   });
   if (!Number.isInteger(maxChars) || maxChars <= 0) {
-    // Number/String report the value faithfully for every input this guard
-    // rejects (NaN, Infinity, a fraction) — unlike JSON.stringify, which
-    // renders NaN/Infinity as the misleading literal "null".
-    const reported = typeof maxChars === "number" ? String(maxChars) : JSON.stringify(maxChars);
-    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive integer, got ${reported}`);
+    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive integer, got ${describeInvalidValue(maxChars)}`);
   }
   const body = renderFindingsCommentBody({ gate, headSha, findings, maxChars });
   if (body.length <= maxChars) {
@@ -474,16 +494,23 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   const almostFullyDropped = n > 0 ? renderWithDropped(n - 1) : fullyDropped;
   if (fullyDropped.body.length > maxChars && almostFullyDropped.body.length > maxChars) {
     throw new Error(
-      `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding omitted; refusing to post a truncated or partial record.`,
+      `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with only one finding surviving; refusing to post a truncated or partial record.`,
     );
   }
-  // Binary-search the minimal drop count that fits, rather than dropping one
-  // finding at a time and re-rendering after each — O(log n) renders instead
-  // of O(n), each still O(n) work, so O(n log n) instead of O(n^2) for a
-  // large round. This assumes the rendered length is non-increasing as more
-  // low-priority findings are dropped, for every step EXCEPT the last (see
-  // above) — so the search only ranges up to whichever of `n`/`n - 1` is
-  // confirmed to fit, never past it.
+  // Binary-search a drop count that fits, rather than dropping one finding at
+  // a time and re-rendering after each — O(log n) renders instead of O(n),
+  // each still O(n) work, so O(n log n) instead of O(n^2) for a large round.
+  // The rendered length is NOT strictly non-increasing as more findings are
+  // dropped: dropping the first finding of a severity group also adds that
+  // group to the omission note (", <count> <Label>"), which can add more
+  // characters than the dropped finding's own line removed, so the curve can
+  // bump upward mid-range, not just at the last step. The search stays SAFE
+  // despite that: `hi` starts at `hiBound`, already confirmed to fit above,
+  // and is only ever narrowed to a `mid` whose render was itself just
+  // verified to fit — so the returned render is always confirmed to fit
+  // `maxChars`, never assumed. A bump can only cost optimality (the search
+  // may settle on dropping a few more findings than the true minimum when it
+  // steps past a dip on the non-fitting side), never correctness.
   const hiBound = fullyDropped.body.length <= maxChars ? n : n - 1;
   let lo = 1;
   let hi = hiBound;
@@ -642,8 +669,8 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
   }
   const marker = buildFindingsMarker({ gate: options.gate });
   // Fails closed (throws) when the round cannot be rendered within GitHub's
-  // comment limit even with every finding omitted, rather than reporting a
-  // false success below.
+  // comment limit even with only one finding surviving, rather than reporting
+  // a false success below.
   const { body: desiredBody, omittedCounts } = renderBoundedFindingsCommentBody({
     gate: options.gate,
     headSha: options.headSha,
