@@ -7,7 +7,7 @@ import {
   normalizeCheckpointCycleIdentity,
   resolveCheckpointStateFromArtifact,
 } from "@dev-loops/core/loop/public-dev-loop-routing";
-import { CHECKPOINT_FILE } from "./checkpoint-contract.mjs";
+import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -306,55 +306,58 @@ function ghJson(args, cwd) {
     throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
-// Recent-history window for the latest-qualifying-completion query below.
-// ponytail: bounded scan, not full history — raise this (or add pagination)
-// if a qualifying merge ever needs to reach further back than this.
-const LATEST_QUALIFYING_COMPLETION_SCAN_LIMIT = 30;
+// Bounds the best-effort `git fetch` below so a slow/offline remote can never
+// delay startup indefinitely.
+const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
 /**
- * Query GitHub directly, at read time, for the identity of the most recently
- * merged PR whose assignees include Copilot — the query-time equivalent of
- * "the latest qualifying async completion" (RETROSPECTIVE_QUALIFYING_GATES).
- * Both qualifying gates (copilot_pr_followup, issue_intake) culminate in a
- * merged PR still carrying the Copilot assignee, so this single query stands
- * in for replaying either gate's historical routing decision.
+ * True when the base branch (as tracked at `origin/<baseBranch>`) carries any
+ * commit after `mergeCommit` — i.e. something has merged since the
+ * checkpoint's recorded discharge point. This is a purely local git ancestry
+ * check (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query:
+ * recency is a fact of this repo's own commit graph, so it never depends on
+ * `gh`, an API rate limit, or a Copilot-assignee proxy that may match nothing.
  *
- * This replaces the prior write-time "arming" mechanism entirely: instead of
- * something having to observe and record a qualifying completion when it
- * happens, the gate re-derives the answer itself on every evaluation — the
- * seam that could never be missed (never re-resolved, worktree-relative, or
- * hit from a read-only preview) because there is no seam, only a query.
+ * A best-effort `git fetch origin <baseBranch>` runs first so the ordinary
+ * case (a commit merged after this checkout last fetched) resolves correctly;
+ * the fetch failing is not fatal on its own — an already-current local
+ * `origin/<baseBranch>` still answers correctly without it.
  *
- * Returns null when no qualifying merge is found in the scan window (a real
- * "nothing to report" answer — NONE is still a legitimate outcome). Throws on
- * any gh/parse failure so the caller can fail closed instead of silently
- * treating a broken query as "no qualifying completion".
+ * Returns `true` (fail closed) when `mergeCommit` cannot be resolved against
+ * `origin/<baseBranch>` at all — unfetched, a shallow clone missing the
+ * history, or a garbage value. An unverifiable discharge claim must not be
+ * trusted, so "cannot tell" collapses to the same outcome as "yes, something
+ * newer exists" rather than a separate "unknown" state.
  *
- * @param {{repo: string, cwd: string}} params
- * @returns {{repo: string, prNumber: number, mergeCommit: string}|null}
+ * This repo (and any repo using this check) squash-merges: the recorded
+ * `mergeCommit` is the single squash commit that lands on the base branch, so
+ * plain first-parent-agnostic `git log` ancestry is correct — filtering on
+ * `--merges` would match nothing.
+ *
+ * @param {{mergeCommit: string, baseBranch: string, cwd: string}} params
+ * @returns {boolean}
  */
-export function resolveLatestQualifyingCompletionIdentity({ repo, cwd }) {
-  const prs = ghJson([
-    "pr", "list", "--repo", repo, "--state", "merged",
-    "--limit", String(LATEST_QUALIFYING_COMPLETION_SCAN_LIMIT),
-    "--json", "number,mergedAt,mergeCommit,assignees",
-  ], cwd);
-  if (!Array.isArray(prs)) {
-    throw new Error("gh pr list --state merged returned a non-array payload");
+export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, cwd }) {
+  try {
+    execFileSync("git", ["fetch", "origin", baseBranch], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: RETROSPECTIVE_FETCH_TIMEOUT_MS,
+    });
+  } catch {
+    // Best-effort — an already-current local origin/<baseBranch> still works.
   }
-  let latest = null;
-  for (const pr of prs) {
-    const assignees = Array.isArray(pr?.assignees) ? pr.assignees : [];
-    if (!assignees.some((assignee) => isCopilotLogin(assignee?.login))) continue;
-    const mergedAtMs = typeof pr?.mergedAt === "string" ? Date.parse(pr.mergedAt) : NaN;
-    const mergeCommitOid = typeof pr?.mergeCommit?.oid === "string" ? pr.mergeCommit.oid : null;
-    if (!Number.isFinite(mergedAtMs) || !Number.isInteger(pr?.number) || mergeCommitOid === null) continue;
-    if (latest === null || mergedAtMs > latest.mergedAtMs) {
-      latest = { mergedAtMs, prNumber: pr.number, mergeCommit: mergeCommitOid };
-    }
+  let log;
+  try {
+    log = execFileSync("git", ["log", `${mergeCommit}..origin/${baseBranch}`, "--oneline"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    // mergeCommit is unresolvable locally — fail closed.
+    return true;
   }
-  return latest === null
-    ? null
-    : normalizeCheckpointCycleIdentity({ repo, prNumber: latest.prNumber, mergeCommit: latest.mergeCommit });
+  return log.trim().length > 0;
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -1011,7 +1014,7 @@ export function buildResolveDevLoopStartupResult(input, {
   cwd,
   asyncStartMode = "required",
   config,
-  resolveLatestQualifyingCompletion = resolveLatestQualifyingCompletionIdentity,
+  resolveHasNewerMerge = resolveHasNewerMergeSinceCheckpoint,
 } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
@@ -1036,16 +1039,28 @@ export function buildResolveDevLoopStartupResult(input, {
   input = routingInput;
   // Retrospective checkpoint gate. The durable checkpoint file (if present)
   // is always honored — unchanged from before cycle-scoping existed. Cycle
-  // scoping itself (deriving the latest qualifying completion so a stale
-  // `complete`/`skipped` cannot satisfy a newer cycle forever) is derived
-  // entirely at READ time, on every evaluation, so there is no write-time
-  // "arming" seam to miss (never re-resolved after merge, never
-  // cwd-relative, never a read-only preview's side effect, never racy).
-  // Gated on workflow.requireRetrospective so a repo that never opts into
-  // cycle scoping never pays for the extra GitHub query — the plain
-  // checkpoint file read below is unaffected either way.
-  const checkpointPath = path.join(effectiveCwd, CHECKPOINT_FILE);
-  let durableCheckpoint = null;
+  // scoping itself (a stale `complete`/`skipped` must not satisfy every later
+  // cycle forever) is derived entirely at READ time, on every evaluation, via
+  // a local git ancestry check — no write-time "arming" seam to miss (never
+  // re-resolved after merge, never cwd-relative, never a read-only preview's
+  // side effect, never racy) and no GitHub query at all. Gated on
+  // workflow.requireRetrospective so a repo that never opts into cycle
+  // scoping never pays for the extra git calls — the plain checkpoint file
+  // read below is unaffected either way. `durableCheckpoint` stays
+  // `undefined` when the file is genuinely absent (ENOENT) so
+  // resolveCheckpointStateFromArtifact can tell that apart from a file
+  // present but containing the JSON literal `null`.
+  //
+  // The path is resolved from the REPO ROOT (the main checkout), not
+  // cwd-relative: the checkpoint is gitignored and lives ONCE per repo, not
+  // once per worktree. `checkpoint-contract.mjs`'s write path resolves the
+  // exact same root via `resolveCheckpointRepoRoot`, so a worktree, a
+  // subdirectory, and the main checkout all address one file — a worktree
+  // write is not silently discarded the moment that worktree is removed, and
+  // the main checkout and a worktree of the same repo never disagree about
+  // the checkpoint state depending on which one last wrote it.
+  const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
+  let durableCheckpoint;
   let checkpointReadFailed = false;
   try {
     durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
@@ -1054,35 +1069,34 @@ export function buildResolveDevLoopStartupResult(input, {
       checkpointReadFailed = true;
     }
   }
-  // A query failure (offline, gh unauthenticated/error, malformed payload,
-  // repo undetectable) degrades gracefully instead of hard-failing every
-  // startup: it is treated the same as "no fresher identity is known this
-  // call" (latestQualifyingIdentity stays null) rather than forcing MISSING
-  // outright. This matters because the cycle-scoping comparison is a
-  // BACKSTOP layered on top of the checkpoint file, not the sole source of
-  // truth — an outstanding `required`/`missing` marker still blocks (that
-  // check never depends on identity), and a repo with no checkpoint at all
-  // still resolves to NONE. The accepted tradeoff: while the query is
-  // unavailable, an existing `complete`/`skipped` record is trusted at face
-  // value even if a newer qualifying merge has actually happened, exactly as
-  // it would be evaluated locally with requireRetrospective off — favoring
-  // "the loop still starts" over "every startup blocks until gh recovers".
-  let latestQualifyingIdentity = null;
-  if (resolveWorkflowConfig(config, "requireRetrospective") === true) {
-    const repo = detectRepoSlug(effectiveCwd);
-    if (repo) {
-      try {
-        latestQualifyingIdentity = resolveLatestQualifyingCompletion({ repo, cwd: effectiveCwd });
-      } catch {
-        // Best-effort: fall through with latestQualifyingIdentity still null.
-      }
+  // Only a `complete`/`skipped` checkpoint needs a recency check — every
+  // other state ignores `hasNewerMergeSinceCheckpoint` (see
+  // resolveCheckpointStateFromArtifact). An unresolvable/absent recorded
+  // `mergeCommit` is an unverifiable discharge claim — it must not be
+  // trusted, so it fails closed exactly like a confirmed newer merge.
+  let hasNewerMergeSinceCheckpoint = false;
+  const durableState = typeof durableCheckpoint?.state === "string"
+    ? durableCheckpoint.state.trim().toLowerCase()
+    : null;
+  if (
+    resolveWorkflowConfig(config, "requireRetrospective") === true &&
+    (durableState === "complete" || durableState === "skipped")
+  ) {
+    const identity = normalizeCheckpointCycleIdentity(durableCheckpoint.identity);
+    if (identity === null) {
+      hasNewerMergeSinceCheckpoint = true;
+    } else {
+      const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
+      hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
+        mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
+      });
     }
   }
   input = {
     ...input,
     retrospectiveCheckpointState: checkpointReadFailed
       ? "missing"
-      : resolveCheckpointStateFromArtifact(durableCheckpoint, { latestQualifyingIdentity }),
+      : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint }),
   };
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";

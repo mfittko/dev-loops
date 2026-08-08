@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { runNode as runNodeHelper } from "../_helpers.mjs";
-import { buildRetrospectiveCheckpointPayload } from "../../scripts/loop/checkpoint-contract.mjs";
+import { buildRetrospectiveCheckpointPayload, resolveCheckpointRepoRoot } from "../../scripts/loop/checkpoint-contract.mjs";
 
 const scriptPath = path.resolve("scripts/loop/checkpoint-contract.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+
+// A well-formed, valid full-40-hex commit oid fixture — every test below that
+// is not specifically testing the hex-shape validation itself uses this.
+const VALID_SHA = "abcdef0123456789abcdef0123456789abcdef01";
 
 test("checkpoint-contract CLI requires --state", async () => {
   const { code, stderr } = await runNode([]);
@@ -73,10 +79,13 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-test-"));
   try {
     const { code, stdout, stderr } = await runNode(
-      ["--state", "complete", "--notes", "Retrospective documented after merge"],
+      [
+        "--state", "complete", "--notes", "Retrospective documented after merge",
+        "--repo", "mfittko/dev-loops", "--pr", "1613", "--merge-commit", VALID_SHA,
+      ],
       { cwd: tempDir },
     );
-    assert.equal(code, 0);
+    assert.equal(code, 0, stderr);
     assert.equal(stderr, "");
     const output = JSON.parse(stdout);
     assert.equal(output.ok, true);
@@ -85,6 +94,7 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
     const checkpoint = JSON.parse(await readFile(checkpointPath, "utf8"));
     assert.equal(checkpoint.state, "complete");
     assert.equal(checkpoint.notes, "Retrospective documented after merge");
+    assert.deepEqual(checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: VALID_SHA });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -94,10 +104,13 @@ test("checkpoint-contract CLI writes skipped checkpoint file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-test-"));
   try {
     const { code, stdout, stderr } = await runNode(
-      ["--state", "skipped", "--reason", "Doc-only change"],
+      [
+        "--state", "skipped", "--reason", "Doc-only change",
+        "--repo", "mfittko/dev-loops", "--pr", "1613", "--merge-commit", VALID_SHA,
+      ],
       { cwd: tempDir },
     );
-    assert.equal(code, 0);
+    assert.equal(code, 0, stderr);
     assert.equal(stderr, "");
     const output = JSON.parse(stdout);
     assert.equal(output.ok, true);
@@ -106,6 +119,7 @@ test("checkpoint-contract CLI writes skipped checkpoint file", async () => {
     const checkpoint = JSON.parse(await readFile(checkpointPath, "utf8"));
     assert.equal(checkpoint.state, "skipped");
     assert.equal(checkpoint.reason, "Doc-only change");
+    assert.deepEqual(checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: VALID_SHA });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -177,7 +191,7 @@ test("checkpoint-contract CLI rejects a partial identity (--repo without --pr/--
 
 test("checkpoint-contract CLI rejects a non-integer --pr", async () => {
   await withIsolatedCwd(async (cwd) => {
-    const { code, stderr } = await runNode(["--state", "required", "--repo", "a/b", "--pr", "abc", "--merge-commit", "sha1"], { cwd });
+    const { code, stderr } = await runNode(["--state", "required", "--repo", "a/b", "--pr", "abc", "--merge-commit", VALID_SHA], { cwd });
     assert.equal(code, 1);
     const parsed = JSON.parse(stderr);
     assert.match(parsed.error, /positive integer/i);
@@ -187,7 +201,7 @@ test("checkpoint-contract CLI rejects a non-integer --pr", async () => {
 test("checkpoint-contract CLI rejects malformed --pr values a bare Number() would accept (0x10, 1e3, 12.0)", async () => {
   await withIsolatedCwd(async (cwd) => {
     for (const badPr of ["0x10", "1e3", "12.0"]) {
-      const { code, stderr } = await runNode(["--state", "required", "--repo", "a/b", "--pr", badPr, "--merge-commit", "sha1"], { cwd });
+      const { code, stderr } = await runNode(["--state", "required", "--repo", "a/b", "--pr", badPr, "--merge-commit", VALID_SHA], { cwd });
       assert.equal(code, 1, `expected rejection for --pr ${badPr}`);
       assert.match(JSON.parse(stderr).error, /positive integer/i);
     }
@@ -196,7 +210,7 @@ test("checkpoint-contract CLI rejects malformed --pr values a bare Number() woul
 
 test("checkpoint-contract CLI rejects a whitespace-only --repo instead of silently dropping the identity", async () => {
   await withIsolatedCwd(async (cwd) => {
-    const { code, stderr } = await runNode(["--state", "required", "--repo", "   ", "--pr", "5", "--merge-commit", "sha1"], { cwd });
+    const { code, stderr } = await runNode(["--state", "required", "--repo", "   ", "--pr", "5", "--merge-commit", VALID_SHA], { cwd });
     assert.equal(code, 1);
     assert.match(JSON.parse(stderr).error, /together/i);
   });
@@ -212,7 +226,7 @@ test("checkpoint-contract CLI rejects a whitespace-only --merge-commit instead o
 
 test("checkpoint-contract CLI rejects identity flags combined with --state none", async () => {
   await withIsolatedCwd(async (cwd) => {
-    const { code, stderr } = await runNode(["--state", "none", "--repo", "a/b", "--pr", "5", "--merge-commit", "sha1"], { cwd });
+    const { code, stderr } = await runNode(["--state", "none", "--repo", "a/b", "--pr", "5", "--merge-commit", VALID_SHA], { cwd });
     assert.equal(code, 1);
     assert.match(JSON.parse(stderr).error, /--state none/i);
   });
@@ -222,16 +236,146 @@ test("checkpoint-contract CLI writes a checkpoint file carrying the cycle identi
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-identity-"));
   try {
     const { code, stdout, stderr } = await runNode(
-      ["--state", "required", "--repo", "mfittko/dev-loops", "--pr", "1613", "--merge-commit", "abc123"],
+      ["--state", "required", "--repo", "mfittko/dev-loops", "--pr", "1613", "--merge-commit", VALID_SHA],
       { cwd: tempDir },
     );
     assert.equal(code, 0, stderr);
     const output = JSON.parse(stdout);
-    assert.deepEqual(output.checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: "abc123" });
+    assert.deepEqual(output.checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: VALID_SHA });
     const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
     const checkpoint = JSON.parse(await readFile(checkpointPath, "utf8"));
-    assert.deepEqual(checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: "abc123" });
+    assert.deepEqual(checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: VALID_SHA });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// `complete`/`skipped` MUST carry an identity (checkpoint-contract-cycle-
+// scoping requirement) — without one, a discharge record can never be told
+// apart from a stale one, and re-running the identical command could never
+// clear a resulting permanently-stale MISSING state.
+
+test("checkpoint-contract CLI rejects --state complete without a cycle identity", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(["--state", "complete", "--notes", "ok"], { cwd });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /requires a cycle identity/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects --state skipped without a cycle identity", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(["--state", "skipped", "--reason", "trivial"], { cwd });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /requires a cycle identity/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects a non-40-hex --merge-commit", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    for (const badSha of ["abc123", VALID_SHA.slice(0, 39), `${VALID_SHA}a`, "not-hex-at-all-not-hex-at-all-not-hexxx"]) {
+      const { code, stderr } = await runNode(
+        ["--state", "required", "--repo", "a/b", "--pr", "5", "--merge-commit", badSha],
+        { cwd },
+      );
+      assert.equal(code, 1, `expected rejection for --merge-commit ${badSha}`);
+      assert.match(JSON.parse(stderr).error, /40-character commit oid/i);
+    }
+  });
+});
+
+test("checkpoint-contract CLI rejects a malformed --repo shape", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    for (const badRepo of ["mfittko", "mfittko/dev-loops/extra", "mfittko//dev-loops"]) {
+      const { code, stderr } = await runNode(
+        ["--state", "required", "--repo", badRepo, "--pr", "5", "--merge-commit", VALID_SHA],
+        { cwd },
+      );
+      assert.equal(code, 1, `expected rejection for --repo ${badRepo}`);
+      assert.match(JSON.parse(stderr).error, /owner\/name shape/i);
+    }
+  });
+});
+
+test("checkpoint-contract CLI rejects a whitespace-only --notes for state complete", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(["--state", "complete", "--notes", "   "], { cwd });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /notes/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects a whitespace-only --reason for state skipped", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(["--state", "skipped", "--reason", "   "], { cwd });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /reason/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCheckpointRepoRoot — the write path resolves the MAIN checkout, not
+// a cwd-relative path, so a worktree write is never silently discarded when
+// that worktree is later removed.
+// ---------------------------------------------------------------------------
+
+test("resolveCheckpointRepoRoot: falls back to cwd itself outside any git repo", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-root-non-repo-"));
+  try {
+    assert.equal(resolveCheckpointRepoRoot(tempDir), tempDir);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCheckpointRepoRoot: resolves the main checkout from inside a linked worktree", async () => {
+  const mainDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-root-main-"));
+  const worktreeParent = await mkdtemp(path.join(os.tmpdir(), "checkpoint-root-wt-parent-"));
+  const worktreeDir = path.join(worktreeParent, "linked");
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "--quiet", worktreeDir, "-b", "linked-branch"], { cwd: mainDir, stdio: "ignore" });
+
+    // git internally resolves realpaths (e.g. /var vs the macOS /private/var
+    // symlink), so both sides are compared through realpathSync.
+    const expectedMainRoot = realpathSync(mainDir);
+    // Resolved from the MAIN checkout itself: identity.
+    assert.equal(realpathSync(resolveCheckpointRepoRoot(mainDir)), expectedMainRoot);
+    // Resolved from the LINKED worktree: still the main checkout, never the
+    // worktree's own path — this is the fix for the read/write path split.
+    assert.equal(realpathSync(resolveCheckpointRepoRoot(worktreeDir)), expectedMainRoot);
+  } finally {
+    try { execFileSync("git", ["worktree", "remove", "--force", worktreeDir], { cwd: mainDir, stdio: "ignore" }); } catch { /* best-effort */ }
+    await rm(mainDir, { recursive: true, force: true });
+    await rm(worktreeParent, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint-contract CLI writes to the MAIN checkout when invoked from a linked worktree, not the worktree's own .pi/", async () => {
+  const mainDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-write-main-"));
+  const worktreeParent = await mkdtemp(path.join(os.tmpdir(), "checkpoint-write-wt-parent-"));
+  const worktreeDir = path.join(worktreeParent, "linked");
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: mainDir, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "--quiet", worktreeDir, "-b", "linked-branch"], { cwd: mainDir, stdio: "ignore" });
+
+    const { code, stderr } = await runNode(["--state", "required"], { cwd: worktreeDir });
+    assert.equal(code, 0, stderr);
+
+    const mainCheckpointPath = path.join(mainDir, ".pi", "dev-loop-retrospective-checkpoint.json");
+    const worktreeCheckpointPath = path.join(worktreeDir, ".pi", "dev-loop-retrospective-checkpoint.json");
+    const mainCheckpoint = JSON.parse(await readFile(mainCheckpointPath, "utf8"));
+    assert.equal(mainCheckpoint.state, "required");
+    await assert.rejects(readFile(worktreeCheckpointPath, "utf8"));
+  } finally {
+    try { execFileSync("git", ["worktree", "remove", "--force", worktreeDir], { cwd: mainDir, stdio: "ignore" }); } catch { /* best-effort */ }
+    await rm(mainDir, { recursive: true, force: true });
+    await rm(worktreeParent, { recursive: true, force: true });
   }
 });

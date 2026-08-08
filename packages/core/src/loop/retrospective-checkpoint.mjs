@@ -73,25 +73,6 @@ export function normalizeRetrospectiveCheckpointState(value) {
 }
 
 /**
- * Returns true if a routing result represents a qualifying GitHub-first async
- * dev-loop completion that requires a post-run behavioral retrospective before
- * the next start/resume.
- *
- * A qualifying completion is one that:
- * - has a `selectedGate` in RETROSPECTIVE_QUALIFYING_GATES
- * - with `routeKind === "route"` (inspect/status-only results do not qualify)
- */
-export function isQualifyingAsyncCompletion(routingResult) {
-  if (!routingResult || typeof routingResult !== "object") return false;
-  const { routeKind, selectedGate } = routingResult;
-  if (routeKind !== "route") {
-    return false;
-  }
-  if (typeof selectedGate !== "string") return false;
-  return RETROSPECTIVE_QUALIFYING_GATES.includes(selectedGate);
-}
-
-/**
  * Normalizes a dev-loop cycle identity — the minimum facts that pin a
  * checkpoint record to one specific qualifying completion: repo, PR number,
  * and merge commit. Returns null when any field is missing or malformed, so a
@@ -114,60 +95,46 @@ export function normalizeCheckpointCycleIdentity(identity) {
 }
 
 /**
- * True when two cycle identities refer to the same dev-loop cycle. Either
- * side may be raw/unnormalized; both are normalized before comparison. An
- * invalid (or absent) identity on either side never matches.
- *
- * @param {unknown} a
- * @param {unknown} b
- * @returns {boolean}
- */
-export function checkpointCycleIdentitiesMatch(a, b) {
-  const normalizedA = normalizeCheckpointCycleIdentity(a);
-  const normalizedB = normalizeCheckpointCycleIdentity(b);
-  if (!normalizedA || !normalizedB) {
-    return false;
-  }
-  return normalizedA.repo.toLowerCase() === normalizedB.repo.toLowerCase()
-    && normalizedA.prNumber === normalizedB.prNumber
-    && normalizedA.mergeCommit.toLowerCase() === normalizedB.mergeCommit.toLowerCase();
-}
-
-/**
  * Resolves the RETROSPECTIVE_CHECKPOINT_STATE for a durable checkpoint
- * artifact, scoped to a specific dev-loop cycle identity (issue: a one-time
+ * artifact, scoped to the recorded cycle's recency (issue: a one-time
  * `complete`/`skipped` checkpoint must not satisfy every later qualifying
  * cycle forever).
  *
- * A `complete` or `skipped` artifact whose recorded `identity` does not match
- * `latestQualifyingIdentity` (when the caller has one to compare against)
- * cannot discharge that newer cycle — it fails closed to MISSING. The caller
- * derives `latestQualifyingIdentity` itself (this module stays pure/I/O-free)
- * by querying the latest qualifying completion at the moment the gate is
- * evaluated, so this comparison runs on every call rather than depending on
- * anything having written a fresh `required` record for the new identity.
+ * A `complete` or `skipped` artifact is scoped by `hasNewerMergeSinceCheckpoint`:
+ * when true, something has merged since the checkpoint's recorded discharge
+ * point (or that point could not be verified at all), so the checkpoint
+ * cannot cover the newer cycle — it fails closed to MISSING. The caller
+ * derives `hasNewerMergeSinceCheckpoint` itself (this module stays
+ * pure/I/O-free) by checking local git ancestry between the checkpoint's
+ * recorded merge commit and the base branch, so this runs fresh on every
+ * evaluation rather than depending on anything having written a fresh
+ * `required` record for the new cycle.
  *
  * `required`/`none` are not scoped by this comparison: `required` already
- * maps to MISSING regardless of identity (an outstanding requirement blocks
+ * maps to MISSING regardless of recency (an outstanding requirement blocks
  * the gate no matter which cycle triggered it), and `none` means no
  * completion has ever been observed.
  *
  * @param {object|null|undefined} artifact - Parsed checkpoint JSON, or
- *   null/undefined when the durable artifact is absent. A non-null value that
- *   is not a plain object (e.g. a corrupt-but-valid-JSON scalar or array) is
- *   treated as a present-but-malformed artifact and fails closed to MISSING —
- *   only a genuinely ABSENT artifact resolves to NONE.
+ *   `undefined` when the durable artifact is genuinely ABSENT (no file). Any
+ *   other non-plain-object value — including the JSON literal `null` (a file
+ *   that IS present but contains malformed content) and a corrupt-but-valid
+ *   scalar/array — is treated as present-but-malformed and fails closed to
+ *   MISSING; only a genuinely absent artifact resolves to NONE.
  * @param {object} [options]
- * @param {unknown} [options.latestQualifyingIdentity] - Identity of the most
- *   recently observed qualifying completion this call, or null/absent when
- *   none is known.
+ * @param {boolean} [options.hasNewerMergeSinceCheckpoint] - True when the
+ *   caller has determined (or could not rule out) that something has merged
+ *   to the base branch since the checkpoint's recorded discharge point.
+ *   Ignored for states other than `complete`/`skipped`. Defaults to `false`
+ *   (trust the recorded state) so callers that never verify recency (e.g.
+ *   `workflow.requireRetrospective` disabled) see unchanged behavior.
  * @returns {"none"|"complete"|"skipped"|"missing"}
  */
-export function resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity = null } = {}) {
-  if (artifact === null || artifact === undefined) {
+export function resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint = false } = {}) {
+  if (artifact === undefined) {
     return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
   }
-  if (typeof artifact !== "object") {
+  if (artifact === null || typeof artifact !== "object" || Array.isArray(artifact)) {
     // Present but malformed — fail closed, do not treat as "nothing observed".
     return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
   }
@@ -178,13 +145,11 @@ export function resolveCheckpointStateFromArtifact(artifact, { latestQualifyingI
   if (rawState === "none") {
     return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
   }
-  const normalizedLatest = normalizeCheckpointCycleIdentity(latestQualifyingIdentity);
-  const staleForLatestCycle = normalizedLatest && !checkpointCycleIdentitiesMatch(artifact.identity, normalizedLatest);
   if (rawState === "skipped") {
-    return staleForLatestCycle ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
+    return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
   }
   if (rawState === "complete") {
-    return staleForLatestCycle ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
+    return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
   }
   // Malformed/unrecognized durable state — fail closed.
   return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;

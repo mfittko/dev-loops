@@ -462,7 +462,7 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
 
 ### Mandatory post-merge retrospective checkpoint write
 
-After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective gate is derived at the START of the NEXT loop by comparing this checkpoint's `identity` against the latest qualifying completion it finds live — an identity-less record can never discharge a cycle, so carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `gh pr view --repo <owner/name> --pr <n> --json mergeCommit --jq .mergeCommit.oid` reports) is MUST, not optional:
+After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective gate is derived at the START of the NEXT loop by checking local git ancestry between this checkpoint's recorded `identity.mergeCommit` and the base branch — an identity-less record can never be verified, so it is treated the same as a stale one; carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `gh pr view --repo <owner/name> --pr <n> --json mergeCommit --jq .mergeCommit.oid` reports) is MUST, not optional (the CLI now rejects `complete`/`skipped` without it):
 
 ```sh
 node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --notes "<one-line retrospective summary>" \

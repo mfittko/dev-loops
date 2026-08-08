@@ -27,6 +27,7 @@
  *   --state skipped  --reason "<reason>" --repo <owner/name> --pr <n> --merge-commit <sha>
  */
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -73,6 +74,36 @@ function isDevLoopCompletion(content: unknown): boolean {
 }
 
 /**
+ * Resolve the checkpoint file's REPO ROOT — the main git checkout — from any
+ * cwd inside the repo's worktree family. `.pi/dev-loop-retrospective-checkpoint.json`
+ * lives ONCE per repo, not once per worktree, and `scripts/loop/checkpoint-contract.mjs`
+ * / `scripts/loop/resolve-dev-loop-startup.mjs` both resolve the exact same
+ * root — this is a vendored copy of that same `git worktree list` first-line
+ * parse (the extension bundle runs in a separate runtime from those Node
+ * scripts, so the logic is duplicated here rather than imported, matching
+ * this repo's existing cross-runtime vendoring convention). Falls back to
+ * `cwd` itself, never throwing, when `git worktree list` cannot be resolved
+ * at all (cwd is not inside a git repo).
+ */
+function resolveCheckpointRepoRoot(cwd: string): string {
+  try {
+    const output = execFileSync("git", ["worktree", "list"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const firstLine = output.split("\n")[0]?.trim();
+    if (firstLine) {
+      const shaIdx = firstLine.search(/\s[0-9a-f]{7,64}\b/iu);
+      if (shaIdx !== -1) return firstLine.slice(0, shaIdx).trim();
+    }
+  } catch {
+    // Not inside a git repo at all — fall through to cwd itself.
+  }
+  return cwd;
+}
+
+/**
  * Writes the retrospective checkpoint marker to the durable checkpoint file,
  * marking the state as "required" so the next dev-loop start/resume can
  * detect the outstanding requirement.
@@ -113,8 +144,11 @@ export default function devLoopBehavioralReview(pi: ExtensionAPI) {
     ) {
       // Write the durable checkpoint marker before sending the prompt so that
       // a fresh session can detect the outstanding requirement even if the
-      // current session ends before the review is recorded.
-      writeRequiredCheckpoint(process.cwd());
+      // current session ends before the review is recorded. Resolved to the
+      // MAIN checkout root (not process.cwd() directly) so a worktree
+      // session's write is never silently discarded when that worktree is
+      // later removed.
+      writeRequiredCheckpoint(resolveCheckpointRepoRoot(process.cwd()));
       pi.sendUserMessage(REVIEW_PROMPT);
     }
   });

@@ -90,13 +90,14 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
   }, async (inputPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
       // An isolated, non-repo cwd (no `.devloops`) rather than repoRoot: this
-      // repo's own `.devloops` sets `workflow.requireRetrospective: true`,
-      // which would make the resolver query GitHub live for the retrospective
-      // gate — an ambient network/auth dependency this test must never have.
-      // (The retrospectiveCheckpointState in the input above is not
-      // authoritative either way — the resolver always recomputes it — but an
-      // isolated cwd keeps that recomputation itself hermetic: no checkpoint
-      // file, no config opting into the live query.)
+      // repo's own `.devloops` sets `workflow.requireRetrospective: true`
+      // (pinned in resolve-dev-loop-startup.test.mjs), which would make the
+      // resolver run a live git ancestry check against this worktree's own
+      // history for the retrospective gate — an ambient dependency this test
+      // must never have. (The retrospectiveCheckpointState in the input above
+      // is not authoritative either way — the resolver always recomputes it —
+      // but an isolated cwd keeps that recomputation itself hermetic: no
+      // checkpoint file, no config opting into the ancestry check.)
       cwd: tmpDir,
       encoding: "utf8",
       env: { ...process.env, ...resolverTestEnv() },
