@@ -41,7 +41,7 @@ Exit codes:
   0  Success
   1  Argument error, gh failure, or the round cannot be rendered within the comment
      length limit even with every finding dropped, nor with only its single
-     least-urgent finding kept (fails closed rather than posting a truncated or
+     most-urgent finding kept (fails closed rather than posting a truncated or
      partial record)
   2  Invalid --jq filter`.trim();
 
@@ -54,10 +54,14 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
+// The one gate vocabulary this module knows about. Shared by normalizeGate
+// (CLI --gate parsing) and validateAndSanitizeRenderInputs's marker-collision
+// guard below, so the two can never name a different set of "real" gates.
+const KNOWN_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+
 function normalizeGate(value) {
-  const gates = new Set(["draft_gate", "pre_approval_gate"]);
   const normalized = String(value).trim().toLowerCase();
-  return gates.has(normalized) ? normalized : null;
+  return KNOWN_GATES.has(normalized) ? normalized : null;
 }
 
 function normalizeHeadSha(value) {
@@ -445,6 +449,21 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
   if (typeof gate !== "string" || gate.trim().length === 0) {
     throw new Error(`renderBoundedFindingsCommentBody: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
   }
+  // gate's sanitization (below, at the return statement) is itself lossy
+  // (e.g. a backtick is stripped outright, not encoded) — a malformed gate
+  // value can sanitize to the SAME marker text as a genuinely different,
+  // real gate (`` "draft`_gate" `` sanitizes to "draft_gate"), letting two
+  // distinct gates collide onto one comment, since buildFindingsMarker keys
+  // solely on this sanitized value. Reject that specific collision class up
+  // front: a value that only sanitizes into a KNOWN gate name by way of
+  // being malformed (never equal to it to begin with) must never be treated
+  // as that gate. A gate that sanitizes to something else entirely (not a
+  // real gate name) is still sanitized, not rejected — it cannot collide
+  // with a real gate's marker, only ever with its own would-be raw self.
+  const sanitizedGateForCollisionCheck = sanitizeInline(gate);
+  if (sanitizedGateForCollisionCheck !== gate && KNOWN_GATES.has(sanitizedGateForCollisionCheck)) {
+    throw new Error(`renderBoundedFindingsCommentBody: gate ${describeInvalidValue(gate)} sanitizes to the different, real gate ${JSON.stringify(sanitizedGateForCollisionCheck)}'s own marker identity — refusing to let a malformed gate collide with it`);
+  }
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     throw new Error(`renderBoundedFindingsCommentBody: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
   }
@@ -475,10 +494,17 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
     }
     // disposition is rendered directly into the comment (bare prose, for any
-    // truthy value, when present — see renderFindingsCommentBody); an
-    // unvalidated non-string/blank value would otherwise post
-    // "[object Object]"/"42"/"true"/an empty italic run into the comment.
-    if (finding.disposition !== undefined && (typeof finding.disposition !== "string" || finding.disposition.trim().length === 0)) {
+    // truthy value, when present — see renderFindingsCommentBody's own `?:`
+    // truthiness check); null/"" are already falsy there, so they render as
+    // "no disposition" today exactly like undefined, and must keep passing
+    // through unrejected. Only a non-string value OTHER than null (an
+    // object/number/boolean/array/symbol) or a truthy-but-blank string
+    // ("   ") would otherwise post "[object Object]"/"42"/"true"/an empty
+    // italic run into the comment, so only those are rejected here.
+    if (
+      finding.disposition !== undefined && finding.disposition !== null && finding.disposition !== ""
+      && (typeof finding.disposition !== "string" || finding.disposition.trim().length === 0)
+    ) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].disposition must be a non-empty string when present, got ${describeInvalidValue(finding.disposition)}`);
     }
     // files entries are rendered directly as code-span file refs (see
@@ -514,8 +540,8 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
 // finding would fit. Every omission is named in the posted comment itself,
 // with a pointer to the disposition ledger — the one surface that is never
 // length-bounded. Throws (fails closed) when BOTH the emptiest render (every
-// finding dropped) and the render with only its single least-urgent finding
-// still dropped still cannot fit, so a round that truly cannot be posted is
+// finding dropped) and the render with only its single most-urgent finding
+// kept still cannot fit, so a round that truly cannot be posted is
 // never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
   ({ gate, headSha } = validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }));
@@ -556,7 +582,7 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   const almostFullyDropped = n > 0 ? renderWithDropped(n - 1) : fullyDropped;
   if (fullyDropped.body.length > maxChars && almostFullyDropped.body.length > maxChars) {
     throw new Error(
-      `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding dropped, nor with only its single least-urgent finding kept; refusing to post a truncated or partial record.`,
+      `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding dropped, nor with only its single most-urgent finding kept; refusing to post a truncated or partial record.`,
     );
   }
   // Binary-search a drop count that fits, rather than dropping one finding at
@@ -735,7 +761,7 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
   const marker = buildFindingsMarker({ gate: sanitizeInline(options.gate) });
   // Fails closed (throws) when the round cannot be rendered within GitHub's
   // comment limit even with every finding dropped, nor with only its single
-  // least-urgent finding kept, rather than reporting a false success below.
+  // most-urgent finding kept, rather than reporting a false success below.
   const { body: desiredBody, omittedCounts } = renderBoundedFindingsCommentBody({
     gate: options.gate,
     headSha: options.headSha,

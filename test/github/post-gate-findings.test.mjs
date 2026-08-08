@@ -15,6 +15,7 @@ import {
   postGateFindings,
   renderBoundedFindingsCommentBody,
   renderFindingsCommentBody,
+  sanitizeInline,
 } from "../../scripts/github/post-gate-findings.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -591,6 +592,41 @@ test("postGateFindings updates the same per-gate comment when re-run with a diff
   }
 });
 
+test("postGateFindings searches for its existing comment using the SAME sanitized gate the render itself embeds in the marker (regression: an un-sanitized search marker would re-create a duplicate)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
+  const repoRoot = await optedInRepoRoot();
+  try {
+    // A gate value sanitizeInline changes but that does not collide with a
+    // real known gate (see the dedicated collision-rejection test above) — a
+    // value the render seam still accepts, just not byte-identical to what
+    // was passed in.
+    const rawGate = "draft_gate[extra]";
+    const sanitizedGate = sanitizeInline(rawGate);
+    assert.notEqual(sanitizedGate, rawGate, "fixture assumption: this gate value must actually require sanitization");
+    const findings = parseFindings(FINDINGS_JSON);
+    const existingBody = renderFindingsCommentBody({ gate: sanitizedGate, headSha: "abc1234", findings });
+    const existingComment = { id: 99, html_url: "https://github.com/owner/repo/pull/42#issuecomment-99", body: existingBody, user: { login: AUTHENTICATED_LOGIN } };
+    const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: JSON.stringify([[existingComment]]) + "\n",
+      },
+      // No mutation entry: an unsanitized search marker would miss this
+      // existing comment and call create instead, overflowing the stub.
+    ]);
+    const result = await postGateFindings(
+      { repo: "owner/repo", pr: 42, gate: rawGate, headSha: "abc1234", findings: FINDINGS_JSON },
+      { env, ghCommand: ghPath, repoRoot },
+    );
+    assert.equal(result.action, "noop");
+    assert.equal(result.commentId, 99);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Config opt-out: postFindingsComments: false → skipped no-op (no gh call)
 // ---------------------------------------------------------------------------
@@ -1033,16 +1069,26 @@ test("renderBoundedFindingsCommentBody posts the fitting single-survivor render 
   const highOnly = parsed.filter((f) => f.severity === "high");
   const nitOmitted = [{ severity: "nit", count: nitCount }];
   const allOmitted = [{ severity: "high", count: 1 }, { severity: "nit", count: nitCount }];
+  // Render once (at the default limit) to learn a candidate length, then
+  // re-render WITH that candidate as maxChars: the omission note embeds
+  // maxChars itself, so its digit count (and therefore the body's own
+  // length) depends on which maxChars produced it — deriving the "fits
+  // exactly" bound from a render that used the much-larger default limit's
+  // digit count understates the true bound by the digit-count difference.
+  const candidateMaxChars = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: highOnly, omittedCounts: nitOmitted }).length;
+  const maxChars = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: highOnly, omittedCounts: nitOmitted, maxChars: candidateMaxChars }).length;
   // The render with every nit dropped but the sole high finding still
   // rendered (one survivor), versus dropping that last survivor too (zero
-  // findings, the "none survived" sentence).
-  const oneSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: highOnly, omittedCounts: nitOmitted });
-  const zeroSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [], omittedCounts: allOmitted });
+  // findings, the "none survived" sentence) — both rendered against the
+  // same self-consistent maxChars so each fixture's own note text matches
+  // the bound actually being tested against.
+  const oneSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: highOnly, omittedCounts: nitOmitted, maxChars });
+  const zeroSurvivorBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [], omittedCounts: allOmitted, maxChars });
+  assert.equal(oneSurvivorBody.length, maxChars, "fixture assumption: the one-survivor render must fit maxChars exactly");
   assert.ok(zeroSurvivorBody.length > oneSurvivorBody.length, "fixture assumption: dropping the very last finding must make the render LONGER, not shorter, to reproduce the bug");
   // A maxChars that fits the one-survivor render exactly, but not the
   // (longer) zero-survivor render — a probe of only `k = n` (drop
   // everything) would wrongly conclude nothing fits and fail closed.
-  const maxChars = oneSurvivorBody.length;
   const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: parsed, maxChars });
   assert.ok(body.length <= maxChars, `degraded body must fit within the limit (got ${body.length})`);
   assert.deepEqual(omittedCounts, nitOmitted, "must stop at dropping every nit and keep the sole surviving high finding, not drop it too");
@@ -1152,6 +1198,25 @@ test("renderBoundedFindingsCommentBody rejects a findings element missing angle/
   );
 });
 
+test("renderBoundedFindingsCommentBody reports the invalid element's OWN index in a multi-element array, not always findings[0]", () => {
+  // Every other per-element validation test above uses a single-element
+  // array, so each always reports index 0 regardless of whether the guard
+  // computes the index correctly or hand-counts it — a hand-maintained
+  // counter that silently drifted out of sync with the loop (or was deleted
+  // outright) would still pass every one of them. Three valid findings ahead
+  // of one invalid one pins the counter to the invalid element's true
+  // position.
+  const valid = { severity: "low", angle: "scope", summary: "fine" };
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [valid, valid, valid, { severity: "high", angle: "scope" }],
+    }),
+    /findings\[3\]\.summary must be a non-empty string, got undefined/,
+  );
+});
+
 test("renderBoundedFindingsCommentBody rejects an array findings element instead of misreporting it as a severity error", () => {
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [[]] }),
@@ -1218,6 +1283,18 @@ test("renderBoundedFindingsCommentBody rejects a non-string/blank disposition in
   );
 });
 
+test("renderBoundedFindingsCommentBody accepts a null or empty-string disposition unchanged (regression: previously-valid falsy input must not now throw)", () => {
+  for (const disposition of [null, ""]) {
+    const { body } = renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "low", angle: "scope", summary: "x", disposition }],
+    });
+    assert.ok(body.includes("`scope`: x"), "must render the finding with no disposition suffix, exactly as an absent disposition would");
+    assert.ok(!body.includes(" — _"), "a null/empty disposition must never render a disposition suffix");
+  }
+});
+
 test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha instead of rendering an identity-breaking marker (<!-- dev-loops:gate-findings gate=undefined -->)", () => {
   const findings = [{ severity: "high", angle: "scope", summary: "x" }];
   assert.throws(
@@ -1267,6 +1344,33 @@ test("renderBoundedFindingsCommentBody sanitizes gate/headSha so neither can for
     firstLine.startsWith("<!-- dev-loops:gate-findings gate=") && firstLine.endsWith("-->"),
     `the rendered identity marker must stay a single line, got: ${JSON.stringify(firstLine)}`,
   );
+  // The forged gate's embedded "### Injected" must never land as its own
+  // standalone line: an unsanitized gate would carry its own literal
+  // newlines straight into the body, so "### Injected" (the gate's own
+  // second embedded line) would surface as a genuine, independently
+  // rendered Markdown heading rather than harmless mid-line text inside the
+  // (now single-line) marker/heading.
+  assert.ok(
+    !bodyWithForgedGate.split("\n").includes("### Injected"),
+    "the forged gate's own embedded newline must never produce a standalone injected line",
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a gate that only sanitizes into a DIFFERENT, real gate's marker identity, instead of colliding with it", () => {
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  // A backtick is stripped outright (not encoded) by sanitizeInline, so this
+  // malformed gate sanitizes to the exact bytes of the real "draft_gate" —
+  // reproducing two reviewers' independently-found marker collision.
+  const collidingGate = "draft`_gate";
+  assert.notEqual(collidingGate, "draft_gate", "fixture assumption: the raw value must differ from the real gate it collides with");
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: collidingGate, headSha: "abc1234", findings }),
+    /sanitizes to the different, real gate/,
+  );
+  // The genuine "draft_gate" itself (already a fixed point of sanitization)
+  // must still render, producing its own distinct, un-collided marker.
+  const { body } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.split("\n")[0].startsWith(buildFindingsMarker({ gate: "draft_gate" })));
 });
 
 test("renderBoundedFindingsCommentBody keys its drop set by position, not object identity, so a repeated finding reference drops exactly as many slots as counted", () => {
