@@ -69,11 +69,12 @@ Required:
   --pr <n>          PR number (resolves the canonical path).
 Optional:
   --branch <name>   Branch to create/check out (default: <kind>-<n>). A
-                     configured-remote-prefixed value ("upstream/foo", only
-                     when "upstream" is a remote THIS machine has configured)
-                     is stripped to the bare name — same remote-vs-bare-branch
-                     handling as --base, so the stripping depends on which
-                     remotes are configured locally, not the value alone.
+                     prefixed value is stripped to the bare name — same
+                     remote-vs-bare-branch handling as --base: "origin/",
+                     "refs/heads/", and "refs/remotes/origin/" always strip,
+                     and any OTHER prefix ("upstream/foo") strips only when
+                     that first segment is a remote THIS machine has
+                     configured.
   --base <ref>      Base ref for a new worktree (default: origin/<repo's
                      auto-detected default branch — origin/HEAD, else
                      main/master; .devloops workflow.baseBranch, when
