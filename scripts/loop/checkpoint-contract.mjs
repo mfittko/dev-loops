@@ -4,13 +4,15 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
+import { normalizeCheckpointCycleIdentity } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 
-const CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
+export const CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
 const ALLOWED_STATES = new Set(["required", "complete", "skipped", "none", "missing"]);
 
 const USAGE = `Usage: dev-loops checkpoint-contract --state <state> [--notes <text>] [--reason <text>]
+       [--repo <owner/name> --pr <number> --merge-commit <sha>]
 
 Write .pi/dev-loop-retrospective-checkpoint.json using the retrospective contract format.
 
@@ -20,6 +22,10 @@ Required:
 Optional:
   --notes <text>           Required when --state is complete
   --reason <text>          Required when --state is skipped
+  --repo <owner/name>      Cycle identity (repo). Provide with --pr and
+  --pr <number>            --merge-commit together to scope this checkpoint
+  --merge-commit <sha>     record to one specific qualifying completion — a
+                           later reader can then tell WHICH cycle it covers.
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -27,12 +33,14 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
-export function buildRetrospectiveCheckpointPayload({ state, notes = null, reason = null }, now = new Date()) {
+export function buildRetrospectiveCheckpointPayload({ state, notes = null, reason = null, identity = null }, now = new Date()) {
   const timestamp = now.toISOString();
-  if (state === "complete") return { state, completedAt: timestamp, notes };
-  if (state === "skipped") return { state, skippedAt: timestamp, reason };
-  if (state === "required") return { state, triggeredAt: timestamp };
-  if (state === "missing") return { state, triggeredAt: timestamp };
+  const normalizedIdentity = identity != null ? normalizeCheckpointCycleIdentity(identity) : null;
+  const identityField = normalizedIdentity ? { identity: normalizedIdentity } : {};
+  if (state === "complete") return { state, completedAt: timestamp, notes, ...identityField };
+  if (state === "skipped") return { state, skippedAt: timestamp, reason, ...identityField };
+  if (state === "required") return { state, triggeredAt: timestamp, ...identityField };
+  if (state === "missing") return { state, triggeredAt: timestamp, ...identityField };
   if (state === "none") return { state };
   throw new Error(`Unsupported state: ${state}`);
 }
@@ -46,6 +54,9 @@ function parseCliArgs(argv) {
         state: { type: "string" },
         notes: { type: "string" },
         reason: { type: "string" },
+        repo: { type: "string" },
+        pr: { type: "string" },
+        "merge-commit": { type: "string" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
@@ -72,7 +83,28 @@ function parseCliArgs(argv) {
     throw parseError('state "skipped" requires --reason');
   }
 
-  return { state, notes: values.notes ?? null, reason: values.reason ?? null, jq: values.jq, silent: values.silent === true };
+  const mergeCommit = values["merge-commit"];
+  const hasIdentityFlag = values.repo !== undefined || values.pr !== undefined || mergeCommit !== undefined;
+  let identity = null;
+  if (hasIdentityFlag) {
+    if (!values.repo || !values.pr || !mergeCommit) {
+      throw parseError("--repo, --pr, and --merge-commit must be provided together to record a cycle identity");
+    }
+    const prNumber = Number(values.pr);
+    if (!Number.isInteger(prNumber) || prNumber <= 0) {
+      throw parseError("--pr must be a positive integer");
+    }
+    identity = { repo: values.repo, prNumber, mergeCommit };
+  }
+
+  return {
+    state,
+    notes: values.notes ?? null,
+    reason: values.reason ?? null,
+    identity,
+    jq: values.jq,
+    silent: values.silent === true,
+  };
 }
 
 async function run(argv) {
@@ -82,8 +114,8 @@ async function run(argv) {
     return 0;
   }
 
-  const { state, notes, reason } = parsed;
-  const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason });
+  const { state, notes, reason, identity } = parsed;
+  const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason, identity });
   const checkpointPath = path.join(process.cwd(), CHECKPOINT_FILE);
   await mkdir(path.dirname(checkpointPath), { recursive: true });
   await writeFile(checkpointPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
