@@ -413,6 +413,7 @@ function summarizeDroppedBySeverity(dropped) {
 // rather than the "object" typeof would give.
 function describeInvalidValue(value) {
   if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
   const type = typeof value;
   if (type === "string") return JSON.stringify(value);
   if (type === "bigint") return `${value}n`;
@@ -430,15 +431,27 @@ function describeInvalidValue(value) {
 // dropped first — the most urgent findings always survive as long as ANY
 // finding would fit. Every omission is named in the posted comment itself,
 // with a pointer to the disposition ledger — the one surface that is never
-// length-bounded. Throws (fails closed) when even the emptiest render — the
-// header plus the omission note covering every finding — still cannot fit, so
-// a round that truly cannot be posted is never reported as a success.
+// length-bounded. Throws (fails closed) when BOTH the emptiest render (every
+// finding dropped) and the render with only its single least-urgent finding
+// still dropped still cannot fit, so a round that truly cannot be posted is
+// never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
+  // gate is the comment's IDENTITY key (buildFindingsMarker): an unvalidated
+  // undefined/blank value would render `gate=undefined` and thereafter match
+  // (and keep updating) that bogus marker on every later run. headSha is
+  // rendered directly into the body ("Reviewed head: ...") with the same
+  // failure mode.
+  if (typeof gate !== "string" || gate.trim().length === 0) {
+    throw new Error(`renderBoundedFindingsCommentBody: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
+  }
+  if (typeof headSha !== "string" || headSha.trim().length === 0) {
+    throw new Error(`renderBoundedFindingsCommentBody: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
+  }
   if (!Array.isArray(findings)) {
     throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${describeInvalidValue(findings)}`);
   }
   findings.forEach((finding, i) => {
-    if (!finding || typeof finding !== "object") {
+    if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}] must be an object, got ${describeInvalidValue(finding)}`);
     }
     if (!SEVERITY_ORDER.includes(normalizeSeverity(finding.severity))) {
@@ -452,6 +465,19 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
+    }
+    // files entries are rendered directly as code-span file refs (see
+    // renderFindingsCommentBody); an unvalidated element would otherwise post
+    // the literal string "undefined"/"null"/"[object Object]" into the comment.
+    if (finding.files !== undefined) {
+      if (!Array.isArray(finding.files)) {
+        throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files must be an array, got ${describeInvalidValue(finding.files)}`);
+      }
+      finding.files.forEach((file, j) => {
+        if (typeof file !== "string" || file.trim().length === 0) {
+          throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files[${j}] must be a non-empty string, got ${describeInvalidValue(file)}`);
+        }
+      });
     }
   });
   if (!Number.isInteger(maxChars) || maxChars <= 0) {

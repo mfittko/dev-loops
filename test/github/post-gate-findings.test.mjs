@@ -1083,6 +1083,58 @@ test("renderBoundedFindingsCommentBody rejects a findings element missing angle/
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "scope" }] }),
     /findings\[0\]\.summary must be a non-empty string, got undefined/,
   );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [{ severity: "high", angle: "scope", summary: "   " }] }),
+    /findings\[0\]\.summary must be a non-empty string/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects an array findings element instead of misreporting it as a severity error", () => {
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [[]] }),
+    /findings\[0\] must be an object, got array/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects an invalid files entry instead of rendering the literal string \"undefined\"/\"null\"/\"[object Object]\" into the comment", () => {
+  for (const badFile of [undefined, null, {}]) {
+    assert.throws(
+      () => renderBoundedFindingsCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        findings: [{ severity: "high", angle: "scope", summary: "x", files: [badFile] }],
+      }),
+      /findings\[0\]\.files\[0\] must be a non-empty string/,
+    );
+  }
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "high", angle: "scope", summary: "x", files: "not-an-array" }],
+    }),
+    /findings\[0\]\.files must be an array, got "not-an-array"/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha instead of rendering an identity-breaking marker (<!-- dev-loops:gate-findings gate=undefined -->)", () => {
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: undefined, headSha: "abc1234", findings }),
+    /gate must be a non-empty string, got undefined/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "  ", headSha: "abc1234", findings }),
+    /gate must be a non-empty string/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: undefined, findings }),
+    /headSha must be a non-empty string, got undefined/,
+  );
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "  ", findings }),
+    /headSha must be a non-empty string/,
+  );
 });
 
 test("renderBoundedFindingsCommentBody keys its drop set by position, not object identity, so a repeated finding reference drops exactly as many slots as counted", () => {

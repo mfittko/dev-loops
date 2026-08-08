@@ -49,7 +49,7 @@ const CASES = [
   { title: "[WIP] [DRAFT]", expect: ["WIP", "DRAFT"] },
 
   // Deliberate loosening (issue #1529): a bare marker word mid-title with no
-  // bracket/paren/colon/standalone/dash construction is a real title, not a
+  // bracket/paren/colon/standalone construction is a real title, not a
   // status claim, and stays unflagged even though the old substring matcher
   // used to flag it.
   { title: "WIP foo bar", expect: [] },
