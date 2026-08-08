@@ -288,6 +288,42 @@ function normalizeGateMarkerSummary(summary) {
     updatedAt: summary.updatedAt,
   };
 }
+/**
+ * Decide whether a gate's recorded (or candidate, not-yet-posted) execution
+ * mode satisfies fan-out evidence enforcement, independent of the ledger/
+ * provenance/angle-coverage layer below it. Returns null when the mode
+ * qualifies (fanout_fanin, or a light-mode-accepted inline verdict) and an
+ * error message — identical wording wherever this runs — otherwise.
+ *
+ * This is the ONE place mode qualification is decided. buildPreMergeGateCheck
+ * (merge-time) and upsert-checkpoint-verdict.mjs (post-time) both call this
+ * against the same buildFanoutEnforcement-produced `gate` descriptor
+ * so the two boundaries can never drift apart on what counts as an accepted
+ * inline verdict.
+ */
+export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
+  // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
+  // collapses the gate fan-out to a single inline check (#1043). Accept that
+  // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
+  //   - lightMode is enabled in config, AND
+  //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
+  //     (scopeUnderThreshold; false whenever scope could not be derived), AND
+  //   - the PR carries no gate:full label (which always forces fan-out), AND
+  //   - the verdict records a non-empty inline reason.
+  // Any non-light inline verdict (over threshold / label / lightMode off /
+  // scope underivable) falls through to the byte-identical rejection below.
+  const lightAccepted =
+    gate.executionMode === "inline_single_agent"
+    && fanoutEnforcement.lightMode === true
+    && fanoutEnforcement.hasFullLabel !== true
+    && gate.scopeUnderThreshold === true
+    && typeof gate.inlineReason === "string"
+    && gate.inlineReason.trim().length > 0;
+  if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
+    return `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`;
+  }
+  return null;
+}
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
   const failures = [];
   const warnings = [];
@@ -308,27 +344,9 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
-      // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
-      // collapses the gate fan-out to a single inline check (#1043). Accept that
-      // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
-      //   - lightMode is enabled in config, AND
-      //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
-      //     (scopeUnderThreshold; false whenever scope could not be derived), AND
-      //   - the PR carries no gate:full label (which always forces fan-out), AND
-      //   - the verdict records a non-empty inline reason.
-      // Any non-light inline verdict (over threshold / label / lightMode off /
-      // scope underivable) falls through to the byte-identical rejection below.
-      const lightAccepted =
-        gate.executionMode === "inline_single_agent"
-        && fanoutEnforcement.lightMode === true
-        && fanoutEnforcement.hasFullLabel !== true
-        && gate.scopeUnderThreshold === true
-        && typeof gate.inlineReason === "string"
-        && gate.inlineReason.trim().length > 0;
-      if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
-        failures.push(
-          `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`,
-        );
+      const modeFailure = evaluateInlineFanoutMode(gate, fanoutEnforcement);
+      if (modeFailure) {
+        failures.push(modeFailure);
         continue;
       }
       // A stateless remote verifier (the gate-evidence CI check, or a gh-less API

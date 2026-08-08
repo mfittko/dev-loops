@@ -44,6 +44,15 @@ async function writeGhStub(tempDir, entries) {
   return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
+// These tests are about the reconcile tool's draft-transition/CI/error
+// mechanics, not fan-out evidence — the reconciling post is inline by design
+// (#891) — and use a bare tempDir as repoRoot (schema default:
+// requireFanoutEvidence: true). Disable it so the reconciling post is not
+// itself refused as under-qualified inline evidence.
+async function disableFanoutEvidence(tempDir) {
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+}
+
 async function readGhCallCount(tempDir) {
   return Number((await readFile(path.join(tempDir, "gh-counter.txt"), "utf8")).trim() || "0");
 }
@@ -292,6 +301,10 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
     await writeFile(path.join(tempDir, ".pi", "dev-loop", "defaults.yaml"), [
       "version: 1",
       "gates:",
+      // This is a manual recovery tool test about the requireCi skip, not fan-out
+      // evidence — the reconciling post is inline by design (#891), so disable
+      // fan-out evidence enforcement to isolate the behavior under test.
+      "  requireFanoutEvidence: false",
       "  draft:",
       "    angles:",
       "      - scope",
@@ -385,6 +398,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-already-draft-"));
 
   try {
+    await disableFanoutEvidence(tempDir);
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -472,6 +486,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-already-draft-upsert-failure-"));
 
   try {
+    await disableFanoutEvidence(tempDir);
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -545,6 +560,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-upsert-failure-"));
 
   try {
+    await disableFanoutEvidence(tempDir);
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
@@ -627,6 +643,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-success-"));
 
   try {
+    await disableFanoutEvidence(tempDir);
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],

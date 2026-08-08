@@ -16,6 +16,8 @@ import {
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -39,6 +41,18 @@ const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 // makeGhMock's runChild instead (a real subprocess is impossible there).
 let gitStubDir = null;
 let originalPath = null;
+// This repo's own .devloops dogfoods gates.requireFanoutEvidence: true. Most
+// tests below exercise behavior orthogonal to fan-out evidence (comment
+// rendering, marker updates, blocking-severity checks — one test
+// even pins "draft_gate blocks on high only" as a live regression guard on
+// this repo's own config) against the ambient repoRoot (process.cwd(), the
+// worktree root) on purpose. Rather than substituting a bare fixture config
+// that would silently drop that coverage, mirror the real .devloops into an
+// isolated repoRoot with ONLY requireFanoutEvidence flipped off — every other
+// setting (angle pools, tiers, blocking severities) stays byte-identical to
+// what upsertCheckpointVerdict resolves from the real repo. Used as the
+// default repoRoot for tests that do not stage their own per-test config.
+let fanoutDisabledRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
@@ -46,10 +60,17 @@ before(async () => {
   await chmod(gitStubPath, 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
+
+  fanoutDisabledRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-fanout-disabled-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  const patched = realDevloops.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  assert.notEqual(patched, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
+  await writeFile(path.join(fanoutDisabledRepoRoot, ".devloops"), patched, "utf8");
 });
 after(async () => {
   if (originalPath !== null) process.env.PATH = originalPath;
   if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
+  if (fanoutDisabledRepoRoot) await rm(fanoutDisabledRepoRoot, { recursive: true, force: true });
 });
 
 // Inline mode is the default execution mode and now requires a non-empty
@@ -84,6 +105,7 @@ const runNode = async (args = [], options = {}) => {
   if (!entries) {
     return runNodeHelper(scriptPath, augmented, {
       ...options,
+      cwd: options.cwd ?? fanoutDisabledRepoRoot,
       env: {
         ...process.env,
         ...(options.env ?? {}),
@@ -105,9 +127,11 @@ const runNode = async (args = [], options = {}) => {
   delete env[GH_MOCK_ENTRIES];
   // Mirror the subprocess cwd: tests that stage a per-test .devloops pass
   // { cwd: tempDir }, so config (gate angle contract, rejectForeignAngles) must
-  // resolve from there rather than the worktree root. Defaults to process.cwd()
-  // (the worktree) — identical to the former subprocess default.
-  const repoRoot = options.cwd ?? process.cwd();
+  // resolve from there rather than the worktree root. Defaults to
+  // fanoutDisabledRepoRoot (the worktree's own config, minus fan-out
+  // enforcement) rather than the bare worktree root, so a test that does not
+  // care about fan-out evidence is not incidentally subject to it.
+  const repoRoot = options.cwd ?? fanoutDisabledRepoRoot;
   // Capture stderr the entry fn writes directly (e.g. foreign-angle warnings) so
   // the assembled stderr matches what the CLI subprocess would have emitted.
   const stderrChunks = [];
@@ -423,7 +447,7 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
       nextAction: "next",
       force: true,
       forceReason: "test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild });
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     // force metadata no longer included
@@ -1019,7 +1043,7 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild });
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
 
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
@@ -1512,7 +1536,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
       },
     ], { repeatLastOnOverflow: true });
-    const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1 });
+    const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(created.action, "created");
 
     const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
@@ -1536,7 +1560,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
     ], { repeatLastOnOverflow: true });
-    const second = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild2 });
+    const second = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(second.action, "noop");
     assert.equal(second.commentId, 103);
     // Same-head noop means no create/update comment call fires.
@@ -2929,6 +2953,11 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-1455-unsettled-await-"));
 
   try {
+    // This test's cwd IS the CLI's repoRoot (real subprocess spawn), so its
+    // resolved config is otherwise bare defaults — disable fan-out evidence
+    // enforcement explicitly; this repro is about the draft-transition
+    // self-heal deadlock, not fan-out evidence.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const headSha = "abc1234000000000000000000000000000000000";
     const cleanPreApprovalComment = {
       id: 501,
@@ -3203,6 +3232,10 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-stale-takeover-"));
 
   try {
+    // This test's cwd IS the CLI's repoRoot (real subprocess spawn); disable
+    // fan-out evidence enforcement — this test is about stale-runner takeover,
+    // not fan-out evidence.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     // Pre-claim ownership with an old timestamp so the runner is considered stale
     await claimRunnerOwnership({
       repo: "owner/repo",
@@ -4773,6 +4806,246 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
   }
 });
 
+// --- Post-time fan-out evidence enforcement ---
+// gates.requireFanoutEvidence is already enforced reactively at merge time
+// (detect-checkpoint-evidence.mjs's buildPreMergeGateCheck). These tests cover
+// the PRODUCE-step refusal added to upsert-checkpoint-verdict.mjs: an inline
+// verdict for a required gate that does not qualify for the light-mode
+// carve-out is refused BEFORE it is ever posted, regardless of verdict value.
+
+test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
+  try {
+    // requireFanoutEvidence: true with no localImplementation.lightMode
+    // configured at all — no inline verdict can ever qualify (lightMode stays
+    // false), so this is the plain "over-threshold" refusal shape.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+
+    for (const verdict of ["clean", "findings_present", "blocked"]) {
+      const env = await writeGhStub(tempDir, [
+        ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      ]);
+      const result = await runNode([
+        "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+        "--verdict", verdict, "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
+        "--execution-mode", "inline_single_agent", "--inline-reason", "over-threshold local change",
+      ], { env, cwd: tempDir });
+      assert.equal(result.code, 1, `verdict=${verdict}: ${result.stderr}`);
+      const payload = JSON.parse(result.stderr);
+      assert.equal(payload.ok, false);
+      // Mirrors the merge-time rejection wording (detect-checkpoint-evidence.mjs's
+      // buildPreMergeGateCheck / evaluateInlineFanoutMode) verbatim, so an operator
+      // sees the SAME diagnosis at post time as they would at merge time.
+      assert.match(
+        payload.error,
+        /draft_gate: requireFanoutEvidence is enabled but executionMode is "inline_single_agent" \(expected "fanout_fanin"\); inline gate verdicts are not accepted/,
+      );
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict accepts an inline verdict under the light-mode threshold", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-light-accept-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      // PR reviews fetch (evidence scan) and the internal-only-file probe both
+      // run before enforcePostTimeFanoutMode's own light-facts fetch.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // The hermetic `git` PATH stub (see the file-level `before()` hook) always
+      // reports an empty diff, so the merge-base scope re-derivation this fetch
+      // feeds is always "0 files / 0 lines" — genuinely under ANY positive
+      // threshold, exercising the real accept path, not a stubbed shortcut.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "micro-PR, under threshold",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict fails closed on an inline verdict when the base ref cannot be resolved (scope un-derivable)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-scope-underivable-"));
+  try {
+    // lightMode is enabled, but the light-facts fetch below fails — with no
+    // base ref, scope re-derivation is skipped and the light-mode carve-out
+    // can never apply, so the post is refused just like the plain
+    // over-threshold case (same fail-closed posture as merge time).
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], exitCode: 1, stderr: "gh: rate limited\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "cannot prove scope",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of requireFanoutEvidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-fanout-accept-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-json", findingsPath, "--next-action", "mark ready for review",
+      "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict posts an inline verdict without restriction when requireFanoutEvidence is false", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-opted-out-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":401,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-401"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "opted out of fan-out evidence",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// One shared fixture, driven through BOTH the post-time refusal
+// (upsertCheckpointVerdict, via enforcePostTimeFanoutMode) and the merge-time
+// rejection (buildFanoutEnforcement + evaluateInlineFanoutMode, exactly as
+// buildPreMergeGateCheck calls it) — proving the two boundaries reach the
+// SAME verdict from the SAME facts because they share the one predicate.
+test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence merge-time rejection agree on the same fixture", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-agree-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const fixture = {
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      executionMode: "inline_single_agent",
+      inlineReason: "shared fixture: over-threshold local change",
+    };
+
+    // Post-time: the verdict does not exist yet — upsertCheckpointVerdict must
+    // refuse to record it.
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], headSha: fixture.headSha }),
+    ]);
+    const postTimeResult = await runNode([
+      "--repo", fixture.repo, "--pr", String(fixture.pr), "--gate", fixture.gate, "--head-sha", fixture.headSha,
+      "--verdict", "clean", "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
+      "--execution-mode", fixture.executionMode, "--inline-reason", fixture.inlineReason,
+    ], { env, cwd: tempDir });
+    assert.equal(postTimeResult.code, 1);
+    const postTimeError = JSON.parse(postTimeResult.stderr).error;
+
+    // Merge-time: simulate the SAME verdict as if it HAD been posted (a marker
+    // read back off the PR) and ask the exact merge-time predicate the same
+    // question, from the same config/fixture facts.
+    const { config } = await loadDevLoopConfig({ repoRoot: tempDir });
+    const postedMarker = { visible: true, executionMode: fixture.executionMode, inlineReason: fixture.inlineReason, headSha: fixture.headSha };
+    const invisibleMarker = { visible: false };
+    const mergeTimeEnforcement = await buildFanoutEnforcement({
+      repo: fixture.repo,
+      pr: fixture.pr,
+      currentHeadSha: fixture.headSha,
+      draftGateMarker: postedMarker,
+      preApprovalGateMarker: invisibleMarker,
+      config,
+      cwd: tempDir,
+      hasFullLabel: false,
+      baseRef: null,
+    });
+    assert.equal(mergeTimeEnforcement.required, true);
+    const mergeTimeGate = mergeTimeEnforcement.gates.find((g) => g.name === "draft_gate");
+    const mergeTimeError = evaluateInlineFanoutMode(mergeTimeGate, mergeTimeEnforcement);
+
+    assert.ok(mergeTimeError, "expected merge-time to also reject this fixture");
+    // Post-time wraps the SAME per-gate message with post-time framing; assert
+    // the underlying diagnosis (the merge-time message) is verbatim-contained,
+    // not paraphrased or re-derived.
+    assert.ok(
+      postTimeError.includes(mergeTimeError),
+      `expected post-time error to contain the merge-time message verbatim.\npost-time: ${postTimeError}\nmerge-time: ${mergeTimeError}`,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // The documented tier-4 (withheld) posting path: a fanout_fanin round consolidate-fanin
 // could not render even at minimum shape has neither --out nor --findings-json available
 // (see the sub-loop contract's "Execution mode and fan-out evidence enforcement"), so the
@@ -4868,6 +5141,16 @@ const SINGLE_SURFACE_HEAD = "abc1234000000000000000000000000000000000";
 const SINGLE_SURFACE_PATCH = ["@@ -1,3 +1,5 @@", " line1", "-old line2", "+new line2", "+new line3", " line4"].join("\n");
 
 async function writeSingleSurfaceLedger(tempDir, findings, overrides = {}) {
+  // These tests are about the finding-surface/ledger mechanics, not fan-out
+  // evidence, and use a bare tempDir as repoRoot (schema default:
+  // requireFanoutEvidence: true) — disable it unless a test already staged
+  // its own .devloops (e.g. for angle-pool configuration) before calling this.
+  const devloopsPath = path.join(tempDir, ".devloops");
+  try {
+    await readFile(devloopsPath, "utf8");
+  } catch {
+    await writeFile(devloopsPath, "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+  }
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo",
