@@ -739,20 +739,20 @@ test("renderFindingsCommentBody renders Question and Nit group labels", () => {
   assert.ok(body.includes("Nit (1)"));
 });
 
-// A low/nit finding with no explicit disposition defaults to "deferred"; a
-// question with no explicit disposition defaults to "needs-answer" — never
-// "deferred" (a question is answered, not dropped).
-test("parseFindings defaults disposition: low/nit to deferred, question to needs-answer", () => {
+// A low/nit finding with no explicit disposition defaults to "deferred".
+// This shape carries no `line` field at all, so a question here can never be
+// proven LOCATABLE — it defaults to "deferred" too (never "needs-answer",
+// which is reserved for a locatable question elsewhere in the pipeline —
+// see write-gate-findings-log.mjs/consolidateFanin, which do carry `line`).
+test("parseFindings defaults disposition: low/nit/question all default to deferred (no line field in this shape)", () => {
   const findings = parseFindings(JSON.stringify([
     { severity: "low", angle: "naming", summary: "a" },
     { severity: "nit", angle: "naming", summary: "b" },
     { severity: "question", angle: "scope", summary: "c" },
   ]));
-  assert.deepEqual(findings.map((f) => f.disposition), ["deferred", "deferred", "needs-answer"]);
+  assert.deepEqual(findings.map((f) => f.disposition), ["deferred", "deferred", "deferred"]);
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
-  assert.ok(body.includes("needs-answer"));
-  // The question's disposition suffix must never render "deferred".
   const questionLine = body.split("\n").find((line) => line.includes("`scope`"));
   assert.ok(questionLine, "expected a rendered line for the scope (question) finding");
-  assert.ok(!questionLine.includes("deferred"), `question finding line must not render "deferred": ${questionLine}`);
+  assert.ok(questionLine.includes("deferred"), `question finding line should render "deferred" (non-locatable, this shape has no line field): ${questionLine}`);
 });

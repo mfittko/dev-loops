@@ -599,21 +599,35 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
         const isBlocking = blocking.has(severity);
         if (isBlocking) blockingCount += 1;
         bySeverity[severity] += 1;
+        // LOCATABLE: a real file + a positive-integer line — the same shape
+        // isLocatableFinding (_gate-finding-surface.mjs) keys on (that
+        // function also checks the file:line is in-diff, which is unknown at
+        // fan-in time; this is the necessary-but-not-sufficient proxy
+        // available here). Only a locatable finding ever gets its own
+        // resolvable review thread.
+        const isLocatable = typeof f.file === "string" && f.file.trim().length > 0
+          && Number.isInteger(f.line) && f.line >= 1;
         const entry = {
           severity,
           angle,
           summary: String(f.summary).trim(),
           // Blocking findings default to accepted-for-fix; non-blocking defect
           // findings (low/nit, or medium outside the blocking set) default to
-          // deferred. "question" is never deferred — it is answered, not
-          // fixed or dropped — so it gets its own disposition ("needs-answer",
-          // in write-gate-findings-log.mjs's VALID_DISPOSITIONS) regardless of
-          // blocking status; a "question" can never be blocking in practice
-          // (blockCleanOnFindingSeverities is restricted to defect severities),
-          // but this stays severity-first rather than isBlocking-first so that
-          // invariant is enforced here too, not just at the config boundary.
-          // The fix cycle / operator can override the disposition.
-          disposition: severity === "question" ? "needs-answer" : (isBlocking ? "accepted-for-fix" : "deferred"),
+          // deferred. A LOCATABLE question is never deferred — it is
+          // answered, not fixed or dropped — so it gets its own disposition
+          // ("needs-answer", in write-gate-findings-log.mjs's
+          // VALID_DISPOSITIONS) regardless of blocking status (a "question"
+          // can never be blocking in practice — blockCleanOnFindingSeverities
+          // is restricted to defect severities — but this stays severity-first
+          // rather than isBlocking-first so that invariant is enforced here
+          // too, not just at the config boundary). A NON-LOCATABLE question
+          // has no resolvable thread to answer through — it is body-filed and
+          // deferred by construction, exactly like every other non-high
+          // body-filed finding (GATE-EXEC-DEFERRAL-RECORD). The fix cycle /
+          // operator can override the disposition.
+          disposition: severity === "question"
+            ? (isLocatable ? "needs-answer" : "deferred")
+            : (isBlocking ? "accepted-for-fix" : "deferred"),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;

@@ -79,6 +79,22 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
+    if (Array.isArray(f.files)) {
+      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
+    }
+    if ("line" in f) {
+      if (!Number.isInteger(f.line) || f.line < 1) {
+        throw parseError(`${flagLabel}[${i}].line must be a positive integer`);
+      }
+      entry.line = f.line;
+    }
+    // A finding is LOCATABLE when it names a real file and a positive-integer
+    // line — the same shape isLocatableFinding (_gate-finding-surface.mjs)
+    // keys on (that function also checks the file:line is in-diff, which
+    // this write-time floor cannot know; this is the necessary-but-not-
+    // sufficient proxy available here). Only a locatable finding can ever
+    // get its own resolvable review thread to answer/fix through.
+    const isLocatable = Array.isArray(entry.files) && entry.files.length > 0 && Number.isInteger(entry.line) && entry.line >= 1;
     if ("disposition" in f) {
       if (typeof f.disposition !== "string" || f.disposition.trim().length === 0) {
         throw parseError(`${flagLabel}[${i}].disposition must be a non-empty string`);
@@ -96,18 +112,14 @@ function validateFindingsArray(parsed, flagLabel) {
       // "deferred") always keep the validation above unchanged.
       entry.disposition = "deferred";
     } else if (f.severity === "question") {
-      // A question with no explicit disposition defaults to "needs-answer" —
-      // never "deferred" (a question is answered, not dropped).
-      entry.disposition = "needs-answer";
-    }
-    if (Array.isArray(f.files)) {
-      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
-    }
-    if ("line" in f) {
-      if (!Number.isInteger(f.line) || f.line < 1) {
-        throw parseError(`${flagLabel}[${i}].line must be a positive integer`);
-      }
-      entry.line = f.line;
+      // A LOCATABLE question with no explicit disposition defaults to
+      // "needs-answer" — never "deferred" (a question is answered, not
+      // dropped) — because it gets its own resolvable review thread to
+      // answer through. A NON-LOCATABLE question has no such thread (it is
+      // body-filed, per GATE-EXEC-DEFERRAL-RECORD / renderNonLocatableBlock)
+      // and so is deferred by construction, exactly like every other
+      // non-high body-filed finding.
+      entry.disposition = isLocatable ? "needs-answer" : "deferred";
     }
     if ("resolvedIn" in f) {
       if (typeof f.resolvedIn !== "string" || f.resolvedIn.trim().length === 0) {

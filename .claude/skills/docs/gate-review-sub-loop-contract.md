@@ -798,13 +798,16 @@ Consolidation:
   DISPOSITION — derived at fan-in for non-blocking findings, finalized per thread by the
   fix cycle / gate close — so no severity is spelled "defer" — the pre-rename spellings
   (`must-fix`, `worth-fixing-now`, `nice-to-have`, `defer`) are normalized to their
-  canonical replacement on read. A `question` is answered, never deferred: the fixer
-  replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
+  canonical replacement on read. A LOCATABLE `question` is answered, never deferred: the
+  fixer replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
   unanswerable question escalates to the author), and an unanswered question blocks
-  gate-close exactly like an open defect. A `nit` is a cosmetic, non-defect finding
-  deferred immediately, with no fixer cycle.
+  gate-close exactly like an open defect. A NON-LOCATABLE `question` has no resolvable
+  thread to answer through — it is body-filed and deferred by construction, exactly like
+  every other non-`high` body-filed finding (`GATE-EXEC-DEFERRAL-RECORD`). A `nit` is a
+  cosmetic, non-defect finding deferred immediately, with no fixer cycle.
 - write the disposition ledger: every finding receives a severity classification and a
-  disposition (accepted-for-fix, deferred, needs-answer, disputed, or operator_acknowledged)
+  disposition (accepted-for-fix, deferred, needs-answer, disputed, or operator_acknowledged) —
+  needs-answer applies only to a LOCATABLE question; a non-locatable one gets deferred
 - produce a merged findings artifact
 - determine the overall gate verdict:
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list remain

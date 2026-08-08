@@ -627,11 +627,11 @@ test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have findi
   }, /disposition must be one of/);
 });
 
-// #1592: a question is answered, never deferred — it gets its own
-// disposition ("needs-answer"), distinct from every other non-blocking
-// severity's "deferred" default.
-test("writeGateFindingsLog derives a needs-answer disposition for a question finding with no explicit disposition", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-"));
+// #1592: a LOCATABLE question (real file + positive-integer line) is
+// answered, never deferred — it gets its own disposition ("needs-answer"),
+// because it gets a resolvable review thread to answer through.
+test("writeGateFindingsLog derives a needs-answer disposition for a LOCATABLE question finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-locatable-"));
   try {
     await writeGateFindingsLog({
       repo: "owner/repo",
@@ -639,12 +639,35 @@ test("writeGateFindingsLog derives a needs-answer disposition for a question fin
       gate: "draft_gate",
       headSha: "1111111111111111111100000000000000000000",
       verdict: "clean",
-      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?" }]),
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?", files: ["src/a.mjs"], line: 12 }]),
       tmpRoot: tmpDir,
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-1111111111111111111100000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.equal(parsed.findings[0].disposition, "needs-answer");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// A NON-LOCATABLE question (no file/line) has no resolvable thread to answer
+// through — it is deferred by construction, exactly like every other
+// non-blocking severity's default.
+test("writeGateFindingsLog derives a deferred disposition for a NON-LOCATABLE question finding with no explicit disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-nonlocatable-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "2222222222222222222200000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?" }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-2222222222222222222200000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].disposition, "deferred");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

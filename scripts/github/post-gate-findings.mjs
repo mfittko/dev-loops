@@ -107,10 +107,13 @@ function validateFindingsArray(parsed, flagLabel) {
       // to "deferred" rather than rendering with no disposition suffix.
       entry.disposition = "deferred";
     } else if (f.severity === "question") {
-      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: a
-      // question with no explicit disposition defaults to "needs-answer",
-      // never "deferred".
-      entry.disposition = "needs-answer";
+      // Mirrors write-gate-findings-log.mjs / consolidate-fanin.mjs: only a
+      // LOCATABLE question (real file + positive-integer line) defaults to
+      // "needs-answer" — it gets a resolvable review thread to answer
+      // through. This shape carries no `line` field at all (see USAGE
+      // above), so locatability can never be proven here; default to
+      // "deferred", matching the non-locatable/body-filed treatment.
+      entry.disposition = "deferred";
     }
     if (Array.isArray(f.files)) {
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());

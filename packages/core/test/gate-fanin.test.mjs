@@ -153,13 +153,24 @@ describe("consolidateFanin — verdict", () => {
     assert.equal(result.verdict, "clean");
     assert.equal(result.counts.blocking, 0);
     assert.deepEqual(result.counts.bySeverity, { high: 0, medium: 0, low: 0, question: 1, nit: 1 });
-    // A question is answered, never deferred — it gets its own disposition,
-    // never "deferred" (which every other non-blocking severity, including
-    // nit, gets).
+    // A NON-LOCATABLE question (no file+line here) has no resolvable thread
+    // to answer through — it is deferred by construction, exactly like nit
+    // and every other non-blocking severity. See the sibling
+    // "locatable question" test below for the needs-answer path.
     const question = result.findings.find((f) => f.severity === "question");
     const nit = result.findings.find((f) => f.severity === "nit");
-    assert.equal(question.disposition, "needs-answer");
+    assert.equal(question.disposition, "deferred");
     assert.equal(nit.disposition, "deferred");
+  });
+
+  test("a LOCATABLE question (real file + positive-integer line) defaults to needs-answer, never deferred", () => {
+    const result = consolidateFanin({
+      angleResults: [findingAngle("scope", "question", "why this approach?", { file: "src/a.mjs", line: 12 })],
+    });
+    assert.equal(result.verdict, "clean");
+    assert.equal(result.findings[0].disposition, "needs-answer");
+    assert.equal(result.findings[0].file, "src/a.mjs");
+    assert.equal(result.findings[0].line, 12);
   });
 
   test("blocked when any angle result is malformed/missing", () => {
