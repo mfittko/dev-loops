@@ -115,22 +115,43 @@ export const LEGACY_SEVERITY_ALIASES = Object.freeze({
 
 /**
  * Map a legacy severity spelling to its canonical name; unknown values pass
- * through trimmed+lowercased (the caller's validation still rejects them) —
- * a non-string passes through unchanged. Trimming/lowercasing BEFORE the
- * alias lookup (rather than requiring every caller to do it first) is what
- * keeps every call site of this function agreeing on the same value for the
- * same incidentally-whitespace/case-varied input: consolidate-fanin.mjs's own
- * floor validation trims before calling this, while gate-fanin's
- * `consolidateFanin` does not — two call sites trimming inconsistently is
- * exactly how an untrimmed "high " passed one gate's validation and then
- * failed the other's.
+ * through trimmed (the caller's validation still rejects them) — a
+ * non-string passes through unchanged. Trimming BEFORE the alias lookup
+ * (rather than requiring every caller to do it first) is what keeps every
+ * call site of this function agreeing on the same value for the same
+ * incidentally-whitespace-varied input: consolidate-fanin.mjs's own floor
+ * validation trims before calling this, while gate-fanin's `consolidateFanin`
+ * does not — two call sites trimming inconsistently is exactly how an
+ * untrimmed "high " passed one gate's validation and then failed the
+ * other's. Deliberately case-SENSITIVE (no lowercasing): every sanctioned
+ * writer (slugForMarker, config authoring, this module's own producers)
+ * already emits lowercase, so a forged/hand-edited mixed-case value (e.g.
+ * "NIT") must fail VALID_SEVERITIES validation and dangle fail-closed rather
+ * than being silently coerced into a real severity that then auto-defers.
  * @param {unknown} severity
  * @returns {unknown}
  */
 export function normalizeSeverity(severity) {
   if (typeof severity !== "string") return severity;
-  const normalized = severity.trim().toLowerCase();
+  const normalized = severity.trim();
   return Object.hasOwn(LEGACY_SEVERITY_ALIASES, normalized) ? LEGACY_SEVERITY_ALIASES[normalized] : normalized;
+}
+
+/**
+ * Map a (possibly legacy-spelled/untrimmed) severity to its SEVERITY_ORDER
+ * index — the ONE rank rule every sort/ordering consumer
+ * (consolidate-fanin.mjs's `angleWorstSeverityRank`,
+ * upsert-checkpoint-verdict.mjs's severity-grouped rendering) shares, so the
+ * two can never drift on how an unknown severity ranks. An unrecognized
+ * severity (after normalization) ranks LAST (`SEVERITY_ORDER.length`, never
+ * -1) so it always sorts after every known severity instead of floating
+ * above "high" the way a raw, unmapped `indexOf` would.
+ * @param {unknown} severity
+ * @returns {number}
+ */
+export function severityRank(severity) {
+  const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
+  return idx === -1 ? SEVERITY_ORDER.length : idx;
 }
 
 /**
@@ -195,6 +216,27 @@ export function hasLocatableShape(finding) {
 export function deriveDisposition(severity, { isBlocking = false, locatable = false } = {}) {
   if (severity === "question") return locatable ? "needs-answer" : "deferred";
   return isBlocking ? "accepted-for-fix" : "deferred";
+}
+
+/**
+ * Does `severity` (already normalized) have a default disposition that
+ * `deriveDisposition` can resolve WITHOUT `isBlocking` context? "low" and
+ * "nit" always defer regardless of any gate's `blockCleanOnFindingSeverities`
+ * config, and "question" resolves off `locatable` alone — so a caller with no
+ * `isBlocking` context (write-gate-findings-log.mjs / post-gate-findings.mjs's
+ * CLI validators, which accept a bare `--findings` array with no config in
+ * scope) can still fill in a default disposition for these three, and only
+ * these three, when the caller left it unset. "high" and "medium" are
+ * excluded: whether either blocks a clean verdict depends on config, which
+ * only a caller holding `blockCleanOnFindingSeverities` can know — guessing
+ * "deferred" for one of those here would be wrong for a repo that configures
+ * it as blocking. Shared by both CLI validators (see `deriveDisposition`) so
+ * the two can never restate this guard out of sync.
+ * @param {string} severity — already normalized
+ * @returns {boolean}
+ */
+export function isDefaultDeferrableSeverity(severity) {
+  return severity === "low" || severity === "nit" || severity === "question";
 }
 
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
@@ -585,7 +627,7 @@ function validateAngleResult(result) {
     }
     const finding = /** @type {Record<string, unknown>} */ (f);
     if (typeof finding.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(finding.severity))) {
-      return `angle '${r.angle}' has a finding with invalid severity (expected high|medium|low|question|nit)`;
+      return `angle '${r.angle}' has a finding with invalid severity (expected ${SEVERITY_ORDER.join("|")})`;
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
       return `angle '${r.angle}' has a finding without a summary`;

@@ -31,7 +31,7 @@ function findingAngle(angle, severity, summary = "issue", extra = {}) {
   };
 }
 
-describe("normalizeSeverity (trim + lowercase before alias lookup)", () => {
+describe("normalizeSeverity (trim, case-sensitive, before alias lookup)", () => {
   test("trims incidental whitespace around a canonical value", () => {
     assert.equal(normalizeSeverity("high "), "high");
     assert.equal(normalizeSeverity(" high"), "high");
@@ -43,9 +43,14 @@ describe("normalizeSeverity (trim + lowercase before alias lookup)", () => {
     assert.equal(normalizeSeverity("worth-fixing-now\n"), "medium");
   });
 
-  test("lowercases before lookup", () => {
-    assert.equal(normalizeSeverity("HIGH"), "high");
-    assert.equal(normalizeSeverity("Must-Fix"), "high");
+  // Deliberately case-SENSITIVE: every sanctioned writer already emits
+  // lowercase, so a mixed-case value is a forged/malformed input, not a
+  // legitimate variant. Case-folding it here would let a forged
+  // "severity=NIT"/"Low" marker silently pass VALID_SEVERITIES and
+  // auto-defer-close instead of failing closed as an unrecognized severity.
+  test("does NOT lowercase — a mixed-case value stays mixed-case (and so fails VALID_SEVERITIES downstream)", () => {
+    assert.equal(normalizeSeverity("HIGH"), "HIGH");
+    assert.equal(normalizeSeverity("Must-Fix"), "Must-Fix");
   });
 
   test("a non-string passes through unchanged (caller's validation rejects it)", () => {
@@ -54,8 +59,8 @@ describe("normalizeSeverity (trim + lowercase before alias lookup)", () => {
     assert.equal(normalizeSeverity(42), 42);
   });
 
-  test("an unrecognized value still normalizes (trim+lowercase) so every caller sees the same rejected form", () => {
-    assert.equal(normalizeSeverity(" Bogus "), "bogus");
+  test("an unrecognized value still normalizes (trim only) so every caller sees the same rejected form", () => {
+    assert.equal(normalizeSeverity(" Bogus "), "Bogus");
   });
 });
 
