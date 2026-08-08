@@ -103,7 +103,7 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       const disp = f.disposition.trim();
       if (!VALID_DISPOSITIONS.has(disp)) {
-        throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, needs-answer, disputed, operator_acknowledged`);
+        throw parseError(`${flagLabel}[${i}].disposition must be one of: ${[...VALID_DISPOSITIONS].join(", ")}`);
       }
       entry.disposition = disp;
     } else if (isDefaultDeferrableSeverity(f.severity)) {

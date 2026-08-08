@@ -1030,9 +1030,11 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `--findings-file` on both tools, no hand extraction. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools. A
-`question` finding with no `disposition` is derived the same way, but the
-value depends on whether the finding is locatable: `needs-answer` when it
-names an in-diff `file:line`, `deferred` otherwise.
+`question` finding with no `disposition` is derived the same way: `needs-answer`
+when the finding is locatable (names an in-diff `file:line`), `deferred`
+otherwise. `write-gate-findings-log.mjs`'s entry shape can carry `line`, so it
+can reach `needs-answer`; `post-gate-findings.mjs`'s entry shape never
+carries `line`, so a question there always resolves `deferred`.
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional

@@ -20,7 +20,7 @@
  *   }
  * `disposition` on an input finding is IGNORED — consolidateFanin() always
  * DERIVES it from severity (accepted-for-fix for a blocking severity,
- * needs-answer for question, deferred otherwise). It is accepted on the input shape only so a reviewer's
+ * needs-answer for a LOCATABLE question, deferred otherwise). It is accepted on the input shape only so a reviewer's
  * own artifact schema round-trips without a separate strip step. A
  * reviewer-provided `recommendation` IS carried through to both output shapes
  * unchanged (truncated only if it exceeds the length cap below).
@@ -173,7 +173,7 @@ Output (stdout, JSON):
   --findings-file, and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
   true, unbudgeted totals across every finding, independent of any marking applied to "findingsJson"
   below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
-  blocking severity, needs-answer for question, deferred otherwise) — an input finding's own "disposition" is never honored,
+  blocking severity, needs-answer for a LOCATABLE question, deferred otherwise) — an input finding's own "disposition" is never honored,
   including on a budget-marker finding (below). A reviewer-provided "recommendation" is carried
   through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars,
   or "file" longer than 300 chars, is truncated with a plain " …" suffix (never a "[truncated N
@@ -316,7 +316,7 @@ function buildAngleMarker(a, verbose) {
   // severity+disposition pairing consolidateFanin already derived, so the
   // marker's "disposition" still matches every other findingsJson finding's
   // severity-derived disposition (accepted-for-fix for a blocking severity,
-  // needs-answer for question, deferred otherwise).
+  // needs-answer for a LOCATABLE question, deferred otherwise).
   const representative = SEVERITY_ORDER
     .map((s) => a.findings.find((f) => normalizeSeverity(f.severity) === s))
     .find(Boolean) ?? a.findings[0];

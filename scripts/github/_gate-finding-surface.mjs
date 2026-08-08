@@ -261,7 +261,7 @@ export function renderNonLocatableBlock(finding, { round }) {
   // normalizes AND sanitizes severity again on its own — normalization alone
   // is not a sanitizer, so this outer normalize is not what keeps a hostile
   // (e.g. newline-bearing) severity out of the posted body; that guarantee
-  // lives in renderFindingLine's own sanitizeCodeSpan call.
+  // lives in renderFindingLine's own sanitizeInline call on severity.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const disposition = severity === "high" ? undefined : "deferred";
   const lines = [
