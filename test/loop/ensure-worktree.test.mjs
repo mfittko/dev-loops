@@ -34,13 +34,22 @@ after(() => {
 const REPO_GIT_ENV = { ...process.env };
 delete REPO_GIT_ENV.DEVLOOPS_ALLOW_MAIN;
 
+// A git command runner bound to `cwd`, with test identity pre-configured —
+// the "define a git() lambda, then set user.email/user.name" pattern
+// repeated at every fixture root below. `cwd` must already be a git repo
+// (freshly `init`ed or `clone`d) by the time this runs.
+function gitIn(cwd) {
+  const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
+  git("config", "user.email", "t@t.t");
+  git("config", "user.name", "t");
+  return git;
+}
+
 // A real (tiny) git repo with one commit on `main`, so `git worktree add` works.
 function makeRepo({ devloops, branch = "main" } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
-  git("init", "-q", "-b", branch);
-  git("config", "user.email", "t@t.t");
-  git("config", "user.name", "t");
+  execFileSync("git", ["init", "-q", "-b", branch], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
+  const git = gitIn(root);
   if (devloops) writeFileSync(path.join(root, ".devloops"), devloops);
   else writeFileSync(path.join(root, "README"), "x");
   git("add", "-A");
@@ -65,10 +74,8 @@ function makeRepo({ devloops, branch = "main" } = {}) {
 function makeOriginRepo() {
   const tmp = mkdtempSync(path.join(tmpdir(), "wt-ensure-clone-"));
   const originDir = path.join(tmp, "origin");
-  const originGit = (...args) => execFileSync("git", args, { cwd: originDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
   execFileSync("git", ["init", "-q", "-b", "main", originDir], { encoding: "utf8", env: REPO_GIT_ENV });
-  originGit("config", "user.email", "t@t.t");
-  originGit("config", "user.name", "t");
+  const originGit = gitIn(originDir);
   originGit("commit", "-q", "--allow-empty", "-m", "init");
   return { tmp, originDir, originGit, cleanup: () => rmSync(tmp, { recursive: true, force: true }) };
 }
@@ -79,10 +86,7 @@ function makeOriginRepo() {
 function cloneRepo(tmp, originDir, name = "root") {
   const root = path.join(tmp, name);
   execFileSync("git", ["clone", "-q", originDir, root], { encoding: "utf8", env: REPO_GIT_ENV });
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
-  git("config", "user.email", "t@t.t");
-  git("config", "user.name", "t");
-  return { root, git };
+  return { root, git: gitIn(root) };
 }
 
 // Create `branch` (optionally at `startPoint`, else the current HEAD) via
@@ -697,21 +701,18 @@ test("branchesDiverged: fails safe (not diverged) when merge-base errors, not ju
 // all) used to degrade silently to created-from-base with no signal in the
 // result.
 test("ensure: a failed best-effort fetch is signaled via fetchDegraded, not silently swallowed", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-noremote-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
+  // makeOriginRepo()'s originDir never gets a `git remote add` — already
+  // exactly the "no origin configured" fixture this needs, no hand-rolling.
+  const origin = makeOriginRepo();
   try {
-    git("init", "-q", "-b", "main");
-    git("config", "user.email", "t@t.t");
-    git("config", "user.name", "t");
-    git("commit", "-q", "--allow-empty", "-m", "init");
     // No "origin" remote configured at all — the fallback candidate itself
     // fails to fetch.
-    const res = await ensureWorktree({ repoRoot: root, issue: 4007, base: "main" });
+    const res = await ensureWorktree({ repoRoot: origin.originDir, issue: 4007, base: "main" });
     assert.equal(res.ok, true);
     assert.equal(res.fetchDegraded, true);
     assert.equal(res.branchOrigin, "created-from-base");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    origin.cleanup();
   }
 });
 
