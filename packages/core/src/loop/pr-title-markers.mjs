@@ -16,23 +16,43 @@
  * Builds a status-marker tester for a bare word like "WIP" or "DRAFT".
  *
  * A status marker asserts, on its own, that the PR is unfinished: bracketed
- * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), or the
- * entire title with nothing else attached (a bare standalone `DRAFT`). A
- * plain `\bWORD\b` match also hits the same word inside a compound noun
- * phrase that names a component instead — `draft-gate`, `draft_gate`,
- * `draft gate`, `wip-branch` — because a hyphen, underscore, or space is
- * itself a word boundary. None of those forms satisfy any of the four
- * constructions below, so a component name is left unflagged while a real
- * status claim still is. "swipe"/"wiped"/"drafting"/"redraft" already fail
- * every construction because there is no boundary between the marker word
- * and the letters that follow it.
+ * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), a trailing
+ * tag set off by a real dash character (`Fix login flow — WIP`, an em/en
+ * dash — never a plain hyphen, see below), or the entire title with nothing
+ * else attached (a bare standalone `DRAFT`). A plain `\bWORD\b` match also
+ * hits the same word inside a compound noun phrase that names a component
+ * instead — `draft-gate`, `draft_gate`, `draft gate`, `wip-branch` — because
+ * a hyphen, underscore, or space is itself a word boundary. None of those
+ * forms satisfy any construction below, so a component name is left
+ * unflagged while a real status claim still is. "swipe"/"wiped"/"drafting"
+ * already fail every construction because there is no boundary between the
+ * marker word and the letters that follow it; a hyphen-prefixed compound
+ * like "re-draft" DOES create such a boundary (`\b` sees the hyphen), so the
+ * colon construction explicitly excludes a marker immediately preceded by a
+ * hyphen — "re-draft: cleanup" is one compound word split by a hyphen, not a
+ * status tag.
+ *
+ * The bracket/paren constructions require the opening delimiter to sit at
+ * the start of the title or after whitespace — never directly after a
+ * letter or `/` — so a conventional-commit scope (`fix(draft): support x`)
+ * or a path segment (`app/[draft]/page.tsx`) is read as a component name,
+ * not a status claim, the same exemption class as the hyphen/underscore/
+ * space compound nouns above.
+ *
+ * The trailing-dash construction deliberately requires an em dash (—) or en
+ * dash (–), never a plain ASCII hyphen: a spaced hyphen (`WIP - add
+ * feature`) is a common, low-signal general-purpose separator that reads as
+ * ordinary title punctuation, while a typographic dash set specifically
+ * around the marker word is a much stronger, unambiguous status-tag signal.
  */
 function statusMarkerTester(word) {
-  const bracket = new RegExp(`\\[\\s*${word}\\s*\\]`, "i");
-  const paren = new RegExp(`\\(\\s*${word}\\s*\\)`, "i");
-  const colon = new RegExp(`\\b${word}\\s*:`, "i");
+  const bracket = new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i");
+  const paren = new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i");
+  const colon = new RegExp(`(?<!-)\\b${word}\\s*:`, "i");
   const standalone = new RegExp(`^\\s*${word}\\s*$`, "i");
-  return (title) => bracket.test(title) || paren.test(title) || colon.test(title) || standalone.test(title);
+  const dashTrailing = new RegExp(`[–—]\\s*${word}\\b`, "i");
+  return (title) => bracket.test(title) || paren.test(title) || colon.test(title)
+    || standalone.test(title) || dashTrailing.test(title);
 }
 
 /**

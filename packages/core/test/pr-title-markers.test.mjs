@@ -47,6 +47,33 @@ const CASES = [
   { title: "DO NOT MERGE [WIP] 🚧", expect: ["WIP", "DO NOT MERGE", "🚧"] },
   { title: "WIP wip [WIP]", expect: ["WIP"] },
   { title: "[WIP] [DRAFT]", expect: ["WIP", "DRAFT"] },
+
+  // Deliberate loosening (issue #1529): a bare marker word mid-title with no
+  // bracket/paren/colon/standalone/dash construction is a real title, not a
+  // status claim, and stays unflagged even though the old substring matcher
+  // used to flag it.
+  { title: "WIP foo bar", expect: [] },
+  { title: "DRAFT some title", expect: [] },
+  // A plain ASCII hyphen (as opposed to an em/en dash, see below) is a
+  // common general-purpose title separator, not a status-tag delimiter.
+  { title: "WIP - add feature", expect: [] },
+
+  // A conventional-commit scope naming a component that happens to share the
+  // marker word is a component name, not a status claim — the bracket/paren
+  // constructions require the delimiter to sit at a title/whitespace
+  // boundary, never directly after a letter or `/`.
+  { title: "fix(draft): support x", expect: [] },
+  { title: "feat(wip): retry", expect: [] },
+  { title: "fix(routes): rename app/[draft]/page.tsx", expect: [] },
+
+  // A hyphen-prefixed compound is one word split by a hyphen, not a
+  // colon-suffixed status tag.
+  { title: "re-draft: cleanup", expect: [] },
+
+  // A trailing marker set off by a real em/en dash IS a separable status
+  // claim and is now flagged.
+  { title: "Fix login flow — WIP", expect: ["WIP"] },
+  { title: "– DRAFT – new module", expect: ["DRAFT"] },
 ];
 
 for (const { title, expect } of CASES) {
