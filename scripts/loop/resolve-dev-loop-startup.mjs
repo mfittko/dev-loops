@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { resolveAuthoritativeStartupResumeBundle } from "@dev-loops/core/loop/public-dev-loop-routing";
+import {
+  resolveAuthoritativeStartupResumeBundle,
+  isQualifyingAsyncCompletion,
+  normalizeCheckpointCycleIdentity,
+  checkpointCycleIdentitiesMatch,
+  resolveCheckpointStateFromArtifact,
+} from "@dev-loops/core/loop/public-dev-loop-routing";
+import { buildRetrospectiveCheckpointPayload, CHECKPOINT_FILE } from "./checkpoint-contract.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -581,14 +588,21 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     return result;
   }
   let artifactState;
+  let mergeCommit = null;
   let prAssignees = [];
   let linkedIssueNumbers = [];
   try {
     const prJson = ghJson(
-      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body"],
+      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,mergeCommit,assignees,closingIssuesReferences,body"],
       repoRoot,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
+    // Only meaningful once merged; carried on `result` (resolver-only field,
+    // like `artifactState`) so the retrospective checkpoint arming step below
+    // can identify exactly which cycle a qualifying completion discharges.
+    mergeCommit = artifactState === "merged" && typeof prJson.mergeCommit?.oid === "string"
+      ? prJson.mergeCommit.oid
+      : null;
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   } catch {
@@ -605,6 +619,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     mode: "bounded_handoff",
     targetPreference: resolvedTargetPreference,
     artifactState,
+    mergeCommit,
     issueLinkageResolution: "not_applicable",
     loopState: uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
@@ -958,32 +973,69 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   // result, mirroring planFileIntakeState/spikeIntakeState.
   const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
   input = routingInput;
+  const checkpointPath = path.join(effectiveCwd, CHECKPOINT_FILE);
+  let durableCheckpoint = null;
+  let checkpointReadFailed = false;
   try {
-    const checkpointText = readFileSync(
-      path.join(effectiveCwd, ".pi", "dev-loop-retrospective-checkpoint.json"),
-      "utf8",
-    );
-    const checkpoint = JSON.parse(checkpointText);
-    const rawState = checkpoint?.state;
-    const DURABLE_STATE_MAP = {
-      none: "none",
-      complete: "complete",
-      skipped: "skipped",
-      missing: "missing",
-      required: "missing",  // durable artifact uses "required" to mean pending retrospective
-    };
-    const normalizedRaw = typeof rawState === "string" ? rawState.trim().toLowerCase() : null;
-    const mappedState = DURABLE_STATE_MAP[normalizedRaw] ?? null;
-    if (mappedState) {
-      input = { ...input, retrospectiveCheckpointState: mappedState };
-    } else {
-      input = { ...input, retrospectiveCheckpointState: "missing" };
-    }
+    const checkpointText = readFileSync(checkpointPath, "utf8");
+    durableCheckpoint = JSON.parse(checkpointText);
   } catch (err) {
-    if (err?.code === "ENOENT") {
-    } else {
-      input = { ...input, retrospectiveCheckpointState: "missing" };
+    if (err?.code !== "ENOENT") {
+      checkpointReadFailed = true;
     }
+  }
+  // Automatic retrospective-checkpoint arming: a merged run whose resolved
+  // gate is a qualifying GitHub-first async completion (copilot_pr_followup /
+  // issue_intake) arms the checkpoint for the NEXT start/resume, scoped to
+  // this exact cycle's identity (repo + PR + merge commit). The qualifying
+  // gate is classified by peeking the routing decision for this same
+  // ownership/target shape in its PRE-completion form (artifactState "open"
+  // for a PR target, matching what buildAutoResolvedInput's --pr path always
+  // carries while the PR is Copilot-owned): the pure evaluator rejects
+  // artifactState "merged" paired with an "active" canonical status as
+  // self-contradictory (isArtifactStateCompatible), so a real merge can never
+  // itself resolve to a "route" result — the peek classifies WHICH gate this
+  // ownership/target shape would have routed through, and the live
+  // artifactState (read separately, from gh) confirms the PR actually merged.
+  // Mirrors the ownership-gate peek pattern already used in
+  // buildAutoResolvedInput above. A no-op when the identity already matches
+  // the durable artifact (required or complete), so re-resolving an
+  // already-discharged merged PR never re-arms/re-blocks it. Gated on
+  // workflow.requireRetrospective so a repo that never opts in never has this
+  // artifact written for it.
+  let qualifyingIdentity = null;
+  if (resolveWorkflowConfig(config, "requireRetrospective") === true && !checkpointReadFailed) {
+    const peekArtifactState = input.currentState?.target?.kind === "pr" ? "open" : "not_applicable";
+    const peekedRouting = resolveAuthoritativeStartupResumeBundle({ ...input, artifactState: peekArtifactState });
+    if (isQualifyingAsyncCompletion(peekedRouting) && input.artifactState === "merged") {
+      qualifyingIdentity = normalizeCheckpointCycleIdentity({
+        repo: detectRepoSlug(effectiveCwd),
+        prNumber: peekedRouting.canonicalState?.target?.pr ?? null,
+        mergeCommit: typeof input.mergeCommit === "string" ? input.mergeCommit : null,
+      });
+      if (qualifyingIdentity && !checkpointCycleIdentitiesMatch(durableCheckpoint?.identity, qualifyingIdentity)) {
+        try {
+          const armed = buildRetrospectiveCheckpointPayload({ state: "required", identity: qualifyingIdentity });
+          mkdirSync(path.dirname(checkpointPath), { recursive: true });
+          writeFileSync(checkpointPath, `${JSON.stringify(armed, null, 2)}\n`, "utf8");
+          durableCheckpoint = armed;
+        } catch {
+          // Best-effort write. A failed arm leaves the prior durable state in
+          // place; the identity-mismatch backstop below still fails a stale
+          // `complete` closed to MISSING for this newly observed identity.
+        }
+      }
+    }
+  }
+  if (checkpointReadFailed) {
+    input = { ...input, retrospectiveCheckpointState: "missing" };
+  } else {
+    input = {
+      ...input,
+      retrospectiveCheckpointState: resolveCheckpointStateFromArtifact(durableCheckpoint, {
+        latestQualifyingIdentity: qualifyingIdentity,
+      }),
+    };
   }
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";
