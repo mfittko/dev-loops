@@ -130,30 +130,33 @@ export function checkpointCycleIdentitiesMatch(a, b) {
   }
   return normalizedA.repo.toLowerCase() === normalizedB.repo.toLowerCase()
     && normalizedA.prNumber === normalizedB.prNumber
-    && normalizedA.mergeCommit === normalizedB.mergeCommit;
+    && normalizedA.mergeCommit.toLowerCase() === normalizedB.mergeCommit.toLowerCase();
 }
 
 /**
  * Resolves the RETROSPECTIVE_CHECKPOINT_STATE for a durable checkpoint
  * artifact, scoped to a specific dev-loop cycle identity (issue: a one-time
- * `complete` checkpoint must not satisfy every later qualifying cycle
- * forever).
+ * `complete`/`skipped` checkpoint must not satisfy every later qualifying
+ * cycle forever).
  *
- * A `complete` artifact whose recorded `identity` does not match
+ * A `complete` or `skipped` artifact whose recorded `identity` does not match
  * `latestQualifyingIdentity` (when the caller has one to compare against)
- * cannot discharge that newer cycle — it fails closed to MISSING. This is the
- * backstop for a bypassed/missed arming step; arming (writing a fresh
- * `required` record for the new identity) is the primary mechanism and keeps
- * the two in sync so this branch is rarely the one doing the work.
+ * cannot discharge that newer cycle — it fails closed to MISSING. The caller
+ * derives `latestQualifyingIdentity` itself (this module stays pure/I/O-free)
+ * by querying the latest qualifying completion at the moment the gate is
+ * evaluated, so this comparison runs on every call rather than depending on
+ * anything having written a fresh `required` record for the new identity.
  *
- * `required`/`skipped`/`none` are not scoped by this comparison: `required`
- * already maps to MISSING regardless of identity (an outstanding requirement
- * blocks the gate no matter which cycle triggered it), and `skipped` is
- * accepted as an explicit reasoned escape hatch scoped to whichever cycle the
- * operator recorded.
+ * `required`/`none` are not scoped by this comparison: `required` already
+ * maps to MISSING regardless of identity (an outstanding requirement blocks
+ * the gate no matter which cycle triggered it), and `none` means no
+ * completion has ever been observed.
  *
  * @param {object|null|undefined} artifact - Parsed checkpoint JSON, or
- *   null/undefined when the durable artifact is absent.
+ *   null/undefined when the durable artifact is absent. A non-null value that
+ *   is not a plain object (e.g. a corrupt-but-valid-JSON scalar or array) is
+ *   treated as a present-but-malformed artifact and fails closed to MISSING —
+ *   only a genuinely ABSENT artifact resolves to NONE.
  * @param {object} [options]
  * @param {unknown} [options.latestQualifyingIdentity] - Identity of the most
  *   recently observed qualifying completion this call, or null/absent when
@@ -161,25 +164,27 @@ export function checkpointCycleIdentitiesMatch(a, b) {
  * @returns {"none"|"complete"|"skipped"|"missing"}
  */
 export function resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity = null } = {}) {
-  if (artifact === null || artifact === undefined || typeof artifact !== "object") {
+  if (artifact === null || artifact === undefined) {
     return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
   }
-  const rawState = typeof artifact.state === "string" ? artifact.state.trim().toLowerCase() : null;
-  if (rawState === "skipped") {
-    return RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
+  if (typeof artifact !== "object") {
+    // Present but malformed — fail closed, do not treat as "nothing observed".
+    return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
   }
+  const rawState = typeof artifact.state === "string" ? artifact.state.trim().toLowerCase() : null;
   if (rawState === "required" || rawState === "missing") {
     return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
   }
   if (rawState === "none") {
     return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
   }
+  const normalizedLatest = normalizeCheckpointCycleIdentity(latestQualifyingIdentity);
+  const staleForLatestCycle = normalizedLatest && !checkpointCycleIdentitiesMatch(artifact.identity, normalizedLatest);
+  if (rawState === "skipped") {
+    return staleForLatestCycle ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
+  }
   if (rawState === "complete") {
-    const normalizedLatest = normalizeCheckpointCycleIdentity(latestQualifyingIdentity);
-    if (normalizedLatest && !checkpointCycleIdentitiesMatch(artifact.identity, normalizedLatest)) {
-      return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
-    }
-    return RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
+    return staleForLatestCycle ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
   }
   // Malformed/unrecognized durable state — fail closed.
   return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;

@@ -440,6 +440,13 @@ test("checkpointCycleIdentitiesMatch: a different PR number does not match", () 
   assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, prNumber: 1 }), false);
 });
 
+test("checkpointCycleIdentitiesMatch: mergeCommit comparison is case-insensitive", () => {
+  assert.equal(
+    checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, mergeCommit: VALID_IDENTITY.mergeCommit.toUpperCase() }),
+    true,
+  );
+});
+
 test("checkpointCycleIdentitiesMatch: a different merge commit does not match", () => {
   assert.equal(checkpointCycleIdentitiesMatch(VALID_IDENTITY, { ...VALID_IDENTITY, mergeCommit: "def456" }), false);
 });
@@ -459,8 +466,10 @@ test("resolveCheckpointStateFromArtifact: absent artifact resolves to NONE", () 
   assert.equal(resolveCheckpointStateFromArtifact(undefined), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
 });
 
-test("resolveCheckpointStateFromArtifact: a non-object artifact fails closed to NONE (no requirement observed)", () => {
-  assert.equal(resolveCheckpointStateFromArtifact("not an object"), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+test("resolveCheckpointStateFromArtifact: a present-but-non-object artifact fails closed to MISSING (not NONE)", () => {
+  assert.equal(resolveCheckpointStateFromArtifact("not an object"), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+  assert.equal(resolveCheckpointStateFromArtifact(42), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+  assert.equal(resolveCheckpointStateFromArtifact(["state", "complete"]), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
 });
 
 test("resolveCheckpointStateFromArtifact: state 'required' resolves to MISSING regardless of identity", () => {
@@ -471,11 +480,33 @@ test("resolveCheckpointStateFromArtifact: state 'required' resolves to MISSING r
   );
 });
 
-test("resolveCheckpointStateFromArtifact: state 'skipped' resolves to SKIPPED regardless of identity", () => {
+test("resolveCheckpointStateFromArtifact: matching-skipped resolves to SKIPPED (identity round-trip)", () => {
   const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
   assert.equal(
-    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: { ...VALID_IDENTITY, prNumber: 9999 } }),
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: VALID_IDENTITY }),
     RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: skipped with no known latest identity is trusted as SKIPPED", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED);
+});
+
+test("resolveCheckpointStateFromArtifact: stale-skipped (mismatched identity) resolves to MISSING — skipped is cycle-scoped like complete", () => {
+  const staleArtifact = { state: "skipped", skippedAt: "2026-08-06T01:00:38.000Z", reason: "trivial docs change", identity: VALID_IDENTITY };
+  const newerIdentity = { ...VALID_IDENTITY, prNumber: 1620, mergeCommit: "def456" };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(staleArtifact, { latestQualifyingIdentity: newerIdentity }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: skipped with no recorded identity at all fails closed to MISSING against a known latest identity", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial" };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { latestQualifyingIdentity: VALID_IDENTITY }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   );
 });
 
