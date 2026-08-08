@@ -832,7 +832,13 @@ marker-tagged PR issue comment grouped by severity. It is governed by
 `gates.postFindingsComments` (resolved via `resolveGatePostFindingsComments(config)`,
 default false / opt-in) and no-ops with a `skipped` result unless a repo explicitly turns
 it on. A repo that does opt in accepts duplicated finding text on a second surface for
-every reader; nothing in the gate flow requires it.
+every reader; nothing in the gate flow requires it. This comment is itself bounded by
+GitHub's per-comment character limit: a round large enough to approach that limit degrades
+by dropping whole severity groups, least-urgent first, naming what was omitted in the posted
+comment and pointing at the disposition ledger (always complete, never bounded) as the full
+record; a round that cannot fit even with every finding omitted fails the post closed rather
+than reporting success. Do not assume this comment alone carries every finding of a large
+round — the ledger is the one surface with that guarantee.
 
 Because the findings ride the verdict review itself, they occupy the same post-verdict,
 pre-fix slot relative to Phase 4 — unresolved threads exist on the PR before any fix is

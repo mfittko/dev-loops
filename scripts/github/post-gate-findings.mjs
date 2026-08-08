@@ -288,7 +288,12 @@ export function sanitizeInline(value) {
     .replace(/!\[/g, "!&#91;");
 }
 
-export function renderFindingsCommentBody({ gate, headSha, findings }) {
+// GitHub rejects an issue comment body over this many characters. Exported so
+// the bounding resolver below (and its tests) share the one authoritative
+// number rather than a second hand-copied literal.
+export const GITHUB_COMMENT_MAX_CHARS = 65536;
+
+export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [] }) {
   const marker = buildFindingsMarker({ gate });
   const lines = [
     marker,
@@ -300,8 +305,20 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
     "This comment shows only the latest posted round for this gate; earlier rounds' findings are no longer shown here and live on their own per-round gate reviews.",
     "",
   ];
+  if (omittedCounts.length > 0) {
+    const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
+    const breakdown = omittedCounts.map(({ severity, count }) => `${count} ${SEVERITY_LABELS[severity]}`).join(", ");
+    lines.push(
+      `**Note:** ${omittedTotal} finding(s) omitted from this comment (${breakdown}) — the full round exceeded GitHub's ${GITHUB_COMMENT_MAX_CHARS}-character comment limit. This gate round's disposition ledger (written by write-gate-findings-log.mjs) always carries the complete, unbounded record.`,
+      "",
+    );
+  }
   if (findings.length === 0) {
-    lines.push("No findings. All review angles passed for this head.");
+    lines.push(
+      omittedCounts.length > 0
+        ? "Every finding for this round is omitted above; none survived the comment length bound."
+        : "No findings. All review angles passed for this head.",
+    );
     return sanitizeCopilotSummonTokens(lines.join("\n"));
   }
   const grouped = new Map();
@@ -356,6 +373,41 @@ export function renderFindingsCommentBody({ gate, headSha, findings }) {
   // (e.g. an excerpt of the anti-summon rule itself) so this comment can never
   // arm request-copilot-review.mjs's anti-summon guard.
   return sanitizeCopilotSummonTokens(lines.join("\n"));
+}
+
+// Least-urgent-first: the order whole severity groups are dropped when a
+// round's rendered comment would exceed GitHub's comment limit. The reverse
+// of SEVERITY_ORDER (most-urgent-first).
+const DROP_LEAST_URGENT_FIRST = [...SEVERITY_ORDER].reverse();
+
+// Renders the findings comment body, degrading through whole severity groups
+// (never a partial group, and never a silently truncated field) when the full
+// render would exceed GitHub's comment length limit. Every omission is named
+// in the posted comment itself, with a pointer to the disposition ledger — the
+// one surface that is never length-bounded. Throws (fails closed) when even
+// the emptiest render — the header plus the omission note covering every
+// finding — still cannot fit, so a round that truly cannot be posted is never
+// reported as a success.
+export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
+  let remaining = findings;
+  let omittedCounts = [];
+  let body = renderFindingsCommentBody({ gate, headSha, findings: remaining });
+  if (body.length <= maxChars) {
+    return { body, omittedCounts };
+  }
+  for (const severity of DROP_LEAST_URGENT_FIRST) {
+    const dropped = remaining.filter((f) => normalizeSeverity(f.severity) === severity);
+    if (dropped.length === 0) continue;
+    remaining = remaining.filter((f) => normalizeSeverity(f.severity) !== severity);
+    omittedCounts = [...omittedCounts, { severity, count: dropped.length }];
+    body = renderFindingsCommentBody({ gate, headSha, findings: remaining, omittedCounts });
+    if (body.length <= maxChars) {
+      return { body, omittedCounts };
+    }
+  }
+  throw new Error(
+    `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding omitted; refusing to post a truncated or partial record.`,
+  );
 }
 
 // Shared by every sibling GitHub script that reads a `--paginate --slurp`
@@ -498,7 +550,14 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
     };
   }
   const marker = buildFindingsMarker({ gate: options.gate });
-  const desiredBody = renderFindingsCommentBody({ gate: options.gate, headSha: options.headSha, findings });
+  // Fails closed (throws) when the round cannot be rendered within GitHub's
+  // comment limit even with every finding omitted, rather than reporting a
+  // false success below.
+  const { body: desiredBody, omittedCounts } = renderBoundedFindingsCommentBody({
+    gate: options.gate,
+    headSha: options.headSha,
+    findings,
+  });
   const login = await resolveAuthenticatedLogin({ env, ghCommand });
   const comments = await listIssueComments({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const existing = findMarkedComment(comments, marker, { author: login });
@@ -509,6 +568,11 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
     gate: options.gate,
     headSha: options.headSha,
     findingsCount: findings.length,
+    // Only present when the render degraded, so an unbounded round's result
+    // shape is unchanged.
+    ...(omittedCounts.length > 0
+      ? { omittedFindingsCount: omittedCounts.reduce((sum, { count }) => sum + count, 0) }
+      : {}),
   };
   if (existing) {
     if (typeof existing.body === "string" && existing.body === desiredBody) {

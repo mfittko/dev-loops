@@ -9,9 +9,11 @@ import { writeGhStub } from "../_helpers.mjs";
 import {
   buildFindingsMarker,
   findMarkedComment,
+  GITHUB_COMMENT_MAX_CHARS,
   parseFindings,
   parsePostGateFindingsCliArgs,
   postGateFindings,
+  renderBoundedFindingsCommentBody,
   renderFindingsCommentBody,
 } from "../../scripts/github/post-gate-findings.mjs";
 
@@ -744,6 +746,71 @@ test("renderFindingsCommentBody renders Question and Nit group labels", () => {
 // proven LOCATABLE — it defaults to "deferred" too (never "needs-answer",
 // which is reserved for a locatable question elsewhere in the pipeline —
 // see write-gate-findings-log.mjs/consolidateFanin, which do carry `line`).
+// ---------------------------------------------------------------------------
+// Length bound (GitHub's 65536-char comment limit)
+// ---------------------------------------------------------------------------
+
+function buildOversizedFindings({ nitCount = 2000 } = {}) {
+  const findings = [{ severity: "high", angle: "scope", summary: "A must-fix that must always survive degradation" }];
+  for (let i = 0; i < nitCount; i += 1) {
+    findings.push({ severity: "nit", angle: "naming", summary: `Nit finding number ${i} padded with filler text so the round is large`.repeat(3) });
+  }
+  return findings;
+}
+
+test("renderBoundedFindingsCommentBody degrades a too-large ledger into a posted-size comment, naming what is omitted", () => {
+  const findings = parseFindings(JSON.stringify(buildOversizedFindings()));
+  const unbounded = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(unbounded.length > GITHUB_COMMENT_MAX_CHARS, "fixture must actually exceed the limit to exercise degradation");
+  const { body, omittedCounts } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.length <= GITHUB_COMMENT_MAX_CHARS, `degraded body must fit within the limit (got ${body.length})`);
+  assert.ok(omittedCounts.length > 0, "expected at least one severity group to be dropped");
+  assert.equal(omittedCounts[0].severity, "nit", "least-urgent severity is dropped first");
+  // Omission is NAMED with a pointer to the durable record — never silent.
+  assert.match(body, /finding\(s\) omitted from this comment/);
+  assert.match(body, /disposition ledger/);
+  // The high finding is never dropped while a less-urgent group is available to drop instead.
+  assert.ok(body.includes("A must-fix that must always survive degradation"));
+});
+
+test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded render cannot fit", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: 10 }),
+    /cannot be rendered within/,
+  );
+});
+
+test("postGateFindings posts a degraded, within-limit comment for an oversized round instead of failing to post", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-"));
+  const repoRoot = await optedInRepoRoot();
+  try {
+    const findingsJson = JSON.stringify(buildOversizedFindings());
+    const { env, ghPath } = await writeGhStub(tmpDir, [
+      userEntry(),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/42/comments", "-f"],
+        assertArgContains: ["dev-loops:gate-findings"],
+        stdout: JSON.stringify({ id: 202, html_url: "https://github.com/owner/repo/pull/42#issuecomment-202" }) + "\n",
+      },
+    ]);
+    const result = await postGateFindings(
+      { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: findingsJson },
+      { env, ghCommand: ghPath, repoRoot },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.ok(result.omittedFindingsCount > 0);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseFindings defaults disposition: low/nit/question all default to deferred (no line field in this shape)", () => {
   const findings = parseFindings(JSON.stringify([
     { severity: "low", angle: "naming", summary: "a" },
