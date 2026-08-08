@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -652,20 +652,14 @@ function normalizeStructuredFinding(f) {
   }
   return entry;
 }
-// Map a severity to its sort rank. Known severities follow
-// SEVERITY_ORDER (high → question → medium → low → nit);
-// unknown/missing severities map to a LARGE rank so they sort LAST, never
-// before high. (indexOf alone would give an unknown severity rank -1,
-// floating it ABOVE high and hiding the highest-priority items below it.)
-function severitySortRank(severity) {
-  const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(severity)));
-  return idx === -1 ? SEVERITY_ORDER.length : idx;
-}
 // Sort findings by severity (high first, unknown/missing last) for
 // deterministic output, preserving input order within a severity.
+// severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule this
+// and consolidate-fanin.mjs's angleWorstSeverityRank both share, so the two
+// can never drift on how an unknown severity ranks.
 function sortStructuredFindings(findings) {
   findings.sort(
-    (a, b) => severitySortRank(a.severity) - severitySortRank(b.severity),
+    (a, b) => severityRank(a.severity) - severityRank(b.severity),
   );
   return findings;
 }

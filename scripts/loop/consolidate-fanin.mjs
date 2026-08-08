@@ -57,7 +57,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -348,20 +348,21 @@ function buildAngleMarker(a, verbose) {
 // never revisited: it already holds its ideal (real, unmarked) shape. Every
 // upgrade is kept only while the WHOLE round still renders. Returns
 // { commentFindingsJson, withheldOut }.
-// The angle's own worst (most blocking) severity among its real findings, as
-// a SEVERITY_ORDER index (0 = high, lower is more severe); a clean angle
-// (no findings) ranks last. Used only to ORDER the greedy upgrade below by
+// The angle's own worst (most urgent) severity among its real findings, as a
+// SEVERITY_ORDER index (0 = high, lower is more urgent); a clean angle (no
+// findings) ranks last. Used only to ORDER the greedy upgrade below by
 // decision value, never to change which findings a marker represents.
 function angleWorstSeverityRank(a) {
   let best = SEVERITY_ORDER.length;
   for (const f of a.findings) {
-    // Normalized first (mirrors upsert-checkpoint-verdict.mjs's sibling
-    // severitySortRank): an un-normalized legacy-spelled severity (e.g.
-    // "must-fix") would never match SEVERITY_ORDER's canonical spellings and
-    // rank as if the angle carried no findings at all — starving it of the
-    // scarce verbose-marker budget it should have won.
-    const idx = SEVERITY_ORDER.indexOf(/** @type {string} */ (normalizeSeverity(f.severity)));
-    if (idx !== -1 && idx < best) best = idx;
+    // severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule
+    // this and upsert-checkpoint-verdict.mjs's rendering both share — it
+    // normalizes first, so an un-normalized legacy-spelled severity (e.g.
+    // "must-fix") ranks by its canonical spelling instead of falling through
+    // to the unknown-severity rank (which would starve the angle of the
+    // scarce verbose-marker budget it should have won).
+    const rank = severityRank(f.severity);
+    if (rank < best) best = rank;
   }
   return best;
 }
@@ -718,7 +719,7 @@ function validateArtifactShape(raw, sourceLabel) {
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
       if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))) {
-        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected high|medium|low|question|nit)`);
+        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected ${SEVERITY_ORDER.join("|")})`);
       }
     });
   }
