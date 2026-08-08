@@ -7,7 +7,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, VALID_SEVERITIES, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -65,7 +65,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     const severity = normalizeSeverity(f.severity);
     if (!severity || !VALID_SEVERITIES.has(severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: high, medium, low, question, nit`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}`);
     }
     f = { ...f, severity };
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
@@ -106,7 +106,7 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: accepted-for-fix, deferred, needs-answer, disputed, operator_acknowledged`);
       }
       entry.disposition = disp;
-    } else if (f.severity === "low" || f.severity === "nit" || f.severity === "question") {
+    } else if (isDefaultDeferrableSeverity(f.severity)) {
       // A non-blocking low/nit finding with no explicit disposition defaults
       // to "deferred" so a hand-authored (or consolidate-fanin.mjs-produced)
       // array need not repeat the obvious disposition for every lowest-tier
@@ -116,6 +116,9 @@ function validateFindingsArray(parsed, flagLabel) {
       // "needs-answer", non-locatable to "deferred" — see that function's
       // own doc for the full rule. Explicit dispositions (including an
       // explicit "deferred") always keep the validation above unchanged.
+      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
+      // producer and post-gate-findings.mjs's own validator both route
+      // through, so the two can never restate it out of sync.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     if ("resolvedIn" in f) {

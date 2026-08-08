@@ -3,8 +3,8 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
-// Severity vocabulary and its most-blocking-first ordering are owned by gate-fanin.
-import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+// Severity vocabulary and its most-urgent-first ordering are owned by gate-fanin.
+import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -83,7 +83,7 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     f = { ...f, severity: normalizeSeverity(f.severity) };
     if (!f.severity || !VALID_SEVERITIES.has(f.severity)) {
-      throw parseError(`${flagLabel}[${i}].severity must be one of: high, medium, low, question, nit`);
+      throw parseError(`${flagLabel}[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}`);
     }
     if (!f.angle || typeof f.angle !== "string" || f.angle.trim().length === 0) {
       throw parseError(`${flagLabel}[${i}].angle is required`);
@@ -101,13 +101,16 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
-    } else if (f.severity === "low" || f.severity === "nit" || f.severity === "question") {
+    } else if (isDefaultDeferrableSeverity(f.severity)) {
       // Routes through the SAME shared rule (deriveDisposition,
       // @dev-loops/core/loop/gate-fanin) every producer uses: a LOCATABLE
       // question (hasLocatableShape) defaults to "needs-answer", non-locatable
       // to "deferred" — see that function's own doc for the full rule. This
       // shape carries no `line` field at all (see USAGE above), so a question
       // here can never be proven locatable and always resolves to "deferred".
+      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
+      // producer and write-gate-findings-log.mjs's own validator both route
+      // through, so the two can never restate it out of sync.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
     return entry;
