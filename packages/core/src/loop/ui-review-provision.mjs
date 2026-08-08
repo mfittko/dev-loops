@@ -118,11 +118,12 @@ export async function provisionAndBoot(
 
   // 2b. Pin the worktree to the PR head, AFTER the primary-checkout guard above
   //     (this checks out a ref, so it must never run in the primary checkout).
-  //     ensureWorktree's `branch` is a branch to CREATE off the default base when
-  //     no such local branch exists, so the default `pr-<n>` silently produces a
-  //     worktree sitting on origin/<default> — and provision used to return
-  //     ok:true for it, so every later stage reviewed the base branch as if it
-  //     were the PR head. Pin explicitly and record the resolved SHA.
+  //     ensureWorktree resolves `branch` against what already exists, so the
+  //     default `pr-<n>` lands wherever that name happens to point — the base
+  //     branch when no remote carries it, and a same-named remote branch that
+  //     is not this PR's head when one does. A fork PR's head branch is on no
+  //     candidate remote at all. Reviewing the wrong commit still reports
+  //     ok:true, so pin the head explicitly and record the resolved SHA.
   let headSha = null;
   if (pinPrHead) {
     const pin = await pinPrHead({ worktreePath, repoRoot, pr });

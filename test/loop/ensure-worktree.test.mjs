@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  branchesDiverged,
   ensureWorktree,
   parseEnsureWorktreeCliArgs,
 } from "../../scripts/loop/ensure-worktree.mjs";
@@ -33,13 +34,22 @@ after(() => {
 const REPO_GIT_ENV = { ...process.env };
 delete REPO_GIT_ENV.DEVLOOPS_ALLOW_MAIN;
 
+// A git command runner bound to `cwd`, with test identity pre-configured —
+// the "define a git() lambda, then set user.email/user.name" pattern
+// repeated at every fixture root below. `cwd` must already be a git repo
+// (freshly `init`ed or `clone`d) by the time this runs.
+function gitIn(cwd) {
+  const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
+  git("config", "user.email", "t@t.t");
+  git("config", "user.name", "t");
+  return git;
+}
+
 // A real (tiny) git repo with one commit on `main`, so `git worktree add` works.
 function makeRepo({ devloops, branch = "main" } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "wt-ensure-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: REPO_GIT_ENV });
-  git("init", "-q", "-b", branch);
-  git("config", "user.email", "t@t.t");
-  git("config", "user.name", "t");
+  execFileSync("git", ["init", "-q", "-b", branch], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
+  const git = gitIn(root);
   if (devloops) writeFileSync(path.join(root, ".devloops"), devloops);
   else writeFileSync(path.join(root, "README"), "x");
   git("add", "-A");
@@ -51,6 +61,47 @@ function makeRepo({ devloops, branch = "main" } = {}) {
   // refs/remotes/origin/HEAD, and the guard resolves the default from it.
   git("remote", "set-head", "origin", "--auto");
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+// A real, SEPARATE origin repo + a clone of it — unlike makeRepo()'s
+// self-referential single-repo trick. Needed whenever a test must keep a
+// remote branch's ref (or a divergent state) independent of the local repo's
+// own history: ensureWorktree's own internal `git fetch --prune` resyncs
+// refs/remotes/origin/* from wherever "origin" physically is, and a
+// self-referential origin IS the same repo — deleting a local branch there
+// deletes it from "origin" too, and re-fetching resyncs (or prunes) any
+// remote-only or diverged state a test set up instead of preserving it.
+function makeOriginRepo() {
+  const tmp = mkdtempSync(path.join(tmpdir(), "wt-ensure-clone-"));
+  const originDir = path.join(tmp, "origin");
+  execFileSync("git", ["init", "-q", "-b", "main", originDir], { encoding: "utf8", env: REPO_GIT_ENV });
+  const originGit = gitIn(originDir);
+  originGit("commit", "-q", "--allow-empty", "-m", "init");
+  return { tmp, originDir, originGit, cleanup: () => rmSync(tmp, { recursive: true, force: true }) };
+}
+
+// Clone `originDir` into `<tmp>/<name>`; a plain clone fetches every branch
+// into refs/remotes/origin/* but checks out only the default branch locally —
+// exactly the shape "a remote branch exists, no local branch does" needs.
+function cloneRepo(tmp, originDir, name = "root") {
+  const root = path.join(tmp, name);
+  execFileSync("git", ["clone", "-q", originDir, root], { encoding: "utf8", env: REPO_GIT_ENV });
+  return { root, git: gitIn(root) };
+}
+
+// Create `branch` (optionally at `startPoint`, else the current HEAD) via
+// `git`, add one commit, then return to main — the "publish a branch with
+// new work" setup repeated across most of the tracked-remote/divergence
+// fixtures below. `git` is whichever repo's command runner the branch
+// belongs on (`origin.originGit` or a clone's own `git`). Returns the
+// branch's resulting sha, which most callers need right after for a
+// HEAD/upstream assertion.
+function publishBranch(git, branch, message, startPoint) {
+  git(...(startPoint === undefined ? ["branch", branch] : ["branch", branch, startPoint]));
+  git("checkout", "-q", branch);
+  git("commit", "-q", "--allow-empty", "-m", message);
+  git("checkout", "-q", "main");
+  return git("rev-parse", branch).trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -168,11 +219,68 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     assert.equal(second.created, false);
     assert.equal(second.reused, true);
     assert.equal(second.path, first.path);
+    // MUST-FIX regression: branchOrigin/diverged used to be emitted only on
+    // the create path — deleting them from the reuse return left this whole
+    // suite green while a persisting diverged state vanished on re-run.
+    assert.equal(second.branchOrigin, "reused-local");
+    assert.equal(second.diverged, undefined);
     // `guard` is documented as always present on BOTH the create and reuse
     // paths — deleting installGuard's call on the reuse branch would leave
     // this whole suite green while breaking that contract.
     assert.equal(second.guard.ok, true);
     assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-merge-commit", "pre-push"]);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// MUST-FIX regression: no test asserted diverged on the REUSE path, so
+// deleting the reuse-path divergence check entirely left the suite green.
+test("ensure: an already-existing worktree being reused reports a divergence on its local branch too", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    const first = await ensureWorktree({ repoRoot: root, issue: 4001 });
+    assert.equal(first.created, true);
+    assert.equal(first.branchOrigin, "created-from-base");
+
+    // Publish issue-4001 on the remote at a DIFFERENT commit — a genuine
+    // fork from the local branch the worktree already created, forked from
+    // the SAME base commit as the local branch (init).
+    const remoteSha = publishBranch(origin.originGit, "issue-4001", "remote-side rewrite", "HEAD");
+
+    // Advance the LOCAL branch too, so it is a genuine, mutually-unreachable fork.
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "local-side work"], { cwd: first.path, encoding: "utf8", env: REPO_GIT_ENV });
+    const localSha = git("-C", first.path, "rev-parse", "HEAD").trim();
+
+    const second = await ensureWorktree({ repoRoot: root, issue: 4001 }); // hits the REUSE path
+    assert.equal(second.ok, true);
+    assert.equal(second.created, false);
+    assert.equal(second.reused, true);
+    assert.equal(second.branchOrigin, "reused-local");
+    assert.deepEqual(second.diverged, { remoteRef: "origin/issue-4001", local: localSha, remote: remoteSha });
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// WFN: a DETACHED-HEAD worktree at the path (this repo's ui-review
+// pinPrHead detaches one via `git checkout --detach`) used to pass the
+// `existing.branch &&` conflict guard and get labeled "reused-local" —
+// even a fabricated diverged report — for a branch it is not even on.
+test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabricating reused-local/diverged", async () => {
+  const repo = makeRepo();
+  try {
+    const target = path.join(repo.root, "tmp/worktrees/dev-loops/issue-4002");
+    repo.git("worktree", "add", "--detach", target, "main");
+
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, false);
+    assert.equal(res.reused, true);
+    assert.equal(res.branchOrigin, "reused-detached");
+    assert.equal(res.diverged, undefined);
+    assert.equal(res.base, undefined, "base is only reported on create");
   } finally {
     repo.cleanup();
   }
@@ -226,6 +334,448 @@ test("ensure: reuses an existing branch when no worktree occupies it", async () 
     repo.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Branch provisioning origin: reuse an existing `origin/<branch>` instead of
+// forking a fresh branch off base when no LOCAL branch of that name exists.
+// A worktree created off base with a matching remote branch left behind used
+// to sit at base with none of the branch's commits, upstream set to base —
+// one `git push` away from replacing the remote branch's commits with a copy
+// of base.
+// ---------------------------------------------------------------------------
+
+test("ensure: neither local nor remote branch exists — created off resolved base (unchanged)", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 2001 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(res.base, "origin/main");
+    assert.equal(res.diverged, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: local branch already exists — re-attached (unchanged), even alongside a same-SHA origin ref", async () => {
+  const repo = makeRepo();
+  try {
+    const stale = path.join(repo.root, "tmp/worktrees/dev-loops/issue-2002");
+    repo.git("worktree", "add", "-b", "issue-2002", stale, "main");
+    repo.git("worktree", "remove", "--force", stale);
+    repo.git("worktree", "prune");
+
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 2002 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "reused-local");
+    assert.equal(res.base, "issue-2002");
+    // makeRepo()'s origin is self-referential, so ensureWorktree's own fetch
+    // pulls the just-created local branch into refs/remotes/origin/issue-2002
+    // at the SAME sha — same-SHA is not divergence, so this must read undefined
+    // rather than proving the origin ref never existed (it does).
+    assert.equal(res.diverged, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: origin/<branch> exists, no local branch — tracks the remote tip instead of forking off base", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const remoteSha = publishBranch(origin.originGit, "issue-2003", "remote-only work");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    assert.equal(branchExistsAt(git, "issue-2003"), false, "clone must not check out the non-default branch locally");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 2003 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "origin/issue-2003");
+    assert.equal(res.diverged, undefined);
+
+    // The worktree carries the remote branch's own commit — not a fork off base.
+    const worktreeSha = git("-C", res.path, "rev-parse", "HEAD").trim();
+    assert.equal(worktreeSha, remoteSha, "worktree tip must be the remote branch's commit, not base");
+
+    // Upstream is the remote branch, never the base branch.
+    const upstream = git("-C", res.path, "rev-parse", "--abbrev-ref", "issue-2003@{upstream}").trim();
+    assert.equal(upstream, "origin/issue-2003");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// MUST-FIX regression: a slashed --base whose first segment is NOT a real
+// remote (the shape workflow.baseBranch documents — "release/1.0") used to
+// resolve remoteRef via the UNVALIDATED first segment ("release/<branch>"),
+// which never matches anything, so the tracked-remote path was skipped even
+// though origin/<branch> genuinely exists — silently reinstating the
+// fork-off-base hazard this whole fix exists to close.
+test("ensure: a slashed non-remote --base still tracks an existing origin/<branch> (never mis-resolves the remote)", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const remoteSha = publishBranch(origin.originGit, "issue-2006", "remote-only work");
+    origin.originGit("branch", "release/1.0");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 2006, branch: "issue-2006", base: "release/1.0" });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "origin/issue-2006");
+    const worktreeSha = git("-C", res.path, "rev-parse", "HEAD").trim();
+    assert.equal(worktreeSha, remoteSha);
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// MUST-FIX regression: a fork workflow's --base on a DIFFERENT, real remote
+// ("upstream", distinct from "origin") used to consult ONLY that remote for
+// the branch lookup — an existing origin/<branch> was invisible, silently
+// forking the branch off base with "upstream" as its (wrong) implied world.
+// This is the exact clobber state the whole fix exists to prevent.
+test("ensure: a fork workflow's --base on a different remote still finds an existing origin/<branch> (never forks off base)", async () => {
+  const origin = makeOriginRepo();
+  // A second, INDEPENDENT remote that genuinely lacks the branch — unlike
+  // origin.originDir, it was never given "issue-4003" at all, mirroring a
+  // real upstream that never saw a fork-only branch.
+  const upstream = makeOriginRepo();
+  try {
+    const remoteSha = publishBranch(origin.originGit, "issue-4003", "fork branch work");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 4003, branch: "issue-4003", base: "upstream/main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "origin/issue-4003");
+    assert.equal(git("-C", res.path, "rev-parse", "HEAD").trim(), remoteSha);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "issue-4003@{upstream}").trim(), "origin/issue-4003");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// WFN regression: the fork-workflow test above only proves fallback-to-origin
+// (upstream never has the branch, so candidates.find() lands on origin no
+// matter the array order — a REVERSED branchRemoteCandidates would survive
+// unnoticed). This proves the PRIORITY order too: when BOTH remotes have the
+// branch at genuinely different tips, the base remote (first in priority)
+// wins, not origin.
+test("ensure: when BOTH the base remote and origin have the branch, the base remote (priority order) wins", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    const originSha = publishBranch(origin.originGit, "issue-4008", "origin-side work");
+    const upstreamSha = publishBranch(upstream.originGit, "issue-4008", "upstream-side work");
+    assert.notEqual(originSha, upstreamSha, "the two remotes must genuinely differ at the same branch name");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 4008, branch: "issue-4008", base: "upstream/main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "upstream/issue-4008", "the base remote (priority order) must win over origin");
+    assert.equal(git("-C", res.path, "rev-parse", "HEAD").trim(), upstreamSha);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "issue-4008@{upstream}").trim(), "upstream/issue-4008");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// WFN regression (#8 in a prior round, now the empty-after-normalization
+// fallback was added for --branch but not --base): "origin/" stays truthy
+// and used to reach git as the invalid ref "origin/".
+test("ensure: a prefix-only --base ('origin/') is treated as unset, falling back to the auto-detected default", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 5001, base: "origin/" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(res.base, "origin/main");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// WFN regression: the emptiness check used a bare normalizeToBareBranch,
+// which only strips "origin/"/"refs/*" — a prefix-only --base on a
+// NON-origin configured remote ("upstream/") stayed truthy and reached git
+// as the invalid ref "upstream/", while --branch's identical check (already
+// routed through resolveRemoteAndBranch) handled it correctly.
+test("ensure: a prefix-only --base on a non-origin configured remote ('upstream/') is treated as unset too", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5004, base: "upstream/" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(res.base, "origin/main");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// NTH: --branch stripping a configured-remote prefix (not just "origin/") had
+// no direct test — only the algorithm's "origin/" case was covered.
+test("ensure: --branch strips a NON-origin configured-remote prefix (upstream/feature-x) too", async () => {
+  const origin = makeOriginRepo();
+  const upstream = makeOriginRepo();
+  try {
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5002, branch: "upstream/feature-x" });
+    assert.equal(res.ok, true);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "feature-x");
+  } finally {
+    origin.cleanup();
+    upstream.cleanup();
+  }
+});
+
+// NTH: --prune's own load-bearing effect had no direct test — a stale
+// remote-tracking ref for a since-deleted branch must not survive the fetch
+// and get tracked as if the branch still existed.
+test("ensure: --prune drops a stale remote-tracking ref for a since-deleted branch, falling back to created-from-base", async () => {
+  const origin = makeOriginRepo();
+  try {
+    origin.originGit("branch", "issue-5003");
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    assert.match(git("rev-parse", "--verify", "--quiet", "refs/remotes/origin/issue-5003").trim(), /\w/);
+
+    // Delete the branch on the remote entirely — the clone's remote-tracking
+    // ref is now stale.
+    origin.originGit("branch", "-D", "issue-5003");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 5003 });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base", "a --prune fetch must drop the stale ref, not track a deleted branch");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// WFN regression: passing an explicit --branch on BOTH arms never exercised
+// --pr's OWN default-branch derivation ("pr-<n>") — the one actual behavior
+// difference between --pr and --issue. Neither arm takes an explicit
+// --branch here; each derives its own default name and must resolve
+// tracked-remote through the identical algorithm.
+test("ensure: --pr (no --branch) derives pr-<n> and tracks an existing origin/pr-<n>, identically to --issue's issue-<n>", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const prSha = publishBranch(origin.originGit, "pr-3005", "pr work");
+    const issueSha = publishBranch(origin.originGit, "issue-3006", "issue work");
+
+    const { root: rootPr, git: gitPr } = cloneRepo(origin.tmp, origin.originDir, "root-pr");
+    const viaPr = await ensureWorktree({ repoRoot: rootPr, pr: 3005 }); // no --branch: must derive "pr-3005"
+    assert.equal(viaPr.ok, true);
+    assert.equal(viaPr.branchOrigin, "tracked-remote");
+    assert.equal(viaPr.base, "origin/pr-3005");
+    assert.equal(gitPr("-C", viaPr.path, "rev-parse", "HEAD").trim(), prSha);
+    assert.equal(gitPr("-C", viaPr.path, "rev-parse", "--abbrev-ref", "pr-3005@{upstream}").trim(), "origin/pr-3005");
+
+    const { root: rootIssue, git: gitIssue } = cloneRepo(origin.tmp, origin.originDir, "root-issue");
+    const viaIssue = await ensureWorktree({ repoRoot: rootIssue, issue: 3006 }); // no --branch: must derive "issue-3006"
+    assert.equal(viaIssue.branchOrigin, viaPr.branchOrigin, "--pr and --issue default-naming resolve through the same algorithm");
+    assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "HEAD").trim(), issueSha);
+    assert.equal(gitIssue("-C", viaIssue.path, "rev-parse", "--abbrev-ref", "issue-3006@{upstream}").trim(), "origin/issue-3006");
+
+    // Genuine "--pr ≡ --branch" parity: --issue + an EXPLICIT --branch
+    // targeting the SAME branch name --pr derived above must land on the
+    // exact same outcome (branchOrigin, base, HEAD sha, upstream) — not just
+    // a structurally similar one on a different branch.
+    const { root: rootOverride, git: gitOverride } = cloneRepo(origin.tmp, origin.originDir, "root-override");
+    const viaOverride = await ensureWorktree({ repoRoot: rootOverride, issue: 9999, branch: "pr-3005" });
+    assert.equal(viaOverride.branchOrigin, viaPr.branchOrigin);
+    assert.equal(viaOverride.base, viaPr.base);
+    assert.equal(gitOverride("-C", viaOverride.path, "rev-parse", "HEAD").trim(), prSha);
+    assert.equal(gitOverride("-C", viaOverride.path, "rev-parse", "--abbrev-ref", "pr-3005@{upstream}").trim(), "origin/pr-3005");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// WORTH-FIXING-NOW: --branch is a NAME, not a ref. "origin/feature-x" (a
+// caller pasting a remote-ref shape by habit) used to build a literal
+// "origin/origin/feature-x" local branch, missing the real remote branch
+// (origin/feature-x) and forking an ambiguous new one off base instead.
+test("ensure: --branch normalizes a remote-ref-shaped value to the bare branch name", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const remoteSha = publishBranch(origin.originGit, "feature-y", "feature work");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    // Rejected form: "origin/feature-y" must normalize to "feature-y", not
+    // build a nested "origin/origin/feature-y" local branch off base.
+    const res = await ensureWorktree({ repoRoot: root, issue: 3001, branch: "  origin/feature-y  " });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "tracked-remote");
+    assert.equal(res.base, "origin/feature-y");
+    assert.equal(git("-C", res.path, "rev-parse", "HEAD").trim(), remoteSha);
+    assert.equal(git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "feature-y");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+test("ensure: --branch accepts a plain bare branch name unchanged", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 3002, branch: "plain-name" });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "plain-name");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: --branch accepts a refs/heads/<b> shaped value, normalized to the bare name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4004, branch: "refs/heads/plain-name-2" });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "plain-name-2");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a whitespace-only --branch falls back to the default <kind>-<n> name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4005, branch: "   " });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "issue-4005");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// MUST-FIX regression (finding 8): "origin/" normalizes to the empty string
+// and used to reach git as `-b ''`, an invalid branch name.
+test("ensure: --branch origin/ (collapses to empty after normalizing) falls back to the default name", async () => {
+  const repo = makeRepo();
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4006, branch: "origin/" });
+    assert.equal(res.ok, true);
+    assert.equal(repo.git("-C", res.path, "rev-parse", "--abbrev-ref", "HEAD").trim(), "issue-4006");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// WFN regression: the ahead/behind test only ever produces merge-base exit 1,
+// so `err.status === 1` and a bare catch-all-false mutation are both
+// mutation-green. Exercised directly against an unresolvable ref, which
+// forces merge-base to exit 128 (a git ERROR), not 1.
+test("branchesDiverged: fails safe (not diverged) when merge-base errors, not just on exit 1", () => {
+  const repo = makeRepo();
+  try {
+    assert.equal(branchesDiverged("git", "refs/heads/main", "refs/heads/does-not-exist", repo.root), false);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// NICE-TO-HAVE: a failed best-effort fetch (e.g. no configured remote at
+// all) used to degrade silently to created-from-base with no signal in the
+// result.
+test("ensure: a failed best-effort fetch is signaled via fetchDegraded, not silently swallowed", async () => {
+  // makeOriginRepo()'s originDir never gets a `git remote add` — already
+  // exactly the "no origin configured" fixture this needs, no hand-rolling.
+  const origin = makeOriginRepo();
+  try {
+    // No "origin" remote configured at all — the fallback candidate itself
+    // fails to fetch.
+    const res = await ensureWorktree({ repoRoot: origin.originDir, issue: 4007, base: "main" });
+    assert.equal(res.ok, true);
+    assert.equal(res.fetchDegraded, true);
+    assert.equal(res.branchOrigin, "created-from-base");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+test("ensure: local branch diverged from origin/<branch> — reported, not silently resolved", async () => {
+  const origin = makeOriginRepo();
+  try {
+    const baseSha = origin.originGit("rev-parse", "HEAD").trim();
+
+    // Fork the remote branch and the local branch from the SAME base commit
+    // so neither is an ancestor of the other — a genuine fork, not just
+    // "local is ahead", the ordinary harmless state of an in-progress branch.
+    const remoteSha = publishBranch(origin.originGit, "issue-2005", "remote-side work");
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    const localSha = publishBranch(git, "issue-2005", "local-side work", baseSha);
+    assert.notEqual(localSha, remoteSha);
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 2005 });
+    assert.equal(res.ok, true);
+    assert.equal(res.created, true);
+    // Fail-closed on WHICH side wins: local is still re-attached (unchanged
+    // existing behavior for an already-existing local branch)...
+    assert.equal(res.branchOrigin, "reused-local");
+    assert.equal(res.base, "issue-2005");
+    // ...but the divergence is surfaced, not silently swallowed.
+    assert.deepEqual(res.diverged, { remoteRef: "origin/issue-2005", local: localSha, remote: remoteSha });
+  } finally {
+    origin.cleanup();
+  }
+});
+
+// WORTH-FIXING-NOW regression: an ahead/behind local branch (one side is a
+// strict ancestor of the other) is the ORDINARY state of an in-progress
+// branch — it must never be reported as "diverged", which used to be
+// conflated with a genuine fork whenever any error (not just is-ancestor's
+// documented "false") escaped the merge-base check.
+test("ensure: local branch merely ahead of origin/<branch> is NOT reported as diverged", async () => {
+  const origin = makeOriginRepo();
+  try {
+    origin.originGit("branch", "issue-2007");
+    const remoteSha = origin.originGit("rev-parse", "issue-2007").trim();
+
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    const localSha = publishBranch(git, "issue-2007", "local-only follow-up work");
+    assert.notEqual(localSha, remoteSha, "local must be strictly ahead, not identical");
+
+    const res = await ensureWorktree({ repoRoot: root, issue: 2007 });
+    assert.equal(res.ok, true);
+    assert.equal(res.branchOrigin, "reused-local");
+    assert.equal(res.diverged, undefined, "ahead-of-remote is not a fork");
+  } finally {
+    origin.cleanup();
+  }
+});
+
+function branchExistsAt(git, branch) {
+  try {
+    git("rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Workspace self-link (#1144): node_modules/@dev-loops/core resolves to the

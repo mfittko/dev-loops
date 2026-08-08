@@ -6,25 +6,50 @@
  *
  * - Canonical path comes from the shared resolveWorktreePath (namespaced
  *   `tmp/worktrees/dev-loops/<kind>-<n>`), so create/provision/cleanup agree.
- * - `git fetch <base-origin>` then `git worktree add` if absent. If a worktree
- *   already exists at the exact path it is REUSED (idempotent); if one exists
- *   there on a DIFFERENT branch it is a hard conflict (we never clobber).
+ * - `git fetch --prune` every candidate remote (see branchRemoteCandidates)
+ *   then `git worktree add` if absent. If a worktree already exists at the
+ *   exact path it is REUSED (idempotent); if one exists there on a DIFFERENT
+ *   branch it is a hard conflict (we never clobber); if it exists DETACHED
+ *   (e.g. ui-review's pinPrHead), it is reused as-is with `branchOrigin:
+ *   "reused-detached"` — there is no local branch to associate with a
+ *   divergence report.
+ * - The branch a fresh worktree is created from depends on what already
+ *   exists, never on guessing: an existing LOCAL branch of that name is
+ *   re-attached as-is; otherwise the first candidate remote (in priority
+ *   order: the one `--base` names, then "origin" when it differs) that
+ *   already has a matching REMOTE branch is tracked at its tip (never forked
+ *   off base — that would silently drop the remote branch's commits and
+ *   point upstream at base instead); only when NO candidate has it is a
+ *   genuinely new branch created off the resolved base. See `branchOrigin`
+ *   below. Caveat: a `--single-branch` clone only carries remote-tracking
+ *   refs for the branches it was cloned with, so a genuinely existing but
+ *   never-fetched remote branch can still fall through to created-from-base
+ *   there — fetching does not retroactively widen a restricted refspec.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
  *   provision warning never aborts the worktree.
  * - Does NOT run npm install (out of scope).
  *
  * Prints a JSON result to stdout:
- *   { ok, path, created|reused, base?, provision: { actions, summary }, guard }
- * (`provision` is the full provisionWorktree() result, not just its summary.
- * `guard` is the default-branch guard's install result — best-effort: a
- * failure there never fails the worktree, see installGuard below.)
+ *   { ok, path, created|reused, base?, branchOrigin, diverged?,
+ *     fetchDegraded?, provision: { actions, summary }, guard }
+ * (`base` is present only on create — the ref the worktree was created off,
+ * see the branch-resolution bullet above and the full USAGE block below.
+ * `branchOrigin` is ALWAYS present, on both create and reuse. `diverged` is
+ * present, on both create and reuse, only when an existing local branch has
+ * genuinely forked from a candidate remote's same-named branch. `fetchDegraded`
+ * is present (`true`) only when at least one candidate remote's best-effort
+ * fetch failed — the branch resolution above still ran, just against
+ * whatever was already fetched. `provision` is the full provisionWorktree()
+ * result, not just its summary. `guard` is the default-branch guard's
+ * install result — best-effort: a failure there never fails the worktree,
+ * see installGuard below.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
@@ -43,7 +68,13 @@ Required:
   --issue <n>       Issue number (resolves the canonical path).
   --pr <n>          PR number (resolves the canonical path).
 Optional:
-  --branch <name>   Branch to create/check out (default: <kind>-<n>).
+  --branch <name>   Branch to create/check out (default: <kind>-<n>). A
+                     prefixed value is stripped to the bare name — same
+                     remote-vs-bare-branch handling as --base: "origin/",
+                     "refs/heads/", and "refs/remotes/origin/" always strip,
+                     and any OTHER prefix ("upstream/foo") strips only when
+                     that first segment is a remote THIS machine has
+                     configured.
   --base <ref>      Base ref for a new worktree (default: origin/<repo's
                      auto-detected default branch — origin/HEAD, else
                      main/master; .devloops workflow.baseBranch, when
@@ -54,7 +85,24 @@ Output (stdout, JSON):
   { "ok": true, "path": <p>, "created": bool, "reused": bool,
     "base": <ref>,   // present on create: the ref the worktree was created off —
                      // the origin/-prefixed resolved base (default or --base) for
-                     // a NEW branch, or the existing local branch when re-attached
+                     // a genuinely new branch, the tracked remote branch
+                     // (<remote>/<branch>), or the existing local branch when
+                     // re-attached
+    "branchOrigin": <str>, // ALWAYS present, on both create and reuse:
+                     // "created-from-base" | "tracked-remote" | "reused-local" |
+                     // "reused-detached" (an already-existing worktree at this
+                     // path with no local branch — e.g. ui-review's pinPrHead)
+    "diverged"?: { "remoteRef": <str>, "local": <sha>, "remote": <sha> },
+                     // present, on both create and reuse, only when the local
+                     // branch has a candidate remote's same-named branch that
+                     // has genuinely forked from it (neither is an ancestor of
+                     // the other) — the caller decides what to do, this never
+                     // silently picks local or remote. Never present for
+                     // "reused-detached" (no local branch to compare).
+    "fetchDegraded"?: true, // present only when at least one candidate
+                     // remote's best-effort fetch failed (offline, unknown
+                     // remote, ...) — branch resolution above still ran,
+                     // just against whatever was already fetched
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
                "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
@@ -67,12 +115,6 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
-
-function parsePositiveInt(value, flag) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) throw parseError(`${flag} must be a positive integer`);
-  return n;
-}
 
 export function parseEnsureWorktreeCliArgs(argv) {
   const options = {
@@ -114,11 +156,11 @@ export function parseEnsureWorktreeCliArgs(argv) {
       continue;
     }
     if (token.name === "issue") {
-      options.issue = parsePositiveInt(requireTokenValue(token, parseError, { flagPattern: /^-/u }), "--issue");
+      options.issue = parsePositiveInteger(requireTokenValue(token, parseError, { flagPattern: /^-/u }), "--issue", parseError);
       continue;
     }
     if (token.name === "pr") {
-      options.pr = parsePositiveInt(requireTokenValue(token, parseError, { flagPattern: /^-/u }), "--pr");
+      options.pr = parsePositiveInteger(requireTokenValue(token, parseError, { flagPattern: /^-/u }), "--pr", parseError);
       continue;
     }
     if (token.name === "branch") {
@@ -173,14 +215,139 @@ function runGit(gitCommand, args, cwd) {
   });
 }
 
-/** True when a local branch ref already exists (non-zero exit → absent). */
-function branchExists(gitCommand, branch, cwd) {
+function revParseOrNull(gitCommand, ref, cwd) {
   try {
-    runGit(gitCommand, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
+    return runGit(gitCommand, ["rev-parse", "--verify", "--quiet", ref], cwd).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** True when a local branch ref already exists. */
+function branchExists(gitCommand, branch, cwd) {
+  return revParseOrNull(gitCommand, `refs/heads/${branch}`, cwd) !== null;
+}
+
+/**
+ * True when `<remote>/<branch>` is a known remote-tracking ref. Guarded
+ * against an empty/whitespace branch (`--verify` on a bare `refs/remotes/foo/`
+ * throws either way, but a guard reads as intent, not a coincidental catch).
+ * Only the REMOTE-tracking ref counts — a local branch of the same name
+ * proves nothing about what a remote has: a `master` repo carrying a stale
+ * local `main` must not read as "origin has a main branch" (this backs
+ * BOTH the branchOrigin lookup and the default-branch guard's own-default
+ * resolution below, which used to duplicate this exact check unguarded).
+ * `--verify` with the full path also keeps a TAG named `main` from matching.
+ */
+function remoteBranchExists(gitCommand, remote, branch, cwd) {
+  if (typeof branch !== "string" || branch.trim().length === 0) return false;
+  try {
+    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch.trim()}`], cwd);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * True only for a genuine fork (neither ref is an ancestor of the other) —
+ * NOT for a plain ahead-or-behind difference, which is the normal state of a
+ * local branch carrying commits the remote has not seen yet (or vice versa).
+ * Flagging that as "diverged" would fire on every ordinary in-progress branch.
+ *
+ * `git merge-base --is-ancestor` exit codes: 0 = is an ancestor, 1 = is not —
+ * anything else (128: unknown ref, missing objects in a shallow/grafted
+ * clone, ...) is a GIT ERROR, not an answer. Treating an error the same as
+ * "not an ancestor" fabricated a diverged report out of a broken clone, not a
+ * genuine fork — undetermined fails safe to "not diverged" here instead.
+ *
+ * Exported (in addition to `ensureWorktree`) so this fail-safe distinction is
+ * directly testable against a git error (e.g. an unresolvable ref), not just
+ * the exit-1 "not an ancestor" case every end-to-end fixture happens to hit.
+ */
+export function branchesDiverged(gitCommand, localRef, remoteRef, cwd) {
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      runGit(gitCommand, ["merge-base", "--is-ancestor", ancestor, descendant], cwd);
+      return true;
+    } catch (err) {
+      if (err.status === 1) return false;
+      throw err;
+    }
+  };
+  try {
+    return !isAncestor(localRef, remoteRef) && !isAncestor(remoteRef, localRef);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remotes to probe for an existing branch, in priority order: the remote
+ * `effectiveBase` actually names first (an operator naming `--base
+ * upstream/main` is telling us where this worktree's world lives), then
+ * "origin" when it differs — so an existing `origin/<branch>` is never
+ * invisible just because `--base` pointed at a DIFFERENT remote, which used
+ * to silently fork the branch off base with the wrong remote's ref as
+ * upstream (the exact clobber this fix exists to prevent). Probing a remote
+ * that does not exist is harmless: remoteBranchExists and a fetch of it both
+ * fail closed (`false` / a warned, ignored fetch error), never a crash.
+ */
+function branchRemoteCandidates(baseRemote) {
+  return baseRemote === "origin" ? [baseRemote] : [baseRemote, "origin"];
+}
+
+/** First candidate remote (in priority order) that already has `branch`, or `null`. */
+function findExistingRemoteBranch(gitCommand, root, candidates, branch) {
+  return candidates.find((remote) => remoteBranchExists(gitCommand, remote, branch, root)) ?? null;
+}
+
+/** Best-effort `git fetch --prune <remote>`; returns false (and warns) on failure. */
+function fetchRemoteBestEffort(gitCommand, root, remote) {
+  try {
+    runGit(gitCommand, ["fetch", "--prune", remote], root);
+    return true;
+  } catch (err) {
+    process.stderr.write(`[ensure-worktree] WARN fetch failed (continuing): ${(err.stderr ?? err.message ?? "").toString().trim()}\n`);
+    return false;
+  }
+}
+
+/**
+ * Best-effort fetch every candidate remote; `true` (fetchDegraded) if ANY of
+ * them failed. Shared by the create path and the reuse-on-a-local-branch
+ * path so both stay in step — a fetch added to one and not the other is
+ * exactly the "the same repo state answers differently based on fetch
+ * timing" defect the reuse-path fetch itself exists to close.
+ */
+function fetchCandidatesDegraded(gitCommand, root, candidates) {
+  let degraded = false;
+  for (const remote of candidates) {
+    if (!fetchRemoteBestEffort(gitCommand, root, remote)) degraded = true;
+  }
+  return degraded;
+}
+
+/**
+ * Divergence report for the local `branch` against the first of `candidates`
+ * (priority order) that already has a matching remote branch, or `undefined`
+ * when there is nothing to report (no candidate has the branch, no
+ * resolvable SHA, equal SHAs, or a plain ahead/behind difference — not a
+ * genuine fork). Shared by BOTH provisioning paths that can land on an
+ * already-existing local branch: a fresh worktree re-attaching to one
+ * (`branchOrigin: "reused-local"`), and an already-existing worktree being
+ * reused outright — a diverged local branch does not stop diverging just
+ * because the worktree already existed before this call.
+ */
+function detectDivergence(gitCommand, root, candidates, branch) {
+  const remote = findExistingRemoteBranch(gitCommand, root, candidates, branch);
+  if (!remote) return undefined;
+  const remoteRef = `${remote}/${branch}`;
+  const localSha = revParseOrNull(gitCommand, `refs/heads/${branch}`, root);
+  const remoteSha = revParseOrNull(gitCommand, `refs/remotes/${remoteRef}`, root);
+  if (!localSha || !remoteSha || localSha === remoteSha) return undefined;
+  if (!branchesDiverged(gitCommand, `refs/heads/${branch}`, `refs/remotes/${remoteRef}`, root)) return undefined;
+  return { remoteRef, local: localSha, remote: remoteSha };
 }
 
 /**
@@ -211,21 +378,30 @@ function branchFromBase(base) {
   return slash > 0 ? base.slice(slash + 1) : base;
 }
 
-// Only the REMOTE-tracking ref counts. A local branch of the same name proves
-// nothing about the remote's default: a `master` repo carrying a stale local
-// `main` would otherwise bake in `main`, leaving the real default unguarded
-// while reporting success. Requiring `<remote>/<name>` makes that case fall to
-// inert, and a repo with no remote is inert too — correctly, since there is no
-// remote default to land on. `--verify` with the full path is what keeps a tag
-// named `main` from matching.
-function remoteDefaultRefExists(gitCommand, remote, branch, cwd) {
-  if (typeof branch !== "string" || branch.trim().length === 0) return false;
-  try {
-    runGit(gitCommand, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch.trim()}`], cwd);
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * Split a base ref into the remote it actually names and the bare branch —
+ * the ONE place that answers "which remote is this base on". The three
+ * prefixes `refs/remotes/origin/`, `refs/heads/`, and `origin/` are ALWAYS
+ * stripped first (normalizeToBareBranch, an unconditional string reduction —
+ * no remote lookup involved; any other prefix survives). What remains
+ * is only EVER further split into remote/branch when its first segment
+ * genuinely names a configured remote (`git remote`); a bare slashed branch
+ * (the shape `workflow.baseBranch` documents — "main" or "spike/foo", or an
+ * unrecognized remote) is NOT split and defaults to "origin" — guessing a
+ * remote from an unqualified first segment used to silently point the fetch,
+ * and every remote-branch lookup keyed off it, at a remote that does not
+ * exist (falling through to created-from-base even when the real remote
+ * already had the branch).
+ */
+function resolveRemoteAndBranch(gitCommand, root, base) {
+  const bareBase = normalizeToBareBranch(base);
+  const remotes = listRemotes(gitCommand, root);
+  const maybeRemote = remoteFromBase(bareBase);
+  const isRealRemote = remotes.includes(maybeRemote);
+  return {
+    remote: isRealRemote ? maybeRemote : "origin",
+    branch: isRealRemote ? branchFromBase(bareBase) : bareBase,
+  };
 }
 
 // Git's OWN advertised default for `remote` — `<remote>/HEAD`, set by every
@@ -274,28 +450,22 @@ function guardedBranches(gitCommand, root, explicitBase) {
   // because this particular call's --base happens to name a different
   // remote (or, worse, a bare slashed branch that only LOOKS like one).
   const repoDefaultCandidate = remoteAdvertisedDefaultBranch(gitCommand, "origin", root);
-  const repoDefault = repoDefaultCandidate && remoteDefaultRefExists(gitCommand, "origin", repoDefaultCandidate, root)
+  const repoDefault = repoDefaultCandidate && remoteBranchExists(gitCommand, "origin", repoDefaultCandidate, root)
     ? repoDefaultCandidate
     : null;
 
   let explicitCandidate = null;
   if (explicitBase) {
-    // Reduce refs/heads/<b>, refs/remotes/origin/<b>, and origin/<b> to the
-    // bare name FIRST, via the same helper resolveBaseBranch already trusts —
-    // a hand-rolled remote/branch split here used to leave refs/heads/develop
-    // and refs/remotes/origin/develop unrecognized (dropping the operator's
+    // resolveRemoteAndBranch reduces refs/heads/<b>, refs/remotes/origin/<b>,
+    // and origin/<b> to the bare name first (via the same helper
+    // resolveBaseBranch already trusts), then only splits off a remote when
+    // the first segment is an actually configured one — a hand-rolled
+    // remote/branch split used to leave refs/heads/develop and
+    // refs/remotes/origin/develop unrecognized (dropping the operator's
     // explicit base unguarded) while origin/HEAD resolved to a phantom "HEAD"
     // branch (a guard for a branch nobody has).
-    const bareBase = normalizeToBareBranch(explicitBase);
-    // Only split off a remote when the first segment is an actually
-    // configured one; a bare slashed branch (or a --base on a remote this
-    // checkout has never heard of) is instead checked whole against origin.
-    const remotes = listRemotes(gitCommand, root);
-    const maybeRemote = remoteFromBase(bareBase);
-    const isRealRemote = remotes.includes(maybeRemote);
-    const remote = isRealRemote ? maybeRemote : "origin";
-    const branch = isRealRemote ? branchFromBase(bareBase) : bareBase;
-    explicitCandidate = branch !== "HEAD" && remoteDefaultRefExists(gitCommand, remote, branch, root) ? branch : null;
+    const { remote, branch } = resolveRemoteAndBranch(gitCommand, root, explicitBase);
+    explicitCandidate = branch !== "HEAD" && remoteBranchExists(gitCommand, remote, branch, root) ? branch : null;
   }
 
   return { repoDefault, explicitBase: explicitCandidate };
@@ -370,16 +540,56 @@ export async function ensureWorktree(
   { gitCommand = "git", provision = provisionWorktree } = {},
 ) {
   const root = path.resolve(repoRoot);
+  // --base/--branch are refs/names an operator (or a config value) may hand
+  // in with incidental whitespace — trimmed up front so every use below (the
+  // "origin/" prefix match inside resolveRemoteAndBranch included) sees the
+  // same value. A PREFIX-ONLY --base ("origin/", "refs/heads/", OR a
+  // configured-remote prefix like "upstream/" — resolveRemoteAndBranch, not a
+  // bare normalizeToBareBranch, so this catches the same remote prefixes
+  // --branch's own emptiness check below does) normalizes to empty — treated
+  // as UNSET (falls through to auto-detect below), matching resolveBaseBranch's
+  // own documented prefix-only-is-unset contract for a configured
+  // workflow.baseBranch value, rather than reaching git as the invalid ref
+  // "origin/" ("fatal: invalid reference: origin/").
+  if (typeof base === "string") base = base.trim();
+  // Resolved once here (not re-resolved below): when base survives, it IS
+  // effectiveBase verbatim, so re-running resolveRemoteAndBranch on the same
+  // string later would spawn a second, redundant `git remote`.
+  let resolvedBase = typeof base === "string" ? resolveRemoteAndBranch(gitCommand, root, base) : null;
+  if (resolvedBase && resolvedBase.branch.length === 0) {
+    base = undefined;
+    resolvedBase = null;
+  }
   const kind = issue !== undefined ? "issue" : "pr";
   const number = issue !== undefined ? issue : pr;
   const target = resolveWorktreePath({ repoRoot: root, kind, number });
-  const wantBranch = branch || `${kind}-${number}`;
+  // resolveRemoteAndBranch (not a bare normalizeToBareBranch) so an explicit
+  // --branch is ALSO stripped of a configured-remote prefix ("upstream/
+  // feature-x" → "feature-x" when "upstream" is a real remote, not just
+  // "origin/..."): an explicit --branch is a NAME, not a ref — passing a
+  // remote-ref shape by habit used to build a literal nested local branch
+  // ("origin/origin/feature-x") below, missing the real remote branch and
+  // forking an ambiguous new one off base instead. Falls back to the default
+  // name when normalizing collapses to empty ("--branch origin/" strips to
+  // "", never a valid branch name).
+  const trimmedBranch = typeof branch === "string" ? branch.trim() : "";
+  const normalizedBranch = trimmedBranch ? resolveRemoteAndBranch(gitCommand, root, trimmedBranch).branch : "";
+  const wantBranch = normalizedBranch || `${kind}-${number}`;
   // No explicit --base: auto-detect the real default branch at `root` (origin/HEAD,
   // else main/master) instead of a hardcoded "origin/main" guess. This script stays
   // a config-agnostic primitive — it never loads .devloops itself; a configured
   // workflow.baseBranch reaches here only via an explicit --base the resolver/skill
   // injects (which always wins over this auto-detected default).
   const effectiveBase = base || `origin/${resolveBaseBranch(undefined, { cwd: root })}`;
+  // The remote effectiveBase actually names — validated against `git remote`,
+  // never guessed from an unqualified first segment (see resolveRemoteAndBranch)
+  // — plus "origin" as a fallback candidate when it differs (see
+  // branchRemoteCandidates): an existing origin/<branch> must never be
+  // invisible just because --base pointed at a different remote (e.g. a fork
+  // workflow's `--base upstream/main`), or the branch is silently forked off
+  // base with the WRONG remote as upstream.
+  const { remote: baseRemote } = resolvedBase ?? resolveRemoteAndBranch(gitCommand, root, effectiveBase);
+  const remoteCandidates = branchRemoteCandidates(baseRemote);
 
   // Idempotency / conflict check BEFORE any mutation.
   const list = parseWorktreeList(runGit(gitCommand, ["worktree", "list", "--porcelain"], root));
@@ -392,36 +602,104 @@ export async function ensureWorktree(
         `worktree conflict: ${target} already checked out on branch "${existing.branch}", not "${wantBranch}"`,
       );
     }
-    // Reuse: still (re-)provision — provisioning is idempotent.
+    // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
+    // detached and local-branch reuse outcomes below.
     const summary = await provision({ worktreePath: target, repoRoot: root });
-    return { ok: true, path: target, created: false, reused: true, provision: summary, guard: installGuard(gitCommand, root, base) };
+    if (!existing.branch) {
+      // DETACHED HEAD (e.g. ui-review's pinPrHead runs `git checkout --detach`
+      // inside the worktree): there is no local branch here to associate a divergence
+      // report with — report the honest origin instead of fabricating
+      // "reused-local" (or a diverged report) for a branch this worktree
+      // isn't even on.
+      return {
+        ok: true,
+        path: target,
+        created: false,
+        reused: true,
+        branchOrigin: "reused-detached",
+        provision: summary,
+        guard: installGuard(gitCommand, root, base),
+      };
+    }
+    // Fetch before the divergence check (mirroring the create path below) so
+    // it answers from freshly-fetched remote-tracking refs rather than
+    // whatever the operator last happened to fetch — the same repo state
+    // must not answer differently purely based on fetch timing.
+    const fetchDegraded = fetchCandidatesDegraded(gitCommand, root, remoteCandidates);
+    const diverged = detectDivergence(gitCommand, root, remoteCandidates, wantBranch);
+    return {
+      ok: true,
+      path: target,
+      created: false,
+      reused: true,
+      branchOrigin: "reused-local",
+      ...(diverged ? { diverged } : {}),
+      ...(fetchDegraded ? { fetchDegraded: true } : {}),
+      provision: summary,
+      guard: installGuard(gitCommand, root, base),
+    };
   }
 
   // Create. fetch is best-effort (offline reuse of a local base ref still works),
   // but `git worktree add` failing is a HARD error.
-  try {
-    runGit(gitCommand, ["fetch", remoteFromBase(effectiveBase)], root);
-  } catch (err) {
-    process.stderr.write(`[ensure-worktree] WARN fetch failed (continuing): ${(err.stderr ?? err.message ?? "").toString().trim()}\n`);
-  }
-  // The branch may already exist (worktree removed but branch left behind). `git
-  // worktree add -b` fails on an existing branch, so attach to it instead; only
-  // create-from-base when the branch is genuinely new.
-  // Report the ref the worktree was created off: an already-existing branch is
-  // re-attached; a genuinely new branch is created from `effectiveBase` (the
-  // origin/-prefixed auto-detected default, or an explicit --base). Lets
-  // callers/tests confirm the origin/ prefix was applied to the default.
+  const fetchDegraded = fetchCandidatesDegraded(gitCommand, root, remoteCandidates);
+  // Three ways the worktree's branch can come into being, in priority order:
+  //   1. A LOCAL branch of that name already exists (worktree removed but the
+  //      branch left behind) → re-attach to it (`branchOrigin: "reused-local"`).
+  //      `git worktree add -b` fails on an existing branch, so this is not
+  //      optional — attaching plainly is the only way to reuse it.
+  //   2. No local branch, but the first candidate remote (in priority order)
+  //      that already has one → check out a NEW local branch tracking THAT
+  //      remote's `<name>` at its tip (`branchOrigin: "tracked-remote"`).
+  //      Forking a fresh branch off `effectiveBase` here would silently sit
+  //      the worktree at base with none of the existing branch's commits,
+  //      upstream set to base — one `git push` away from clobbering whatever
+  //      the remote branch holds.
+  //   3. NO candidate has it → the branch is genuinely new, created off
+  //      `effectiveBase` (the origin/-prefixed auto-detected default, or an
+  //      explicit --base) (`branchOrigin: "created-from-base"`).
+  // Report the ref the worktree was created off, and which of the three paths
+  // was taken, so callers/tests can tell them apart.
   let createdBase;
+  let branchOrigin;
+  let diverged;
   if (branchExists(gitCommand, wantBranch, root)) {
     createdBase = wantBranch;
+    branchOrigin = "reused-local";
     runGit(gitCommand, ["worktree", "add", target, wantBranch], root);
+    // A local branch that has genuinely forked from a candidate remote's
+    // same-named branch is never silently resolved one way or the other —
+    // report it so the caller can decide, instead of masking a
+    // rewrite-in-progress remote (or a stale local branch) as an ordinary
+    // re-attach.
+    diverged = detectDivergence(gitCommand, root, remoteCandidates, wantBranch);
   } else {
-    createdBase = effectiveBase;
-    runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, effectiveBase], root);
+    const foundRemote = findExistingRemoteBranch(gitCommand, root, remoteCandidates, wantBranch);
+    if (foundRemote) {
+      const remoteRef = `${foundRemote}/${wantBranch}`;
+      createdBase = remoteRef;
+      branchOrigin = "tracked-remote";
+      runGit(gitCommand, ["worktree", "add", "-b", wantBranch, "--track", target, remoteRef], root);
+    } else {
+      createdBase = effectiveBase;
+      branchOrigin = "created-from-base";
+      runGit(gitCommand, ["worktree", "add", "-b", wantBranch, target, effectiveBase], root);
+    }
   }
 
   const summary = await provision({ worktreePath: target, repoRoot: root });
-  return { ok: true, path: target, created: true, reused: false, base: createdBase, provision: summary, guard: installGuard(gitCommand, root, base) };
+  return {
+    ok: true,
+    path: target,
+    created: true,
+    reused: false,
+    base: createdBase,
+    branchOrigin,
+    ...(diverged ? { diverged } : {}),
+    ...(fetchDegraded ? { fetchDegraded: true } : {}),
+    provision: summary,
+    guard: installGuard(gitCommand, root, base),
+  };
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
