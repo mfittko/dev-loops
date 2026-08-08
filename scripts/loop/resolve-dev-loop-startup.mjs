@@ -288,12 +288,18 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   }
   return options;
 }
+// Bounds every synchronous `gh` call this file makes (including the
+// retrospective-completion query) so a hung/offline `gh` can never block
+// startup indefinitely — it fails (and callers treat that as a normal `gh`
+// failure) after this timeout instead of hanging forever.
+const GH_CALL_TIMEOUT_MS = 10000;
 function ghJson(args, cwd) {
   try {
     const stdout = execFileSync("gh", args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: GH_CALL_TIMEOUT_MS,
     });
     return JSON.parse(stdout);
   } catch (err) {
@@ -1048,27 +1054,33 @@ export function buildResolveDevLoopStartupResult(input, {
       checkpointReadFailed = true;
     }
   }
-  // A query failure (offline, gh error, malformed payload) fails closed:
-  // this repo opted into cycle scoping, and the gate cannot be evaluated
-  // honestly without knowing whether a newer qualifying cycle exists, so it
-  // must not silently pass through as if none did.
+  // A query failure (offline, gh unauthenticated/error, malformed payload,
+  // repo undetectable) degrades gracefully instead of hard-failing every
+  // startup: it is treated the same as "no fresher identity is known this
+  // call" (latestQualifyingIdentity stays null) rather than forcing MISSING
+  // outright. This matters because the cycle-scoping comparison is a
+  // BACKSTOP layered on top of the checkpoint file, not the sole source of
+  // truth — an outstanding `required`/`missing` marker still blocks (that
+  // check never depends on identity), and a repo with no checkpoint at all
+  // still resolves to NONE. The accepted tradeoff: while the query is
+  // unavailable, an existing `complete`/`skipped` record is trusted at face
+  // value even if a newer qualifying merge has actually happened, exactly as
+  // it would be evaluated locally with requireRetrospective off — favoring
+  // "the loop still starts" over "every startup blocks until gh recovers".
   let latestQualifyingIdentity = null;
-  let queryFailed = false;
   if (resolveWorkflowConfig(config, "requireRetrospective") === true) {
     const repo = detectRepoSlug(effectiveCwd);
-    if (!repo) {
-      queryFailed = true;
-    } else {
+    if (repo) {
       try {
         latestQualifyingIdentity = resolveLatestQualifyingCompletion({ repo, cwd: effectiveCwd });
       } catch {
-        queryFailed = true;
+        // Best-effort: fall through with latestQualifyingIdentity still null.
       }
     }
   }
   input = {
     ...input,
-    retrospectiveCheckpointState: (checkpointReadFailed || queryFailed)
+    retrospectiveCheckpointState: checkpointReadFailed
       ? "missing"
       : resolveCheckpointStateFromArtifact(durableCheckpoint, { latestQualifyingIdentity }),
   };

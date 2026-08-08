@@ -367,7 +367,11 @@ test("resolve-dev-loop-startup CLI emits stable JSON for a final-approval route"
       loopState: "waiting_for_human_pr_approval",
     });
 
-    const result = await runNode(["--input", inputPath]);
+    // cwd MUST be the isolated tempDir, not the ambient process cwd: this
+    // repo's own `.devloops` sets `workflow.requireRetrospective: true`,
+    // which would otherwise make this test's resolution depend on a live gh
+    // query (network/auth) instead of being a pure argument-shape check.
+    const result = await runNode(["--input", inputPath], { cwd: tempDir });
     assert.equal(result.code, 0, `expected exit 0, got: ${result.stderr}`);
 
     const parsed = JSON.parse(result.stdout.trim());
@@ -2465,9 +2469,54 @@ test("buildResolveDevLoopStartupResult: an unparseable checkpoint file fails clo
   }
 });
 
-test("removing the read-time derivation breaks this test: a query failure fails closed instead of passing through", () => {
+// A query failure (offline, gh unauthenticated, transient error) degrades
+// gracefully rather than hard-failing every startup: it is treated as "no
+// fresher identity known this call", not as an automatic MISSING. This is a
+// deliberate tradeoff — see the three tests below, each pinning one side of
+// it — favoring "the loop still starts" over "every startup blocks until gh
+// recovers", since the live query is a backstop layered on the checkpoint
+// file, not the sole source of truth.
+
+test("a query failure does not brick a repo with no checkpoint at all — degrades to NONE, not needs_reconcile", () => {
   const tempDir = stampRepoWithOrigin();
   try {
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: () => { throw new Error("simulated offline"); },
+    });
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a query failure trusts an existing complete checkpoint at face value (accepted tradeoff during an outage)", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "ok",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+    });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveLatestQualifyingCompletion: () => { throw new Error("simulated offline"); },
+    });
+    // Cannot verify freshness right now — trusted rather than blocked. This
+    // is the residual risk: a genuinely stale complete is not caught WHILE
+    // gh is unavailable (it would be caught the moment the query succeeds
+    // again). Documented, not silently assumed.
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a query failure does not weaken an existing required marker — still blocks", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, { state: "required", triggeredAt: "2026-08-08T00:00:00.000Z" });
     const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveLatestQualifyingCompletion: () => { throw new Error("simulated offline"); },
@@ -2590,6 +2639,77 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: no qualifying merge observed
     const parsed = JSON.parse(result.stdout.trim());
     assert.notEqual(parsed.bundleKind, "needs_reconcile");
     await assert.rejects(readFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: requireRetrospective unset makes zero gh calls for the retrospective query (verified via the real gh call log, not by inspection)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-derive-no-devloops-e2e-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    // No .devloops at all — requireRetrospective defaults to false.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "9008"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          mergeCommit: null,
+          assignees: [],
+          closingIssuesReferences: [],
+          body: "",
+        }),
+      },
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "9008"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv() },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const log = await readFile(ghStub.ghLogPath, "utf8");
+    const calledArgs = log.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.ok(
+      calledArgs.every((args) => !(args[0] === "pr" && args[1] === "list")),
+      `expected zero "gh pr list" calls, got: ${log}`,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: a real gh failure on the retrospective query degrades gracefully instead of hard-failing the whole startup", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-derive-gh-fail-e2e-"));
+  try {
+    await initRepoWithOrigin(tempDir);
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "9009"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          mergeCommit: null,
+          assignees: [],
+          closingIssuesReferences: [],
+          body: "",
+        }),
+      },
+      {
+        assertArgs: ["pr", "list", "--state", "merged"],
+        exitCode: 1,
+        stderr: "gh: authentication required\n",
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "9009"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv() },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    // No checkpoint file exists here either — a gh failure must not manufacture
+    // a MISSING requirement that was never observed.
+    assert.notEqual(parsed.bundleKind, "needs_reconcile");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

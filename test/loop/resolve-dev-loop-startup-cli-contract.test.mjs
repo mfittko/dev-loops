@@ -89,12 +89,17 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
-      cwd: repoRoot,
+      // An isolated, non-repo cwd (no `.devloops`) rather than repoRoot: this
+      // repo's own `.devloops` sets `workflow.requireRetrospective: true`,
+      // which would make the resolver query GitHub live for the retrospective
+      // gate — an ambient network/auth dependency this test must never have.
+      // (The retrospectiveCheckpointState in the input above is not
+      // authoritative either way — the resolver always recomputes it — but an
+      // isolated cwd keeps that recomputation itself hermetic: no checkpoint
+      // file, no config opting into the live query.)
+      cwd: tmpDir,
       encoding: "utf8",
       env: { ...process.env, ...resolverTestEnv() },
-      // Note: This test assumes no .pi/dev-loop-retrospective-checkpoint.json
-      // exists in repoRoot — the explicit retrospectiveCheckpointState in the
-      // input ensures deterministic routing regardless.
     });
 
     assert.equal(result.status, 0);
@@ -158,7 +163,10 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
-      cwd: repoRoot,
+      // Isolated cwd, not repoRoot — see the identical note in the previous
+      // test: repoRoot's own `.devloops` opts into the live retrospective
+      // query, which this test must not depend on.
+      cwd: tmpDir,
       encoding: "utf8",
       // Deliberately omit every async-context signal so both the rejection
       // path AND its exact reason are exercised hermetically — independent of
