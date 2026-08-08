@@ -185,21 +185,23 @@ export function collectFingerprints(text, set) {
 // severity/angle/summary. Shared by inline comments (unblockquoted — inline
 // review comments are never scanned by the evidence checker) and body-filed
 // blocks (blockquoted by the caller). `severity` is normalized (a legacy
-// spelling renders under its canonical replacement) AND sanitized through the
-// same sanitizeCodeSpan the verdict renderer (upsert-checkpoint-verdict.mjs's
-// sanitizeStructuredCodeSpan, an alias of this exact function) already uses
-// for its own severity field — angle and summary are sanitized here, and an
-// un-sanitized severity is the one field that could otherwise carry a raw
-// newline into this line, which matters most for the blockquoted
-// (renderNonLocatableBlock) caller: a newline inside "> **${severity}**"
-// would put every following field on its own un-blockquoted line, escaping
-// the blockquote this function's own callers document as load-bearing for
-// the evidence parser. normalizeSeverity alone is NOT that sanitizer — it
-// only maps a legacy spelling to its canonical name, it does not strip a
-// hostile character — so it is applied here in addition to, never instead
-// of, sanitizeCodeSpan.
+// spelling renders under its canonical replacement) AND sanitized. It renders
+// bare — "**${severity}**", never inside a code span — so it needs the same
+// bare-prose sanitizer (sanitizeInline) the verdict renderer's
+// sanitizeStructuredInline alias already applies to its own bare-prose
+// fields, not sanitizeCodeSpan (which leaves a raw `<` and the markdown
+// link/image bracket forms live): angle is wrapped in a code span below and
+// keeps sanitizeCodeSpan, summary already uses sanitizeInline. Sanitizing
+// severity also closes the blockquoted (renderNonLocatableBlock) caller's own
+// newline hazard: a newline inside "> **${severity}**" would put every
+// following field on its own un-blockquoted line, escaping the blockquote
+// this function's own callers document as load-bearing for the evidence
+// parser. normalizeSeverity alone is NOT that sanitizer — it only maps a
+// legacy spelling to its canonical name, it does not neutralize a hostile
+// character — so it is applied here in addition to, never instead of,
+// sanitizeInline.
 function renderFindingLine({ severity, angle, summary }) {
-  const safeSeverity = sanitizeCodeSpan(normalizeSeverity(severity));
+  const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
 }
 

@@ -266,6 +266,23 @@ test("renderInlineCommentBody: renders the canonical severity, matching its own 
   assert.equal(parseFindingMarker(body).severity, "high");
 });
 
+// severity renders bare — "**${severity}**" — never inside a code span, so a
+// bracket/angle-bearing severity needs the same bare-prose neutralization
+// (raw "<", and the markdown link/image bracket forms) sanitizeCodeSpan alone
+// does not provide. Both renderInlineCommentBody (unblockquoted) and
+// renderNonLocatableBlock (blockquoted) share renderFindingLine, so both must
+// come out unable to form a link, image, or raw HTML tag.
+test("renderInlineCommentBody / renderNonLocatableBlock: a bracket/angle-bearing severity cannot form a link, image, or raw HTML tag", () => {
+  const hostile = "[click](http://evil.com)<script>alert(1)</script>![img](http://evil.com/x.png)";
+  const inline = renderInlineCommentBody({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
+  for (const body of [inline, block]) {
+    assert.ok(!/\[[^\]]*\]\(/.test(body), `must never form a markdown link, got: ${JSON.stringify(body)}`);
+    assert.ok(!/!\[[^\]]*\]\(/.test(body), `must never form a markdown image, got: ${JSON.stringify(body)}`);
+    assert.ok(!/<script>/i.test(body), `must never carry a raw HTML tag, got: ${JSON.stringify(body)}`);
+  }
+});
+
 test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {
   const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
   const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
