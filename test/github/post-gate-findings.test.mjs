@@ -746,6 +746,84 @@ test("renderFindingsCommentBody renders Question and Nit group labels", () => {
 // proven LOCATABLE — it defaults to "deferred" too (never "needs-answer",
 // which is reserved for a locatable question elsewhere in the pipeline —
 // see write-gate-findings-log.mjs/consolidateFanin, which do carry `line`).
+
+// ---------------------------------------------------------------------------
+// Sanitisation parity with upsert-checkpoint-verdict.mjs's renderer
+// ---------------------------------------------------------------------------
+
+// The two known bypasses, run through BOTH gate finding renderers with the
+// exact same crafted payload: a `must-fix](url)` link-injection form in
+// severity/disposition, and a stray backtick in `summary` that used to shift
+// CommonMark's left-to-right backtick pairing and unwrap a later field's own
+// code span. Both renderers import the identical sanitizeInline/sanitizeCodeSpan
+// pair from this file (post-gate-findings.mjs) rather than each keeping a copy
+// (see upsert-checkpoint-verdict.mjs's own comment on its sanitizeStructured*
+// aliases), so this one test fails if EITHER renderer stops sanitizing —
+// whether by a regression in the shared functions or by either file reverting
+// to its own duplicate copy.
+test("both gate finding renderers neutralize the same crafted link-injection and backtick-unbalance payload (parity guard)", async () => {
+  const { renderGateReviewCommentBody } = await import("../../scripts/github/upsert-checkpoint-verdict.mjs");
+
+  // Link-injection form: a severity/disposition value shaped like the closing
+  // half of a markdown link, which used to complete into a live link when
+  // paired with an unescaped `[` (a literal bracket the old severity-in-brackets
+  // rendering supplied, or a `[` surviving elsewhere on the same line).
+  const linkInjectionFindings = parseFindings(JSON.stringify([
+    {
+      severity: "high",
+      angle: "renderer-security",
+      summary: "See [details for more info",
+      disposition: "must-fix](https://evil.example)",
+    },
+  ]));
+  const postGateBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: linkInjectionFindings });
+  assert.ok(
+    !/\[[^\]]*\]\(https:\/\/evil\.example\)/.test(postGateBody),
+    "post-gate-findings.mjs must never render a live markdown link from a crafted severity/disposition value combined with an earlier dangling `[`",
+  );
+
+  const verdictBody = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "renderer-security",
+        verdict: "findings_present",
+        findings: [
+          { severity: "must-fix](https://evil.example)", summary: "See [details for more info" },
+        ],
+      },
+    ],
+  });
+  assert.ok(
+    !/(?<!`)\[[^\]]*\]\(https:\/\/evil\.example\)(?!`)/.test(verdictBody),
+    "upsert-checkpoint-verdict.mjs must never render a live markdown link from a crafted severity/disposition value combined with an earlier dangling `[`",
+  );
+
+  // Backtick-unbalance form: a stray backtick in `summary` that could shift
+  // CommonMark's left-to-right backtick pairing and steal a LATER field's own
+  // opening code-span delimiter, leaving that field's crafted `](url)` to
+  // combine with an EARLIER unescaped `[` into a live link instead of inert
+  // code text.
+  const backtickFindings = parseFindings(JSON.stringify([
+    {
+      severity: "high",
+      angle: "renderer-security",
+      summary: "guard [missing for ` value",
+      files: ["a.mjs](https://evil.example)"],
+    },
+  ]));
+  const backtickBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: backtickFindings });
+  // The file ref's own code span still forms intact around the WHOLE crafted
+  // value: no earlier stray backtick stole its opening delimiter.
+  assert.match(backtickBody, /`a\.mjs\]\(https:\/\/evil\.example\)`/);
+  assert.ok(!backtickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
+});
+
 // ---------------------------------------------------------------------------
 // Length bound (GitHub's 65536-char comment limit)
 // ---------------------------------------------------------------------------
