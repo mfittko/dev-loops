@@ -13,21 +13,42 @@
  */
 
 /**
+ * Builds a status-marker tester for a bare word like "WIP" or "DRAFT".
+ *
+ * A status marker asserts, on its own, that the PR is unfinished: bracketed
+ * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), or the
+ * entire title with nothing else attached (a bare standalone `DRAFT`). A
+ * plain `\bWORD\b` match also hits the same word inside a compound noun
+ * phrase that names a component instead — `draft-gate`, `draft_gate`,
+ * `draft gate`, `wip-branch` — because a hyphen, underscore, or space is
+ * itself a word boundary. None of those forms satisfy any of the four
+ * constructions below, so a component name is left unflagged while a real
+ * status claim still is. "swipe"/"wiped"/"drafting"/"redraft" already fail
+ * every construction because there is no boundary between the marker word
+ * and the letters that follow it.
+ */
+function statusMarkerTester(word) {
+  const bracket = new RegExp(`\\[\\s*${word}\\s*\\]`, "i");
+  const paren = new RegExp(`\\(\\s*${word}\\s*\\)`, "i");
+  const colon = new RegExp(`\\b${word}\\s*:`, "i");
+  const standalone = new RegExp(`^\\s*${word}\\s*$`, "i");
+  return (title) => bracket.test(title) || paren.test(title) || colon.test(title) || standalone.test(title);
+}
+
+/**
  * Canonical merge-blocking markers and how to detect them.
  *
- * Word-boundary matching is used for the alphabetic markers so that real words
- * are not false-positives (e.g. "swipe"/"wiped" must not match WIP;
- * "drafting"/"redraft" must not match DRAFT). Bracket/paren/colon punctuation
- * (`[WIP]`, `(wip)`, `WIP:`) are non-word characters, so `\b` boundaries still
- * match those variants. The construction emoji has no word boundary, so it is
- * matched literally anywhere in the title.
+ * "DO NOT MERGE" is a three-word phrase with no plausible compound-noun
+ * reading, so it keeps simple word-boundary matching. The construction emoji
+ * has no word boundary at all, so it is matched literally anywhere in the
+ * title.
  */
 const MARKER_MATCHERS = [
-  { label: "WIP", pattern: /\bWIP\b/i },
-  { label: "DRAFT", pattern: /\bDRAFT\b/i },
+  { label: "WIP", test: statusMarkerTester("WIP") },
+  { label: "DRAFT", test: statusMarkerTester("DRAFT") },
   // Flexible (any) whitespace between the phrase words, case-insensitive.
-  { label: "DO NOT MERGE", pattern: /\bDO\s+NOT\s+MERGE\b/i },
-  { label: "🚧", pattern: /🚧/u },
+  { label: "DO NOT MERGE", test: (title) => /\bDO\s+NOT\s+MERGE\b/i.test(title) },
+  { label: "🚧", test: (title) => /🚧/u.test(title) },
 ];
 
 /**
@@ -47,8 +68,8 @@ export function findBlockingTitleMarkers(title) {
   }
 
   const matched = [];
-  for (const { label, pattern } of MARKER_MATCHERS) {
-    if (pattern.test(title) && !matched.includes(label)) {
+  for (const { label, test } of MARKER_MATCHERS) {
+    if (test(title) && !matched.includes(label)) {
       matched.push(label);
     }
   }

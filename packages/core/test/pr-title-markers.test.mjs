@@ -3,73 +3,57 @@ import test from "node:test";
 
 import { findBlockingTitleMarkers } from "../src/loop/pr-title-markers.mjs";
 
-test("matches bare WIP", () => {
-  assert.deepEqual(findBlockingTitleMarkers("WIP"), ["WIP"]);
-});
+// Table-driven: every accepted (still-flagged status marker) and rejected
+// (unflagged component name / false-positive guard) title form, for both
+// WIP and DRAFT.
+const CASES = [
+  // Genuine status markers stay flagged, for both marker words.
+  { title: "WIP", expect: ["WIP"] },
+  { title: "wip", expect: ["WIP"] },
+  { title: "[WIP] add feature", expect: ["WIP"] },
+  { title: "Fix login (wip)", expect: ["WIP"] },
+  { title: "WIP: add feature", expect: ["WIP"] },
+  { title: "DRAFT", expect: ["DRAFT"] },
+  { title: "draft", expect: ["DRAFT"] },
+  { title: "Add module [draft]", expect: ["DRAFT"] },
+  { title: "Fix bug (DRAFT)", expect: ["DRAFT"] },
+  { title: "DRAFT: new module", expect: ["DRAFT"] },
+  { title: "draft: new module", expect: ["DRAFT"] },
 
-test("matches bracketed [WIP]", () => {
-  assert.deepEqual(findBlockingTitleMarkers("[WIP] add feature"), ["WIP"]);
-});
+  // Component names — a hyphen, underscore, or space joining the marker
+  // word into a compound noun phrase is not a status claim.
+  { title: "fix(gate): drop the repo-local draft-gate override", expect: [] },
+  { title: "Document the draft gate behavior", expect: [] },
+  { title: "Rename draft_gate module", expect: [] },
+  { title: "Retry the wip-branch pipeline", expect: [] },
+  { title: "Rebase wip branch onto main", expect: [] },
+  { title: "Clean up wip_branch fixtures", expect: [] },
 
-test("matches WIP with colon", () => {
-  assert.deepEqual(findBlockingTitleMarkers("WIP: add feature"), ["WIP"]);
-});
+  // Pre-existing true-negative guards named in the module comment.
+  { title: "Improve swipe gesture handling", expect: [] },
+  { title: "Cache is wiped on logout", expect: [] },
+  { title: "Improve drafting workflow", expect: [] },
+  { title: "Redraft the proposal copy", expect: [] },
 
-test("matches WIP followed by a word", () => {
-  assert.deepEqual(findBlockingTitleMarkers("WIP foo bar"), ["WIP"]);
-});
+  // Unrelated markers, unaffected by the WIP/DRAFT change.
+  { title: "DO NOT MERGE - blocked on infra", expect: ["DO NOT MERGE"] },
+  { title: "Fix bug (do   not\tmerge)", expect: ["DO NOT MERGE"] },
+  { title: "DOI NOT MERGEABLE registry", expect: [] },
+  { title: "Refactor pipeline 🚧", expect: ["🚧"] },
+  { title: "🚧 still building", expect: ["🚧"] },
 
-test("matches parenthesized lowercase (wip)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Fix login (wip)"), ["WIP"]);
-});
+  // Clean and mixed-marker titles.
+  { title: "Add user authentication flow", expect: [] },
+  { title: "DO NOT MERGE [WIP] 🚧", expect: ["WIP", "DO NOT MERGE", "🚧"] },
+  { title: "WIP wip [WIP]", expect: ["WIP"] },
+  { title: "[WIP] [DRAFT]", expect: ["WIP", "DRAFT"] },
+];
 
-test("matches DRAFT as a word", () => {
-  assert.deepEqual(findBlockingTitleMarkers("DRAFT: new module"), ["DRAFT"]);
-});
-
-test("matches DRAFT case-insensitively", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Add module [draft]"), ["DRAFT"]);
-});
-
-test("matches DO NOT MERGE phrase", () => {
-  assert.deepEqual(findBlockingTitleMarkers("DO NOT MERGE - blocked on infra"), ["DO NOT MERGE"]);
-});
-
-test("matches DO NOT MERGE with flexible whitespace, case-insensitive", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Fix bug (do   not\tmerge)"), ["DO NOT MERGE"]);
-});
-
-test("matches the construction emoji anywhere", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Refactor pipeline 🚧"), ["🚧"]);
-});
-
-test("matches construction emoji at start", () => {
-  assert.deepEqual(findBlockingTitleMarkers("🚧 still building"), ["🚧"]);
-});
-
-test("clean title returns empty array", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Add user authentication flow"), []);
-});
-
-test("does not match swipe (false positive guard)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Improve swipe gesture handling"), []);
-});
-
-test("does not match wiped (false positive guard)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Cache is wiped on logout"), []);
-});
-
-test("does not match drafting (false positive guard)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Improve drafting workflow"), []);
-});
-
-test("does not match redraft (false positive guard)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("Redraft the proposal copy"), []);
-});
-
-test("does not match DOI NOT MERGE-like noise (negative phrase guard)", () => {
-  assert.deepEqual(findBlockingTitleMarkers("DOI NOT MERGEABLE registry"), []);
-});
+for (const { title, expect } of CASES) {
+  test(`findBlockingTitleMarkers(${JSON.stringify(title)}) -> ${JSON.stringify(expect)}`, () => {
+    assert.deepEqual(findBlockingTitleMarkers(title), expect);
+  });
+}
 
 test("empty string returns empty array", () => {
   assert.deepEqual(findBlockingTitleMarkers(""), []);
@@ -88,17 +72,6 @@ test("non-string returns empty array", () => {
   assert.deepEqual(findBlockingTitleMarkers({ title: "WIP" }), []);
 });
 
-test("multiple distinct markers are returned in stable order", () => {
-  assert.deepEqual(
-    findBlockingTitleMarkers("DO NOT MERGE [WIP] 🚧"),
-    ["WIP", "DO NOT MERGE", "🚧"],
-  );
-});
-
 test("repeated markers are de-duped", () => {
   assert.deepEqual(findBlockingTitleMarkers("WIP wip [WIP]"), ["WIP"]);
-});
-
-test("DRAFT and WIP together both surface", () => {
-  assert.deepEqual(findBlockingTitleMarkers("WIP draft work"), ["WIP", "DRAFT"]);
 });
