@@ -85,6 +85,21 @@ function cloneRepo(tmp, originDir, name = "root") {
   return { root, git };
 }
 
+// Create `branch` (optionally at `startPoint`, else the current HEAD) via
+// `git`, add one commit, then return to main — the "publish a branch with
+// new work" setup repeated across most of the tracked-remote/divergence
+// fixtures below. `git` is whichever repo's command runner the branch
+// belongs on (`origin.originGit` or a clone's own `git`). Returns the
+// branch's resulting sha, which most callers need right after for a
+// HEAD/upstream assertion.
+function publishBranch(git, branch, message, startPoint) {
+  git(...(startPoint === undefined ? ["branch", branch] : ["branch", branch, startPoint]));
+  git("checkout", "-q", branch);
+  git("commit", "-q", "--allow-empty", "-m", message);
+  git("checkout", "-q", "main");
+  return git("rev-parse", branch).trim();
+}
+
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
@@ -228,11 +243,7 @@ test("ensure: an already-existing worktree being reused reports a divergence on 
     // Publish issue-4001 on the remote at a DIFFERENT commit — a genuine
     // fork from the local branch the worktree already created, forked from
     // the SAME base commit as the local branch (init).
-    origin.originGit("branch", "issue-4001", "HEAD");
-    origin.originGit("checkout", "-q", "issue-4001");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "remote-side rewrite");
-    origin.originGit("checkout", "-q", "main");
-    const remoteSha = origin.originGit("rev-parse", "issue-4001").trim();
+    const remoteSha = publishBranch(origin.originGit, "issue-4001", "remote-side rewrite", "HEAD");
 
     // Advance the LOCAL branch too, so it is a genuine, mutually-unreachable fork.
     execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "local-side work"], { cwd: first.path, encoding: "utf8", env: REPO_GIT_ENV });
@@ -369,11 +380,7 @@ test("ensure: local branch already exists — re-attached (unchanged), even alon
 test("ensure: origin/<branch> exists, no local branch — tracks the remote tip instead of forking off base", async () => {
   const origin = makeOriginRepo();
   try {
-    origin.originGit("branch", "issue-2003");
-    origin.originGit("checkout", "-q", "issue-2003");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "remote-only work");
-    origin.originGit("checkout", "-q", "main");
-    const remoteSha = origin.originGit("rev-parse", "issue-2003").trim();
+    const remoteSha = publishBranch(origin.originGit, "issue-2003", "remote-only work");
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
     assert.equal(branchExistsAt(git, "issue-2003"), false, "clone must not check out the non-default branch locally");
@@ -406,12 +413,8 @@ test("ensure: origin/<branch> exists, no local branch — tracks the remote tip 
 test("ensure: a slashed non-remote --base still tracks an existing origin/<branch> (never mis-resolves the remote)", async () => {
   const origin = makeOriginRepo();
   try {
-    origin.originGit("branch", "issue-2006");
-    origin.originGit("checkout", "-q", "issue-2006");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "remote-only work");
-    origin.originGit("checkout", "-q", "main");
+    const remoteSha = publishBranch(origin.originGit, "issue-2006", "remote-only work");
     origin.originGit("branch", "release/1.0");
-    const remoteSha = origin.originGit("rev-parse", "issue-2006").trim();
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
 
@@ -439,11 +442,7 @@ test("ensure: a fork workflow's --base on a different remote still finds an exis
   // real upstream that never saw a fork-only branch.
   const upstream = makeOriginRepo();
   try {
-    origin.originGit("branch", "issue-4003");
-    origin.originGit("checkout", "-q", "issue-4003");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "fork branch work");
-    origin.originGit("checkout", "-q", "main");
-    const remoteSha = origin.originGit("rev-parse", "issue-4003").trim();
+    const remoteSha = publishBranch(origin.originGit, "issue-4003", "fork branch work");
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
     git("remote", "add", "upstream", upstream.originDir);
@@ -472,17 +471,8 @@ test("ensure: when BOTH the base remote and origin have the branch, the base rem
   const origin = makeOriginRepo();
   const upstream = makeOriginRepo();
   try {
-    origin.originGit("branch", "issue-4008");
-    origin.originGit("checkout", "-q", "issue-4008");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "origin-side work");
-    origin.originGit("checkout", "-q", "main");
-    const originSha = origin.originGit("rev-parse", "issue-4008").trim();
-
-    upstream.originGit("branch", "issue-4008");
-    upstream.originGit("checkout", "-q", "issue-4008");
-    upstream.originGit("commit", "-q", "--allow-empty", "-m", "upstream-side work");
-    upstream.originGit("checkout", "-q", "main");
-    const upstreamSha = upstream.originGit("rev-parse", "issue-4008").trim();
+    const originSha = publishBranch(origin.originGit, "issue-4008", "origin-side work");
+    const upstreamSha = publishBranch(upstream.originGit, "issue-4008", "upstream-side work");
     assert.notEqual(originSha, upstreamSha, "the two remotes must genuinely differ at the same branch name");
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
@@ -525,9 +515,9 @@ test("ensure: a prefix-only --base on a non-origin configured remote ('upstream/
   const origin = makeOriginRepo();
   const upstream = makeOriginRepo();
   try {
-    const { root } = cloneRepo(origin.tmp, origin.originDir);
-    execFileSync("git", ["remote", "add", "upstream", upstream.originDir], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
-    execFileSync("git", ["fetch", "-q", "upstream"], { cwd: root, encoding: "utf8", env: REPO_GIT_ENV });
+    const { root, git } = cloneRepo(origin.tmp, origin.originDir);
+    git("remote", "add", "upstream", upstream.originDir);
+    git("fetch", "-q", "upstream");
 
     const res = await ensureWorktree({ repoRoot: root, issue: 5004, base: "upstream/" });
     assert.equal(res.ok, true);
@@ -588,16 +578,8 @@ test("ensure: --prune drops a stale remote-tracking ref for a since-deleted bran
 test("ensure: --pr (no --branch) derives pr-<n> and tracks an existing origin/pr-<n>, identically to --issue's issue-<n>", async () => {
   const origin = makeOriginRepo();
   try {
-    origin.originGit("branch", "pr-3005");
-    origin.originGit("checkout", "-q", "pr-3005");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "pr work");
-    origin.originGit("checkout", "-q", "main");
-    origin.originGit("branch", "issue-3006");
-    origin.originGit("checkout", "-q", "issue-3006");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "issue work");
-    origin.originGit("checkout", "-q", "main");
-    const prSha = origin.originGit("rev-parse", "pr-3005").trim();
-    const issueSha = origin.originGit("rev-parse", "issue-3006").trim();
+    const prSha = publishBranch(origin.originGit, "pr-3005", "pr work");
+    const issueSha = publishBranch(origin.originGit, "issue-3006", "issue work");
 
     const { root: rootPr, git: gitPr } = cloneRepo(origin.tmp, origin.originDir, "root-pr");
     const viaPr = await ensureWorktree({ repoRoot: rootPr, pr: 3005 }); // no --branch: must derive "pr-3005"
@@ -635,11 +617,7 @@ test("ensure: --pr (no --branch) derives pr-<n> and tracks an existing origin/pr
 test("ensure: --branch normalizes a remote-ref-shaped value to the bare branch name", async () => {
   const origin = makeOriginRepo();
   try {
-    origin.originGit("branch", "feature-y");
-    origin.originGit("checkout", "-q", "feature-y");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "feature work");
-    origin.originGit("checkout", "-q", "main");
-    const remoteSha = origin.originGit("rev-parse", "feature-y").trim();
+    const remoteSha = publishBranch(origin.originGit, "feature-y", "feature work");
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
     // Rejected form: "origin/feature-y" must normalize to "feature-y", not
@@ -745,18 +723,10 @@ test("ensure: local branch diverged from origin/<branch> — reported, not silen
     // Fork the remote branch and the local branch from the SAME base commit
     // so neither is an ancestor of the other — a genuine fork, not just
     // "local is ahead", the ordinary harmless state of an in-progress branch.
-    origin.originGit("branch", "issue-2005");
-    origin.originGit("checkout", "-q", "issue-2005");
-    origin.originGit("commit", "-q", "--allow-empty", "-m", "remote-side work");
-    const remoteSha = origin.originGit("rev-parse", "HEAD").trim();
-    origin.originGit("checkout", "-q", "main");
+    const remoteSha = publishBranch(origin.originGit, "issue-2005", "remote-side work");
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
-    git("branch", "issue-2005", baseSha);
-    git("checkout", "-q", "issue-2005");
-    git("commit", "-q", "--allow-empty", "-m", "local-side work");
-    const localSha = git("rev-parse", "HEAD").trim();
-    git("checkout", "-q", "main");
+    const localSha = publishBranch(git, "issue-2005", "local-side work", baseSha);
     assert.notEqual(localSha, remoteSha);
 
     const res = await ensureWorktree({ repoRoot: root, issue: 2005 });
@@ -785,11 +755,7 @@ test("ensure: local branch merely ahead of origin/<branch> is NOT reported as di
     const remoteSha = origin.originGit("rev-parse", "issue-2007").trim();
 
     const { root, git } = cloneRepo(origin.tmp, origin.originDir);
-    git("branch", "issue-2007");
-    git("checkout", "-q", "issue-2007");
-    git("commit", "-q", "--allow-empty", "-m", "local-only follow-up work");
-    const localSha = git("rev-parse", "HEAD").trim();
-    git("checkout", "-q", "main");
+    const localSha = publishBranch(git, "issue-2007", "local-only follow-up work");
     assert.notEqual(localSha, remoteSha, "local must be strictly ahead, not identical");
 
     const res = await ensureWorktree({ repoRoot: root, issue: 2007 });

@@ -552,7 +552,14 @@ export async function ensureWorktree(
   // workflow.baseBranch value, rather than reaching git as the invalid ref
   // "origin/" ("fatal: invalid reference: origin/").
   if (typeof base === "string") base = base.trim();
-  if (typeof base === "string" && resolveRemoteAndBranch(gitCommand, root, base).branch.length === 0) base = undefined;
+  // Resolved once here (not re-resolved below): when base survives, it IS
+  // effectiveBase verbatim, so re-running resolveRemoteAndBranch on the same
+  // string later would spawn a second, redundant `git remote`.
+  let resolvedBase = typeof base === "string" ? resolveRemoteAndBranch(gitCommand, root, base) : null;
+  if (resolvedBase && resolvedBase.branch.length === 0) {
+    base = undefined;
+    resolvedBase = null;
+  }
   const kind = issue !== undefined ? "issue" : "pr";
   const number = issue !== undefined ? issue : pr;
   const target = resolveWorktreePath({ repoRoot: root, kind, number });
@@ -581,7 +588,7 @@ export async function ensureWorktree(
   // invisible just because --base pointed at a different remote (e.g. a fork
   // workflow's `--base upstream/main`), or the branch is silently forked off
   // base with the WRONG remote as upstream.
-  const { remote: baseRemote } = resolveRemoteAndBranch(gitCommand, root, effectiveBase);
+  const { remote: baseRemote } = resolvedBase ?? resolveRemoteAndBranch(gitCommand, root, effectiveBase);
   const remoteCandidates = branchRemoteCandidates(baseRemote);
 
   // Idempotency / conflict check BEFORE any mutation.
@@ -595,6 +602,8 @@ export async function ensureWorktree(
         `worktree conflict: ${target} already checked out on branch "${existing.branch}", not "${wantBranch}"`,
       );
     }
+    // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
+    // detached and local-branch reuse outcomes below.
     const summary = await provision({ worktreePath: target, repoRoot: root });
     if (!existing.branch) {
       // DETACHED HEAD (e.g. ui-review's pinPrHead uses `git worktree add
@@ -612,11 +621,10 @@ export async function ensureWorktree(
         guard: installGuard(gitCommand, root, base),
       };
     }
-    // Reuse: still (re-)provision — provisioning is idempotent. Fetch before
-    // the divergence check (mirroring the create path below) so it answers
-    // from freshly-fetched remote-tracking refs rather than whatever the
-    // operator last happened to fetch — the same repo state must not answer
-    // differently purely based on fetch timing.
+    // Fetch before the divergence check (mirroring the create path below) so
+    // it answers from freshly-fetched remote-tracking refs rather than
+    // whatever the operator last happened to fetch — the same repo state
+    // must not answer differently purely based on fetch timing.
     const fetchDegraded = fetchCandidatesDegraded(gitCommand, root, remoteCandidates);
     const diverged = detectDivergence(gitCommand, root, remoteCandidates, wantBranch);
     return {
