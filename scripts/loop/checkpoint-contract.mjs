@@ -5,6 +5,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { normalizeCheckpointCycleIdentity } from "@dev-loops/core/loop/public-dev-loop-routing";
+import { parsePositiveInteger } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 
@@ -26,6 +27,7 @@ Optional:
   --pr <number>            --merge-commit together to scope this checkpoint
   --merge-commit <sha>     record to one specific qualifying completion — a
                            later reader can then tell WHICH cycle it covers.
+                           Not accepted with --state none.
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -85,16 +87,22 @@ function parseCliArgs(argv) {
 
   const mergeCommit = values["merge-commit"];
   const hasIdentityFlag = values.repo !== undefined || values.pr !== undefined || mergeCommit !== undefined;
+  if (hasIdentityFlag && state === "none") {
+    throw parseError("--state none does not accept a cycle identity; --repo/--pr/--merge-commit only apply to required/complete/skipped/missing");
+  }
   let identity = null;
   if (hasIdentityFlag) {
-    if (!values.repo || !values.pr || !mergeCommit) {
+    // Trim before the truthiness check so a whitespace-only value (which is
+    // truthy) is rejected here rather than silently normalizing away to an
+    // invalid identity that gets dropped without a word.
+    if (!values.repo?.trim() || values.pr === undefined || !mergeCommit?.trim()) {
       throw parseError("--repo, --pr, and --merge-commit must be provided together to record a cycle identity");
     }
-    const prNumber = Number(values.pr);
-    if (!Number.isInteger(prNumber) || prNumber <= 0) {
-      throw parseError("--pr must be a positive integer");
-    }
+    const prNumber = parsePositiveInteger(values.pr, "--pr", parseError);
     identity = { repo: values.repo, prNumber, mergeCommit };
+    if (normalizeCheckpointCycleIdentity(identity) === null) {
+      throw parseError("--repo, --pr, and --merge-commit must form a valid cycle identity");
+    }
   }
 
   return {
