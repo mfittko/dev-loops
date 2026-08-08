@@ -187,32 +187,49 @@ reflection**, never a pre-merge blocker. The former contradiction —
 pre-merge gate: the merge lifecycle step proceeds, and the retrospective is an
 advisory reflection whose findings reach the conductor via the envelope.
 
+## Cycle scoping — a checkpoint discharges exactly one qualifying completion
+
+<!-- rule: RETRO-CHECKPOINT-CYCLE-SCOPED -->
+`requireRetrospective` is not a one-time gate: a `complete` (or `skipped`) checkpoint MUST be scoped to the exact qualifying completion it discharges, not treated as satisfying every later one forever. The durable artifact carries an `identity` — at minimum `{ repo, prNumber, mergeCommit }` — alongside its `state`, and both arming and completion write that identity so a later reader can tell WHICH cycle it covers.
+
+- **Arming.** `resolve-dev-loop-startup.mjs` detects a qualifying completion (a merged run whose resolved gate is in `RETROSPECTIVE_QUALIFYING_GATES`) and automatically writes `state: "required"` with `triggeredAt` and the cycle `identity` — no manual `checkpoint-contract` invocation is required for the gate to fire. Arming is idempotent: it is a no-op once the durable artifact's `identity` already matches the observed completion, so re-resolving an already-discharged merged PR never re-blocks it.
+- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--state`/`--notes`/`--reason`) SHOULD carry forward the same `identity` the `required` record armed, so the artifact states which cycle it discharged. `skipped` is scoped the same way — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
+- **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) treats a `complete` checkpoint whose recorded `identity` does not match the latest observed qualifying completion as `MISSING`, not `COMPLETE` — even if arming was somehow bypassed for the newer cycle. Arming is the primary mechanism; this is the backstop for when it is not.
+- **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never has this artifact written for it — the arming step itself checks the config before touching disk.
+
 ## Durable artifact format
 
-The checkpoint file is written by `.pi/extensions/dev-loop-behavioral-review.ts` when it observes the standard async `dev-loop` completion message. The extension trigger is message-based; qualifying-path policy is enforced by the checkpoint gate and repo contract, not by deep route inspection in the extension itself:
+The checkpoint file is written by two mechanisms:
 
-### On observed async dev-loop completion message (written automatically by extension)
+- **`resolve-dev-loop-startup.mjs`** (authoritative, deterministic): arms `state: "required"` automatically at the qualifying-completion seam described above.
+- **`.pi/extensions/dev-loop-behavioral-review.ts`** (best-effort, Pi-harness-specific): fires when it observes the standard async `dev-loop` completion message and writes the same `required` marker as a secondary trigger. Its message-based detection does not carry a cycle identity.
+
+Completion/skip are written by the operator or skill, optionally via `scripts/loop/checkpoint-contract.mjs`'s `--repo`/`--pr`/`--merge-commit` flags to carry the cycle identity forward.
+
+### On a qualifying completion (written automatically)
 
 ```json
 {
   "state": "required",
-  "triggeredAt": "2026-05-29T16:00:00.000Z"
+  "triggeredAt": "2026-05-29T16:00:00.000Z",
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
 }
 ```
 
 ### After retrospective is done (written by operator or skill)
 
 A minimal completion clears the startup/resume completion gate. The checkpoint
-file carries **only completion state** — retrospective *findings*
-(`behavioralReview`, `rawCallViolations`, `internalToolingOnly`) no longer live on
-disk; they travel in the handoff envelope's `retrospectiveFindings` field and an
-advisory PR comment (issue #1077, Reading B):
+file carries **only completion state** plus the cycle `identity` — retrospective
+*findings* (`behavioralReview`, `rawCallViolations`, `internalToolingOnly`) do not
+live on disk; they travel in the handoff envelope's `retrospectiveFindings` field
+and an advisory PR comment (issue #1077, Reading B):
 
 ```json
 {
   "state": "complete",
   "completedAt": "2026-05-29T16:30:00.000Z",
-  "notes": "Loop followed working agreement; minor drift on thread resolution."
+  "notes": "Loop followed working agreement; minor drift on thread resolution.",
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
 }
 ```
 
@@ -222,7 +239,8 @@ advisory PR comment (issue #1077, Reading B):
 {
   "state": "skipped",
   "skippedAt": "2026-05-29T16:30:00.000Z",
-  "reason": "Trivial documentation-only change; no post-run audit needed."
+  "reason": "Trivial documentation-only change; no post-run audit needed.",
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "abc123" }
 }
 ```
 
@@ -230,10 +248,12 @@ advisory PR comment (issue #1077, Reading B):
 
 | Artifact | Location |
 |---|---|
-| Checkpoint state machine | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; not part of the public package exports surface) |
+| Checkpoint state machine (identity, cycle scoping) | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; not part of the public package exports surface — its classification/identity helpers are re-exported through `public-dev-loop-routing.mjs` for script-layer callers) |
+| Automatic arming seam | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`) |
+| Manual write CLI (identity-aware) | `scripts/loop/checkpoint-contract.mjs` |
 | Internal-tooling verifier (findings-producer) | `scripts/loop/check-retro-tooling.mjs` (+ `test/loop/check-retro-tooling.test.mjs`) |
 | Advisory findings envelope field | `packages/core/src/loop/handoff-envelope.mjs` — `retrospectiveFindings` |
-| Tests | `packages/core/test/retrospective-checkpoint.test.mjs`, `packages/core/test/pr-gate-coordination.test.mjs`, `packages/core/test/handoff-envelope.test.mjs` |
-| Extension (writes required marker, fires review prompt) | `.pi/extensions/dev-loop-behavioral-review.ts` |
+| Tests | `packages/core/test/retrospective-checkpoint.test.mjs`, `test/loop/resolve-dev-loop-startup.test.mjs`, `test/loop/checkpoint-contract.test.mjs`, `packages/core/test/pr-gate-coordination.test.mjs`, `packages/core/test/handoff-envelope.test.mjs` |
+| Extension (best-effort secondary trigger, writes required marker, fires review prompt) | `.pi/extensions/dev-loop-behavioral-review.ts` |
 | Checkpoint file | `.pi/dev-loop-retrospective-checkpoint.json` |
 | AGENTS.md repo contract | [Agent Instructions](../../AGENTS.md) — concise repo contract and working rules |
