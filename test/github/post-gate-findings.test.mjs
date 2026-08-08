@@ -930,6 +930,36 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
   const verdictPrecedingBackticks = (verdictBacktickBody.slice(0, verdictFileRefIndex).match(/`/g) ?? []).length;
   assert.equal(verdictPrecedingBackticks % 2, 0, "an even number of backticks must precede the file ref's own opening delimiter (odd means an earlier stray backtick shifted the pairing)");
   assert.ok(!verdictBacktickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
+
+  // Both assertions above turn on the PROSE sanitiser stripping summary's
+  // backtick, so they hold even if the code-span sanitiser stops working.
+  // The file ref goes through the code-span sanitiser instead: a backtick
+  // inside the value closes its own span early and unwraps the crafted
+  // `](url)` tail back into live markdown. Pin that half on its own, in both
+  // renderers, so dropping either sanitiser fails this test.
+  const codeSpanFile = "b.mjs`](https://evil.example)";
+  const codeSpanFindings = parseFindings(JSON.stringify([
+    { severity: "high", angle: "renderer-security", summary: "plain prose", files: [codeSpanFile] },
+  ]));
+  const codeSpanBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: codeSpanFindings });
+  assert.ok(!codeSpanBody.includes("b.mjs`"), "a backtick inside the file ref must be stripped by the code-span sanitiser, not left to close the span early");
+
+  const verdictCodeSpanBody = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      {
+        angle: "renderer-security",
+        verdict: "findings_present",
+        findings: [{ severity: "high", summary: "plain prose", file: codeSpanFile }],
+      },
+    ],
+  });
+  assert.ok(!verdictCodeSpanBody.includes("b.mjs`"), "the structured renderer's file ref must be code-span sanitised on its own, independent of the prose sanitiser");
 });
 
 // ---------------------------------------------------------------------------

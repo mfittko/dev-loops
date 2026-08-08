@@ -150,9 +150,9 @@ sanctioned constructions — a genuine status claim, not a plain word match:
 A hyphen, underscore, or space joining the marker word into a compound noun phrase names a
 component instead of asserting status, and is exempt from every construction —
 `draft-gate`, `draft_gate`, `draft gate`, `wip-branch` never flag; nor does a conventional-commit
-scope that happens to share the marker word, e.g. `fix(draft): support x`. `DO NOT MERGE`
-(flexible whitespace between the words) and `🚧` (anywhere in the title) are matched directly,
-with no compound-noun exemption — case-insensitive throughout.
+scope that happens to share the marker word, e.g. `fix(draft): support x`. `DO NOT MERGE` and `🚧` (anywhere in the title) are matched directly rather than through the
+four constructions. Only whitespace joins the words of `DO NOT MERGE`, so hyphen- or
+underscore-joined spellings such as `do-not-merge` do not flag — case-insensitive throughout.
 
 A dash-set-off trailing tag (`Fix login flow — WIP`) is deliberately not a construction: no
 dash-based rule closes the tag without also reopening the compound-noun false positive for a
