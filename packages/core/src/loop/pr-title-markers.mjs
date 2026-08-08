@@ -89,9 +89,12 @@ const MARKER_MATCHERS = [
 /**
  * Finds merge-blocking markers in a PR title.
  *
- * Returns the canonical labels of every matched marker, de-duped and in a
- * stable order (the declaration order of {@link MARKER_MATCHERS}). Returns an
- * empty array when the title is clean, empty, or not a string.
+ * Returns the canonical labels of every matched marker, in a stable order
+ * (the declaration order of {@link MARKER_MATCHERS}). Each label can appear
+ * at most once: MARKER_MATCHERS visits each entry exactly once and every
+ * entry's label is distinct, so the result is de-duped by construction —
+ * there is no separate dedupe step to fail. Returns an empty array when the
+ * title is clean, empty, or not a string.
  *
  * @param {unknown} title - The PR title to inspect.
  * @returns {string[]} Canonical labels of matched markers, e.g. ["WIP"] or
@@ -104,7 +107,7 @@ export function findBlockingTitleMarkers(title) {
 
   const matched = [];
   for (const { label, test } of MARKER_MATCHERS) {
-    if (test(title) && !matched.includes(label)) {
+    if (test(title)) {
       matched.push(label);
     }
   }

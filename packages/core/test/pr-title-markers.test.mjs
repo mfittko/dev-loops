@@ -38,7 +38,15 @@ const CASES = [
   // Unrelated markers, unaffected by the WIP/DRAFT change.
   { title: "DO NOT MERGE - blocked on infra", expect: ["DO NOT MERGE"] },
   { title: "Fix bug (do   not\tmerge)", expect: ["DO NOT MERGE"] },
-  { title: "DOI NOT MERGEABLE registry", expect: [] },
+  // Guards the TRAILING \b: "MERGEABLE" is a longer word than "MERGE" with no
+  // boundary between them, so it must not match. ("DOI NOT MERGEABLE" was
+  // tried here before and failed to match for an unrelated reason — "DOI" has
+  // no whitespace after "DO" for \s+ to consume — so it never reached the
+  // trailing boundary it claimed to guard.)
+  { title: "DO NOT MERGEABLE registry", expect: [] },
+  // Guards the LEADING \b: with no boundary before "DO", this would match
+  // inside the "XDO" prefix.
+  { title: "XDO NOT MERGE", expect: [] },
   { title: "Refactor pipeline 🚧", expect: ["🚧"] },
   { title: "🚧 still building", expect: ["🚧"] },
 
@@ -128,8 +136,18 @@ test("undefined returns empty array", () => {
 test("non-string returns empty array", () => {
   assert.deepEqual(findBlockingTitleMarkers(42), []);
   assert.deepEqual(findBlockingTitleMarkers({ title: "WIP" }), []);
+  // 42 and {title:"WIP"} both coerce (via a matcher regex's implicit
+  // ToString) to a value that matches no marker regardless of the type
+  // guard, so neither actually pins the guard. String(["WIP"]) === "WIP"
+  // does: dropping the `typeof title !== "string"` check (leaving only an
+  // undefined/null check) would let this coerce to "WIP" and return
+  // ["WIP"] instead of [].
+  assert.deepEqual(findBlockingTitleMarkers(["WIP"]), []);
 });
 
-test("repeated markers are de-duped", () => {
-  assert.deepEqual(findBlockingTitleMarkers("WIP wip [WIP]"), ["WIP"]);
-});
+// A dedicated "repeated markers are de-duped" test is unreachable dead code
+// as a distinct assertion: MARKER_MATCHERS has one entry per label, each
+// visited once, so no input can produce two entries with the same label. The
+// CASES table's "WIP wip [WIP]" -> ["WIP"] entry above already exercises the
+// same input; findBlockingTitleMarkers's own doc comment states the
+// dedupe-by-construction guarantee instead of a runtime check.
