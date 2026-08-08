@@ -19,9 +19,11 @@
  * (`[WIP]`), parenthesized (`(draft)`), colon-suffixed (`WIP:`), or the
  * entire title with nothing else attached (a bare standalone `DRAFT`). A
  * plain `\bWORD\b` match also hits the same word inside a compound noun
- * phrase that names a component instead — `draft-gate`, `draft_gate`,
- * `draft gate`, `wip-branch` — because a hyphen, underscore, or space is
- * itself a word boundary. None of those forms satisfy any construction
+ * phrase that names a component instead — `draft-gate`, `draft gate`,
+ * `wip-branch` — because a hyphen or a space is itself a word boundary. An
+ * underscore is a word character, so `draft_gate` never matched `\bDRAFT\b`
+ * to begin with; it is listed among the exempt forms for consistency, not
+ * because it was ever flagged. None of those forms satisfy any construction
  * below, so a component name is left unflagged while a real status claim
  * still is. "swipe"/"wiped"/"drafting" already fail every construction
  * because there is no boundary between the marker word and the letters that

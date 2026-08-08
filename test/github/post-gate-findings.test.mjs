@@ -943,6 +943,11 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
   ]));
   const codeSpanBody = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: codeSpanFindings });
   assert.ok(!codeSpanBody.includes("b.mjs`"), "a backtick inside the file ref must be stripped by the code-span sanitiser, not left to close the span early");
+  // Negative-only assertions would also pass if the payload were DROPPED
+  // rather than stripped (both renderers drop a file ref that sanitises to
+  // empty), so pin that it still renders, minus the backtick.
+  const codeSpanStripped = "b.mjs](https://evil.example)";
+  assert.ok(codeSpanBody.includes(codeSpanStripped), "the file ref must still render with only its backtick removed, not be dropped");
 
   const verdictCodeSpanBody = renderGateReviewCommentBody({
     gate: "draft_gate",
@@ -960,6 +965,7 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
     ],
   });
   assert.ok(!verdictCodeSpanBody.includes("b.mjs`"), "the structured renderer's file ref must be code-span sanitised on its own, independent of the prose sanitiser");
+  assert.ok(verdictCodeSpanBody.includes(codeSpanStripped), "the structured renderer must also strip the backtick rather than drop the file ref");
 });
 
 // ---------------------------------------------------------------------------
