@@ -706,10 +706,10 @@ would land on disk (the findings would exist only on that process's stdout,
 which the sanctioned ledger/post path cannot consume). Which
 tier an angle lands on is NOT decided by whether that angle's own marker fits
 in isolation: angles are upgraded one at a time, in order of each angle's
-most blocking severity (ties by artifact index), and an upgrade is kept only
-while the WHOLE round still renders — so a low-only angle can stay bare
-purely because a higher-severity angle consumed the budget first, even
-though its own verbose sentence would fit alone:
+most urgent severity (SEVERITY_ORDER's own rank; ties by artifact index), and
+an upgrade is kept only while the WHOLE round still renders — so a low-only
+angle can stay bare purely because a more urgent angle consumed the budget
+first, even though its own verbose sentence would fit alone:
 
 1. **real (unmarked)** — an angle whose own real findings, tried at their
    ORIGINAL pre-shrink length first and falling back to the
