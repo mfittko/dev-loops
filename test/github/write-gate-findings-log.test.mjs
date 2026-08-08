@@ -673,6 +673,34 @@ test("writeGateFindingsLog derives a deferred disposition for a NON-LOCATABLE qu
   }
 });
 
+// Copilot review (PR #1610): files[] entries were filtered for emptiness but
+// stored UNTRIMMED — a padded path (" src/a.mjs ") still counted as
+// locatable-SHAPED (deriving "needs-answer"), but every downstream consumer
+// that keys on the raw stored value (the diff's commentable-line lookup, the
+// posted review `path`, renderNonLocatableBlock's Location line) compares
+// against the TRIMMED form, so it would never actually match a real in-diff
+// position — locatability and disposition must agree with what gets stored.
+test("writeGateFindingsLog trims a padded files[] entry so it matches downstream locatable checks", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-padded-path-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "3333333333333333333300000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "question", angle: "scope", summary: "Why this approach?", files: [" src/a.mjs "], line: 12 }]),
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-3333333333333333333300000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.deepEqual(parsed.findings[0].files, ["src/a.mjs"]);
+    assert.equal(parsed.findings[0].disposition, "needs-answer");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // --- Fan-out provenance (AC1) ---
 
 test("parseProvenanceJson accepts a well-formed provenance object", () => {

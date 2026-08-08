@@ -80,7 +80,16 @@ function validateFindingsArray(parsed, flagLabel) {
       summary: f.summary.trim(),
     };
     if (Array.isArray(f.files)) {
-      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0);
+      // Trimmed, not just filtered: an untrimmed files[0] (e.g. " src/a.mjs ")
+      // would still count as locatable-SHAPED (hasLocatableShape only checks
+      // non-empty, not exact form) while every downstream consumer that keys
+      // on the raw value (the diff's commentable-line set lookup, the posted
+      // review `path`, renderNonLocatableBlock's Location line) compares
+      // against the TRIMMED form — an untrimmed entry would derive
+      // "needs-answer"/locatable here yet never actually match a real
+      // in-diff position later, silently downgrading it back to
+      // non-locatable at a different layer instead of agreeing everywhere.
+      entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
     }
     if ("line" in f) {
       if (!Number.isInteger(f.line) || f.line < 1) {
