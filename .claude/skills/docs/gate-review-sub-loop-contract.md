@@ -1082,11 +1082,18 @@ node scripts/github/write-gate-findings-log.mjs \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
-`--findings-file` reads the same JSON array from a file (identical validation) —
+`--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
-`--ledger-out <path>` writes exactly this shape — pass that path straight to
-`--findings-file` on both tools, no hand extraction. A finding with severity
+`--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
+that path straight to `--findings-file` on both tools, no hand extraction.
+`write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the
+consolidator's computed verdict) into the durable ledger, so
+`upsert-checkpoint-verdict.mjs` enforces verdict consistency against it (#1616,
+`GATE-COMMENT-VERDICT-VALUES`): a `--verdict` that contradicts the ledger's
+`overallVerdict` is refused, and when the ledger carries `overallVerdict` the
+verdict is derived from it by default (passing no `--verdict` is valid).
+`post-gate-findings.mjs` unwraps and ignores `overallVerdict`. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools. A
 `question` finding with no `disposition` is derived the same way: `needs-answer`
