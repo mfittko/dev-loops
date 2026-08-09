@@ -180,10 +180,22 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
     prefix, a same-head rebuild after a live description edit yields different prefix bytes,
     which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
-    the context while reviewers for that head are still running. This does not affect the
-    frozen artifact of an already-completed gate pass. Round retirement
+    the context while reviewers for that head are still running. This is now ENFORCED, not
+    merely stated in prose (#1537): `write-gate-context.mjs` REFUSES (throws, exit 1, no
+    bytes written) a same-head rebuild that would change the recorded prefix bytes while
+    this gate's reviewer sentinels for that head are still live (a fan-out is in flight).
+    The refusal names the in-flight head and points at the reviewers already briefed on
+    the prior bytes (their sentinel files + recorded prefix hash). A sentinel scan that
+    fails for any reason other than a missing tmp/ dir (EACCES, ENOTDIR, ...) cannot
+    rule out an in-flight fan-out, so it is REFUSED too (fail-closed) rather than allowed
+    through a broken scan that could hide live sentinels; only an unreadable EXISTING
+    prefix (which cannot be proven to differ) stays advisory. A rebuild after the
+    round has retired — no live sentinels — is unaffected: the frozen artifact of an
+    already-completed gate pass is not the case being protected. Round retirement
     (`GATE-EXEC-ROUND-RETIREMENT`) does not relax this: it recovers a round AFTER a rebuild
-    stranded it, and never licenses rebuilding mid-flight.
+    stranded it, and never licenses rebuilding mid-flight; the sanctioned rebuild path is
+    retire-THEN-rebuild (retire the round, moving its sentinels out of the live namespace,
+    THEN rebuild at the same head).
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -656,9 +668,11 @@ the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> -
 directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
 other gate's live round at the same head is never touched), so a
 FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
-one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
-command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
-never retires as a side effect. The caller MUST pass `--findings-dir` whenever the retired
+one new hash. Retirement MUST be explicit — `write-gate-context.mjs` REFUSES a same-head
+rebuild that would change the recorded prefix bytes while this gate's reviewer sentinels
+for that head are still live (#1537, naming this command in the refusal); it never retires
+as a side effect. An operator who needs to rebuild at a head with a live round MUST retire
+first (retire-THEN-rebuild), so the rebuild sees no live sentinels and proceeds. The caller MUST pass `--findings-dir` whenever the retired
 round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
 silently mix into the new round's fan-in; retiring them is the explicit discard. This is
 now ENFORCED, not just advised (#1626): when `--findings-dir` is omitted and
