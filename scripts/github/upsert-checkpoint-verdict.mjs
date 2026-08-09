@@ -113,7 +113,21 @@ Required:
                                             "operator_acknowledged"; every other
                                             disposition (missing, "accepted-for-fix",
                                             "deferred", "needs-answer", or an unrecognized string)
-                                            still trips this check.
+                                            still trips this check. A finding the
+                                            normalizer cannot interpret (no usable
+                                            summary, or not an object) is never
+                                            dropped: it is tallied as UNPARSEABLE
+                                            and counts toward this clean-verdict
+                                            check on its severity alone (no
+                                            disposition to resolve against), so a
+                                            blocking severity cannot pass silently
+                                            by being unparseable (#1526). The
+                                            resolved-disposition rule above and
+                                            this tally operate on the same
+                                            representation, where "could not
+                                            interpret this finding" is
+                                            distinguishable from "this finding is
+                                            not blocking".
   --next-action <text>
 Optional:
   --findings-ledger <path>                  Path to this round's
@@ -711,21 +725,62 @@ function looksLikeFlatFinding(item) {
 // rendered under a `general` fallback label (consistent with the flat-grouping
 // angleless→`general` bucket). Dropping it would let a non-empty structured
 // payload silently degrade to the free-text path and hide findings.
+//
+// A finding that normalization CANNOT interpret (no usable summary, or not an
+// object) is NEVER silently dropped (#1526): it is tracked on the section's
+// `unparseable` list so the clean-verdict cross-check can still see a blocking
+// severity it carries, and the rendered comment can surface it explicitly as
+// unparseable. The tally must operate on a representation where "could not
+// interpret this finding" is distinguishable from "this finding is not
+// blocking" — a dropped finding is neither, so it is kept here. The severity is
+// the one field read straight off the raw finding (when present) so the
+// cross-check can decide blocking without broadening what normalizeStructuredFinding
+// accepts (the non-goal: the question is what happens to what it rejects, not
+// whether it should reject less).
 function buildAngleSectionFromNested(raw) {
   const trimmedAngle = typeof raw.angle === "string" ? raw.angle.trim() : "";
   const angle = trimmedAngle.length > 0 ? trimmedAngle : "general";
   const findings = [];
+  const unparseable = [];
   for (const f of raw.findings) {
     const entry = normalizeStructuredFinding(f);
     if (entry) {
       findings.push(entry);
+    } else if (f !== undefined) {
+      // normalizeStructuredFinding rejected this entry (no usable summary, or
+      // not an object). A bare `null` still counts: something occupied a
+      // findings slot the guard cannot interpret, and dropping it silently is
+      // exactly the fail-open this list exists to close. `undefined` (a sparse
+      // array hole) is the one non-finding value skipped, since nothing was
+      // emitted there at all.
+      unparseable.push({ severity: readRawSeverity(f) });
+    }
+  }
+  // renderGateReviewCommentBody re-normalizes an already-normalized section
+  // (its structuredFindings argument); preserve any unparseable entries carried
+  // on the input so re-normalization can never silently re-drop them (#1526).
+  if (Array.isArray(raw.unparseable)) {
+    for (const u of raw.unparseable) {
+      if (u && typeof u === "object") unparseable.push({ severity: u.severity ?? "" });
     }
   }
   sortStructuredFindings(findings);
   const verdict = typeof raw.verdict === "string" && raw.verdict.trim().length > 0
     ? raw.verdict.trim()
-    : (findings.length > 0 ? "findings_present" : "clean");
-  return { angle, verdict, findings };
+    : (findings.length > 0 || unparseable.length > 0 ? "findings_present" : "clean");
+  return { angle, verdict, findings, unparseable };
+}
+// Read the severity off a raw finding the normalizer rejected, so the
+// clean-verdict cross-check can still decide whether an unparseable finding
+// carries a blocking severity (#1526). Returns the normalized severity string
+// (or "" when none is readable); an unknown/typo'd value normalizes to itself
+// and then matches no blocking severity, same as a parseable unknown severity.
+function readRawSeverity(f) {
+  if (!f || typeof f !== "object") return "";
+  if (typeof f.severity === "string" && f.severity.trim().length > 0) {
+    return /** @type {string} */ (normalizeSeverity(f.severity.trim()));
+  }
+  return "";
 }
 // Group a FLAT per-finding array into per-angle sections, keyed by each
 // finding's `.angle` field (findings without an angle are grouped under a
@@ -755,6 +810,12 @@ function groupFlatFindingsByAngle(input) {
       angle,
       verdict: findings.length > 0 ? "findings_present" : "clean",
       findings,
+      // Flat per-finding input that lacks a usable summary is rejected by
+      // normalizeStructuredFindings' unrecognized-item guard before this grouping
+      // runs, so a flat section never carries an unparseable entry. Kept as an
+      // empty array so the section shape matches the nested path and consumers
+      // can read `angle.unparseable` uniformly (#1526).
+      unparseable: [],
     });
   }
   return angles;
@@ -850,7 +911,7 @@ export function normalizeStructuredFindings(input) {
 // it (see consolidate-fanin.mjs's fitsRenderBudget).
 export function renderStructuredFindings(angles) {
   const lines = [];
-  for (const { angle, verdict, findings } of angles) {
+  for (const { angle, verdict, findings, unparseable } of angles) {
     // severity/verdict/disposition are enum labels, never prose — rendered
     // inside a backtick code span (like the angle label and file ref already
     // are) rather than bare, so a reviewer-supplied value crafted to look like
@@ -876,6 +937,15 @@ export function renderStructuredFindings(angles) {
         : "";
       lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}`);
     }
+    // A finding the normalizer could not interpret is reported explicitly as
+    // unparseable — never dropped (#1526). Its severity (when readable) is
+    // rendered so a reader can see whether it sat at a blocking severity;
+    // the `unparseable` label itself distinguishes "could not interpret this
+    // finding" from a normal `[severity]` finding that is simply not blocking.
+    for (const u of unparseable ?? []) {
+      const sev = sanitizeStructuredCodeSpan(u.severity) || "none";
+      lines.push(`  - [\`unparseable\`] finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped)`);
+    }
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
@@ -887,8 +957,12 @@ export function renderStructuredFindings(angles) {
 // budget the way a full breakdown can.
 export function renderAngleVerdictDigest(angles) {
   return angles
-    .map(({ angle, verdict, findings }) => {
-      const count = findings.length;
+    .map(({ angle, verdict, findings, unparseable }) => {
+      // An unparseable finding still occupies a finding slot, so it counts
+      // toward the per-angle total — otherwise the digest would undercount a
+      // round that the clean-verdict tally and the rendered breakdown both see
+      // (#1526).
+      const count = findings.length + (Array.isArray(unparseable) ? unparseable.length : 0);
       const suffix = count === 0 ? "" : ` (${count} finding${count === 1 ? "" : "s"})`;
       return `- \`${sanitizeStructuredCodeSpan(angle)}\` → \`${sanitizeStructuredCodeSpan(verdict)}\`${suffix}`;
     })
@@ -918,7 +992,10 @@ export function renderAngleVerdictDigest(angles) {
 // breakdown below it still lists real findings. Only known severity keys are
 // summed — an unrecognized/typo'd key must not inflate the posted total.
 function buildStructuredFindingsDigest(angles, severityCounts) {
-  const angleTotal = angles.reduce((sum, a) => sum + a.findings.length, 0);
+  // Unparseable findings occupy a finding slot too, so they count toward the
+  // per-angle total — the digest must not undercount a round whose tally and
+  // rendered breakdown both see the unparseable entries (#1526).
+  const angleTotal = angles.reduce((sum, a) => sum + a.findings.length + (Array.isArray(a.unparseable) ? a.unparseable.length : 0), 0);
   const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
     ? Object.entries(severityCounts).reduce((sum, [key, n]) => {
         // Keys normalize through the legacy alias map so a "defer"-keyed count
@@ -1464,6 +1541,14 @@ function roundCarriesBlockingSeverity({ verdict, structuredFindings, findingsSev
         if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
         if (blocking.includes(/** @type {string} */ (normalizeSeverity(f.severity)))) return true;
       }
+      // An unparseable finding carries no disposition to resolve against, so
+      // it is judged on its severity alone — the same representation the
+      // clean-verdict tally uses, so an inline round that surfaces an
+      // unparseable blocking finding escalates gate:full just as it would
+      // block a clean verdict (#1526).
+      for (const u of angle.unparseable ?? []) {
+        if (blocking.includes(/** @type {string} */ (normalizeSeverity(u.severity)))) return true;
+      }
     }
     return false;
   }
@@ -1837,11 +1922,26 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {
     const observedCounts = Object.fromEntries(SEVERITY_ORDER.map((sev) => [sev, 0]));
+    // Track whether any blocking-severity hit came from an UNPARSEABLE finding,
+    // so the refusal message can name the real cause (#1526): a finding the
+    // normalizer dropped used to pass this cross-check silently; now it is
+    // tallied from the section's `unparseable` list and fails the verdict
+    // exactly as a parseable blocking finding would. An unparseable finding
+    // carries no disposition to resolve against, so it is judged on its
+    // severity alone — a blocking severity fails, any other value (including
+    // none at all) is reported explicitly as unparseable in the rendered
+    // comment rather than blocking the clean verdict.
+    let unparseableBlocking = false;
     for (const angle of structuredFindings) {
       for (const f of angle.findings) {
         if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
         const sev = /** @type {string} */ (normalizeSeverity(f.severity));
         if (Object.hasOwn(observedCounts, sev)) observedCounts[sev] += 1;
+      }
+      for (const u of angle.unparseable ?? []) {
+        const sev = /** @type {string} */ (normalizeSeverity(u.severity));
+        if (Object.hasOwn(observedCounts, sev)) observedCounts[sev] += 1;
+        if (activeGateConfig.blockCleanOnFindingSeverities.includes(sev)) unparseableBlocking = true;
       }
     }
     const blockingObserved = activeGateConfig.blockCleanOnFindingSeverities.filter(
@@ -1849,7 +1949,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     );
     if (blockingObserved.length > 0) {
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate}: --findings-json's own per-angle findings show unresolved findings at blocking severities [${blockingObserved.join(", ")}], regardless of --findings-severity-counts. Fix these findings and re-gate before declaring clean.`,
+        `Cannot set verdict "clean" for ${options.gate}: --findings-json's own per-angle findings show unresolved findings at blocking severities [${blockingObserved.join(", ")}], regardless of --findings-severity-counts.${unparseableBlocking ? " At least one of these is an UNPARSEABLE finding (no usable summary) the normalizer would otherwise have dropped silently (#1526)." : ""} Fix these findings and re-gate before declaring clean.`,
       );
     }
   }

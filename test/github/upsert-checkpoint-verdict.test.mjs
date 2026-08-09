@@ -2530,6 +2530,172 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
   }
 });
 
+// ---------------------------------------------------------------------------
+// #1526 (variant 3): normalizeStructuredFinding returns null for a finding it
+// cannot interpret (no usable summary, or not an object). The clean-verdict
+// cross-check tallies the NORMALIZED findings, so a dropped finding was
+// invisible to the guard — a blocking severity could pass silently by being
+// unparseable rather than by being absent. The fix tracks such findings as
+// UNPARSEABLE on the per-angle section and tallies them on their severity
+// alone (no disposition to resolve against), so a blocking severity fails the
+// clean verdict and a non-blocking one is reported explicitly as unparseable
+// rather than dropped. These tests fail if the guard reverts to dropping.
+// ---------------------------------------------------------------------------
+
+test("normalizeStructuredFindings tracks an unparseable finding (no summary) on the section instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "real finding" }, { severity: "must-fix" }] },
+    { angle: "pr-description", verdict: "clean", findings: [] },
+  ]);
+  // The parseable finding is still rendered; the summary-less one is NOT dropped.
+  assert.equal(angles[0].findings.length, 1);
+  assert.equal(angles[0].findings[0].summary, "real finding");
+  assert.ok(Array.isArray(angles[0].unparseable));
+  assert.equal(angles[0].unparseable.length, 1);
+  // The severity is read off the raw finding so the tally can decide blocking.
+  assert.equal(angles[0].unparseable[0].severity, "high"); // "must-fix" normalizes to "high"
+  // A flat section (no nested findings path) still carries the uniform shape.
+  assert.ok(Array.isArray(angles[1].unparseable));
+  assert.equal(angles[1].unparseable.length, 0);
+});
+
+test("normalizeStructuredFindings tracks a non-object finding entry as unparseable instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: ["bogus", null, { severity: "nice-to-have" }] },
+  ]);
+  assert.equal(angles[0].findings.length, 0);
+  assert.equal(angles[0].unparseable.length, 3);
+  // A non-object and null carry no readable severity; an object without summary
+  // still exposes its severity.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "low"); // "nice-to-have" -> "low"
+});
+
+test("normalizeStructuredFindings preserves unparseable entries through render's re-normalization (#1526)", () => {
+  // renderGateReviewCommentBody re-normalizes an already-normalized section;
+  // the unparseable list must survive that pass or the rendered body re-drops it.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.match(body, /\[`unparseable`\]/);
+  assert.match(body, /severity: `high`/);
+});
+
+test("renderGateReviewCommentBody reports an unparseable finding explicitly in the per-angle breakdown (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  // The unparseable entry is distinguishable from a non-blocking parseable finding.
+  assert.match(body, /\[`unparseable`\] finding could not be interpreted/);
+  assert.match(body, /severity: `low`/);
+  // The digest counts the unparseable finding so it is not undercounted.
+  assert.match(body, /1 angle reviewed; 2 findings/);
+});
+
+test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-blocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> normalizeStructuredFinding returns null -> formerly dropped.
+          findings: [{ severity: "must-fix" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Cannot set verdict "clean"/);
+    assert.match(payload.error, /blocking severities \[high\]/);
+    assert.match(payload.error, /UNPARSEABLE/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries an unparseable finding WITHOUT a blocking severity, and reports it as unparseable (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-nonblocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> unparseable, but severity is non-blocking (low).
+          findings: [{ severity: "nice-to-have" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        // The clean verdict is posted AND the unparseable finding is surfaced in the body.
+        assertStdinIncludes: ["**Verdict:** clean", "unparseable"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
