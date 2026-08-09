@@ -2446,7 +2446,8 @@ test("consolidateGateFanin exempts a carried angle case-insensitively but never 
 // GATE-EXEC-BRIEFING-PREFIX fan-in integration (#1618): consolidate-fanin MUST
 // run verify-briefing-prefixes before consolidation. The verifier had ZERO
 // callers before this. Each behavior below has a test that fails when reverted
-// (proven by mutation). Sentinel files live under <tmpRoot>/tmp/ and are read
+// (proven by mutation). Sentinel files live directly under <tmpRoot>/ (the tmp/
+// directory) and are read
 // by verifyBriefingPrefixesForHead; the findings artifacts carry headSha stamps
 // matching the round head so the head-stamp guard does not fire first.
 // ---------------------------------------------------------------------------

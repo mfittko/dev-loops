@@ -176,9 +176,10 @@ Optional:
                                  GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
                                  artifact count — comparing against the angle count would false-fail
                                  every grouped round.
-  --tmp-root <path>              Root whose tmp/ holds the reviewer sentinels and per-gate briefing-prefix
+  --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
                                  records read by the briefing-prefix verification (default:
-                                 process.cwd()/tmp). Passed explicitly so the check is not cwd-dependent.
+                                 process.cwd()/tmp). Sentinels are read directly from this directory
+                                 (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],

@@ -114,7 +114,8 @@ Exit codes:
      --context-path) the seeded gate-context artifact is missing or resolves
      outside the reviewer's working directory, OR (with --prefix-file) the
      prefix file is missing, OR (with --same-head-retry) the existing
-     sentinel's recorded prefix hash does not match the given one
+     sentinel's recorded prefix hash does not match the given one (or records
+     none at all)
   2  Usage or internal error, invalid --jq filter, invalid/conflicting
      --prefix-hash/--prefix-file, or --prefix-hash/--prefix-file omitted
      entirely (required on every invocation, #1618), or --same-head-retry
