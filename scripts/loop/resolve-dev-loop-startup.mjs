@@ -645,21 +645,14 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     return result;
   }
   let artifactState;
-  let mergeCommit = null;
   let prAssignees = [];
   let linkedIssueNumbers = [];
   try {
     const prJson = ghJson(
-      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,mergeCommit,assignees,closingIssuesReferences,body"],
+      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body"],
       repoRoot,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
-    // Only meaningful once merged; carried on `result` (resolver-only field,
-    // like `artifactState`) so the retrospective checkpoint arming step below
-    // can identify exactly which cycle a qualifying completion discharges.
-    mergeCommit = artifactState === "merged" && typeof prJson.mergeCommit?.oid === "string"
-      ? prJson.mergeCommit.oid
-      : null;
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   } catch {
@@ -676,7 +669,6 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     mode: "bounded_handoff",
     targetPreference: resolvedTargetPreference,
     artifactState,
-    mergeCommit,
     issueLinkageResolution: "not_applicable",
     loopState: uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
