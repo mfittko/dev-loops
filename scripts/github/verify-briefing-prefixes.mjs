@@ -336,6 +336,41 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
   return { verified: true, gates };
 }
 
+/**
+ * Programmatic entry: read this round's reviewer sentinels and per-gate
+ * briefing-prefix records for the given head SHA and return the verdict
+ * `evaluateBriefingPrefixes` produces, WITHOUT any CLI/exit-code/emit
+ * concerns. Used by `consolidate-fanin.mjs` (Phase 3 fan-in) so the rule's
+ * own cited proof is mechanically invoked at consolidation time (#1618) —
+ * the verifier had zero callers before this. Returns:
+ *   { verified: boolean, reviewerCount: number, headSha, reason?, missing?, mismatched?, prefixHash?, gates? }
+ * A head with no sentinels at all returns `{ verified: true, reviewerCount: 0, ... }`
+ * (AC4: offline/inline/test paths where the fresh-context guard was never
+ * invoked stay byte-identical — the count reconciliation in consolidate-fanin
+ * treats `reviewerCount === 0` as "skip", never a failure). Does NOT validate
+ * the head SHA length here (a non-40-char value simply matches zero sentinel
+ * files → `reviewerCount: 0` → AC4 skip); the CLI `main` keeps the strict
+ * 40-char refusal for direct invocations.
+ * @param {string} tmpRoot
+ * @param {string} headSha — already lowercased/trimmed by the caller
+ * @returns {Promise<object>}
+ */
+export async function verifyBriefingPrefixesForHead(tmpRoot, headSha) {
+  const sentinels = await readRoundSentinels(tmpRoot, headSha);
+  const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
+  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords);
+  return {
+    verified: verdict.verified,
+    headSha,
+    reviewerCount: sentinels.length,
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
+    ...(verdict.missing ? { missing: verdict.missing } : {}),
+    ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
+    ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
+    ...(verdict.gates ? { gates: verdict.gates } : {}),
+  };
+}
+
 export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(process.cwd(), "tmp") } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
@@ -357,20 +392,8 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
 
-  const sentinels = await readRoundSentinels(tmpRoot, headSha);
-  const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
-  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords);
-  const payload = {
-    ok: true,
-    verified: verdict.verified,
-    headSha,
-    reviewerCount: sentinels.length,
-    ...(verdict.reason ? { reason: verdict.reason } : {}),
-    ...(verdict.missing ? { missing: verdict.missing } : {}),
-    ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
-    ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
-    ...(verdict.gates ? { gates: verdict.gates } : {}),
-  };
+  const verdict = await verifyBriefingPrefixesForHead(tmpRoot, headSha);
+  const payload = { ok: true, ...verdict };
   return emitResult(payload, { jq, silent, ok: verdict.verified });
 }
 

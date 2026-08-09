@@ -59,11 +59,12 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
+import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -159,6 +160,20 @@ Optional:
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
+  --expected-dispatch-units <n>  The number of fresh dispatch units the conductor spawned reviewers for
+                                 this round (groups for grouped dispatch; angle count for per-angle
+                                 dispatch — write-gate-context.mjs's fanout.wavePlan/pendingGroups
+                                 length). When given alongside --head-sha, the fan-in fails closed
+                                 (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
+                                 for the head is SHORT of it — a dispatched reviewer never ran the
+                                 fresh-context guard. Optional; when omitted the count check is skipped
+                                 (the hash checks still run). Grouped dispatch writes one sentinel per
+                                 GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
+                                 artifact count — comparing against the angle count would false-fail
+                                 every grouped round.
+  --tmp-root <path>              Root whose tmp/ holds the reviewer sentinels and per-gate briefing-prefix
+                                 records read by the briefing-prefix verification (default:
+                                 process.cwd()/tmp). Passed explicitly so the check is not cwd-dependent.
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
@@ -217,8 +232,11 @@ Exit codes:
      ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
      --carry-forward-plan's "carried" list, --carried-angles given without
      --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
-     malformed "carriedFromHead" (not a 7-64 char hex SHA), or a round still over the
-     render budget at minimum summary length with --ledger-out not given
+     malformed "carriedFromHead" (not a 7-64 char hex SHA), a round still over the
+     render budget at minimum summary length with --ledger-out not given, or a
+     GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
+     (a sentinel records a divergent/missing prefix hash, or the sentinel count
+     is short of --expected-dispatch-units) — #1618
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -534,6 +552,8 @@ export function parseConsolidateFaninCliArgs(argv) {
     carriedAngles: undefined,
     carryForwardPlan: undefined,
     repoRoot: undefined,
+    expectedDispatchUnits: undefined,
+    tmpRoot: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -548,6 +568,8 @@ export function parseConsolidateFaninCliArgs(argv) {
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
       "repo-root": { type: "string" },
+      "expected-dispatch-units": { type: "string" },
+      "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -640,6 +662,23 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--repo-root requires a non-empty path");
       }
       options.repoRoot = repoRoot;
+      continue;
+    }
+    if (token.name === "expected-dispatch-units") {
+      const raw = requireTokenValue(token, parseError).trim();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1) {
+        throw parseError(`--expected-dispatch-units must be a positive integer (the number of fresh dispatch units the conductor spawned reviewers for this round), got ${JSON.stringify(raw)}`);
+      }
+      options.expectedDispatchUnits = n;
+      continue;
+    }
+    if (token.name === "tmp-root") {
+      const tmpRoot = requireTokenValue(token, parseError).trim();
+      if (tmpRoot.length === 0) {
+        throw parseError("--tmp-root requires a non-empty path");
+      }
+      options.tmpRoot = tmpRoot;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -877,6 +916,40 @@ export async function consolidateGateFanin(options) {
       .map(([angle, paths]) => `"${angle}" declared in ${paths.join(", ")}`)
       .join("; ");
     throw new Error(`--findings-dir "${dir}" has duplicate angle name(s) across multiple artifact files (ambiguous fan-out): ${detail}`);
+  }
+
+  // GATE-EXEC-BRIEFING-PREFIX (#1618): the fan-in MUST run
+  // verify-briefing-prefixes.mjs before consolidation — before this, the
+  // rule's own cited proof had ZERO callers. A reviewer seeded with a
+  // divergent briefing (the mid-flight-rebuild case the rule exists for) would
+  // otherwise consolidate into a clean verdict with no consumer noticing. The
+  // verifier reads reviewer sentinels for this head and fails closed on:
+  //   - AC1: two or more sentinels recording DISTINCT prefix hashes (a
+  //     seeded-briefing divergence),
+  //   - AC2: any sentinel recording NO prefix hash (the proof was never
+  //     established for that reviewer — never grandfathered),
+  //   - AC3: when the conductor declares --expected-dispatch-units, a sentinel
+  //     count SHORT of the fresh dispatch units it spawned (a dispatched
+  //     reviewer never ran the fresh-context guard). Grouped fan-out writes one
+  //     sentinel per GROUP reviewer, so the expected count is the dispatch-UNIT
+  //     count (groups for grouped dispatch; angle count for per-angle dispatch,
+  //     where resolveFanoutGroups emits one singleton per angle), NOT the
+  //     per-angle artifact count — comparing against the angle count would
+  //     false-fail every grouped round (#1579/#1601 shipped default).
+  // AC4: a head with NO sentinels at all still consolidates — offline/inline/
+  // test paths where the fresh-context guard was never invoked stay
+  // byte-identical (reviewerCount === 0 → skip). Only runs when --head-sha is
+  // given (the same boundary the artifact head-stamp guard uses).
+  if (options.headSha !== undefined) {
+    const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
+    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha);
+    if (prefixVerdict.reviewerCount > 0 && !prefixVerdict.verified) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX verification failed for head ${options.headSha} (${prefixVerdict.reviewerCount} reviewer sentinel(s)): ${prefixVerdict.reason} — the fan-in refuses to consolidate a round whose invariant-briefing-prefix proof is broken. Re-run the offending reviewer(s), then re-consolidate.`);
+    }
+    if (options.expectedDispatchUnits !== undefined && prefixVerdict.reviewerCount > 0
+        && prefixVerdict.reviewerCount < options.expectedDispatchUnits) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX sentinel count (${prefixVerdict.reviewerCount}) is short of the expected dispatch-unit count (${options.expectedDispatchUnits}) for head ${options.headSha} — ${options.expectedDispatchUnits - prefixVerdict.reviewerCount} dispatched reviewer(s) never ran the fresh-context guard (no sentinel written). Re-run the missing reviewer(s), then re-consolidate.`);
+    }
   }
 
   if (options.prChecklistMatrix !== undefined) {

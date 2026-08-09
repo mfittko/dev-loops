@@ -463,10 +463,16 @@ test("integration: a reviewer sentinel with no recorded prefix hash fails closed
 
     const r1 = runContextGuard(["--scope", "scope-safety", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
     assert.equal(r1.status, 0, r1.stderr);
-    // scope-legacy never records a prefix hash (old-style invocation, no
-    // --prefix-hash/--prefix-file) — must NOT be silently grandfathered in.
-    const r2 = runContextGuard(["--scope", "scope-legacy"], { cwd: tmpDir });
-    assert.equal(r2.status, 0, r2.stderr);
+    // scope-legacy never records a prefix hash (a legacy/pre-#1618 sentinel, or
+    // one a caller never seeded with a prefix). #1618 made a prefix hash
+    // mandatory on every CLI run, so a hashless sentinel can no longer be
+    // CREATED via the tool — write it directly to disk to simulate the legacy
+    // case. It must NOT be silently grandfathered in.
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-scope-legacy-${headSha}.json`),
+      JSON.stringify({ scope: "scope-legacy", createdAt: "legacy" }) + "\n",
+      "utf8",
+    );
 
     const result = runChecker(["--head-sha", headSha], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);
