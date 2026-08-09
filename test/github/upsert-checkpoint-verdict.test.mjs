@@ -6326,6 +6326,46 @@ test("#1621: an inline CLEAN round does NOT apply the gate:full label", async ()
   }
 });
 
+// #1526: the roundCarriesBlockingSeverity unparseable branch (parallel tally to
+// the clean-verdict cross-check) must escalate gate:full for an inline round
+// that surfaces an UNPARSEABLE blocking finding, exactly as a parseable one
+// would. Fails if the guard reverts to dropping unparseable findings from
+// this tally too.
+test("#1526: an inline round that surfaces an UNPARSEABLE blocking finding applies the gate:full label (roundCarriesBlockingSeverity unparseable branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1526-unparseable-escalate-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        // No `summary` -> normalizeStructuredFinding returns null -> unparseable,
+        // but severity "must-fix" (-> "high") is read and is blocking.
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+      ]),
+      "utf8",
+    );
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsJson: findingsPath,
+      findingsSummary: "an unparseable blocking finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline unparseable blocking finding",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
+    assert.ok(labelCreate, "gate:full label resource was created for an unparseable blocking finding");
+    const addLabel = calls.find((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full"));
+    assert.ok(addLabel, "gate:full label was added to the PR for an unparseable blocking finding");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("#1621: a clean pre_approval_gate verdict is REFUSED while the spec-of-record has unticked AC items", async () => {
   const repoRoot = await stageConfigRepoRoot(false);
   try {
