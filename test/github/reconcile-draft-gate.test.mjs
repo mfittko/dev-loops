@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import test from "node:test";
 import { DEFAULT_TEST_PR_BODY, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
@@ -834,6 +834,148 @@ test("reconcile-draft-gate refuses a non-light-mode PR with actionable fan-out g
     // Every staged entry (including the rollback `pr ready`) was consumed —
     // proves the rollback ran and no extra/POST call happened.
     assert.equal(await readGhCallCount(tempDir), 14);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The HIGH finding from the prior draft_gate round: reconcile-draft-gate's
+// documented light-mode recovery path was UNREACHABLE because the programmatic
+// upsertCheckpointVerdict call passed neither executionMode nor inlineReason,
+// so the candidate marker carried inlineReason:null and evaluateInlineFanoutMode's
+// light-mode acceptance clause (non-empty inlineReason) could never hold — a
+// genuine 1-file/2-line micro-PR was refused too. This test proves the path is
+// now reachable: a PR under the light-mode threshold (real git repo, real
+// merge-base scope re-derivation, no gate:full label, lightMode enabled) is
+// reconciled successfully — the inline verdict is ACCEPTED at post time.
+test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under active requireFanoutEvidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-light-success-"));
+
+  try {
+    // Real git repo so detectMergeBaseScope's `git diff <base>...<head>` derives
+    // a genuine under-threshold scope (1 file, 1 line) — not a synthetic marker.
+    const g = (...args) => execFileSync("git", args, { cwd: tempDir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 3",
+      "    maxLines: 200",
+    ].join("\n") + "\n", "utf8");
+    await writeFile(path.join(tempDir, "a.txt"), "one\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const baseRef = g("rev-parse", "HEAD").trim();
+    await writeFile(path.join(tempDir, "a.txt"), "one\ntwo\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: JSON.stringify({ headRefOid: headSha }) + "\n",
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"],
+        stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["owner=owner", "name=repo", "number=17", "pullRequest(number: $number)"],
+        stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":false}}}}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "-f", "-F"],
+        assertArgContains: ["pullRequestId=PR_kwDOScHU78000017", "convertPullRequestToDraft"],
+        stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: headSha, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        assertArgContains: ["reviewThreads(first: 100, after: $after)"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: JSON.stringify({ headRefOid: headSha }) + "\n",
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      // Post-time light-facts fetch (enforcePostTimeFanoutMode): the real base
+      // commit SHA + no gate:full label, so detectMergeBaseScope re-derives the
+      // under-threshold scope and the inline verdict is ACCEPTED.
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: JSON.stringify({ baseRefOid: baseRef, labels: [] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "### Gate review: `draft_gate`",
+          `**Reviewed head SHA:** \`${headSha}\``,
+          "**Execution mode:** inline_single_agent",
+          "**Next action:** Mark ready for review (auto-reconciled).",
+        ],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+      {
+        assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"],
+        stdout: "",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, result.stderr);
+    // stderr may carry a non-fatal git deprecation warning (e.g.
+    // `core.fsyncObjectFiles is deprecated`) from detectMergeBaseScope's real
+    // `git diff` under parallel load; assert no error payload leaks instead of
+    // asserting strict emptiness.
+    assert.ok(!/"ok"\s*:\s*false/.test(result.stderr), result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true,
+      action: "reconciled",
+      repo: "owner/repo",
+      pr: 17,
+      headSha,
+      currentHeadSha: headSha,
+      commentId: 101,
+      commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
+    });
+    assert.equal(await readGhCallCount(tempDir), 18);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

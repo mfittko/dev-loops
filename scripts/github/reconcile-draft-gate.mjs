@@ -241,6 +241,18 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       gate: "draft_gate",
       headSha,
       verdict: "clean",
+      // This tool only ever posts an INLINE verdict, so it can only satisfy
+      // requireFanoutEvidence for a PR that qualifies for the light-mode
+      // carve-out (under threshold, no gate:full label, lightMode enabled).
+      // Declare both explicitly: executionMode so the candidate marker carries
+      // it, and inlineReason so evaluateInlineFanoutMode's light-mode acceptance
+      // clause (non-empty inlineReason) can actually hold — without these the
+      // documented under-threshold recovery path is unreachable (the post is
+      // always refused, even for a 1-file/2-line micro-PR).
+      executionMode: "inline_single_agent",
+      inlineReason: draftGateConfig.requireCi
+        ? "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI green)"
+        : "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI optional by config)",
       findingsSeverityCounts: Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0])),
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
