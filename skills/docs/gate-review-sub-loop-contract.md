@@ -700,9 +700,11 @@ verdict; omitting it falls back to the shipped `["high"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
-included — plus the flat ledger shape (written to `--ledger-out <path>`) —
-the exact `--findings-file` input `write-gate-findings-log.mjs` and
-`post-gate-findings.mjs` accept, so neither tool needs an improvised
+included — plus the `{ overallVerdict, findings }` wrapper (written to
+`--ledger-out <path>`) — the exact `--findings-file` input
+`write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former
+threads `overallVerdict` into the durable ledger for verdict-consistency
+enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
 `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,

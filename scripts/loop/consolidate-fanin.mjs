@@ -9,7 +9,10 @@
  * via the result's "findingsJson" field / --out) accept directly — the orchestrator
  * no longer hand-authors this JSON with inline interpreters. "findingsJson"/--out is
  * the NESTED per-angle shape (one section per source artifact, clean angles included
- * with an empty findings array); "findings"/--ledger-out is the FLAT per-finding shape.
+ * with an empty findings array); "findings"/--ledger-out is the { overallVerdict,
+ * findings } wrapper (the flat per-finding shape plus the consolidator's computed
+ * verdict, threaded into the durable ledger by write-gate-findings-log.mjs so
+ * upsert-checkpoint-verdict.mjs can enforce verdict consistency, #1616).
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
