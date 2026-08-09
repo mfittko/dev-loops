@@ -451,6 +451,21 @@ test("buildCreatePrArgs treats --draft=true as already supplied", () => {
   );
 });
 
+test("create-pr --help short-circuits before --issue validation (#1626)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-help-shortcircuit-"));
+  try {
+    const { env, counterPath } = await writeGhStub(tempDir, []);
+    // --help with a valueless --issue must still print USAGE and exit 0,
+    // not throw the --issue validation error.
+    const result = await runNode(["--help", "--issue"], { env });
+    assert.equal(result.code, 0, `expected exit 0, got ${result.code}. stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Canonical PR-creation wrapper around/i);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr --help documents draft-only behavior, default self-assign, and --ready rejection", async () => {
   const result = await runNode(["--help"]);
 

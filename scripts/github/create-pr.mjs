@@ -191,6 +191,13 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
   });
 }
 export async function main(argv = process.argv.slice(2), runtime = {}) {
+  // --help/-h short-circuits BEFORE wrapper-owned validation (#1626 Copilot
+  // finding): otherwise `--help --issue` (or a valueless `--issue`) would throw
+  // an --issue validation error before help is honored.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
   // Last occurrence wins, same as the --draft handling in buildCreatePrArgs.
   const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const lightweight = lastLightweightToken === "--lightweight" ||
