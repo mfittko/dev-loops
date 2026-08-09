@@ -77,6 +77,69 @@ export function backoffMaxConcurrent(maxConcurrent) {
   return Math.max(1, Math.floor(cap / 2));
 }
 
+/**
+ * Reviewer-budget preflight for a gate fan-out (issue #1507).
+ *
+ * Before the conductor dispatches any reviewer, it derives how many reviewers
+ * the round needs (one per dispatch unit — fresh angles + re-verifications) and
+ * compares against the harness's remaining reviewer budget. When the budget
+ * cannot cover the dispatch, the preflight reports the shortfall BEFORE any
+ * reviewer spawns, naming the shortfall; the shortfall is a recorded, resumable
+ * state (completed per-angle artifacts stay valid for their head, so a later
+ * session resumes the fan-out instead of restarting it). A budget shortfall
+ * NEVER downgrades a required gate to `inline_single_agent` and NEVER produces a
+ * clean verdict — no new gate-exemption path (#1507 AC4).
+ *
+ * Pure: takes the dispatch plan + available budget, returns the decision. The
+ * conductor reads `artifact.fanout.preflight` (emitted by `write-gate-context`)
+ * and dispatches wave-by-wave only when `dispatch === true`; on `false` it
+ * records the shortfall (the artifact itself is the resumable record) and
+ * stops without spawning a single reviewer. `availableReviewers` is `null` when
+ * the harness does not expose a budget — no shortfall can be proven, so the
+ * preflight proceeds (today's behavior); it only blocks on a PROVEN shortfall.
+ *
+ * The returned `verdict` and `executionMode` are ALWAYS `null`: a shortfall is
+ * not a verdict. `buildPreMergeGateCheck` / `evaluateInlineFanoutMode` reject a
+ * gate with no clean current-head marker and a non-`fanout_fanin` execution
+ * mode, so a shortfall state fails closed at merge rather than yielding a clean
+ * or inline verdict (#1507 DoD).
+ *
+ * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
+ * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
+ * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null }}
+ */
+export function reviewerBudgetPreflight(dispatchGroups, availableReviewers) {
+  const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
+  // One reviewer per dispatch unit: a group of N angles is one reviewer's
+  // scoped dispatch (see resolveFanoutGroups / countFreshDispatchUnits), so the
+  // reviewer count is the dispatch-unit count, not the angle count.
+  const requiredReviewers = groups.length;
+  const verdict = null;
+  const executionMode = null;
+  if (typeof availableReviewers !== "number" || !Number.isFinite(availableReviewers)) {
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode };
+  }
+  // A negative/over-spent budget clamps to 0 (budget exhausted → shortfall for
+  // any non-empty round); a fractional budget truncates to the integer floor.
+  const available = Math.max(0, Math.trunc(availableReviewers));
+  if (requiredReviewers === 0) {
+    return { ok: true, dispatch: true, requiredReviewers: 0, availableReviewers: available, shortfall: null, reason: "no_reviewers_needed", verdict, executionMode };
+  }
+  if (available >= requiredReviewers) {
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: available, shortfall: null, reason: "budget_sufficient", verdict, executionMode };
+  }
+  return {
+    ok: false,
+    dispatch: false,
+    requiredReviewers,
+    availableReviewers: available,
+    shortfall: requiredReviewers - available,
+    reason: "budget_shortfall",
+    verdict,
+    executionMode,
+  };
+}
+
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each

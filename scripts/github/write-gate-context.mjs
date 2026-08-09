@@ -35,7 +35,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
-import { scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -149,6 +149,7 @@ Optional:
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
+  --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -273,6 +274,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "prefix-file": { type: "string" },
       "validation-results": { type: "string" },
       "full-label": { type: "boolean" },
+      "available-reviewers": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -297,6 +299,7 @@ export function parseWriteGateContextCliArgs(argv) {
     prefixFile: null,
     validationResultsPath: null,
     fullLabel: false,
+    availableReviewers: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -391,6 +394,18 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "full-label") {
       options.fullLabel = true;
+      continue;
+    }
+    if (token.name === "available-reviewers") {
+      const raw = requireTokenValue(token, parseError).trim();
+      if (raw.length === 0) {
+        throw parseError("--available-reviewers must not be empty/whitespace-only (pass a non-negative integer, or omit to leave the budget unexposed)");
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+        throw parseError(`--available-reviewers must be a non-negative integer (got "${raw}")`);
+      }
+      options.availableReviewers = parsed;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -1471,15 +1486,20 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean }} [options]
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number }}
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null }} [options]
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   const wavePlan = scheduleFanoutWaves(groups, maxConcurrent);
-  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent };
+  // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
+  // before spawning any reviewer; on `false` it records the shortfall (this
+  // artifact is the resumable record) and stops without dispatching. `null`
+  // budget (harness does not expose one) → proceed, no shortfall proven.
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers);
+  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent, preflight };
 }
 
 export function buildGateContextArtifact(options) {
@@ -1978,6 +1998,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
+ * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string }>}
@@ -2023,7 +2044,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null });
 
   const writeResult = await writeGateContext(
     {
@@ -2453,7 +2474,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
