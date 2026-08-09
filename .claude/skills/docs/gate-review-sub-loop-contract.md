@@ -690,9 +690,11 @@ result (mismatched or missing prefix hashes across this round's reviewer
 sentinels, or a sentinel count short of the dispatch units the conductor spawned)
 MUST stop the pass rather than proceed to consolidation. The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
-context artifact's `fanout.wavePlan`/`pendingGroups` length — groups for grouped
-dispatch, angle count for per-angle dispatch; NOT the per-angle artifact count,
-which would false-fail every grouped round).
+context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
+count; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
+dispatch; NOT the per-angle artifact count, which would false-fail every grouped
+round).
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:

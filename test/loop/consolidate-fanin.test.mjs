@@ -2687,3 +2687,65 @@ test("parseConsolidateFaninCliArgs parses --tmp-root", () => {
   const ok = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--tmp-root", "/var/tmp"]);
   assert.equal(ok.tmpRoot, "/var/tmp");
 });
+
+// ---------------------------------------------------------------------------
+// #1618 record-matching path: when on-disk per-gate briefing-prefix records
+// exist, consolidate-fanin's verifier exercises the record-matching branch
+// (not only the flat fallback the tests above cover). A sentinel whose hash
+// matches a gate record consolidates; a sentinel whose hash matches NO record
+// fails closed (the production path — write-gate-context persists records).
+// ---------------------------------------------------------------------------
+
+async function writeGateBriefingRecord(tmpRoot, gate, headSha, bytes) {
+  const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${gate}-${headSha}.briefing-prefix.txt`), bytes);
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+test("#1618 record-matching: sentinels whose hashes match an on-disk gate record consolidate", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        // Both sentinels record the SAME hash that matches the draft_gate record.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1618 record-matching: a sentinel whose hash matches NO gate record fails closed", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // A gate record exists, but the sentinels record a DIFFERENT hash.
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /matches no gate briefing-prefix record/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
