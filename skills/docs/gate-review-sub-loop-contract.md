@@ -705,7 +705,7 @@ included — plus the `{ overallVerdict, findings }` wrapper (written to
 `write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former
 threads `overallVerdict` into the durable ledger for verdict-consistency
 enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
-`--jq`/`node -e` extraction step to materialize it — the severity counts, and
+an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,
 `severityCounts` (the true, unbudgeted totals), and the `out`/`ledgerOut` paths
