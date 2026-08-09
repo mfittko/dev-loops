@@ -4094,3 +4094,51 @@ test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is suppl
   });
   assert.equal("fanout" in artifact, false);
 });
+
+test("#1507 resolveFanoutDispatch emits a reviewer-budget preflight (unknown budget proceeds)", () => {
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { fullLabel: false });
+  assert.equal(typeof plan.preflight, "object");
+  assert.equal(plan.preflight.requiredReviewers, 1); // 3 angles auto-chunk into 1 group
+  assert.equal(plan.preflight.dispatch, true);
+  assert.equal(plan.preflight.reason, "budget_unknown");
+  assert.equal(plan.preflight.availableReviewers, null);
+  assert.equal(plan.preflight.shortfall, null);
+});
+
+test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", () => {
+  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e).
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  assert.equal(plan.preflight.requiredReviewers, 2);
+  assert.equal(plan.preflight.ok, false);
+  assert.equal(plan.preflight.dispatch, false);
+  assert.equal(plan.preflight.availableReviewers, 1);
+  assert.equal(plan.preflight.shortfall, 1);
+  assert.equal(plan.preflight.reason, "budget_shortfall");
+});
+
+test("#1507 buildGateContextArtifact carries the preflight in fanout.preflight", () => {
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b"], { fullLabel: false, availableReviewers: 0 });
+  const artifact = buildGateContextArtifact({
+    repo: "a/b", pr: 5, gate: "draft_gate", headSha: "abc1234",
+    angles: ["a", "b"],
+    fanoutDispatch: plan,
+  });
+  assert.equal(artifact.fanout.preflight.dispatch, false);
+  assert.equal(artifact.fanout.preflight.shortfall, 1);
+  assert.equal(artifact.fanout.preflight.verdict, null);
+  assert.equal(artifact.fanout.preflight.executionMode, null);
+});
+
+test("#1507 parseWriteGateContextCliArgs parses --available-reviewers (non-negative integer)", () => {
+  const opts = parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "3"]);
+  assert.equal(opts.availableReviewers, 3);
+  // omitted → null (budget unexposed)
+  const omitted = parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234"]);
+  assert.equal(omitted.availableReviewers, null);
+});
+
+test("#1507 parseWriteGateContextCliArgs rejects a non-integer / negative --available-reviewers", () => {
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "1.5"]), /non-negative integer/);
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "-1"]), /non-negative integer/);
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "nope"]), /non-negative integer/);
+});

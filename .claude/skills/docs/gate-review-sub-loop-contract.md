@@ -293,6 +293,55 @@ MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
+<!-- rule: GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT -->
+**Reviewer-budget preflight (issue #1507).** Before fanning out, the conductor
+runs a pure reviewer-budget preflight and reads its result from
+`artifact.fanout.preflight` (emitted by `write-gate-context.mjs`, which derives
+it via `reviewerBudgetPreflight` from `@dev-loops/core/loop/gate-fanin`). The
+preflight derives how many reviewers the round needs — one per dispatch unit
+(the resolved fresh angles + re-verifications, NOT the raw angle count: a group
+of N angles is one reviewer's scoped dispatch) — and compares it against the
+harness's remaining reviewer budget, supplied to `write-gate-context` via
+`--available-reviewers <n>` (the conductor reads whatever budget the harness
+exposes and passes it through). The result shape:
+
+```
+{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode }
+```
+
+- `dispatch: true` (budget sufficient, OR the harness does not expose a budget
+  so no shortfall can be proven) → proceed with the wave-by-wave fan-out below.
+- `dispatch: false` (`reason: "budget_shortfall"`, `shortfall` names the exact
+  count the budget is short) → the conductor MUST NOT spawn any reviewer. Zero
+  reviewers are dispatched. The shortfall is a recorded, resumable state: the
+  gate-context artifact itself is the record (it carries the dispatch plan +
+  preflight for this head), and completed per-angle artifacts stay valid for
+  their head. A later session resumes the fan-out instead of restarting it:
+  `reviewerBudgetPreflight` receives `completedAngles` — the angle names that
+  already have a CLEAN findings artifact stamped for this head (scanned by
+  `write-gate-context.mjs` from the per-angle reviews directory) — and excludes
+  any dispatch unit whose angles are ALL complete from `requiredReviewers` and
+  from `preflight.pendingGroups`. The conductor dispatches only `pendingGroups`
+  (the shortfall), never re-dispatching a group already complete at this head,
+  so a session that exhausted its reviewer budget mid-fan-out picks up exactly
+  where it stopped once a later session re-runs `write-gate-context`
+  (`--available-reviewers` with the now-refreshed budget) at the same head and
+  the preflight clears. Completed per-angle artifacts from PRIOR heads stay
+  valid for their head via the carry-forward seam (see [Angle carry-forward
+  (fail-closed)](#angle-carry-forward-fail-closed)); the same-head resume above
+  is a separate, preflight-driven mechanism — carry-forward is a head-bump
+  provenance check and intentionally fails closed when `--prev-head` equals
+  `--head-sha` (it is never the same-head resume path).
+
+**No new gate-exemption path (#1507 AC4).** A budget shortfall is NOT a
+verdict: `preflight.verdict` and `preflight.executionMode` are always `null`. A
+shortfall never downgrades a required gate to `inline_single_agent` and never
+produces a clean verdict — `buildPreMergeGateCheck` /
+`evaluateInlineFanoutMode` reject a gate with no clean current-head marker and a
+non-`fanout_fanin` execution mode, so a shortfall state fails closed at merge.
+The preflight only blocks on a PROVEN shortfall; when the budget is unexposed
+(`availableReviewers: null`), it proceeds (today's behavior).
+
 Fan out one fresh-context reviewer per resolved **dispatch unit**. In the default grouped
 mode a dispatch unit is a group of angles (`resolveFanoutGroups`, below): configured
 `gates.fanout.groups` are matched first (unchanged), then the leftover ungrouped angles are

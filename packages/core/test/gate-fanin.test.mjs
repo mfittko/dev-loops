@@ -16,6 +16,7 @@ import {
   freshAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
+  reviewerBudgetPreflight,
   normalizeSeverity,
 } from "../src/loop/gate-fanin.mjs";
 
@@ -769,4 +770,177 @@ test("countFreshDispatchUnits counts auto-chunked groups as single units on a ch
     ]),
     2,
   );
+});
+
+describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fan-out dispatch)", () => {
+  const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+  test("counts one reviewer per dispatch unit (fresh angles + re-verifications)", () => {
+    // 5 dispatch units → 5 required reviewers, regardless of how many angles
+    // each unit covers (a group of N angles is one reviewer's scoped dispatch).
+    const groups = [
+      { name: "group:a+b", angles: ["a", "b"] },
+      { name: "group:c+d", angles: ["c", "d"] },
+      { name: "e", angles: ["e"] },
+    ];
+    const preflight = reviewerBudgetPreflight(groups, 10);
+    assert.equal(preflight.requiredReviewers, 3);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "budget_sufficient");
+  });
+
+  test("#1507 DoD1 — insufficient budget: dispatch is false and shortfall is named (zero reviewers dispatched)", () => {
+    // The conductor reads `preflight.dispatch` before spawning any reviewer.
+    // On `false` it records the shortfall and stops — NO reviewer is spawned.
+    const groups = units(["a", "b", "c", "d", "e"]); // 5 required
+    const preflight = reviewerBudgetPreflight(groups, 2); // only 2 available
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.equal(preflight.requiredReviewers, 5);
+    assert.equal(preflight.availableReviewers, 2);
+    assert.equal(preflight.shortfall, 3); // 5 - 2 = 3 short, named explicitly
+    assert.equal(preflight.reason, "budget_shortfall");
+  });
+
+  test("#1507 DoD1 — exact budget covers dispatch (no shortfall)", () => {
+    const groups = units(["a", "b", "c"]);
+    assert.equal(reviewerBudgetPreflight(groups, 3).dispatch, true);
+    assert.equal(reviewerBudgetPreflight(groups, 3).shortfall, null);
+  });
+
+  test("#1507 DoD1 — zero budget against a non-empty round is a shortfall", () => {
+    const groups = units(["a", "b"]);
+    const preflight = reviewerBudgetPreflight(groups, 0);
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.equal(preflight.shortfall, 2);
+  });
+
+  test("unknown budget (harness does not expose one) proceeds — no shortfall can be proven", () => {
+    const groups = units(["a", "b", "c"]);
+    const preflight = reviewerBudgetPreflight(groups, null);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.availableReviewers, null);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "budget_unknown");
+    // Non-finite values are treated as unknown too (caller bug, not a shortfall).
+    assert.equal(reviewerBudgetPreflight(groups, NaN).dispatch, true);
+    assert.equal(reviewerBudgetPreflight(groups, undefined).dispatch, true);
+  });
+
+  test("empty dispatch plan needs no reviewers", () => {
+    const preflight = reviewerBudgetPreflight([], 0);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.requiredReviewers, 0);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "no_reviewers_needed");
+    // Non-array input is defensive (no groups → nothing to dispatch).
+    assert.equal(reviewerBudgetPreflight(null, 5).requiredReviewers, 0);
+  });
+
+  test("negative/fractional budget clamps to a non-negative integer floor", () => {
+    const groups = units(["a", "b", "c"]);
+    // negative → 0 → shortfall
+    assert.equal(reviewerBudgetPreflight(groups, -5).availableReviewers, 0);
+    assert.equal(reviewerBudgetPreflight(groups, -5).dispatch, false);
+    assert.equal(reviewerBudgetPreflight(groups, -5).shortfall, 3);
+    // fractional → truncates toward zero (2.9 → 2 → shortfall of 1)
+    assert.equal(reviewerBudgetPreflight(groups, 2.9).availableReviewers, 2);
+    assert.equal(reviewerBudgetPreflight(groups, 2.9).shortfall, 1);
+  });
+
+  test("#1507 DoD2 — a shortfall does NOT yield a clean or inline verdict for a non-light-mode PR", () => {
+    // A shortfall is not a verdict: the preflight result carries no clean
+    // verdict and no inline executionMode. buildPreMergeGateCheck /
+    // evaluateInlineFanoutMode reject a gate with no clean current-head
+    // marker and a non-fanout_fanin executionMode, so a shortfall state fails
+    // closed at merge instead of yielding a clean or inline verdict (#1507 AC4:
+    // no new gate-exemption path).
+    const groups = units(["a", "b", "c", "d", "e"]);
+    const preflight = reviewerBudgetPreflight(groups, 1);
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.notEqual(preflight.verdict, "clean");
+    assert.notEqual(preflight.executionMode, "inline_single_agent");
+    assert.equal(preflight.verdict, null);
+    assert.equal(preflight.executionMode, null);
+    // A sufficient budget also never claims a verdict — the preflight is a
+    // pre-dispatch gate, not a verdict producer.
+    const ok = reviewerBudgetPreflight(groups, 10);
+    assert.equal(ok.verdict, null);
+    assert.equal(ok.executionMode, null);
+  });
+
+  describe("#1507 AC3 — same-head skip-completed resume (resumes instead of restarts)", () => {
+    const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+    test("a group whose angles are ALL complete is excluded from requiredReviewers and pendingGroups", () => {
+      // 3 dispatch units; group:b already has a clean artifact at this head.
+      const groups = units(["a", "b", "c"]);
+      const preflight = reviewerBudgetPreflight(groups, 10, { completedAngles: ["b"] });
+      assert.equal(preflight.requiredReviewers, 2); // only a + c remain
+      assert.deepEqual(
+        preflight.pendingGroups.map((g) => g.name),
+        ["a", "c"],
+      );
+      assert.deepEqual(
+        preflight.skippedGroups.map((g) => g.name),
+        ["b"],
+      );
+      assert.deepEqual(preflight.completedAngles, ["b"]);
+      assert.equal(preflight.dispatch, true);
+      assert.equal(preflight.shortfall, null);
+    });
+
+    test("a multi-angle group is skipped only when EVERY angle is complete", () => {
+      // group:a+b is NOT skipped when only one of its angles is complete — the
+      // reviewer still needs to run for the incomplete angle.
+      const groups = [{ name: "group:a+b", angles: ["a", "b"] }, { name: "c", angles: ["c"] }];
+      const partial = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"] });
+      assert.equal(partial.requiredReviewers, 2); // group:a+b still needs a reviewer (b incomplete) + c
+      assert.deepEqual(partial.pendingGroups.map((g) => g.name), ["group:a+b", "c"]);
+      assert.deepEqual(partial.skippedGroups, []);
+      const full = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a", "b"] });
+      assert.equal(full.requiredReviewers, 1); // only c remains
+      assert.deepEqual(full.pendingGroups.map((g) => g.name), ["c"]);
+      assert.deepEqual(full.skippedGroups.map((g) => g.name), ["group:a+b"]);
+    });
+
+    test("all groups complete at this head → zero reviewers, resume finished, still no clean/inline verdict", () => {
+      const groups = units(["a", "b"]);
+      const preflight = reviewerBudgetPreflight(groups, 0, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.requiredReviewers, 0);
+      assert.equal(preflight.dispatch, true); // proceed to fan-in of existing artifacts
+      assert.equal(preflight.shortfall, null);
+      assert.equal(preflight.reason, "no_reviewers_needed");
+      assert.deepEqual(preflight.pendingGroups, []);
+      assert.deepEqual(preflight.skippedGroups.map((g) => g.name), ["a", "b"]);
+      // AC4 still holds: a resume-finished state is not a verdict.
+      assert.equal(preflight.verdict, null);
+      assert.equal(preflight.executionMode, null);
+    });
+
+    test("shortfall is computed against the REMAINING (incomplete) groups, not the full plan", () => {
+      // 5 units; 2 already complete → only 3 remain. A budget of 1 is short by 2,
+      // not by 4 — the later session resumes by dispatching only the 3 pending.
+      const groups = units(["a", "b", "c", "d", "e"]);
+      const preflight = reviewerBudgetPreflight(groups, 1, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.dispatch, false);
+      assert.equal(preflight.requiredReviewers, 3);
+      assert.equal(preflight.shortfall, 2);
+      assert.equal(preflight.reason, "budget_shortfall");
+      assert.deepEqual(preflight.pendingGroups.map((g) => g.name), ["c", "d", "e"]);
+    });
+
+    test("omitting completedAngles is backward-compatible (full dispatch, nothing skipped)", () => {
+      const groups = units(["a", "b"]);
+      assert.equal(reviewerBudgetPreflight(groups, 10).requiredReviewers, 2);
+      assert.equal(reviewerBudgetPreflight(groups, 10, {}).requiredReviewers, 2);
+      assert.deepEqual(reviewerBudgetPreflight(groups, 10).skippedGroups, []);
+    });
+  });
 });
