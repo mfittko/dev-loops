@@ -2591,6 +2591,36 @@ test("normalizeStructuredFindings preserves unparseable entries through render's
   assert.match(body, /severity: `high`/);
 });
 
+test("normalizeStructuredFindings coerces a non-string severity on a preserved unparseable entry to the canonical vocabulary (#1526)", () => {
+  // A hand-crafted/producer-drift section may carry a non-string severity on
+  // raw.unparseable; re-normalization must coerce it (never copy verbatim, which
+  // normalizeSeverity would skip and the renderer would emit as `[object Object]`).
+  const angles = normalizeStructuredFindings([
+    {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [],
+      unparseable: [{ severity: 5 }, { severity: { x: 1 } }, { severity: "must-fix" }],
+    },
+  ]);
+  assert.equal(angles[0].unparseable.length, 3);
+  // Non-string severities coerce to "" (no readable severity); a string normalizes.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "high");
+  // The renderer never emits `[object Object]` for the coerced entries.
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.ok(!body.includes("[object Object]"));
+});
+
 test("renderGateReviewCommentBody reports an unparseable finding explicitly in the per-angle breakdown (#1526)", () => {
   const angles = normalizeStructuredFindings([
     { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },

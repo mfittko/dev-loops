@@ -759,9 +759,14 @@ function buildAngleSectionFromNested(raw) {
   // renderGateReviewCommentBody re-normalizes an already-normalized section
   // (its structuredFindings argument); preserve any unparseable entries carried
   // on the input so re-normalization can never silently re-drop them (#1526).
+  // The severity is re-read through readRawSeverity (not copied verbatim) so a
+  // non-string severity on a hand-crafted/producer-drift section is coerced to
+  // the same canonical vocabulary first-creation uses — never carried as a
+  // non-string that normalizeSeverity would skip and the renderer would emit as
+  // `[object Object]` (Copilot review feedback on #1526).
   if (Array.isArray(raw.unparseable)) {
     for (const u of raw.unparseable) {
-      if (u && typeof u === "object") unparseable.push({ severity: u.severity ?? "" });
+      if (u && typeof u === "object") unparseable.push({ severity: readRawSeverity(u) });
     }
   }
   sortStructuredFindings(findings);
