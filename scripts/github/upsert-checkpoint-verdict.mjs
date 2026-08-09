@@ -1428,6 +1428,76 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   return surface;
 }
 
+// GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
+// (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
+// carry an advancing next action. The mandated next action for a round that
+// found blocking findings is a closed set, so the tool DERIVES it rather than
+// accepting caller prose into a machine-read evidence surface (#1621). Returns
+// null for a `clean` verdict — the caller's value is accepted unchanged
+// (derivation is non-clean only; validating clean-verdict next actions is out
+// of scope for #1621).
+function deriveEffectiveNextAction(verdict, gate) {
+  if (verdict !== "findings_present" && verdict !== "blocked") {
+    return null;
+  }
+  // draft_gate: the PR stays draft and fixes are required before retrying.
+  // pre_approval_gate: follow-up fixes are required before final approval —
+  // address the findings and re-run the gate.
+  return gate === "draft_gate" ? "stay draft and fix" : "rerun gate";
+}
+
+// GATE-EXEC-LIGHT-ESCALATION (#1621): does this round carry a finding at a
+// blocking severity? A `findings_present` verdict is DEFINED as "found issues
+// at blocking severities" (GATE-COMMENT-VERDICT-VALUES), so it always carries
+// one when blocking severities are configured. Structured per-angle findings
+// and explicit severity counts are inspected directly so a marker-collapsed or
+// free-text round still escalates on its real blocking findings. A `blocked`
+// verdict (gate could not complete) carries no finding evidence by itself.
+function roundCarriesBlockingSeverity({ verdict, structuredFindings, findingsSeverityCounts, activeGateConfig }) {
+  const blocking = Array.isArray(activeGateConfig?.blockCleanOnFindingSeverities) ? activeGateConfig.blockCleanOnFindingSeverities : [];
+  if (blocking.length === 0) {
+    return false;
+  }
+  if (structuredFindings) {
+    for (const angle of structuredFindings) {
+      for (const f of angle.findings) {
+        if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
+        if (blocking.includes(/** @type {string} */ (normalizeSeverity(f.severity)))) return true;
+      }
+    }
+    return false;
+  }
+  if (findingsSeverityCounts && typeof findingsSeverityCounts === "object") {
+    return blocking.some((sev) => (findingsSeverityCounts[sev] ?? 0) > 0);
+  }
+  return verdict === "findings_present";
+}
+
+// Apply the gate:full PR label so the next round forces full fan-out. Mirrors
+// create-label.mjs's idempotent "already exists" handling for the label
+// resource, then adds it to the PR (adding an already-present label is a
+// no-op success). Both existing consumers (detect-checkpoint-evidence.mjs,
+// write-gate-context.mjs) already honor the label. Applied (not a post refusal)
+// so it never collides with GATE-EXEC-POST-BEFORE-FIX (#1621).
+async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
+  const createResult = await runChild(
+    ghCommand,
+    ["label", "create", GATE_FULL_LABEL, "--repo", repo, "--color", "d73a4a", "--description", "Inline gate round surfaced a blocking finding; force full fan-out review"],
+    env,
+  );
+  if (createResult.code !== 0 && !/already exists/i.test(createResult.stderr)) {
+    throw new Error(`Cannot apply ${GATE_FULL_LABEL} label for ${repo}#${pr}: gh label create failed: ${(createResult.stderr ?? "").trim() || `exit code ${createResult.code}`}`);
+  }
+  const addResult = await runChild(
+    ghCommand,
+    ["pr", "edit", String(pr), "--repo", repo, "--add-label", GATE_FULL_LABEL],
+    env,
+  );
+  if (addResult.code !== 0) {
+    throw new Error(`Cannot apply ${GATE_FULL_LABEL} label to ${repo}#${pr}: gh pr edit --add-label failed: ${(addResult.stderr ?? "").trim() || `exit code ${addResult.code}`}`);
+  }
+}
+
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
@@ -1674,6 +1744,43 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
+  // ACCEPT-CRITERIA-VERIFY-AND-REFLECT (#1621): a `clean` pre_approval_gate
+  // verdict must not be recorded while the spec-of-record still has unticked
+  // Acceptance criteria. The spec-of-record's AC data is carried by
+  // coordinationContext.refinementArtifact (loaded above) — for a tracker-backed
+  // ready PR this fetches the linked issue body and surfaces `uncheckedAcItems`.
+  // Only an actual unticked checkbox (`- [ ]`) counts; a ticked box and a plain
+  // bullet (no checkbox) are excluded (see extractUncheckedChecklistItems). An
+  // artifact that did not resolve AC data (no linked issue, or the fetch failed)
+  // carries no uncheckedAcItems and does not block — the gate cannot verify what
+  // it cannot read, and the absence of a spec-of-record is owned by the draft-gate
+  // refinement check, not this precondition.
+  if (
+    options.verdict === "clean"
+    && options.gate === "pre_approval_gate"
+    && Array.isArray(coordinationContext.refinementArtifact?.uncheckedAcItems)
+    && coordinationContext.refinementArtifact.uncheckedAcItems.length > 0
+  ) {
+    const acArtifact = coordinationContext.refinementArtifact;
+    const items = acArtifact.uncheckedAcItems;
+    throw new Error(
+      `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. Tick the satisfied ACs in the tracker issue before declaring the pre-approval gate clean — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
+    );
+  }
+  // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
+  // (#1621): a non-clean verdict must not carry an advancing next action. The
+  // mandated next action for a round that found blocking findings is a closed
+  // set (gate-review-comment-contract.md), so derive it at the OPTION seam —
+  // mutating options.nextAction — so BOTH the render and the same-head
+  // idempotency compare see the derived value (a render-only fix would break
+  // idempotency: the parsed body would carry the derived string while the
+  // compare read the raw caller string). Deriving beats validating here: for a
+  // non-clean verdict the mandated action is closed, so the tool produces it
+  // rather than accepting prose into a machine-read evidence surface.
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate);
+  if (derivedNextAction !== null) {
+    options.nextAction = derivedNextAction;
+  }
   // Structured per-angle findings (consolidated fan-in shape) take precedence
   // over the free-text summary: when present, the verdict comment renders a
   // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
@@ -1916,6 +2023,23 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
     : {};
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  // GATE-EXEC-LIGHT-ESCALATION (#1621): an inline round that surfaces a blocking
+  // finding escalates the next round to full fan-out by applying the gate:full
+  // PR label. Applied (not a post refusal) so it never collides with
+  // GATE-EXEC-POST-BEFORE-FIX. Only when fan-out evidence is required — the
+  // label's sole purpose is to force fan-out, so a repo with
+  // requireFanoutEvidence:false has nothing to escalate. Computed here (after
+  // structuredFindings is finalized) and applied on the created/updated/noop
+  // paths — noop re-applies it too (idempotent) so a prior post whose label
+  // application failed is retried at the same head, never left un-escalated.
+  const escalateGateFullLabel = resolveRequireFanoutEvidence(config)
+    && desiredExecutionMode === "inline_single_agent"
+    && roundCarriesBlockingSeverity({
+      verdict: options.verdict,
+      structuredFindings,
+      findingsSeverityCounts: options.findingsSeverityCounts,
+      activeGateConfig,
+    });
   // inlineReason is only meaningful for inline mode and is dropped for
   // fanout_fanin at parse time, so normalize both sides to null when the
   // resolved mode is not inline. This makes the noop short-circuit fire only
@@ -1947,6 +2071,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && existingInlineReason === desiredInlineReason
     && unpostedFindings === 0
   ) {
+    // GATE-EXEC-LIGHT-ESCALATION (#1621): a same-head noop rerun must still
+    // ensure the gate:full label is on the PR — if the original post succeeded
+    // but its label application failed (network/permissions), the noop would
+    // otherwise never retry it. The add is idempotent (a present label is a
+    // no-op success), so re-applying on noop is harmless and closes the gap.
+    if (escalateGateFullLabel) {
+      await applyGateFullLabel({ repo: options.repo, pr: options.pr }, gh);
+    }
     return {
       ok: true,
       action: "noop",
@@ -1963,6 +2095,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...findingSurfaceFields,
       ...(existingInlineReason ? { inlineReason: existingInlineReason } : {}),
       ...(warning ? { warning } : {}),
+      ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
   }
   if (existing) {
@@ -1990,6 +2123,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         ? `Post-update verification failed: ${existing.surface === "review" ? "review" : "comment"} ${updated.commentId} not retrievable after retry.`
         : null;
     }
+    if (escalateGateFullLabel) {
+      await applyGateFullLabel({ repo: options.repo, pr: options.pr }, gh);
+    }
     return {
       ok: true,
       action: "updated",
@@ -2007,6 +2143,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
+      ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
   }
   const createdReview = await createGateReview({
@@ -2042,6 +2179,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ? `Post-creation verification failed: review ${created.commentId} not retrievable after retry. The review was created (API confirmed) but may not appear in list endpoints immediately.`
       : null;
   }
+  if (escalateGateFullLabel) {
+    await applyGateFullLabel({ repo: options.repo, pr: options.pr }, gh);
+  }
   return {
     ok: true,
     action: "created",
@@ -2059,6 +2199,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
+    ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
   };
 }
 export function buildInlineExecutionWarning(executionMode, inlineReason) {

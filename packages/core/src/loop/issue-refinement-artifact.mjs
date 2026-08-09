@@ -148,20 +148,25 @@ function findSectionByPatterns(sections, patterns) {
 }
 
 /**
- * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
- * checklist items and top-level plain `- ` bullets (dash at column 0, so
- * nested/indented sub-bullets are not counted). Empty checkbox placeholders
- * (`- [ ]` / `- [x]` with no trailing text) are skipped, not counted, so a
- * section of only unfilled placeholders reports as unrefined. Returns the
- * trimmed item text for each matching line. The checkbox state (checked vs
- * unchecked) is intentionally not preserved: callers only need the item
- * text to satisfy the refinement-artifact contract.
+ * Parse bullet/checkbox items from a section body into item states. Each
+ * checkbox item (`- [ ]`/`- [x]`/`- [X]`) becomes `{ text, checked }`
+ * (`checked` true only for a ticked `[x]`/`[X]`); a top-level plain bullet
+ * (`- text`, dash at column 0 so nested/indented sub-bullets are not counted)
+ * becomes `{ text, checked: null }` — it has no checkbox to tick. Empty
+ * checkbox placeholders (`- [ ]` / `- [x]` with no trailing text) are skipped,
+ * not counted, so a section of only unfilled placeholders reports as unrefined.
+ * Code-fenced lines are skipped (same fence logic as parseMarkdownSections,
+ * issue #1025) so a body cannot spoof the AC/DoD gate with code-fenced
+ * checkboxes.
  *
- * This is only ever called on the body of an already-recognized AC/DoD
- * section (see `detectIssueRefinementArtifact`), so counting plain bullets
- * is scoped to those sections and never affects prose sections.
+ * Shared by `extractChecklistItems` (text-only) and the unticked-AC check
+ * (`extractUncheckedChecklistItems`) so the two never drift on what counts as
+ * a checklist item or on the checkbox-state read (#1621). Only ever called on
+ * the body of an already-recognized AC/DoD section (see
+ * `detectIssueRefinementArtifact`), so counting plain bullets is scoped to
+ * those sections and never affects prose sections.
  */
-export function extractChecklistItems(sectionBody) {
+function parseChecklistItems(sectionBody) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
     return [];
   }
@@ -171,9 +176,6 @@ export function extractChecklistItems(sectionBody) {
   let fence = null;
 
   for (const line of lines) {
-    // Checkboxes/bullets inside a fenced code span are non-interactive text, not
-    // real items — skip them so a body cannot spoof the AC/DoD gate with
-    // code-fenced checkboxes (issue #1025). Same fence logic as parseMarkdownSections.
     const step = stepFence(fence, line);
     fence = step.fence;
     if (step.insideFence) {
@@ -186,7 +188,10 @@ export function extractChecklistItems(sectionBody) {
     if (checkboxMatch) {
       const text = (checkboxMatch[1] ?? "").trim();
       if (text.length > 0) {
-        items.push(text);
+        // `checked` is true only for a ticked box; `[ ]` (space) is false.
+        // A plain bullet has no checkbox, so it stays `null` below — it is
+        // neither ticked nor unticked and does not count as an unticked AC.
+        items.push({ text, checked: /^\s*-\s+\[[xX]\]/u.test(line) });
       }
       continue;
     }
@@ -196,12 +201,38 @@ export function extractChecklistItems(sectionBody) {
     if (bulletMatch) {
       const text = bulletMatch[1].trim();
       if (text.length > 0) {
-        items.push(text);
+        items.push({ text, checked: null });
       }
     }
   }
 
   return items;
+}
+
+/**
+ * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
+ * checklist items and top-level plain `- ` bullets. Empty checkbox placeholders
+ * are skipped. Returns the trimmed item text for each matching line; the
+ * checkbox state is not preserved (use `extractUncheckedChecklistItems` for
+ * that). Thin wrapper over `parseChecklistItems` so the text-only contract
+ * stays byte-identical to its pre-#1621 shape.
+ */
+export function extractChecklistItems(sectionBody) {
+  return parseChecklistItems(sectionBody).map((item) => item.text);
+}
+
+/**
+ * Extract the text of UNCHECKED checkbox items (`- [ ]`) from a section body.
+ * A ticked box (`- [x]`/`- [X]`) and a plain bullet (no checkbox) are both
+ * excluded — only an actual unticked checkbox is an "unticked AC item"
+ * (#1621, ACCEPT-CRITERIA-VERIFY-AND-REFLECT). Empty placeholders are skipped.
+ * Thin wrapper over `parseChecklistItems` so the unticked read never drifts
+ * from `extractChecklistItems` on what counts as a checklist item.
+ */
+export function extractUncheckedChecklistItems(sectionBody) {
+  return parseChecklistItems(sectionBody)
+    .filter((item) => item.checked === false)
+    .map((item) => item.text);
 }
 
 /**
@@ -246,6 +277,7 @@ export function detectLinkedRefinementDoc(body) {
  *   hasACs: boolean,
  *   source: string,
  *   acItems: string[],
+ *   uncheckedAcItems: string[],
  *   dodItems: string[],
  *   sections: string[],
  *   linkedDoc: { found: boolean, path: string|null, reason: string },
@@ -259,6 +291,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
       hasACs: false,
       source: REFINEMENT_SOURCE.MISSING,
       acItems: [],
+      uncheckedAcItems: [],
       dodItems: [],
       sections: [],
       linkedDoc: { found: false, path: null, reason: "empty-body" },
@@ -274,6 +307,11 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
 
   const acItems = acceptanceSection ? extractChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
+  // Unticked AC checkboxes (`- [ ]`) of the spec-of-record — the
+  // ACCEPT-CRITERIA-VERIFY-AND-REFLECT precondition a clean pre_approval_gate
+  // must refuse on (#1621). Only actual unticked checkboxes count; a ticked
+  // box and a plain bullet (no checkbox) are both excluded.
+  const uncheckedAcItems = acceptanceSection ? extractUncheckedChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
   const dodItems = dodSection ? extractChecklistItems(dodSection.bodyLines.join("\n")) : [];
 
   const linkedDoc = detectLinkedRefinementDoc(body);
@@ -283,6 +321,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
       hasACs: true,
       source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
       acItems,
+      uncheckedAcItems,
       dodItems,
       sections: sectionNames,
       linkedDoc,
@@ -296,6 +335,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
       hasACs: true,
       source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
       acItems,
+      uncheckedAcItems,
       dodItems,
       sections: sectionNames,
       linkedDoc,
@@ -309,6 +349,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
       hasACs: true,
       source: REFINEMENT_SOURCE.LINKED_DOC,
       acItems: [],
+      uncheckedAcItems: [],
       dodItems: [],
       sections: sectionNames,
       linkedDoc,
@@ -321,6 +362,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
     hasACs: false,
     source: REFINEMENT_SOURCE.MISSING,
     acItems: [],
+    uncheckedAcItems: [],
     dodItems: [],
     sections: sectionNames,
     linkedDoc,
