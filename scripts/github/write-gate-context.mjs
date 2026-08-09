@@ -1986,9 +1986,22 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
   // Rebuild detection: overwriting a DIFFERENT prefix at a head that already
   // has reviewer sentinels invalidates every one of them (their recorded hash
-  // can never match the new bytes), stranding the round. The rebuild itself is
-  // legitimate — warn and name the sanctioned retirement command instead of
-  // refusing or silently invalidating (GATE-EXEC-ROUND-RETIREMENT).
+  // can never match the new bytes), stranding the round.
+  //
+  // rebuildWarning contract (#1626 — decided advisory-by-design, NOT a refusal):
+  // The context rebuild is the sanctioned FIRST step of
+  // GATE-EXEC-ROUND-RETIREMENT (rebuild context → retire round → re-fan). The
+  // rebuild itself is legitimate, so each of the three warning branches below is
+  // ADVISORY rather than a refusal; each names the explicit recovery command
+  // (retire-gate-round) so an operator following up is never left stranded.
+  // These are NOT "MUSTs degraded to a warning": the MUST (round retirement
+  // before re-fan) is enforced separately by verify-fresh-review-context.mjs,
+  // which fails closed on a sentinel whose recorded prefix hash no longer
+  // matches — a retired round has no live sentinels, so a re-fan at the same
+  // head proceeds; an un-retired invalidated round's sentinels fail closed and
+  // block consolidation. The warning here only surfaces the consequence EARLY,
+  // at the moment of invalidation, because that is genuinely advisory context
+  // (the operator may retire immediately or continue and retire next).
   let rebuildWarning = null;
   let existingBytes = null;
   let readError = null;

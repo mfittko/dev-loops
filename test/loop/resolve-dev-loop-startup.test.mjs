@@ -931,9 +931,12 @@ test("resolver does not block non-local_implementation strategies from main chec
 // warnings-array and linkage-default assertions these tests used to make on a
 // successful return now live on the copilot/external-author tests below,
 // which stub the assignment read to reach a normal return.
-test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fails and defaults to unassigned", () => {
+test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fails and defaults to unassigned", async () => {
   const tmp = stampRepoWithOrigin();
   try {
+    // #1626: stub linkage to SUCCEED (no open linked PR) so the ownership gate
+    // is reached — this test is about the gate, not linkage failure.
+    await stubNoLinkedPr(tmp, 999999);
     assert.throws(
       () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
       /Issue #999999 is not claimed by any contributor.*edit-issue\.mjs.*--issue 999999 --add-assignee @me/s,
@@ -955,12 +958,29 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
   }
 });
 
-test("buildAutoResolvedInput with local-first tracker source still hits the ownership gate (fails closed, not a phase-doc bypass)", () => {
+test("buildAutoResolvedInput fails closed when linked-PR detection fails instead of fabricating resolved_no_open_pr (#1626)", () => {
+  const tmp = stampRepoWithOrigin();
+  try {
+    // No detect-linked-issue-pr.mjs in the tmp repo → execFileSync fails. This
+    // MUST fail closed rather than defaulting to resolved_no_open_pr (a
+    // transient failure would misroute an issue that HAS an open linked PR to
+    // issue_intake, which the router cannot catch).
+    assert.throws(
+      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
+      /linked-PR detection failed for issue #999999.*refusing to fabricate.*resolved_no_open_pr/s,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("buildAutoResolvedInput with local-first tracker source still hits the ownership gate (fails closed, not a phase-doc bypass)", async () => {
   const tmp = stampRepoWithOrigin();
   try {
     // inputSource "tracker" (vs "phase-docs") keeps this on the issue-backed
     // path where the ownership gate applies — proving the tracker source
-    // itself doesn't bypass the gate.
+    // itself doesn't bypass the gate. #1626: stub linkage so the gate is reached.
+    await stubNoLinkedPr(tmp, 999999);
     assert.throws(
       () => buildAutoResolvedInput({
         issue: 999999,

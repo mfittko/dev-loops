@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -114,6 +114,17 @@ test("info.mjs --issue produces human-readable output with gh stubs", async () =
 
     await writeFile(ghPath, ghScript);
     await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
+
+    // Stub detect-linked-issue-pr.mjs so the startup resolver's linkage check
+    // succeeds (a real repo has this script; #1626 fails closed when it's
+    // absent, which would mask the strategy/route fields this test asserts).
+    const linkageDir = path.join(tmpDir, "scripts", "github");
+    await mkdir(linkageDir, { recursive: true });
+    await writeFile(
+      path.join(linkageDir, "detect-linked-issue-pr.mjs"),
+      `process.stdout.write(JSON.stringify({ ok: true, repo: ${JSON.stringify(repoSlug)}, issue: ${issueNumber}, hasOpenLinkedPr: false, prNumber: null }));`,
+      "utf8",
+    );
 
     const { code, stdout, stderr } = await runNode(["--issue", String(issueNumber), "--repo", repoSlug], {
       env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, DEVLOOPS_RUN_ID: "info-test" },

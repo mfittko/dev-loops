@@ -14,7 +14,11 @@ Behavior:
   - defaults \`--assignee @me\` when no assignee is given (self-assigned by default)
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
-  - detects missing \`Closes #N\` / \`Fixes #N\` in \`--body\` or \`--body-file\` content (non-fatal stderr warning)
+  - accepts \`--issue <n>\` (consumed here, never forwarded to \`gh\`): declares the
+    tracker link this PR closes and makes a missing or mismatched \`Closes #N\`/
+    \`Fixes #N\` closing reference in \`--body\`/\`--body-file\` FATAL (refused before
+    \`gh\` is invoked). Without \`--issue\` the closing keyword is not enforced
+    (issue-less \`--lightweight\` PRs intentionally carry none).
   - \`--lightweight\` (consumed here in every form — bare or \`=true/1/false/0\`, last
     occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
     \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
@@ -32,8 +36,8 @@ Examples:
   node <resolved-skill-scripts>/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
 Notes:
   - Use \`gh pr ready\` later to leave draft state; this wrapper never opens a ready PR.
-  - Wrapper-owned validation is limited to \`--ready\`; all other argument validation is left to \`gh pr create\`.
-  - Closing-keyword warning is advisory only and does not change exit code.
+  - Wrapper-owned validation: \`--ready\` (rejected) and \`--issue\` closing-reference enforcement; all other argument validation is left to \`gh pr create\`.
+  - \`--issue <n>\` makes the closing reference a MUST (refused if missing or mismatched); without \`--issue\` the closing keyword is not enforced.
 Exit codes:
   0  \`gh pr create\` succeeded
   1  wrapper validation failed or \`gh\` could not be spawned
@@ -45,6 +49,9 @@ const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 // flags), and the LAST occurrence decides — bare or =true/=1 enables,
 // anything else (=false, =0, ...) disables.
 const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
+// #1626: `--issue <n>` declares the tracker link this PR closes. Consumed by the
+// wrapper (never forwarded to gh), same shape as --repo.
+const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
@@ -57,11 +64,20 @@ const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
 // `-a <login>` would get a conflicting `--assignee @me` injected). (#894)
 const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
 const DEFAULT_ASSIGNEE = "@me";
-const CLOSING_KEYWORD_PATTERN = /Closes\s+#\d+|Fixes\s+#\d+/i;
+const CLOSING_KEYWORD_PATTERN = /Closes\s+#(\d+)|Fixes\s+#(\d+)/i;
 const MAX_BODY_SCAN_BYTES = 16 * 1024;
 export function detectClosingKeyword(body) {
   if (!body || typeof body !== "string") return false;
   return CLOSING_KEYWORD_PATTERN.test(body.slice(0, MAX_BODY_SCAN_BYTES));
+}
+// #1626: extract the issue number from a `Closes #N` / `Fixes #N` closing
+// reference so create-pr can REFUSE a missing or mismatched reference when
+// `--issue <n>` declares the tracker link (a warning is invisible under --jq).
+export function extractClosingIssueNumber(body) {
+  if (!body || typeof body !== "string") return null;
+  const match = CLOSING_KEYWORD_PATTERN.exec(body.slice(0, MAX_BODY_SCAN_BYTES));
+  if (!match) return null;
+  return Number(match[1] ?? match[2]);
 }
 async function resolveBody(args) {
   const bodyIdx = args.indexOf("--body");
@@ -78,15 +94,6 @@ async function resolveBody(args) {
     }
   }
   return null; // unreadable → warn
-}
-function warnMissingClosingKeyword(body) {
-  if (body === null) return; // no --body or --body-file, skip
-  if (!detectClosingKeyword(body)) {
-    process.stderr.write(
-      "[create-pr] Warning: PR body missing `Closes #N` or `Fixes #N`. " +
-        "GitHub will not auto-close the linked issue on merge.\n",
-    );
-  }
 }
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
@@ -188,14 +195,53 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const lightweight = lastLightweightToken === "--lightweight" ||
     (typeof lastLightweightToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastLightweightToken.slice("--lightweight=".length)));
-  const forwardedArgv = argv.filter((token) => !LIGHTWEIGHT_FLAG_PATTERN.test(token));
+  // #1626: --issue <n> declares the tracker link this PR closes. Consumed by
+  // the wrapper (never forwarded to gh) and makes the closing reference
+  // (`Closes #n` / `Fixes #n`) a MUST — missing or mismatched is refused.
+  const issueRaw = getFlagValue(argv, ISSUE_FLAG_PATTERN);
+  let issue = null;
+  if (issueRaw !== null) {
+    if (!/^\d+$/.test(issueRaw) || Number(issueRaw) <= 0) {
+      throw parseError(`--issue must be a positive integer (got ${JSON.stringify(issueRaw)})`);
+    }
+    issue = Number(issueRaw);
+  }
+  // Strip --lightweight and --issue (with its value in the space form) so
+  // neither is forwarded to `gh pr create` (which rejects unknown flags).
+  // for...of + skip-flag avoids a hand-rolled index loop (arg-parsing contract).
+  const forwardedArgv = [];
+  let skipNext = false;
+  for (const token of argv) {
+    if (skipNext) { skipNext = false; continue; }
+    if (LIGHTWEIGHT_FLAG_PATTERN.test(token)) continue;
+    if (ISSUE_FLAG_PATTERN.test(token)) {
+      // = form carries the value; space form consumes the next token too.
+      if (!token.includes("=")) skipNext = true;
+      continue;
+    }
+    forwardedArgv.push(token);
+  }
   const { help, ghArgs } = buildCreatePrArgs(forwardedArgv);
   if (help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
   const body = await resolveBody(forwardedArgv);
-  warnMissingClosingKeyword(body);
+  // #1626: with --issue <n> the closing reference is a MUST. A warning is
+  // invisible under --jq (which the repo's token-discipline contract
+  // mandates), so a missing or mismatched reference is refused before gh is
+  // invoked. Without --issue the caller has not declared a tracker link, so
+  // there is nothing to enforce (issue-less lightweight PRs intentionally
+  // carry no closing keyword).
+  if (issue !== null) {
+    const closingNumber = extractClosingIssueNumber(body);
+    if (closingNumber === null) {
+      throw parseError(`--issue ${issue} requires a closing reference (Closes #${issue} or Fixes #${issue}) in --body/--body-file, but none was found — GitHub will not auto-close the linked issue on merge`);
+    }
+    if (closingNumber !== issue) {
+      throw parseError(`--issue ${issue} requires the closing reference to match, but the body closes #${closingNumber} — refusing a mismatched closing reference`);
+    }
+  }
   // Issue-less lightweight: caller signals lightweight AND an explicit body
   // source (--body/--body-file) carries no closing keyword. A tracker-backed
   // lightweight PR (closing keyword present) never reaches the board — its
