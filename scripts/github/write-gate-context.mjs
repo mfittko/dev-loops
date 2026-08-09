@@ -2007,7 +2007,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let readError = null;
   // ONE copy of the operator-facing recovery command: the three warning
   // branches below differ only in what went wrong, never in the remedy.
-  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
+  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`;
   const warn = (text) => {
     rebuildWarning = text;
     process.stderr.write(`WARNING: ${rebuildWarning}\n`);
