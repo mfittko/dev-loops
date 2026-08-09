@@ -2530,6 +2530,225 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
   }
 });
 
+// ---------------------------------------------------------------------------
+// #1526 (variant 3): normalizeStructuredFinding returns null for a finding it
+// cannot interpret (no usable summary, or not an object). The clean-verdict
+// cross-check tallies the NORMALIZED findings, so a dropped finding was
+// invisible to the guard — a blocking severity could pass silently by being
+// unparseable rather than by being absent. The fix tracks such findings as
+// UNPARSEABLE on the per-angle section and tallies them on their severity
+// alone (no disposition to resolve against), so a blocking severity fails the
+// clean verdict and a non-blocking one is reported explicitly as unparseable
+// rather than dropped. These tests fail if the guard reverts to dropping.
+// ---------------------------------------------------------------------------
+
+test("normalizeStructuredFindings tracks an unparseable finding (no summary) on the section instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "real finding" }, { severity: "must-fix" }] },
+    { angle: "pr-description", verdict: "clean", findings: [] },
+  ]);
+  // The parseable finding is still rendered; the summary-less one is NOT dropped.
+  assert.equal(angles[0].findings.length, 1);
+  assert.equal(angles[0].findings[0].summary, "real finding");
+  assert.ok(Array.isArray(angles[0].unparseable));
+  assert.equal(angles[0].unparseable.length, 1);
+  // The severity is read off the raw finding so the tally can decide blocking.
+  assert.equal(angles[0].unparseable[0].severity, "high"); // "must-fix" normalizes to "high"
+  // A flat section (no nested findings path) still carries the uniform shape.
+  assert.ok(Array.isArray(angles[1].unparseable));
+  assert.equal(angles[1].unparseable.length, 0);
+});
+
+test("normalizeStructuredFindings tracks a non-object finding entry as unparseable instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: ["bogus", null, { severity: "nice-to-have" }] },
+  ]);
+  assert.equal(angles[0].findings.length, 0);
+  assert.equal(angles[0].unparseable.length, 3);
+  // A non-object and null carry no readable severity; an object without summary
+  // still exposes its severity.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "low"); // "nice-to-have" -> "low"
+});
+
+test("normalizeStructuredFindings preserves unparseable entries through render's re-normalization (#1526)", () => {
+  // renderGateReviewCommentBody re-normalizes an already-normalized section;
+  // the unparseable list must survive that pass or the rendered body re-drops it.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.match(body, /\[`unparseable`\]/);
+  assert.match(body, /severity: `high`/);
+});
+
+test("normalizeStructuredFindings coerces a non-string severity on a preserved unparseable entry to the canonical vocabulary (#1526)", () => {
+  // A hand-crafted/producer-drift section may carry a non-string severity on
+  // raw.unparseable; re-normalization must coerce it (never copy verbatim, which
+  // normalizeSeverity would skip and the renderer would emit as `[object Object]`).
+  const angles = normalizeStructuredFindings([
+    {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [],
+      unparseable: [{ severity: 5 }, { severity: { x: 1 } }, { severity: "must-fix" }],
+    },
+  ]);
+  assert.equal(angles[0].unparseable.length, 3);
+  // Non-string severities coerce to "" (no readable severity); a string normalizes.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "high");
+  // The renderer never emits `[object Object]` for the coerced entries.
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.ok(!body.includes("[object Object]"));
+});
+
+test("renderGateReviewCommentBody reports an unparseable finding explicitly in the per-angle breakdown (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  // The unparseable entry is distinguishable from a non-blocking parseable finding.
+  assert.match(body, /\[`unparseable`\] finding could not be interpreted/);
+  assert.match(body, /severity: `low`/);
+  // The digest counts the unparseable finding so it is not undercounted.
+  assert.match(body, /1 angle reviewed; 2 findings/);
+});
+
+test("renderGateReviewCommentBody's reduced per-angle digest (finding-surface round) counts unparseable findings (#1526)", () => {
+  // A round that carries its own finding surface (nonLocatableFindings is an array)
+  // renders the REDUCED per-angle digest (renderAngleVerdictDigest) instead of the
+  // full breakdown. That reduced digest must also count unparseable findings, or a
+  // finding-surface round would undercount the very findings it surfaces.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+    // An array (even empty) selects the reduced digest path.
+    nonLocatableFindings: [],
+  });
+  // 1 parseable + 1 unparseable = 2 findings in the reduced one-liner.
+  assert.match(body, /`correctness` → `findings_present` \(2 findings\)/);
+});
+
+test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-blocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> normalizeStructuredFinding returns null -> formerly dropped.
+          findings: [{ severity: "must-fix" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Cannot set verdict "clean"/);
+    assert.match(payload.error, /blocking severities \[high\]/);
+    assert.match(payload.error, /UNPARSEABLE/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries an unparseable finding WITHOUT a blocking severity, and reports it as unparseable (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-nonblocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> unparseable, but severity is non-blocking (low).
+          findings: [{ severity: "nice-to-have" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        // The clean verdict is posted AND the unparseable finding is surfaced in the body.
+        assertStdinIncludes: ["**Verdict:** clean", "unparseable"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
@@ -6156,6 +6375,46 @@ test("#1621: an inline CLEAN round does NOT apply the gate:full label", async ()
     assert.equal(result.gateFullLabelApplied, undefined);
     assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
   } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// #1526: the roundCarriesBlockingSeverity unparseable branch (parallel tally to
+// the clean-verdict cross-check) must escalate gate:full for an inline round
+// that surfaces an UNPARSEABLE blocking finding, exactly as a parseable one
+// would. Fails if the guard reverts to dropping unparseable findings from
+// this tally too.
+test("#1526: an inline round that surfaces an UNPARSEABLE blocking finding applies the gate:full label (roundCarriesBlockingSeverity unparseable branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1526-unparseable-escalate-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        // No `summary` -> normalizeStructuredFinding returns null -> unparseable,
+        // but severity "must-fix" (-> "high") is read and is blocking.
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+      ]),
+      "utf8",
+    );
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsJson: findingsPath,
+      findingsSummary: "an unparseable blocking finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline unparseable blocking finding",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
+    assert.ok(labelCreate, "gate:full label resource was created for an unparseable blocking finding");
+    const addLabel = calls.find((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full"));
+    assert.ok(addLabel, "gate:full label was added to the PR for an unparseable blocking finding");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

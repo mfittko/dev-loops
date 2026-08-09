@@ -1192,7 +1192,7 @@ export async function consolidateGateFanin(options) {
       // review at this head) so a reader of --out/the emitted result — not
       // just the ledger's provenance.perAngle — can tell carried from fresh.
       // upsert-checkpoint-verdict.mjs's buildAngleSectionFromNested only reads
-      // angle/verdict/findings, so this extra field never affects the
+      // angle/verdict/findings/unparseable, so this extra field never affects the
       // rendered gate comment.
       ...(typeof a.carriedFromHead === "string" ? { carriedFromHead: a.carriedFromHead } : {}),
     };
