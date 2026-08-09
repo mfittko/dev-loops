@@ -745,7 +745,12 @@ async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
 }
 
 export async function postGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
-  const findings = await resolveFindings(options);
+  // resolveFindings now returns `{ findings, overallVerdict }` (the
+  // consolidator's computed verdict threads through `--ledger-out`'s wrapper);
+  // post-gate-findings posts the visible comment and does not record a durable
+  // verdict, so it drops `overallVerdict` here — only write-gate-findings-log.mjs
+  // persists it into the ledger that upsert-checkpoint-verdict.mjs enforces.
+  const { findings } = await resolveFindings(options);
   // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
   // A non-empty errors array means the config could not be loaded/validated, so
   // log it (stderr) and fall back to default behavior (config-unavailable →

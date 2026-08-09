@@ -342,7 +342,7 @@ test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed fr
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([]),
-    /requires --repo, --pr, --head-sha, --verdict, --findings-summary .* and --next-action/i,
+    /requires --repo, --pr, --head-sha, --verdict .* --findings-summary .* and --next-action/i,
   );
 
   const parsed = parseUpsertCheckpointVerdictCliArgs([
@@ -5683,4 +5683,246 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
   });
   assert.ok(body.includes("[`low`]"));
   assert.ok(!body.includes("[`defer`]"));
+});
+
+// ---------------------------------------------------------------------------
+// #1616: verdict consistency enforcement — upsert-checkpoint-verdict refuses a
+// --verdict that contradicts the consolidated ledger's overallVerdict, derives
+// it by default when the ledger carries one, and fails closed on a malformed
+// ledger. The consolidator's overallVerdict threads from consolidate-fanin.mjs's
+// --ledger-out through write-gate-findings-log.mjs into the durable ledger; an
+// absent overallVerdict preserves today's behavior so inline/fallback paths are
+// unaffected. Enforces GATE-COMMENT-VERDICT-VALUES (clean = no blocking
+// findings remain; findings_present = blocking findings found).
+// ---------------------------------------------------------------------------
+
+const VERDICT_LEDGER_HEAD = "abc1234000000000000000000000000000000000";
+
+async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate" }) {
+  const ledgerPath = path.join(tempDir, "verdict-ledger.json");
+  const log = {
+    repo: "owner/repo",
+    pr: 17,
+    gate,
+    headSha: VERDICT_LEDGER_HEAD,
+    verdict: verdict ?? overallVerdict,
+    loggedAt: "2026-08-09T00:00:00.000Z",
+    findings,
+  };
+  if (overallVerdict !== undefined) {
+    log.overallVerdict = overallVerdict;
+  }
+  await writeFile(ledgerPath, JSON.stringify(log), "utf8");
+  return ledgerPath;
+}
+
+// Full gh entry set for a --findings-ledger round that reaches the finding
+// surface + review POST path. VERDICT_LEDGER_HEAD === SINGLE_SURFACE_HEAD, so
+// singleSurfaceLeadingEntries covers every call the coordination + finding
+// surface path makes; the trailing POST entry accepts the created review.
+function verdictEnforcementEntries() {
+  return [
+    ...singleSurfaceLeadingEntries(),
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
+  ];
+}
+
+// A permissive runChild that dispatches on the gh args and answers every call
+// the verdict-enforcement happy path makes (coordination, finding surface,
+// review POST) without the fragile sequential-entry ordering makeGhMock
+// requires. Used for the derive/match/absent tests that reach resolveFindingSurface.
+function permissiveVerdictRunChild(headSha) {
+  const prJson = JSON.stringify({
+    number: 17, state: "OPEN", isDraft: true, headRefOid: headSha, body: DEFAULT_TEST_PR_BODY,
+    closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+  }) + "\n";
+  return async (cmd, args = [], _env, _stdin = "") => {
+    if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
+    const a = args.join(" ");
+    if (a.includes("pulls/17/reviews") && a.includes("-X POST")) {
+      return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
+    }
+    if (a.includes("requested_reviewers")) return { code: 0, stdout: '{"users":[],"teams":[]}\n', stderr: "" };
+    if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
+    if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("--json") && a.includes("statusCheckRollup")) return { code: 0, stdout: prJson, stderr: "" };
+    if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state")) return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
+    if (a.includes("--json") && a.includes("files")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
+    if (a.includes("--json")) return { code: 0, stdout: prJson, stderr: "" };
+    return { code: 0, stdout: "{}\n", stderr: "" };
+  };
+}
+
+async function runVerdictEnforcement(args, { repoRoot, headSha }) {
+  const options = parseUpsertCheckpointVerdictCliArgs(args);
+  try {
+    const result = await upsertCheckpointVerdict(options, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild: permissiveVerdictRunChild(headSha) });
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n` };
+  }
+}
+
+test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-clean-vs-findings-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "findings_present", "--findings-summary", "operator says findings",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "stay draft and fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /contradicts the consolidated ledger's overallVerdict "clean"/);
+    assert.match(error.error, /--verdict "findings_present"/);
+    assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
+    assert.match(error.error, new RegExp(VERDICT_LEDGER_HEAD));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (clean posted for a findings round)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-findings-vs-clean-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "operator says clean",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /contradicts the consolidated ledger's overallVerdict "findings_present"/);
+    assert.match(error.error, /--verdict "clean"/);
+    assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert derives the verdict from the ledger's overallVerdict when --verdict is omitted", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-derive-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    // Inline mode (no --execution-mode): verdict enforcement is independent of
+    // execution mode — the ledger's overallVerdict derives the verdict.
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-summary", "findings present (derived)",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "stay draft and fix",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+    assert.equal(parsed.gate, "draft_gate");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-match-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert fails closed on a present-but-malformed ledger overallVerdict", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-malformed-"));
+  try {
+    const ledgerPath = path.join(tempDir, "verdict-ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: VERDICT_LEDGER_HEAD,
+      verdict: "clean",
+      findings: [],
+      overallVerdict: "not-a-verdict",
+    }), "utf8");
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /"overallVerdict" must be clean, findings_present, or blocked/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: an absent overallVerdict in the ledger preserves current behavior (explicit --verdict accepted)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-absent-ov-"));
+  try {
+    // Legacy ledger shape (no overallVerdict field) — inline/fallback paths
+    // must be unaffected: the explicit --verdict is accepted as before.
+    const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert fails closed when --verdict is omitted but the ledger carries no overallVerdict", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-no-verdict-no-ov-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /--verdict is required/);
+    assert.match(error.error, /carries no overallVerdict/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

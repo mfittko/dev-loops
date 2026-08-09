@@ -379,7 +379,26 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  const findings = await resolveFindings(options);
+  const { findings, overallVerdict } = await resolveFindings(options);
+  // The consolidator's computed verdict (consolidate-fanin.mjs's
+  // `overallVerdict`) threads through `--ledger-out`'s `{overallVerdict,
+  // findings}` wrapper into here, so the durable ledger records the verdict
+  // the fan-in actually computed for this head/gate — not whatever a caller
+  // hand-passed to `--verdict`. Optional and additive: a bare-array input
+  // (legacy `--findings-file`, hand-authored `--findings`) leaves it
+  // undefined and the ledger writes exactly as before. Validated here so a
+  // malformed wrapper cannot silently record an invalid verdict as the
+  // consolidator's truth (#1616).
+  let normalizedOverallVerdict;
+  if (overallVerdict !== undefined) {
+    const verdict = normalizeVerdict(overallVerdict);
+    if (!verdict) {
+      throw parseError(
+        `--${options.findingsFile ? "findings-file" : "findings"} "${options.findingsFile ?? "<inline>"}" wrapper "overallVerdict" must be one of: clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdict)})`,
+      );
+    }
+    normalizedOverallVerdict = verdict;
+  }
   let provenance;
   if (options.provenance === undefined) {
     provenance = undefined;
@@ -423,6 +442,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
+  // The consolidator's computed verdict, threaded from `--ledger-out`'s
+  // wrapper. Optional and additive: when absent (a bare-array input or an
+  // older producer) the ledger writes byte-identically to before, so inline
+  // and fallback paths are unaffected (#1616 AC: absent ledger unchanged).
+  if (normalizedOverallVerdict !== undefined) {
+    log.overallVerdict = normalizedOverallVerdict;
+  }
   // Provenance is optional and additive: when absent the ledger writes exactly
   // as before (no provenance key), preserving byte-identical output for the
   // default / Claude-Code path. When present it records fan-out provenance for

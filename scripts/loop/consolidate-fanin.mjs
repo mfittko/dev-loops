@@ -9,7 +9,11 @@
  * via the result's "findingsJson" field / --out) accept directly — the orchestrator
  * no longer hand-authors this JSON with inline interpreters. "findingsJson"/--out is
  * the NESTED per-angle shape (one section per source artifact, clean angles included
- * with an empty findings array); "findings"/--ledger-out is the FLAT per-finding shape.
+ * with an empty findings array). The stdout "findings" field is the FLAT per-finding
+ * shape (a bare array); --ledger-out writes that same flat array wrapped as
+ * { overallVerdict, findings } (the consolidator's computed verdict plus the flat
+ * per-finding shape, threaded into the durable ledger by write-gate-findings-log.mjs
+ * so upsert-checkpoint-verdict.mjs can enforce verdict consistency, #1616).
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
@@ -100,9 +104,16 @@ Optional:
                                  budget at minimum summary length FAILS CLOSED (exit 1) when
                                  --ledger-out was not also given — a degraded round otherwise has no
                                  durable record of its findings anywhere.
-  --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
-                                 exact --findings-file input write-gate-findings-log.mjs and
-                                 post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
+  --ledger-out <path>            Write the { overallVerdict, findings } wrapper to this path as
+                                 JSON — overallVerdict is this CLI's computed verdict (the same
+                                 value reported on stdout), findings is the flat per-finding shape
+                                 (the exact --findings-file input write-gate-findings-log.mjs and
+                                 post-gate-findings.mjs accept). Embedding overallVerdict here
+                                 lets it flow to the durable ledger (write-gate-findings-log.mjs
+                                 threads it through) and on to upsert-checkpoint-verdict.mjs's
+                                 enforcement (#1616) without an orchestrator hand-off — a value the
+                                 orchestrator re-types as --verdict reproduces the same defect.
+                                 Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
                                  destroy the other. Neither --out nor --ledger-out may resolve to a
                                  DIRECT TOP-LEVEL sibling of --findings-dir's own artifacts (also
@@ -170,7 +181,9 @@ Output (stdout, JSON):
   angles with an empty findings array) — pass --out's file straight to
   upsert-checkpoint-verdict.mjs's --findings-json. "findings" is the FLAT per-finding shape — pass
   --ledger-out's file straight to write-gate-findings-log.mjs/post-gate-findings.mjs's
-  --findings-file, and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
+  --findings-file (a { overallVerdict, findings } wrapper object — both tools
+  unwrap it; write-gate-findings-log.mjs threads overallVerdict into the
+  durable ledger, post-gate-findings.mjs ignores it), and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
   true, unbudgeted totals across every finding, independent of any marking applied to "findingsJson"
   below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
   blocking severity, needs-answer for a LOCATABLE question, deferred otherwise) — an input finding's own "disposition" is never honored,
@@ -1070,7 +1083,17 @@ export async function consolidateGateFanin(options) {
   // (never budgeted)").
   if (options.ledgerOut !== undefined) {
     await mkdir(path.dirname(options.ledgerOut), { recursive: true });
-    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
+    // Write `{ overallVerdict, findings }` rather than a bare array so the
+    // consolidator's COMPUTED verdict flows downstream to the durable ledger
+    // (write-gate-findings-log.mjs, via `--findings-file`) without an
+    // orchestrator hand-off — the defect #1616 describes is exactly that a
+    // caller can post a `--verdict` contradicting this computed value, and a
+    // value the orchestrator re-types is the same defect shape. Embedding it
+    // here makes `overallVerdict` available to the enforcement in
+    // upsert-checkpoint-verdict.mjs automatically, with no new flag and no
+    // recompute. A bare-array consumer (post-gate-findings.mjs) unwraps and
+    // ignores it; write-gate-findings-log.mjs threads it into the ledger.
+    await writeFile(options.ledgerOut, `${JSON.stringify({ overallVerdict: consolidated.verdict, findings }, null, 2)}\n`, "utf8");
   }
 
   const findingsJson = rawArtifacts.map((a) => {

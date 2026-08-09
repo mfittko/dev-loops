@@ -63,7 +63,18 @@ Required:
   --repo <owner/name>
   --pr <number>
   --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected
-  --verdict <clean|findings_present|blocked>
+  --verdict <clean|findings_present|blocked>   Optional when --findings-ledger
+                                            carries the consolidator's
+                                            overallVerdict (the durable
+                                            ledger written by
+                                            write-gate-findings-log.mjs from
+                                            consolidate-fanin.mjs's
+                                            --ledger-out): derived from it by
+                                            default, a matching explicit value
+                                            is accepted, a contradicting one is
+                                            REFUSED (#1616,
+                                            GATE-COMMENT-VERDICT-VALUES).
+                                            Required otherwise.
   --findings-summary <text>                 Findings summary as a single argument
                                             (use --findings-file for multi-line)
   --findings-file <path>                    Read findings summary from file;
@@ -565,8 +576,20 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
   }
+  // --verdict is OPTIONAL when --findings-ledger is present: the consolidator's
+  // computed `overallVerdict` (threaded into the durable ledger by
+  // write-gate-findings-log.mjs from consolidate-fanin.mjs's --ledger-out) is
+  // the source of truth, so the caller need not pass --verdict at all — it is
+  // derived by default and a contradicting explicit value is refused at
+  // enforcement time (#1616). The requirement is deferred to runtime
+  // (upsertCheckpointVerdict) so a ledger whose `overallVerdict` is absent
+  // (a legacy/inline ledger) still requires an explicit --verdict there.
+  if (options.findingsLedger) {
+    const vIdx = missing.indexOf("verdict");
+    if (vIdx !== -1) missing.splice(vIdx, 1);
+  }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict, --findings-summary (or --findings-file or --findings-json), and --next-action");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action");
   }
   // Contract (skills/copilot-pr-followup/SKILL.md): inline runs MUST pass
   // --inline-reason. Inline is the default mode, so a complete call that resolves
@@ -1584,6 +1607,46 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.findingsSeverityCounts && typeof options.findingsSeverityCounts === "object") {
     options.findingsSeverityCounts = normalizeSeverityCounts(options.findingsSeverityCounts);
   }
+  // Verdict consistency enforcement (#1616): when --findings-ledger is present
+  // and carries the consolidator's computed `overallVerdict` (threaded from
+  // consolidate-fanin.mjs's --ledger-out via write-gate-findings-log.mjs), the
+  // posted --verdict MUST agree with it. The consolidator already computed the
+  // verdict from the round's findings and the gate's blockCleanOnFindingSeverities
+  // — re-deriving or hand-picking a different value is the defect this guards
+  // against. Loaded here (before the clean-verdict guard) so the resolved
+  // verdict drives every downstream guard; reused by the withheld-tier
+  // coverage check and resolveFindingSurface so the file is read once.
+  let preloadedFindingsLedger;
+  if (options.findingsLedger) {
+    preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+  }
+  if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
+    const ledgerVerdict = preloadedFindingsLedger.overallVerdict;
+    if (options.verdict === undefined) {
+      // Derive: the caller need not pass --verdict at all when the ledger
+      // carries the consolidator's verdict (#1616 AC: "passing no --verdict
+      // is valid and correct").
+      options.verdict = ledgerVerdict;
+    } else if (options.verdict !== ledgerVerdict) {
+      // Refuse the contradiction, naming both values and the head, citing the
+      // rule whose meaning the consolidator's computation already implements.
+      // No override flag (#1616 AC): a round whose verdict genuinely differs
+      // from the computed one is a consolidator bug to fix, not an operator
+      // decision to override.
+      throw new Error(
+        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}). The verdict must match the fan-in consolidator's computed value — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain; "findings_present" = the gate found issues at blocking severities. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or post the matching verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+      );
+    }
+    // else: a matching explicit --verdict is accepted unchanged.
+  } else if (options.verdict === undefined) {
+    // --findings-ledger absent OR present without overallVerdict (a legacy/
+    // inline ledger): --verdict is still required. The parser allows omitting
+    // it only when --findings-ledger is present, so reach this with a ledger
+    // that carries no overallVerdict.
+    throw new Error(
+      `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
+    );
+  }
   if (
     options.verdict === "clean"
     && activeGateConfig.blockCleanOnFindingSeverities
@@ -1683,10 +1746,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
-  // Populated by the withheld-tier branch below when it loads --findings-ledger
-  // to prove angle coverage, and reused by resolveFindingSurface further down
-  // so the same ledger file is never read from disk twice for one round.
-  let preloadedFindingsLedger;
+  // Populated early (above) whenever --findings-ledger is present, so the
+  // consolidator's `overallVerdict` can resolve/refuse the posted --verdict
+  // BEFORE the clean-verdict guard runs, and reused by the withheld-tier
+  // coverage check and resolveFindingSurface so the same ledger file is never
+  // read from disk twice for one round.
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
   // per-angle results (structured, or the withheld branch's ledger provenance)
   // must cover every configured mandatory angle, and (default) must not name
@@ -1744,7 +1808,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
             );
           }
         } else {
-          preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+          // Reuse the ledger loaded early for verdict enforcement (#1616) —
+          // only load here if it was not (defensive; options.findingsLedger
+          // truthy at this point means the early load already populated it).
+          preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
           const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
           if (consistencyErr && mandatoryAngles.length > 0) {
             throw new Error(

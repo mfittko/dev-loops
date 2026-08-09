@@ -285,14 +285,18 @@ test("consolidateGateFanin writes --out as the nested findingsJson shape", async
   );
 });
 
-test("consolidateGateFanin writes --ledger-out as the flat findings shape (the --findings-file input write-gate-findings-log.mjs/post-gate-findings.mjs accept)", async () => {
+test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings } wrapper write-gate-findings-log.mjs/post-gate-findings.mjs accept", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
     async (dir) => {
       const ledgerPath = path.join(dir, "out", "ledger.json");
       const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.deepEqual(written, result.findings);
+      // --ledger-out carries the consolidator's computed overallVerdict
+      // alongside the flat findings, so it flows downstream to the durable
+      // ledger (and upsert-checkpoint-verdict.mjs's enforcement) without an
+      // orchestrator hand-off (#1616).
+      assert.deepEqual(written, { overallVerdict: result.overallVerdict, findings: result.findings });
       assert.equal(result.findings.length, 1);
     },
   );
@@ -418,7 +422,7 @@ test("consolidateGateFanin rejects --out === --ledger-out even when the CLI pars
       // The ledger must still be intact on disk, not deleted by the rm() the
       // guard exists to prevent from ever running against it.
       const written = JSON.parse(await readFile(samePath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -437,7 +441,7 @@ test("consolidateGateFanin rejects a --out that is a symlink alias of --ledger-o
         /resolve to the same file/,
       );
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -1711,9 +1715,9 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // normalizes to the canonical output vocabulary.
     assert.deepEqual(result.severityCounts, { high: 1, medium: totalFindings - 2, low: 1, question: 0, nit: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.deepEqual(writtenLedger, result.findings);
-    assert.equal(writtenLedger.length, totalFindings);
-    const pinnedLedgerEntry = writtenLedger.find((f) => f.summary === PINNED_SUMMARY);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
+    assert.equal(writtenLedger.findings.length, totalFindings);
+    const pinnedLedgerEntry = writtenLedger.findings.find((f) => f.summary === PINNED_SUMMARY);
     assert.ok(pinnedLedgerEntry, "the ledger must carry the exact, un-shrunk original summary text");
     assert.equal(pinnedLedgerEntry.angle, MIXED_ANGLE);
 
@@ -2168,8 +2172,8 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
 
     // The ledger is still written in full regardless.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
-    assert.deepEqual(writtenLedger, result.findings);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
   });
 });
 
@@ -2244,7 +2248,7 @@ test("a withheld-tier round still writes a complete ledger when --out is an exis
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
 
@@ -2265,7 +2269,7 @@ test("a marker-tier round still writes a complete ledger when --out's parent dir
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
 

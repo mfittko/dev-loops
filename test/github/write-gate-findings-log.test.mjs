@@ -1316,3 +1316,71 @@ test("a legacy defer-severity finding normalizes to low in the written log", asy
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// #1616: write-gate-findings-log threads the consolidator's computed
+// overallVerdict (carried in consolidate-fanin.mjs's --ledger-out wrapper
+// `{ overallVerdict, findings }`) into the durable ledger, so
+// upsert-checkpoint-verdict.mjs can enforce verdict consistency against the
+// value the fan-in actually computed — not whatever a caller hand-passed as
+// --verdict. A bare-array input (legacy/hand-authored) leaves overallVerdict
+// absent and writes byte-identically to before.
+test("#1616: writeGateFindingsLog persists overallVerdict from the {overallVerdict,findings} wrapper", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-"));
+  try {
+    const findings = [{ severity: "must-fix", angle: "scope", summary: "blocking finding" }];
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify({ overallVerdict: "findings_present", findings }),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.overallVerdict, "findings_present");
+    assert.equal(parsed.findings.length, 1);
+    assert.equal(parsed.findings[0].severity, "high"); // "must-fix" normalizes to canonical "high"
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-bad-"));
+  try {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: "bogus", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      /"overallVerdict" must be one of: clean, findings_present, or blocked/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: writeGateFindingsLog omits overallVerdict for a bare-array input (legacy unchanged)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-absent-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "clean",
+      findings: JSON.stringify([]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.ok(!("overallVerdict" in parsed), "a bare-array input must not synthesize an overallVerdict");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

@@ -700,10 +700,12 @@ verdict; omitting it falls back to the shipped `["high"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
-included — plus the flat ledger shape (written to `--ledger-out <path>`) —
-the exact `--findings-file` input `write-gate-findings-log.mjs` and
-`post-gate-findings.mjs` accept, so neither tool needs an improvised
-`--jq`/`node -e` extraction step to materialize it — the severity counts, and
+included — plus the `{ overallVerdict, findings }` wrapper (written to
+`--ledger-out <path>`) — the exact `--findings-file` input
+`write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former
+threads `overallVerdict` into the durable ledger for verdict-consistency
+enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
+an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,
 `severityCounts` (the true, unbudgeted totals), and the `out`/`ledgerOut` paths
@@ -1082,11 +1084,18 @@ node scripts/github/write-gate-findings-log.mjs \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
-`--findings-file` reads the same JSON array from a file (identical validation) —
+`--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
-`--ledger-out <path>` writes exactly this shape — pass that path straight to
-`--findings-file` on both tools, no hand extraction. A finding with severity
+`--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
+that path straight to `--findings-file` on both tools, no hand extraction.
+`write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the
+consolidator's computed verdict) into the durable ledger, so
+`upsert-checkpoint-verdict.mjs` enforces verdict consistency against it (#1616,
+`GATE-COMMENT-VERDICT-VALUES`): a `--verdict` that contradicts the ledger's
+`overallVerdict` is refused, and when the ledger carries `overallVerdict` the
+verdict is derived from it by default (passing no `--verdict` is valid).
+`post-gate-findings.mjs` unwraps and ignores `overallVerdict`. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools. A
 `question` finding with no `disposition` is derived the same way: `needs-answer`
