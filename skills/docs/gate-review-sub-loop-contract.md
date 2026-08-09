@@ -691,7 +691,9 @@ sentinels, or a sentinel count short of the dispatch units the conductor spawned
 MUST stop the pass rather than proceed to consolidation. The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
 context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
-count; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+count; when Phase 1.2 carry-forward carried angles, pass the dispatch-unit count
+over the plan's FRESH angles, since `pendingGroups` includes carried angles and
+would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
 the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
 dispatch; NOT the per-angle artifact count, which would false-fail every grouped
 round).

@@ -162,12 +162,17 @@ Optional:
                                  deterministic regardless of the CLI's invocation directory
   --expected-dispatch-units <n>  The number of fresh dispatch units the conductor spawned reviewers for
                                  this round (groups for grouped dispatch; angle count for per-angle
-                                 dispatch — write-gate-context.mjs's fanout.wavePlan/pendingGroups
-                                 length). When given alongside --head-sha, the fan-in fails closed
+                                 dispatch — write-gate-context.mjs's fanout.pendingGroups.length when
+                                 no Phase 1.2 carry-forward ran; when carry-forward carried angles,
+                                 pass the dispatch-unit count over the plan's FRESH angles —
+                                 fanout.pendingGroups includes carried angles and would overcount).
+                                 When given alongside --head-sha, the fan-in fails closed
                                  (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
                                  for the head is SHORT of it — a dispatched reviewer never ran the
                                  fresh-context guard. Optional; when omitted the count check is skipped
-                                 (the hash checks still run). Grouped dispatch writes one sentinel per
+                                 (the hash checks AC1/AC2 still run). NOT fanout.wavePlan.length (that
+                                 is the WAVE count, typically 1) and NOT the per-angle artifact count,
+                                 which would false-fail every grouped round. Grouped dispatch writes one sentinel per
                                  GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
                                  artifact count — comparing against the angle count would false-fail
                                  every grouped round.
