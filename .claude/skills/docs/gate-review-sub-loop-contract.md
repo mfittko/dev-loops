@@ -650,8 +650,8 @@ differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
 the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
---reason "<why>" [--findings-dir <round artifacts dir>]` (`--head-sha` is the FULL 40-char
-SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
+--reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`
+(`--head-sha` is the FULL 40-char SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
 (and, when given, the round's findings-artifacts directory) into an audited retirement
 directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
 other gate's live round at the same head is never touched), so a
@@ -660,7 +660,13 @@ one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (na
 command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
 never retires as a side effect. The caller MUST pass `--findings-dir` whenever the retired
 round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
-silently mix into the new round's fan-in; retiring them is the explicit discard. The
+silently mix into the new round's fan-in; retiring them is the explicit discard. This is
+now ENFORCED, not just advised (#1626): when `--findings-dir` is omitted and
+`--no-findings-artifacts` is not set, retirement REFUSES if the canonical per-angle findings
+directory for this gate+head (`tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/`, the path
+`write-gate-context.mjs` / `consolidate-fanin.mjs` use) exists — its artifacts would stay
+LIVE. `--repo` + `--pr` name that canonical path for the check; `--no-findings-artifacts` is
+the explicit opt-out (the operator accepts any live-artifact risk). The
 retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
 into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
 one-hash-per-round invariant covers only artifacts its own reviewers wrote). The
@@ -670,7 +676,9 @@ re-seed the fresh fan-out at the same head via `GATE-EXEC-ANGLE-CARRY-FORWARD` e
 never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
 `verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
 never reads, and sentinels of one LIVE round that disagree still fail closed. A gate+head
-with no sentinels and no `--findings-dir` retires as a no-op.
+with no sentinels and no canonical artifacts dir retires as a no-op; the canonical-dir
+check still runs first (pass `--repo`/`--pr` so it can verify no artifacts exist, or
+`--no-findings-artifacts` to opt out).
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
