@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveRefinementConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -1249,6 +1250,68 @@ export function buildCoordinationEvaluatorInput({
   };
 }
 
+// Post-time fan-out evidence enforcement. `detect-checkpoint-evidence.mjs`
+// already enforces gates.requireFanoutEvidence reactively at the pre-merge
+// check; this refuses an inline verdict at the PRODUCE step instead, before it
+// is ever posted as visible PR evidence, by reusing the exact merge-time
+// acceptance predicate (buildFanoutEnforcement + evaluateInlineFanoutMode) —
+// never mirroring the threshold/label/scope logic — so the two boundaries
+// cannot drift apart. Applies to every verdict value (clean/findings_present/
+// blocked): mode qualification does not depend on the conclusion being
+// recorded. Throws when the candidate does not qualify; resolves silently
+// otherwise (fanout_fanin candidates, light-mode-accepted inline candidates,
+// and any candidate while requireFanoutEvidence is off).
+async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, config }, { env, ghCommand, repoRoot, runChild }) {
+  let hasFullLabel = false;
+  let baseRef = null;
+  // Light-mode facts only matter for an inline candidate under active
+  // enforcement; fetched lazily so a fanout_fanin post (the common path) pays
+  // no extra gh call, and so does an inline post once light mode itself is
+  // off (no facts could ever change the outcome).
+  if (executionMode === "inline_single_agent" && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null) {
+    try {
+      const prFacts = await runGhJson(
+        ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefOid,labels"],
+        { env, ghCommand, runChild },
+      );
+      baseRef = typeof prFacts?.baseRefOid === "string" && prFacts.baseRefOid.trim().length > 0
+        ? prFacts.baseRefOid.trim()
+        : null;
+      hasFullLabel = Array.isArray(prFacts?.labels)
+        && prFacts.labels.some((label) => (typeof label === "string" ? label : label?.name) === GATE_FULL_LABEL);
+    } catch {
+      // Fail CLOSED: without the label/base facts an inline verdict cannot be
+      // safely accepted — baseRef stays null, so scope re-derivation below is
+      // skipped and the light-mode carve-out cannot apply.
+    }
+  }
+  // A candidate marker describing the verdict ABOUT TO BE POSTED — no comment
+  // exists yet, so this is shaped exactly like a posted marker
+  // (buildFanoutEnforcement only reads .visible/.executionMode/.inlineReason/
+  // .headSha off it). The other gate is marked invisible so only the gate
+  // actually being posted is evaluated this call.
+  const candidateMarker = { visible: true, executionMode, inlineReason: inlineReason ?? null, headSha };
+  const inactiveMarker = { visible: false };
+  const fanoutEnforcement = await buildFanoutEnforcement({
+    repo,
+    pr,
+    currentHeadSha: headSha,
+    draftGateMarker: gate === "draft_gate" ? candidateMarker : inactiveMarker,
+    preApprovalGateMarker: gate === "pre_approval_gate" ? candidateMarker : inactiveMarker,
+    config,
+    cwd: repoRoot,
+    hasFullLabel,
+    baseRef,
+  });
+  if (!fanoutEnforcement.required) return;
+  for (const gateResult of fanoutEnforcement.gates) {
+    const modeFailure = evaluateInlineFanoutMode(gateResult, fanoutEnforcement);
+    if (modeFailure) {
+      throw new Error(`Cannot post a ${executionMode} verdict for ${repo}#${pr} ${gate}: ${modeFailure}`);
+    }
+  }
+}
+
 /**
  * Resolve this round's finding surface from `--findings-ledger`: the round
  * number, the fingerprint-suppressed candidate set, and its split into inline
@@ -1491,6 +1554,22 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (gateActionForbidden) {
     throw new Error(buildGateEntryRefusalError({ options, coordination }));
   }
+  // Post-time fan-out evidence enforcement: refuse an under-qualified inline
+  // verdict here, before it is posted, for every verdict value. No override
+  // flag — requireFanoutEvidence: false is the only opt-out, and that is
+  // already handled inside buildFanoutEnforcement.
+  await enforcePostTimeFanoutMode(
+    {
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      inlineReason: options.inlineReason,
+      headSha: canonicalHeadSha,
+      config,
+    },
+    { env, ghCommand, repoRoot, runChild },
+  );
   const activeGateConfig = options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig;
   // Legacy config spellings ("defer") compare against the same canonical
   // vocabulary as the normalized counts keys.

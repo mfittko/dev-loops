@@ -83,7 +83,7 @@ Contract:
 - rejects `--ready` before invoking `gh`; use `gh pr ready` later after draft-gate approval
 - forwards every other argument to `gh pr create` unchanged and in order
 - preserves the underlying `gh pr create` stdout, stderr, and exit code without wrapping success output
-- stays intentionally narrow: this is the prevention layer for draft-first creation, while `scripts/github/reconcile-draft-gate.mjs` remains the separate recovery path for already-open non-draft PRs
+- stays intentionally narrow: this is the prevention layer for draft-first creation, while `scripts/github/reconcile-draft-gate.mjs` remains the separate recovery path for already-open non-draft PRs — that recovery only completes for a PR under the light-mode threshold (it posts an inline verdict); a larger PR must convert to draft and run the real fan-out gate instead
 
 Failure behavior:
 - wrapper-owned validation failures emit `{ "ok": false, "error": "...", "usage": "..." }` on stderr and exit non-zero

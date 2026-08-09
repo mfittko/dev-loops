@@ -1212,26 +1212,26 @@ resolvable thread through which the standard fix loop could otherwise close it.
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the tier-4/withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the tier-4/withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA. Enforcement runs at **both** boundaries, sharing one acceptance predicate (`evaluateInlineFanoutMode`, `detect-checkpoint-evidence.mjs`) so the two can never drift: the **produce step** (`upsert-checkpoint-verdict.mjs`) refuses to record an under-qualified `inline_single_agent` verdict for a required gate BEFORE it is ever posted — for every verdict value (`clean`, `findings_present`, `blocked`), since mode qualification does not depend on the conclusion — and the **pre-merge evidence check** (`buildPreMergeGateCheck`) remains the fail-closed net for a required gate otherwise (e.g. a verdict posted before enforcement existed, or a hand-edited comment). Repos can opt out with `gates.requireFanoutEvidence: false`; there is no per-post override. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 
 `lightMode` (`localImplementation.lightMode`, #1043) collapses the gate fan-out to a
 single `inline_single_agent` check for genuinely small changes. Because
-`requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, the pre-merge
-evidence check (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`) is
-**light-mode-aware** (#1174): it accepts a required gate's `inline_single_agent` verdict
-**only** when **all** of the following hold, and **fails closed** on any one that does
-not — leaving today's rejection byte-identical:
+`requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, both enforcement
+boundaries are **light-mode-aware** (#1174) through the one shared predicate: they accept
+a required gate's `inline_single_agent` verdict **only** when **all** of the following
+hold, and **fail closed** on any one that does not — leaving today's rejection
+byte-identical:
 
 - `localImplementation.lightMode.enabled` is `true` in config;
-- the reviewed head's scope is **re-derived fail-closed** at merge time via
-  `detectMergeBaseScope` (the three-dot merge-base diff, `git diff <base>...<head>`) and
-  is genuinely under the configured `maxFiles`/`maxLines`. This is deliberately NOT the
-  two-dot `detectScope` that `resolve-gate-dispatch` uses at dispatch time: the merge-time
-  check re-derives against the merge base so a non-fast-forward advance cannot understate
-  scope. If scope cannot be derived (missing base ref, git failure), the inline verdict is
-  rejected;
+- the reviewed head's scope is **re-derived fail-closed** — at post time against the
+  PR's current base ref, and again at merge time — via `detectMergeBaseScope` (the
+  three-dot merge-base diff, `git diff <base>...<head>`) and is genuinely under the
+  configured `maxFiles`/`maxLines`. This is deliberately NOT the two-dot `detectScope`
+  that `resolve-gate-dispatch` uses at dispatch time: re-deriving against the merge base
+  means a non-fast-forward advance cannot understate scope. If scope cannot be derived
+  (missing base ref, git failure), the inline verdict is rejected;
 - the PR carries **no `gate:full` label** (the label always forces the full fan-out —
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.
