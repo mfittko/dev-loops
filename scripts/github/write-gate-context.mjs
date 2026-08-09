@@ -443,6 +443,73 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
 }
 
 /**
+ * Build the deterministic per-angle findings-artifact directory a gate-review
+ * fan-out writes to (one `<angle>.json` per angle). Mirrors the path
+ * `consolidate-fanin.mjs` reads from, so producer and consumer agree.
+ * Exported for reuse by the same-head skip-completed resume scan.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative directory path
+ */
+export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-reviews", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}`);
+}
+
+/**
+ * #1507 AC3 — same-head skip-completed resume. Scan the per-angle findings
+ * directory for this head and return the angle names that already have a CLEAN
+ * artifact stamped for this head. The preflight excludes groups whose angles are
+ * all in this set, so a later session re-running the fan-out at the same head
+ * dispatches only the shortfall (the groups not yet complete) instead of
+ * restarting. A missing/empty directory (first round, or no prior partial run)
+ * yields `[]` — the preflight then demands the full dispatch as before.
+ *
+ * Best-effort and fail-OPEN to `[]`: a read/parse error never blocks the gate
+ * (the preflight proceeds with the full plan; the only consequence is re-review
+ * of angles that were already complete — wasteful, not incorrect). This mirrors
+ * the head-stamp compare `consolidate-fanin.mjs` uses (trim+lowercase).
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {Promise<string[]>} angle names with a clean artifact at this head
+ */
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const dir = buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot });
+  const want = String(headSha).trim().toLowerCase();
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const completed = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
+      if (typeof parsed.angle === "string" && parsed.angle.length > 0) completed.push(parsed.angle);
+    }
+  }
+  return completed;
+}
+
+/**
  * Validate the non-repo path components (gate, pr, headSha) that are
  * interpolated into a filesystem path which is later `path.resolve()`d and
  * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
@@ -1486,10 +1553,10 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null }} [options]
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object }}
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string> }} [options]
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
@@ -1498,8 +1565,14 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
-  const preflight = reviewerBudgetPreflight(groups, availableReviewers);
-  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent, preflight };
+  // `completedAngles` (angles with a clean artifact already stamped at this
+  // head) drives the same-head skip-completed resume (#1507 AC3): groups whose
+  // angles are all complete are excluded from `preflight.requiredReviewers` and
+  // from `pendingGroups`, so the conductor dispatches only the shortfall.
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles });
+  const pendingGroups = preflight.pendingGroups;
+  const pendingWavePlan = scheduleFanoutWaves(pendingGroups, maxConcurrent);
+  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent, preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -2044,7 +2117,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null });
+  // #1507 AC3: same-head skip-completed resume — angles with a clean artifact
+  // already stamped at this head are excluded from `preflight.requiredReviewers`
+  // and from `pendingGroups`, so a later session dispatches only the shortfall.
+  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles });
 
   const writeResult = await writeGateContext(
     {
@@ -2474,7 +2551,10 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers });
+      // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
+      // at this head are excluded from the required count + pending plan).
+      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

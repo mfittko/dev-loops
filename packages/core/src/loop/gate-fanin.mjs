@@ -106,27 +106,50 @@ export function backoffMaxConcurrent(maxConcurrent) {
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
- * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null }}
+ * @param {{ completedAngles?: Iterable<string> }} [options] — `completedAngles`: angle names that
+ *   already have a clean per-angle findings artifact stamped for THIS head. A dispatch unit (group)
+ *   whose angles are ALL complete is excluded from the required count and from `pendingGroups`, so a
+ *   later session resumes the fan-out instead of restarting it (issue #1507 AC3): it re-runs the
+ *   preflight and dispatches only the groups not already complete at this head.
+ * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[] }}
  */
-export function reviewerBudgetPreflight(dispatchGroups, availableReviewers) {
+export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles } = {}) {
   const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
+  const completedSet = new Set(
+    Array.isArray(completedAngles)
+      ? completedAngles
+      : completedAngles == null
+        ? []
+        : [...completedAngles],
+  );
+  // #1507 AC3: resume instead of restart. One reviewer per dispatch unit (a
+  // group of N angles is one reviewer's scoped dispatch — see resolveFanoutGroups /
+  // countFreshDispatchUnits), but a group already COMPLETE at this head — every
+  // one of its angles has a clean artifact stamped for this head — needs no
+  // reviewer and is excluded from the required count and the pending plan. The
+  // conductor dispatches only `pendingGroups`.
+  const groupIsComplete = (g) =>
+    Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => completedSet.has(a));
+  const pendingGroups = groups.filter((g) => !groupIsComplete(g));
+  const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's
-  // scoped dispatch (see resolveFanoutGroups / countFreshDispatchUnits), so the
-  // reviewer count is the dispatch-unit count, not the angle count.
-  const requiredReviewers = groups.length;
+  // scoped dispatch, so the reviewer count is the pending dispatch-unit count,
+  // not the raw angle count.
+  const requiredReviewers = pendingGroups.length;
   const verdict = null;
   const executionMode = null;
+  const resume = { pendingGroups, skippedGroups, completedAngles: [...completedSet] };
   if (typeof availableReviewers !== "number" || !Number.isFinite(availableReviewers)) {
-    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode };
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode, ...resume };
   }
   // A negative/over-spent budget clamps to 0 (budget exhausted → shortfall for
   // any non-empty round); a fractional budget truncates to the integer floor.
   const available = Math.max(0, Math.trunc(availableReviewers));
   if (requiredReviewers === 0) {
-    return { ok: true, dispatch: true, requiredReviewers: 0, availableReviewers: available, shortfall: null, reason: "no_reviewers_needed", verdict, executionMode };
+    return { ok: true, dispatch: true, requiredReviewers: 0, availableReviewers: available, shortfall: null, reason: "no_reviewers_needed", verdict, executionMode, ...resume };
   }
   if (available >= requiredReviewers) {
-    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: available, shortfall: null, reason: "budget_sufficient", verdict, executionMode };
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: available, shortfall: null, reason: "budget_sufficient", verdict, executionMode, ...resume };
   }
   return {
     ok: false,
@@ -137,6 +160,7 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers) {
     reason: "budget_shortfall",
     verdict,
     executionMode,
+    ...resume,
   };
 }
 

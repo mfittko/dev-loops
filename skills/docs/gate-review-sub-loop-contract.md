@@ -315,12 +315,23 @@ exposes and passes it through). The result shape:
   count the budget is short) → the conductor MUST NOT spawn any reviewer. Zero
   reviewers are dispatched. The shortfall is a recorded, resumable state: the
   gate-context artifact itself is the record (it carries the dispatch plan +
-  preflight for this head), and completed per-angle artifacts from prior heads
-  stay valid for their head via the carry-forward seam (see [Angle carry-forward
-  (fail-closed)](#angle-carry-forward-fail-closed)), so a later session resumes
-  the fan-out instead of restarting it — it re-runs `write-gate-context`
+  preflight for this head), and completed per-angle artifacts stay valid for
+  their head. A later session resumes the fan-out instead of restarting it:
+  `reviewerBudgetPreflight` receives `completedAngles` — the angle names that
+  already have a CLEAN findings artifact stamped for this head (scanned by
+  `write-gate-context.mjs` from the per-angle reviews directory) — and excludes
+  any dispatch unit whose angles are ALL complete from `requiredReviewers` and
+  from `preflight.pendingGroups`. The conductor dispatches only `pendingGroups`
+  (the shortfall), never re-dispatching a group already complete at this head,
+  so a session that exhausted its reviewer budget mid-fan-out picks up exactly
+  where it stopped once a later session re-runs `write-gate-context`
   (`--available-reviewers` with the now-refreshed budget) at the same head and
-  dispatches the same plan when the preflight clears.
+  the preflight clears. Completed per-angle artifacts from PRIOR heads stay
+  valid for their head via the carry-forward seam (see [Angle carry-forward
+  (fail-closed)](#angle-carry-forward-fail-closed)); the same-head resume above
+  is a separate, preflight-driven mechanism — carry-forward is a head-bump
+  provenance check and intentionally fails closed when `--prev-head` equals
+  `--head-sha` (it is never the same-head resume path).
 
 **No new gate-exemption path (#1507 AC4).** A budget shortfall is NOT a
 verdict: `preflight.verdict` and `preflight.executionMode` are always `null`. A

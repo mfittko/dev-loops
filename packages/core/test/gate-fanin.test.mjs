@@ -874,4 +874,73 @@ describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fa
     assert.equal(ok.verdict, null);
     assert.equal(ok.executionMode, null);
   });
+
+  describe("#1507 AC3 — same-head skip-completed resume (resumes instead of restarts)", () => {
+    const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+    test("a group whose angles are ALL complete is excluded from requiredReviewers and pendingGroups", () => {
+      // 3 dispatch units; group:b already has a clean artifact at this head.
+      const groups = units(["a", "b", "c"]);
+      const preflight = reviewerBudgetPreflight(groups, 10, { completedAngles: ["b"] });
+      assert.equal(preflight.requiredReviewers, 2); // only a + c remain
+      assert.deepEqual(
+        preflight.pendingGroups.map((g) => g.name),
+        ["a", "c"],
+      );
+      assert.deepEqual(
+        preflight.skippedGroups.map((g) => g.name),
+        ["b"],
+      );
+      assert.deepEqual(preflight.completedAngles, ["b"]);
+      assert.equal(preflight.dispatch, true);
+      assert.equal(preflight.shortfall, null);
+    });
+
+    test("a multi-angle group is skipped only when EVERY angle is complete", () => {
+      // group:a+b is NOT skipped when only one of its angles is complete — the
+      // reviewer still needs to run for the incomplete angle.
+      const groups = [{ name: "group:a+b", angles: ["a", "b"] }, { name: "c", angles: ["c"] }];
+      const partial = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"] });
+      assert.equal(partial.requiredReviewers, 2); // group:a+b still needs a reviewer (b incomplete) + c
+      assert.deepEqual(partial.pendingGroups.map((g) => g.name), ["group:a+b", "c"]);
+      assert.deepEqual(partial.skippedGroups, []);
+      const full = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a", "b"] });
+      assert.equal(full.requiredReviewers, 1); // only c remains
+      assert.deepEqual(full.pendingGroups.map((g) => g.name), ["c"]);
+      assert.deepEqual(full.skippedGroups.map((g) => g.name), ["group:a+b"]);
+    });
+
+    test("all groups complete at this head → zero reviewers, resume finished, still no clean/inline verdict", () => {
+      const groups = units(["a", "b"]);
+      const preflight = reviewerBudgetPreflight(groups, 0, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.requiredReviewers, 0);
+      assert.equal(preflight.dispatch, true); // proceed to fan-in of existing artifacts
+      assert.equal(preflight.shortfall, null);
+      assert.equal(preflight.reason, "no_reviewers_needed");
+      assert.deepEqual(preflight.pendingGroups, []);
+      assert.deepEqual(preflight.skippedGroups.map((g) => g.name), ["a", "b"]);
+      // AC4 still holds: a resume-finished state is not a verdict.
+      assert.equal(preflight.verdict, null);
+      assert.equal(preflight.executionMode, null);
+    });
+
+    test("shortfall is computed against the REMAINING (incomplete) groups, not the full plan", () => {
+      // 5 units; 2 already complete → only 3 remain. A budget of 1 is short by 2,
+      // not by 4 — the later session resumes by dispatching only the 3 pending.
+      const groups = units(["a", "b", "c", "d", "e"]);
+      const preflight = reviewerBudgetPreflight(groups, 1, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.dispatch, false);
+      assert.equal(preflight.requiredReviewers, 3);
+      assert.equal(preflight.shortfall, 2);
+      assert.equal(preflight.reason, "budget_shortfall");
+      assert.deepEqual(preflight.pendingGroups.map((g) => g.name), ["c", "d", "e"]);
+    });
+
+    test("omitting completedAngles is backward-compatible (full dispatch, nothing skipped)", () => {
+      const groups = units(["a", "b"]);
+      assert.equal(reviewerBudgetPreflight(groups, 10).requiredReviewers, 2);
+      assert.equal(reviewerBudgetPreflight(groups, 10, {}).requiredReviewers, 2);
+      assert.deepEqual(reviewerBudgetPreflight(groups, 10).skippedGroups, []);
+    });
+  });
 });
