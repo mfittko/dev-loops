@@ -144,6 +144,52 @@ test("create-pr --issue <n> refuses a mismatched closing reference before invoki
   }
 });
 
+test("create-pr --issue refuses a valueless bare --issue token (#1626)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-bare-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #1",
+      "--issue",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /--issue must be a positive integer/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --issue refuses non-numeric / zero / negative values (#1626)", async () => {
+  for (const bad of ["abc", "0", "-1", "1.5"]) {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-invalid-"));
+    try {
+      const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+      const result = await runNode([
+        "--repo", "owner/repo",
+        "--assignee", "@me",
+        "--base", "main",
+        "--head", "feature",
+        "--title", "Add feature",
+        "--body", `Closes #1`,
+        "--issue", bad,
+      ], { env });
+      assert.equal(result.code, 1, `expected exit 1 for --issue ${bad}`);
+      assert.match(JSON.parse(result.stderr).error, /--issue must be a positive integer/);
+      assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("create-pr --issue accepts the =inline form", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-inline-"));
   try {

@@ -188,6 +188,22 @@ test("CLI entry point: help, arg errors, success, and invalid --jq map to the do
   });
 });
 
+test("parseRetireGateRoundArgs rejects a non-positive-integer --pr (#1626)", () => {
+  for (const bad of ["abc", "0", "-1", "1.5"]) {
+    assert.throws(
+      () => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "x", "--pr", bad]),
+      /--pr .*positive integer/,
+    );
+  }
+});
+
+test("parseRetireGateRoundArgs rejects an empty --repo (#1626)", () => {
+  assert.throws(
+    () => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "x", "--repo", ""]),
+    /--repo requires a non-empty/,
+  );
+});
+
 test("retireGateRound re-validates headSha and reason at the function boundary", async () => {
   await withTmpRoot(async (tmpRoot) => {
     await assert.rejects(

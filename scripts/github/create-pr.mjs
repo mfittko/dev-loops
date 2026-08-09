@@ -198,11 +198,15 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // #1626: --issue <n> declares the tracker link this PR closes. Consumed by
   // the wrapper (never forwarded to gh) and makes the closing reference
   // (`Closes #n` / `Fixes #n`) a MUST — missing or mismatched is refused.
+  const issuePresent = argv.some((token) => ISSUE_FLAG_PATTERN.test(token));
   const issueRaw = getFlagValue(argv, ISSUE_FLAG_PATTERN);
   let issue = null;
-  if (issueRaw !== null) {
-    if (!/^\d+$/.test(issueRaw) || Number(issueRaw) <= 0) {
-      throw parseError(`--issue must be a positive integer (got ${JSON.stringify(issueRaw)})`);
+  if (issuePresent) {
+    // A present-but-valueless --issue (bare trailing token, or `--issue=`)
+    // MUST refuse rather than silently skip enforcement — silently dropping
+    // the MUST on a malformed invocation is the exact gap this PR closes.
+    if (issueRaw === null || !/^\d+$/.test(issueRaw) || Number(issueRaw) <= 0) {
+      throw parseError(`--issue must be a positive integer (got ${JSON.stringify(issueRaw ?? "<no value>")})`);
     }
     issue = Number(issueRaw);
   }
