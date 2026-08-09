@@ -4982,6 +4982,94 @@ test("upsert-checkpoint-verdict posts an inline verdict without restriction when
   }
 });
 
+// A gate:full label always forces the full fan-out — scope is not even measured
+// — so an inline verdict for a gate:full-labelled PR is refused at post time
+// even when the merge-base scope would otherwise be under threshold. Kills the
+// mutation `hasFullLabel = false` on the post-time light-facts fetch (the label
+// is a first-class term of the acceptance predicate, resolved from the PR only
+// at post time on this boundary).
+test("upsert-checkpoint-verdict refuses an inline verdict at post time when the PR carries the gate:full label", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-gatefull-refuse-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      // light-facts fetch returns a gate:full label: the carve-out cannot apply
+      // (the label always forces fan-out, scope is not even measured).
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[{"name":"gate:full"}]}\n' },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "gate:full forces fan-out",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// pre_approval_gate is the gate that actually gates merge, so post-time
+// enforcement must cover it too — not only draft_gate. Every existing post-time
+// test posts --gate draft_gate; this kills the mutation that removes the
+// pre_approval_gate candidate marker entirely (the `gate === "pre_approval_gate"
+// ? candidateMarker : inactiveMarker` branch), which would silently exempt the
+// most important surface from enforcement.
+test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at post time under requireFanoutEvidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-preapproval-refuse-"));
+  try {
+    // lightMode disabled so the lazy light-facts fetch does not fire (no fetch
+    // needed to prove the marker is evaluated); requireFanoutEvidence on so the
+    // pre_approval_gate candidate marker IS evaluated by enforcePostTimeFanoutMode.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: false",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        // A Copilot review on the current head lets the coordination state allow
+        // pre_approval_gate entry (otherwise gateActionForbidden refuses with
+        // "request Copilot review before any pre_approval_gate entry" before
+        // enforcement runs — which would not exercise the marker path).
+        reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
+      }),
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "merge ready",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "single-agent pre-approval",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // One shared fixture, driven through BOTH the post-time refusal
 // (upsertCheckpointVerdict, via enforcePostTimeFanoutMode) and the merge-time
 // rejection (buildFanoutEnforcement + evaluateInlineFanoutMode, exactly as
