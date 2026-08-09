@@ -131,6 +131,13 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       // upsert-checkpoint-verdict.mjs) from the installed tarball — no other
       // entry above loads that import graph.
       ["gate", "consolidate-fanin", "--help"],
+      // Regression for issue #1555: `queue sync-status` loads
+      // scripts/projects/sync-item-status.mjs -> @dev-loops/core/loop/queue-board-sync
+      // -> ../projects/move-queue-item.mjs. The pre-#1243 import escaped to
+      // ../../../../scripts/projects/move-queue-item.mjs and ERR_MODULE_NOT_FOUND'd
+      // from the installed tarball; this --help resolves that full chain from the
+      // installed tree so a re-escape is caught here, not in a published release.
+      ["queue", "sync-status", "--help"],
     ]) {
       // execFileSync throws on a non-zero exit, so reaching here already means
       // the command succeeded; additionally assert it printed real help (a
