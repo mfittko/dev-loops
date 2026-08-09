@@ -20,7 +20,7 @@ retroactively record clean \`draft_gate\` evidence.
 Converts the PR to draft, validates the head, posts a reconciling clean
 draft_gate comment, then marks the PR ready for review again.
 This posts an INLINE verdict — it can only reconcile a PR that qualifies for
-the light-mode carve-out (gates.localImplementation.lightMode, under
+the light-mode carve-out (localImplementation.lightMode, under
 maxFiles/maxLines, no gate:full label). When gates.requireFanoutEvidence is
 enabled and the PR is over that threshold, the reconciling post is refused:
 convert the PR to draft and run the real gate with --execution-mode
