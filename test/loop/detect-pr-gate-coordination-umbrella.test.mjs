@@ -177,7 +177,19 @@ test("loadRefinementArtifact: no linked issue on draft PR → missing (unchanged
   assert.equal(result.linkedIssue, null);
 });
 
-test("loadRefinementArtifact: non-draft open PR is informational only (does not fetch)", async () => {
+// #1621: a ready (non-draft) open PR is NOT subject to the draft-gate
+// refinement ENFORCEMENT (status stays "unknown", finding null), but the linked
+// issue's AC data is now fetched so the pre_approval_gate unticked-AC
+// precondition has the spec-of-record to read. The refinement check itself
+// stays informational only — it does not block a ready PR on a missing artifact.
+test("loadRefinementArtifact: non-draft open PR stays informational (unknown) but fetches the spec-of-record AC data (#1621)", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ready-ac-"));
+  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {
+    1052: UNREFINED_BODY,
+    1019: REFINED_BODY,
+    1050: REFINED_BODY,
+  });
   const result = await loadRefinementArtifact(
     {
       repo: "owner/repo",
@@ -186,10 +198,37 @@ test("loadRefinementArtifact: non-draft open PR is informational only (does not 
       prClosed: false,
       prMerged: false,
     },
-    // ghCommand deliberately invalid: informational branch must not shell out.
-    { env: process.env, ghCommand: "/nonexistent/gh" },
+    { env, ghCommand },
   );
   assert.equal(result.status, "unknown");
-  assert.equal(result.linkedIssue, null);
+  assert.equal(result.finding, null);
+  assert.equal(result._onlyEnforcedWhenDraft, false);
   assert.deepEqual(result.linkedIssues, [1052, 1019, 1050]);
+  assert.deepEqual(result.refinedIssues, [1019, 1050]);
+  assert.equal(result.linkedIssue, 1019);
+  // The first PRESENT artifact's AC data is surfaced for the pre_approval_gate
+  // unticked-AC check; REFINED_BODY's three ACs are all unticked `- [ ]`.
+  assert.deepEqual(result.acItems, ["first", "second", "third"]);
+  assert.deepEqual(result.uncheckedAcItems, ["first", "second", "third"]);
+  assert.match(result.reason, /informational only/);
+});
+
+test("loadRefinementArtifact: non-draft open PR with a fetch failure stays unknown with unavailable AC data (#1621)", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "ready-ac-fail-"));
+  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {});
+  const result = await loadRefinementArtifact(
+    {
+      repo: "owner/repo",
+      prData: { closingIssuesReferences: [{ number: 1052 }] },
+      prDraft: false,
+      prClosed: false,
+      prMerged: false,
+    },
+    { env, ghCommand },
+  );
+  assert.equal(result.status, "unknown");
+  assert.equal(result.finding, undefined);
+  assert.deepEqual(result.linkedIssues, [1052]);
+  assert.match(result.reason, /Failed to fetch issue bodies/);
 });

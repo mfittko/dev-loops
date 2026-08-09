@@ -7,6 +7,7 @@ import {
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
   extractChecklistItems,
+  extractUncheckedChecklistItems,
   parseMarkdownSections,
   summarizeRefinementGateCheck,
 } from "../src/loop/issue-refinement-artifact.mjs";
@@ -234,4 +235,48 @@ test("decideEnqueueRefinementGate enqueues an un-refined issue when the target i
   const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: false, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
+});
+
+// ---- #1621: checkbox tick-state parsing (unticked AC precondition) ----
+
+test("#1621 extractUncheckedChecklistItems returns only unticked checkbox text", () => {
+  const body = [
+    "## Acceptance criteria",
+    "- [ ] first unticked",
+    "- [x] a ticked one",
+    "- [X] another ticked (capital)",
+    "- [ ] second unticked",
+    "- plain bullet (no checkbox)",
+    "",
+    "```",
+    "- [ ] fenced unticked must not count",
+    "```",
+  ].join("\n");
+  assert.deepEqual(extractUncheckedChecklistItems(body), ["first unticked", "second unticked"]);
+  // extractChecklistItems stays text-only (all non-empty items, both tick states + bullets).
+  assert.deepEqual(extractChecklistItems(body), [
+    "first unticked", "a ticked one", "another ticked (capital)", "second unticked", "plain bullet (no checkbox)",
+  ]);
+});
+
+test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside acItems", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: [
+      "## Acceptance criteria", "",
+      "- [x] done AC", "- [ ] open AC one", "- [ ] open AC two", "",
+      "## Definition of done", "",
+      "- [ ] tests pass",
+    ].join("\n"),
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.deepEqual(artifact.acItems, ["done AC", "open AC one", "open AC two"]);
+  // Only unticked AC checkboxes (NOT the DoD item, NOT the ticked AC).
+  assert.deepEqual(artifact.uncheckedAcItems, ["open AC one", "open AC two"]);
+});
+
+test("#1621 detectIssueRefinementArtifact carries uncheckedAcItems: [] when all ACs are ticked", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: ["## Acceptance criteria", "", "- [x] done one", "- [x] done two"].join("\n"),
+  });
+  assert.deepEqual(artifact.uncheckedAcItems, []);
 });

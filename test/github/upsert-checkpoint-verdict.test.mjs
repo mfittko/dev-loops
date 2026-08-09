@@ -4723,7 +4723,10 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
       headSha: "abc1234000000000000000000000000000000000",
       verdict: "findings_present",
       findingsSummary: "ignored in structured mode",
-      nextAction: "fix",
+      // #1621: a non-clean draft_gate verdict's next action is DERIVED (not the
+      // caller's "fix"), so the pre-rendered body must carry the derived value
+      // to stay a same-head noop.
+      nextAction: "stay draft and fix",
       executionMode: "fanout_fanin",
       structuredFindings,
       findingsSeverityCounts,
@@ -5924,5 +5927,545 @@ test("#1616: upsert fails closed when --verdict is omitted but the ledger carrie
     assert.match(error.error, /carries no overallVerdict/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---- #1621: verdict-write preconditions (next-action derivation, gate:full
+// light escalation, unticked-AC refusal) ----
+
+const GATE_FULL_HEAD = "abc1234000000000000000000000000000000000";
+const UNTICKED_AC_ISSUE_BODY = [
+  "## Summary", "", "Fix the gate.", "",
+  "## Acceptance criteria", "",
+  "- [ ] first AC is still open", "- [x] second AC is done", "- [ ] third AC remains", "",
+  "## Definition of done", "",
+  "- [ ] tests pass", "",
+].join("\n");
+const TICKED_AC_ISSUE_BODY = [
+  "## Acceptance criteria", "",
+  "- [x] first AC is done", "- [x] second AC is done", "",
+].join("\n");
+
+// Permissive dispatch runChild for #1621 AC tests: answers every gh call the
+// coordination + post path makes from arg shape (not fragile sequential order),
+// captures calls, and is configurable for draft/ready, linked-issue bodies,
+// and gate:full label creation/addition.
+function makeAcRunChild({
+  headSha = GATE_FULL_HEAD,
+  isDraft = true,
+  closingIssues = [],
+  issueBodyByNumber = {},
+  reviews = [],
+  issueComments = [],
+  ciSuccess = true,
+} = {}) {
+  const calls = [];
+  const prJson = JSON.stringify({
+    number: 17, state: "OPEN", isDraft, headRefOid: headSha,
+    body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: closingIssues,
+    reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ciSuccess ? "SUCCESS" : "FAILURE", name: "ci" }],
+  }) + "\n";
+  const runChild = async (cmd, args = [], _env, _stdin = "") => {
+    calls.push({ command: cmd, args: [...args], stdinText: _stdin ?? "" });
+    if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
+    const a = args.join(" ");
+    // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
+    if (args[0] === "issue" && args[1] === "view") {
+      const issue = args[2];
+      const body = issueBodyByNumber[issue];
+      if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
+      return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
+    }
+    // gate:full label resource creation (idempotent).
+    if (args[0] === "label" && args[1] === "create") return { code: 0, stdout: "", stderr: "" };
+    // add gate:full label to the PR.
+    if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-label")) return { code: 0, stdout: "", stderr: "" };
+    if (a.includes("pulls/17/reviews") && a.includes("-X POST")) return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
+    if (a.includes("-X") && (a.includes("PUT") || a.includes("PATCH")) && a.includes("pulls/17/reviews")) return { code: 0, stdout: '{"id":91,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-91"}\n', stderr: "" };
+    if (a.includes("-X") && a.includes("PATCH") && a.includes("issues/comments")) return { code: 0, stdout: '{"id":91,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-91"}\n', stderr: "" };
+    if (a.includes("requested_reviewers")) return { code: 0, stdout: '{"users":[],"teams":[]}\n', stderr: "" };
+    if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
+    if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n", stderr: "" };
+    if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments) + "\n", stderr: "" };
+    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    // Dispatch pr view --json <fields> on the exact --json field list, so the
+    // full pr view (which lists `files` among many fields) is not mistaken for
+    // the dedicated `--json files` files-list call.
+    const jsonIdx = args.indexOf("--json");
+    const jsonFields = jsonIdx >= 0 ? args[jsonIdx + 1] : "";
+    if (jsonFields === "baseRefOid,labels") return { code: 0, stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n', stderr: "" };
+    if (jsonFields === "headRefOid") return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
+    if (jsonFields === "files") return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
+    if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: prJson, stderr: "" };
+    return { code: 0, stdout: "{}\n", stderr: "" };
+  };
+  return { runChild, calls };
+}
+
+// Stage a repoRoot whose .devloops mirrors the real config with
+// requireFanoutEvidence flipped to the requested value (true for the
+// gate:full-label test, false otherwise).
+async function stageConfigRepoRoot(requireFanoutEvidence) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1621-cfg-"));
+  const real = await readFile(path.resolve(".devloops"), "utf8");
+  // Patch the gates.requireFanoutEvidence value regardless of the literal's
+  // current spelling (true/false/absent) so a future default flip does not make
+  // this a silent no-op. Always asserts the replacement landed so a missing key
+  // fails loudly instead of leaking the real (fan-out-on) config into a test
+  // that expects fan-out off.
+  const want = `requireFanoutEvidence: ${requireFanoutEvidence}`;
+  const patched = real.replace(/requireFanoutEvidence:\s*(true|false)\b/, want);
+  // Fails loudly if the key is absent (no patch landed) instead of silently
+  // leaking the real (fan-out-on) config into a fan-out-off test.
+  assert.ok(patched.includes(want), `patched .devloops must carry ${want}`);
+  await writeFile(path.join(dir, ".devloops"), patched, "utf8");
+  return dir;
+}
+
+test("#1621: a findings_present draft_gate verdict DERIVES the next action, ignoring an advancing caller value", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // An ADVANCING next action the caller tried to splice in.
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* merge/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a findings_present pre_approval_gate verdict derives 'rerun gate' (not the caller's advancing action)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({
+      isDraft: false,
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // An ADVANCING action the caller tried to splice into a non-clean verdict.
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* await final human approval/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: same-head idempotency holds after next-action derivation (a rerun is a noop, not a spurious re-post)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const draftGateComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "a high-severity finding remains", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [draftGateComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // Caller passes an advancing action; it is derived away to the same value
+      // the existing comment already carries.
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "noop");
+    // No re-post occurred.
+    assert.equal(calls.filter((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")).length, 0);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline round that surfaces a blocking finding applies the gate:full label and the post still succeeds", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline blocking finding",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    // The post succeeded.
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    // The label resource was created and added to the PR.
+    const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
+    assert.ok(labelCreate, "gate:full label resource was created");
+    const addLabel = calls.find((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full"));
+    assert.ok(addLabel, "gate:full label was added to the PR");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline CLEAN round does NOT apply the gate:full label", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline clean",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, undefined);
+    assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is REFUSED while the spec-of-record has unticked AC items", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: UNTICKED_AC_ISSUE_BODY },
+      // 5 Copilot reviews on prior heads → round-cap reached; draft_gate clean
+      // comment on the current head; zero unresolved threads; CI green.
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
+        assert.match(err.message, /unticked Acceptance criteria/);
+        assert.match(err.message, /first AC is still open/);
+        assert.match(err.message, /ACCEPT-CRITERIA-VERIFY-AND-REFLECT/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is ALLOWED when the spec-of-record ACs are all ticked", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gate, "pre_approval_gate");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is ALLOWED when there is no linked issue (no spec-of-record ACs to check)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [],
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a blocked draft_gate verdict DERIVES 'stay draft and fix' (not the caller's advancing action)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "blocked", findingsSummary: "gate could not complete",
+      // The AC names both findings_present AND blocked; the blocked path must
+      // also derive, not accept the caller's advancing action.
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 blocked test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* mark ready for review/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline round whose --findings-json carries a blocking-severity finding applies gate:full (structuredFindings branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const findingsPath = path.join(repoRoot, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "a real defect", file: "src/x.mjs", line: 1 }] },
+      { angle: "coverage", verdict: "clean", findings: [] },
+    ]), "utf8");
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsJson: findingsPath,
+      findingsSummary: "ignored in structured mode",
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline structured #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a blocking-severity finding with a resolved disposition does NOT escalate gate:full (structuredFindings branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const findingsPath = path.join(repoRoot, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "clean", findings: [{ severity: "high", summary: "already resolved", file: "src/x.mjs", line: 1, disposition: "operator_acknowledged" }] },
+    ]), "utf8");
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsJson: findingsPath,
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      findingsSummary: "ignored in structured mode",
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline structured resolved #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, undefined);
+    assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline UPDATE round that surfaces a blocking finding applies gate:full on the updated path", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    // An existing same-head comment that differs (older summary) → forces an update, not a noop.
+    const existingComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "OLDER summary now changed", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 update test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T19:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [existingComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 update test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "updated");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added on update");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an umbrella ready PR whose first-linked issue is ticked but a sibling has unticked ACs is REFUSED clean", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }, { number: 901 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY, 901: UNTICKED_AC_ISSUE_BODY },
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 umbrella test",
+      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
+        assert.match(err.message, /ACCEPT-CRITERIA-VERIFY-AND-REFLECT/);
+        // The message names BOTH linked issues (no misattribution to the ticked first-linked #900).
+        assert.match(err.message, /#900, #901/);
+        // The unticked ACs come from sibling issue #901.
+        assert.match(err.message, /first AC is still open/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline free-text-only findings_present round (no structuredFindings, no counts) escalates gate:full via the verdict fallback", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      // No findingsJson, no findingsSeverityCounts — exercises roundCarriesBlockingSeverity's
+      // `return verdict === "findings_present"` free-text fallback branch.
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline free-text #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added via free-text fallback");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: gate:full label is re-applied on a noop rerun (idempotent retry after a prior label failure)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const draftGateComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "a high-severity finding remains", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 noop-retry test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [draftGateComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 noop-retry test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "noop");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label re-applied on noop");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

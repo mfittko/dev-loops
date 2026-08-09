@@ -375,6 +375,33 @@ async function resolveNoIssueRefinementArtifact(body) {
   };
 }
 
+// Fetch and evaluate every closing-referenced issue. An umbrella PR's scope is
+// refined if AT LEAST ONE linked issue carries a refinement artifact. Shared
+// by the draft/closed/merged enforcement path AND the ready-PR informational
+// path so the two never drift on what counts as a fetched/evaluated artifact.
+// The ready-PR path reuses the SAME evaluated results to surface the
+// spec-of-record's AC data (acItems/uncheckedAcItems) for the pre_approval_gate
+// unticked-AC check (#1621) without re-deriving it.
+async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild }) {
+  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  const evaluated = [];
+  for (const issue of linkedIssues) {
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+    if (body === null) {
+      evaluated.push({ issue, artifact: null });
+      continue;
+    }
+    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
+  }
+  const refinedIssues = evaluated
+    .filter((e) => e.artifact && e.artifact.hasACs === true)
+    .map((e) => e.issue);
+  const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
+  const firstFetched = evaluated.find((e) => e.artifact !== null);
+  const allFailed = evaluated.every((e) => e.artifact === null);
+  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed };
+}
+
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
@@ -390,31 +417,67 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     };
   }
   const scopeLabel = linkedIssues.map((n) => `#${n}`).join(", ");
+  const isUmbrella = linkedIssues.length > 1;
   if (!prDraft && !prClosed && !prMerged) {
-    return {
+    // Ready PR: the refinement ENFORCEMENT (missing_refinement_artifact) is a
+    // draft-gate boundary, so the status stays "unknown" and no finding is
+    // recorded. But the linked issue's AC data is also the spec-of-record for
+    // the pre_approval_gate unticked-AC check (ACCEPT-CRITERIA-VERIFY-AND-
+    // REFLECT, #1621), so fetch the linked issue bodies and surface
+    // acItems/uncheckedAcItems alongside the unknown status — the
+    // pre_approval_gate refuses a `clean` verdict while unticked AC items
+    // remain, reading exactly this field. `_onlyEnforcedWhenDraft: false`
+    // keeps the draft-gate missing-enforcement off for ready PRs.
+    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+      await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
+    const base = {
       status: "unknown",
       linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : null,
       linkedIssues,
-      reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement check is a draft-gate boundary and the PR is not draft, so the check is informational only and does not fetch issue bodies.`,
+      specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
+      refinedIssues,
+      _onlyEnforcedWhenDraft: false,
+    };
+    if (allFailed) {
+      return {
+        ...base,
+        reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
+      };
+    }
+    const a = (firstPresent ?? firstFetched).artifact;
+    // Union the spec-of-record AC data across EVERY successfully-fetched linked
+    // issue, not just the first present one: an umbrella PR closing several
+    // refined issues must refuse a clean pre_approval_gate while ANY sibling
+    // issue still has an unticked AC (ACCEPT-CRITERIA-VERIFY-AND-REFLECT, #1621).
+    // Reporting only the first-present issue's uncheckedAcItems would let a PR
+    // whose first-linked issue is fully ticked pass clean while a later sibling
+    // still has open ACs. The first-present artifact still anchors the single-
+    // value fields (source/sections/linkedDoc/reason) for shape parity with the
+    // draft branch.
+    const fetchedArtifacts = evaluated
+      .filter((e) => e.artifact !== null)
+      .map((e) => e.artifact);
+    // Dedupe by text (an AC repeating across sibling issues is the same AC) so an
+    // umbrella PR with two issues sharing an AC wording does not double-count.
+    const dedupe = (arr) => [...new Set(arr)];
+    const unionUnchecked = dedupe(fetchedArtifacts.flatMap((x) => x.uncheckedAcItems ?? []));
+    const unionAc = dedupe(fetchedArtifacts.flatMap((x) => x.acItems ?? []));
+    const unionDod = dedupe(fetchedArtifacts.flatMap((x) => x.dodItems ?? []));
+    return {
+      ...base,
+      linkedIssue: (firstPresent ?? firstFetched).issue,
+      source: a.source,
+      acItems: unionAc.length > 0 ? unionAc : a.acItems,
+      uncheckedAcItems: unionUnchecked,
+      dodItems: unionDod.length > 0 ? unionDod : a.dodItems,
+      sections: a.sections,
+      linkedDoc: a.linkedDoc,
+      reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft, so the check is informational only. The spec-of-record AC data is fetched for the pre_approval_gate unticked-AC precondition (#1621).`,
+      finding: null,
     };
   }
-  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-  // Fetch and evaluate every closing-referenced issue. An umbrella PR's scope
-  // is refined if AT LEAST ONE linked issue carries a refinement artifact.
-  const evaluated = [];
-  for (const issue of linkedIssues) {
-    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-    if (body === null) {
-      evaluated.push({ issue, artifact: null });
-      continue;
-    }
-    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
-  }
-  const refinedIssues = evaluated
-    .filter((e) => e.artifact && e.artifact.hasACs === true)
-    .map((e) => e.issue);
-  const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
-  const isUmbrella = linkedIssues.length > 1;
+  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+    await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
 
   if (firstPresent) {
     const a = firstPresent.artifact;
@@ -426,6 +489,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       refinedIssues,
       source: a.source,
       acItems: a.acItems,
+      uncheckedAcItems: a.uncheckedAcItems ?? [],
       dodItems: a.dodItems,
       sections: a.sections,
       linkedDoc: a.linkedDoc,
@@ -442,7 +506,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // Note: `finding`/`missing` here is only enforced by the gate when the PR is
   // draft (`_onlyEnforcedWhenDraft`); closed/merged PRs surface it informationally.
   const firstEvaluated = evaluated[0];
-  const allFailed = evaluated.every((e) => e.artifact === null);
   if (allFailed) {
     // Preserve prior single-issue semantics: draft → missing, else unknown.
     if (prDraft) {
@@ -468,7 +531,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // refined. Report against the first successfully-fetched (non-null) issue —
   // `evaluated[0]` may be a failed fetch: it still retains its `issue` field but
   // has `artifact: null` (body fetch / artifact detection failed for that issue).
-  const firstFetched = evaluated.find((e) => e.artifact !== null);
   const first = firstFetched.artifact;
   return {
     status: "missing",
@@ -478,6 +540,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     refinedIssues,
     source: first.source,
     acItems: first.acItems,
+    uncheckedAcItems: first.uncheckedAcItems ?? [],
     dodItems: first.dodItems,
     sections: first.sections,
     linkedDoc: first.linkedDoc,
