@@ -682,17 +682,29 @@ check still runs first (pass `--repo`/`--pr` so it can verify no artifacts exist
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
-Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`
-(the `GATE-EXEC-BRIEFING-PREFIX` enforcement check); a fail-closed result (mismatched or
-missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
-than proceed to consolidation.
+Before consolidating, `consolidate-fanin.mjs` itself runs
+`scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>` (the
+`GATE-EXEC-BRIEFING-PREFIX` enforcement check, #1618 — the verifier previously
+had ZERO callers, so the rule's own cited proof was never invoked); a fail-closed
+result (mismatched or missing prefix hashes across this round's reviewer
+sentinels, or a sentinel count short of the dispatch units the conductor spawned)
+MUST stop the pass rather than proceed to consolidation. The conductor supplies
+the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
+context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
+count; when Phase 1.2 carry-forward carried angles, pass the dispatch-unit count
+over the plan's FRESH angles, since `pendingGroups` includes carried angles and
+would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
+dispatch; NOT the per-angle artifact count, which would false-fail every grouped
+round).
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
-  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
+  --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
+  --out <path> --ledger-out <path> \
   --jq '.severityCounts' \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
