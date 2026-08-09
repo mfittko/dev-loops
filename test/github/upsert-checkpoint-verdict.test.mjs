@@ -5697,7 +5697,6 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
 // ---------------------------------------------------------------------------
 
 const VERDICT_LEDGER_HEAD = "abc1234000000000000000000000000000000000";
-const GREEN_CI = [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }];
 
 async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate" }) {
   const ledgerPath = path.join(tempDir, "verdict-ledger.json");

@@ -394,7 +394,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const verdict = normalizeVerdict(overallVerdict);
     if (!verdict) {
       throw parseError(
-        `--findings-file "${options.findingsFile ?? "<inline>"}" wrapper "overallVerdict" must be one of: clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdict)})`,
+        `--${options.findingsFile ? "findings-file" : "findings"} "${options.findingsFile ?? "<inline>"}" wrapper "overallVerdict" must be one of: clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdict)})`,
       );
     }
     normalizedOverallVerdict = verdict;
