@@ -2641,6 +2641,29 @@ test("renderGateReviewCommentBody reports an unparseable finding explicitly in t
   assert.match(body, /1 angle reviewed; 2 findings/);
 });
 
+test("renderGateReviewCommentBody's reduced per-angle digest (finding-surface round) counts unparseable findings (#1526)", () => {
+  // A round that carries its own finding surface (nonLocatableFindings is an array)
+  // renders the REDUCED per-angle digest (renderAngleVerdictDigest) instead of the
+  // full breakdown. That reduced digest must also count unparseable findings, or a
+  // finding-surface round would undercount the very findings it surfaces.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+    // An array (even empty) selects the reduced digest path.
+    nonLocatableFindings: [],
+  });
+  // 1 parseable + 1 unparseable = 2 findings in the reduced one-liner.
+  assert.match(body, /`correctness` → `findings_present` \(2 findings\)/);
+});
+
 test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-blocking-"));
   try {
