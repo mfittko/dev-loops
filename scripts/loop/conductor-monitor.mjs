@@ -33,7 +33,7 @@ Success output (stdout, JSON):
     "repo": "owner/repo",
     "checkedAt": "...",
     "prCount": 2,
-    "queueStatus": "queue_complete"|"monitoring"|"attention_needed",
+    "queueStatus": "queue_complete"|"monitoring"|"attention_needed"|"github_degraded",
     "needsAttentionCount": 1,
     "summary": {
       "waiting": 1,

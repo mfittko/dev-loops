@@ -25,8 +25,10 @@ function githubStatusFetch(status) {
   fn.calls = calls;
   return fn;
 }
-const healthyGithubStatusFetch = githubStatusFetch("good");
-const degradedGithubStatusFetch = githubStatusFetch("minor");
+// Plain (non-spy) defaults for the ~30 auto-resume tests that don't assert on
+// call counts — avoids shared mutable state accumulating across tests.
+const healthyGithubStatusFetch = async () => ({ ok: true, status: 200, json: async () => ({ status: "good" }) });
+const degradedGithubStatusFetch = async () => ({ ok: true, status: 200, json: async () => ({ status: "minor" }) });
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
