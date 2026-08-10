@@ -124,6 +124,16 @@ function validateFindingsArray(parsed, flagLabel) {
       // through, so the two can never restate it out of sync.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
+    // Preserve the judge's relevance-based dispositions (#1525) so the
+    // rendered findings comment shows what was consciously not acted on and
+    // why — without this the judge suffix in renderFindingsCommentBody is
+    // unreachable dead code.
+    if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
+      entry.judgeDisposition = f.judgeDisposition.trim();
+    }
+    if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
+      entry.judgeRationale = f.judgeRationale.trim();
+    }
     return entry;
   });
 }
@@ -359,6 +369,11 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       // the single-line Markdown list item.
       const summary = sanitizeInline(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
+      // Judge relevance-based disposition (#1525) — shows what was consciously
+      // not acted on and why, alongside the severity-derived disposition.
+      const judgeSuffix = finding.judgeDisposition
+        ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_`
+        : "";
       // angle is a code/label literal → backticks; summary is prose. angle is
       // free text from a scoped-review agent and is rendered inside an inline
       // code span, so it must be sanitized too: an embedded backtick or newline
@@ -366,7 +381,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       // list item. Use sanitizeCodeSpan (backtick-stripping) since it lives
       // inside backticks, consistent with the file refs below.
       const angle = sanitizeCodeSpan(finding.angle);
-      lines.push(`- \`${angle}\`: ${summary}${dispositionSuffix}`);
+      lines.push(`- \`${angle}\`: ${summary}${dispositionSuffix}${judgeSuffix}`);
       if (Array.isArray(finding.files) && finding.files.length > 0) {
         // File refs go inside backticks; sanitize each so embedded whitespace,
         // newlines, or backticks can't break the single Markdown list item /

@@ -1405,3 +1405,46 @@ test("#1616: writeGateFindingsLog omits overallVerdict for a bare-array input (l
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// #1525: the --judge-verdict flag enriches findings with the judge agent's
+// relevance-based dispositions (act/defer/reject + rationale + follow-up
+// drafts) before writing the ledger, and records the scope-drift verdict.
+test("writeGateFindingsLog enriches findings from --judge-verdict and records scopeDrift (#1525)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-"));
+  try {
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha: "abc1234567890abcdef000000000000000000000",
+      scopeDrift: { verdict: "drift_detected", rationale: "diff adds a CLI flag not in any AC", driftedAreas: ["cli surface"] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+        { index: 1, disposition: "reject", rationale: "style churn excluded by non-goal 3", criterion: "Non-goal 3" },
+      ],
+    }), "utf8");
+
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "must-fix", angle: "correctness", summary: "null deref", disposition: "accepted-for-fix" },
+        { severity: "low", angle: "docs", summary: "rename variable", disposition: "deferred" },
+      ]),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+
+    assert.equal(result.ok, true);
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", "draft_gate-abc1234567890abcdef000000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+    assert.equal(parsed.findings[0].judgeRationale, "fixes the defect named in AC-1");
+    assert.equal(parsed.findings[1].judgeDisposition, "reject");
+    assert.equal(parsed.scopeDrift.verdict, "drift_detected");
+    assert.deepEqual(parsed.scopeDrift.driftedAreas, ["cli surface"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

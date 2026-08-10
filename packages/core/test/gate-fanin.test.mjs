@@ -18,6 +18,8 @@ import {
   backoffMaxConcurrent,
   reviewerBudgetPreflight,
   normalizeSeverity,
+  applyJudgeDispositions,
+  validateJudgeVerdict,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -942,5 +944,119 @@ describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fa
       assert.equal(reviewerBudgetPreflight(groups, 10, {}).requiredReviewers, 2);
       assert.deepEqual(reviewerBudgetPreflight(groups, 10).skippedGroups, []);
     });
+  });
+});
+
+// #1525: the judge agent's relevance-based dispositions (act/defer/reject) are
+// a separate axis from the severity-based disposition deriveDisposition owns.
+// applyJudgeDispositions is the pure merge seam that enriches the consolidated
+// findings with the judge's verdict so the ledger and posted comment carry what
+// was consciously not acted on and why.
+describe("applyJudgeDispositions (#1525)", () => {
+  const baseFindings = [
+    { severity: "high", angle: "correctness", summary: "null deref in parser", disposition: "accepted-for-fix", file: "src/parser.mjs", line: 42 },
+    { severity: "low", angle: "docs", summary: "rename variable for clarity", disposition: "deferred" },
+  ];
+
+  function judgeVerdict(dispositions, scopeDrift = { verdict: "within_scope", rationale: "diff matches the stated AC", driftedAreas: [] }) {
+    return { headSha: "abc123", scopeDrift, dispositions };
+  }
+
+  test("a finding acted on against a named criterion gets judgeDisposition act", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "fixes the null-deref named in AC criterion 1", criterion: "AC-1: parser must not crash on null input" },
+    ]);
+    const { findings, scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[0].judgeDisposition, "act");
+    assert.equal(findings[0].judgeRationale, "fixes the null-deref named in AC criterion 1");
+    assert.equal(findings[0].judgeCriterion, "AC-1: parser must not crash on null input");
+    // severity-based disposition stays intact (complementary, not replaced)
+    assert.equal(findings[0].disposition, "accepted-for-fix");
+    assert.equal(scopeDrift.verdict, "within_scope");
+  });
+
+  test("a finding rejected as out-of-scope against a named non-goal gets judgeDisposition reject", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope defect", criterion: "AC-1" },
+      { index: 1, disposition: "reject", rationale: "variable rename is a style preference; non-goal 3 excludes style churn from this PR", criterion: "Non-goal 3: no stylistic refactors" },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[1].judgeDisposition, "reject");
+    assert.equal(findings[1].judgeRationale, "variable rename is a style preference; non-goal 3 excludes style churn from this PR");
+    assert.equal(findings[1].judgeCriterion, "Non-goal 3: no stylistic refactors");
+    // no followUpDraft on a reject (reject is out-of-scope, not deferred work)
+    assert.equal(findings[1].followUpDraft, undefined);
+  });
+
+  test("a deferred finding carries a fileable follow-up draft (soft-cap contract)", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 1, disposition: "defer", rationale: "valid improvement but outside this PR's scope; track separately", criterion: "Non-goal 2: no broad refactor", followUpDraft: { title: "Rename parser variable for clarity", body: "## Summary\nRename the variable per the reviewer suggestion." } },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[1].judgeDisposition, "defer");
+    assert.deepEqual(findings[1].followUpDraft, { title: "Rename parser variable for clarity", body: "## Summary\nRename the variable per the reviewer suggestion." });
+  });
+
+  test("scope-drift verdict is raised when the diff exceeds the declared scope", () => {
+    const verdict = judgeVerdict(
+      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      { verdict: "drift_detected", rationale: "the diff adds a new CLI flag not in any acceptance criterion; criterion 4 limits scope to the parser", driftedAreas: ["cli surface"] },
+    );
+    const { scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(scopeDrift.verdict, "drift_detected");
+    assert.equal(scopeDrift.driftedAreas[0], "cli surface");
+  });
+
+  test("toFindingsLogShape carries judge fields through to the ledger shape", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 1, disposition: "defer", rationale: "deferred", criterion: "NG-2", followUpDraft: { title: "x", body: "y" } },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    const logShape = toFindingsLogShape(findings);
+    assert.equal(logShape[0].judgeDisposition, "act");
+    assert.equal(logShape[0].judgeRationale, "in-scope");
+    assert.equal(logShape[1].followUpDraft.title, "x");
+  });
+
+  test("fails closed on an out-of-range disposition index", () => {
+    const verdict = judgeVerdict([
+      { index: 5, disposition: "act", rationale: "x", criterion: "AC-1" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /out of range/);
+  });
+
+  test("fails closed on a malformed judge verdict (missing headSha)", () => {
+    assert.throws(() => applyJudgeDispositions(baseFindings, { scopeDrift: { verdict: "within_scope", rationale: "x", driftedAreas: [] }, dispositions: [] }), /headSha/);
+  });
+
+  test("fails closed when a defer disposition lacks a followUpDraft", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "defer", rationale: "deferred", criterion: "NG-2" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /followUpDraft.*defer/);
+  });
+
+  test("fails closed on a duplicate disposition index (one-per-finding contract)", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 0, disposition: "reject", rationale: "dup", criterion: "NG-2" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /duplicate.*one disposition per finding/);
+  });
+
+  test("fails closed on a non-string driftedAreas element", () => {
+    const verdict = judgeVerdict(
+      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      { verdict: "drift_detected", rationale: "x", driftedAreas: [42] },
+    );
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /driftedAreas.*non-empty string/);
+  });
+
+  test("no judge verdict enrichment leaves findings unchanged (toFindingsLogShape is additive)", () => {
+    const logShape = toFindingsLogShape(baseFindings);
+    assert.equal(logShape[0].judgeDisposition, undefined);
+    assert.equal(logShape[0].followUpDraft, undefined);
   });
 });

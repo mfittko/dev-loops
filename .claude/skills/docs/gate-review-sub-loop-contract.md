@@ -931,10 +931,80 @@ attempted. On `pre_approval_gate`, an unresolved review thread forbids the gate'
 actions, which is why that slot matters there; the same slot is kept for `draft_gate` too,
 for uniformity, even though the draft boundary does not carry that specific refusal.
 
+### Phase 3.5 — Judge: relevance disposition (#1525)
+
+<!-- rule: GATE-EXEC-JUDGE-PHASE -->
+`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), the
+conductor dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
+the linked issue's acceptance criteria, definition of done, and non-goals, the PR's declared
+scope, and the prior rounds' judge ledgers, and decides — per finding — whether this PR is
+the place to act on it. This is the relevance axis; it is distinct from and complementary
+to the severity-based disposition `deriveDisposition` owns (accepted-for-fix / deferred /
+needs-answer), which stays intact.
+
+**Inputs:** the consolidated disposition ledger (`consolidate-fanin`'s `{overallVerdict,
+findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, and the
+prior-round judge verdict artifacts for this gate.
+
+**Output:** the judge writes one verdict artifact to a deterministic path
+(`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`) — its only write.
+The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
+
+```json
+{
+  "headSha": "<sha>",
+  "scopeDrift": { "verdict": "within_scope|drift_detected", "rationale": "...", "driftedAreas": ["..."] },
+  "dispositions": [{ "index": 0, "disposition": "act|defer|reject", "rationale": "...", "criterion": "...", "followUpDraft": { "title": "...", "body": "..." } }]
+}
+```
+
+- `index` is the 0-based position of the finding in the consolidated ledger's `findings`
+  array. One disposition per finding.
+- `act` — in-scope for this PR; the fixer addresses it.
+- `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract).
+- `reject` — out-of-scope against a named non-goal or scope boundary; this PR is not the
+  place, and a follow-up is not warranted.
+- `rationale` MUST name the criterion, non-goal, or scope boundary the disposition turns on.
+- `scopeDrift.verdict` is the PR-as-a-whole scope-drift verdict, distinct from the
+  per-finding dispositions.
+
+**Merge seam.** The conductor enriches the consolidated findings with the judge's
+dispositions via `applyJudgeDispositions(findings, judgeVerdict)` (`@dev-loops/core/loop/gate-fanin`,
+pure, fail-closed on a malformed verdict or an out-of-range index), then writes the durable
+ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched findings carry
+`judgeDisposition` / `judgeRationale` / `judgeCriterion` / `followUpDraft` so the disposition
+ledger and the posted findings comment show what was consciously not acted on and why
+(`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
+
+<!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
+`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
+PR?); the fixer owns **reproduction** (does this finding reproduce / is it a real defect?).
+The fix pass (Phase 4) consumes **only the `act` list** and retains reproduction-based
+rejection — a finding that does not reproduce is dead regardless of what the judge decided —
+but stops being the actor that decides relevance. The judge does NOT soften `must-fix` on
+correctness grounds: a real defect stays a real defect; the judge decides *where* it is
+fixed, not *whether* it is real. When no judge verdict is present (a gate that has not yet
+wired the judge phase), the fixer falls back to the existing severity-based disposition.
+
+<!-- rule: GATE-EXEC-JUDGE-NOT-FRESH -->
+`GATE-EXEC-JUDGE-NOT-FRESH`: The judge is the one actor that must NOT be fresh-context per
+round. Reviewer fresh-context isolation (`GATE-EXEC-BUILD-ONCE-SEED`) is unchanged — the
+judge is a separate agent dispatched after fan-in, not a reviewer. The judge is the
+designated memory: it sees the round history precisely so it can notice accretion,
+self-renewing churn, or findings-about-a-fix. It is seeded with the conductor's accumulated
+state (prior-round ledgers, scope history) rather than a blank slate — the conductor hands
+it the prior-round judge verdict artifacts as an explicit input, so its memory is durable
+and auditable rather than implicit.
+
 ### Phase 4 — Fix
 
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
 
+- When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
+  — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding
+  that does not reproduce is dead regardless of the judge's verdict) but stops deciding
+  relevance (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). When no judge verdict is present, the fixer
+  falls back to the severity-based `blockCleanOnFindingSeverities` set below.
 - apply only the accepted narrow fixes on the same branch
 - do not broaden scope or touch unrelated files
 - run the smallest honest validation for the accepted fix scope
