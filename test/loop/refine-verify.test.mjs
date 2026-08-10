@@ -18,13 +18,14 @@ const cliPath = path.resolve("cli/index.mjs");
 const runVerify = (args = [], options = {}) => runNode(verifyScriptPath, args, options);
 const runCli = (args = [], options = {}) => runNode(cliPath, args, options);
 
-function buildBody({ scope, nonGoals = "", includeSections = true }) {
+function buildBody({ scope, nonGoals = "", includeSections = true, boundary }) {
   if (!includeSections) {
     return "## Scope\n- owns incomplete\n";
   }
+  const scopeLine = boundary ? `- ${boundary}` : `- ${scope}`;
   return [
     "## Scope",
-    `- ${scope}`,
+    scopeLine,
     "",
     "## Acceptance criteria",
     "- [ ] has acceptance checkbox",
@@ -47,9 +48,9 @@ function buildPassingTreePayload() {
   return {
     root: 1,
     issues: [
-      { number: 1, parentNumber: null, children: [2, 3], body: buildBody({ scope: "owns orchestration" }) },
-      { number: 2, parentNumber: 1, children: [], body: buildBody({ scope: "owns api", nonGoals: "- not ui -> #3" }) },
-      { number: 3, parentNumber: 1, children: [], body: buildBody({ scope: "owns ui" }) },
+      { number: 1, parentNumber: null, children: [2, 3], body: buildBody({ scope: "owns orchestration", boundary: "This issue owns orchestration. It does NOT own api (#2) or ui (#3)." }) },
+      { number: 2, parentNumber: 1, children: [], body: buildBody({ scope: "owns api", nonGoals: "- not ui -> #3", boundary: "This issue owns api. It does NOT own ui (#3)." }) },
+      { number: 3, parentNumber: 1, children: [], body: buildBody({ scope: "owns ui", boundary: "This issue owns ui. It does NOT own api (#2)." }) },
     ],
   };
 }
@@ -148,6 +149,154 @@ test("runRefinementCompletenessChecker flags missing checkbox and invalid matrix
   assert.ok(result.errors.some((entry) => entry.code === "invalid_ac_dod_matrix"));
 });
 
+function buildNoOwnershipBody() {
+  return [
+    "## Scope",
+    "- no ownership text here",
+    "",
+    "## Acceptance criteria",
+    "- [ ] has acceptance checkbox",
+    "",
+    "## Definition of done",
+    "- [ ] has done checklist",
+    "",
+    "## Non-goals",
+    "- not needed",
+    "",
+    "## AC / DoD matrix",
+    "| Item | Type |",
+    "|---|---|",
+    "| ac-1 | dod |",
+  ].join("\n");
+}
+
+test("runRefinementCompletenessChecker flags missing_scope_boundary when ownership prose is absent (AC1)", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [], body: buildNoOwnershipBody() },
+    ],
+  });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "missing_scope_boundary"));
+});
+
+test("runRefinementCompletenessChecker passes with a scope boundary and cross-checker runs against a non-empty claim set (AC2)", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3], body: buildBody({ scope: "owns parent", boundary: "This issue owns parent. It does NOT own shared (#2) or shared (#3)." }) },
+      { number: 2, parentNumber: 1, children: [], body: buildBody({ scope: "owns shared", boundary: "This issue owns shared. It does NOT own parent (#1)." }) },
+      { number: 3, parentNumber: 1, children: [], body: buildBody({ scope: "owns shared", boundary: "This issue owns shared. It does NOT own parent (#1)." }) },
+    ],
+  });
+  const completeness = runRefinementCompletenessChecker(tree);
+  assert.equal(completeness.ok, true, completeness.errors.map((e) => e.message).join("\n"));
+
+  const cross = runScopeBoundaryCrossChecker(tree);
+  assert.equal(cross.ok, false);
+  assert.ok(cross.errors.some((entry) => entry.code === "duplicate_ownership"));
+});
+
+test("runProseLinkageDetector flags duplicate_child_checklist when parent duplicates child checklists (AC3)", () => {
+  const body = [
+    ...buildBody({ scope: "owns parent", boundary: "This issue owns parent. It does NOT own api (#2) or ui (#3)." }).split("\n"),
+    "",
+    "## Acceptance criteria",
+    "- [ ] #2 implement api",
+    "- [ ] #3 implement ui",
+  ].join("\n");
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3], body },
+    ],
+  });
+  const result = runProseLinkageDetector(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "duplicate_child_checklist"));
+});
+
+test("runProseLinkageDetector passes a parent that merely links its children (AC4)", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3], body: buildBody({ scope: "owns parent", boundary: "This issue owns parent. It does NOT own api (#2) or ui (#3)." }) },
+    ],
+  });
+  const result = runProseLinkageDetector(tree);
+  assert.ok(!result.errors.some((entry) => entry.code === "duplicate_child_checklist"), result.errors.map((e) => e.message).join("\n"));
+});
+
+test("duplicate_child_checklist also fires on a checked child item", () => {
+  const body = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2).",
+    "",
+    "## Done",
+    "- [x] #2 api complete",
+  ].join("\n");
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2], body },
+    ],
+  });
+  const result = runProseLinkageDetector(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "duplicate_child_checklist"));
+});
+
+test("each refusal names the rule it upholds (AC5)", () => {
+  const noBoundaryTree = normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [], body: buildNoOwnershipBody() }],
+  });
+  const completeness = runRefinementCompletenessChecker(noBoundaryTree);
+  const missingBoundary = completeness.errors.find((entry) => entry.code === "missing_scope_boundary");
+  assert.ok(missingBoundary);
+  assert.match(missingBoundary.message, /EPIC-REFINEMENT-REQUIRED-CONTRACTS/);
+
+  const dupBody = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2) or ui (#3).",
+    "",
+    "## Acceptance criteria",
+    "- [ ] #2 implement api",
+    "- [ ] #3 implement ui",
+  ].join("\n");
+  const dupTree = normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [2, 3], body: dupBody }],
+  });
+  const linkage = runProseLinkageDetector(dupTree);
+  const dupChecklist = linkage.errors.find((entry) => entry.code === "duplicate_child_checklist");
+  assert.ok(dupChecklist);
+  assert.match(dupChecklist.message, /SUBISSUE-LEAN-BODY-NO-DUPLICATE/);
+});
+
+test("verify FAILS (no vacuous PASS) when ownership prose is absent (DoD regression)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-refine-vacuous-"));
+  try {
+    const inputPath = await writeFixture(tempDir, "tree.json", {
+      root: 1,
+      issues: [
+        { number: 1, children: [2, 3], body: buildNoOwnershipBody() },
+        { number: 2, parentNumber: 1, children: [], body: buildNoOwnershipBody() },
+        { number: 3, parentNumber: 1, children: [], body: buildNoOwnershipBody() },
+      ],
+    });
+    const result = await runVerify(["--input", inputPath, "--json"]);
+    assert.equal(result.code, 1, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.ok, false);
+    assert.ok(parsed.errors.some((entry) => entry.code === "missing_scope_boundary"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("runTreeIntegrityValidator detects orphans, cycles, and depth violations", () => {
   const tree = normalizeTreePayload({
     root: 1,
@@ -220,7 +369,7 @@ test("verify script online mode fetches tree via GitHub API", async () => {
     const { env } = await writeGhStub(tempDir, [
       {
         assertArgs: ["api", "repos/owner/repo/issues/1"],
-        stdout: `${JSON.stringify({ number: 1, title: "root", body: buildBody({ scope: "owns orchestration" }), state: "open" })}\n`,
+        stdout: `${JSON.stringify({ number: 1, title: "root", body: buildBody({ scope: "owns orchestration", boundary: "This issue owns orchestration. It does NOT own api (#2)." }), state: "open" })}\n`,
       },
       {
         assertArgs: ["api", "repos/owner/repo/issues/1/sub_issues"],
@@ -228,7 +377,7 @@ test("verify script online mode fetches tree via GitHub API", async () => {
       },
       {
         assertArgs: ["api", "repos/owner/repo/issues/2"],
-        stdout: `${JSON.stringify({ number: 2, title: "child", body: buildBody({ scope: "owns api" }), state: "open" })}\n`,
+        stdout: `${JSON.stringify({ number: 2, title: "child", body: buildBody({ scope: "owns api", boundary: "This issue owns api. It does NOT own orchestration (#1)." }), state: "open" })}\n`,
       },
       {
         assertArgs: ["api", "repos/owner/repo/issues/2/sub_issues"],
