@@ -1513,6 +1513,114 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
   }
 });
 
+test("detect-pr-gate-coordination-state auto-releases the runner-coordination lock at terminal stop boundaries (#1632)", async () => {
+  // A dev-loop run that reaches a gate-coordination terminal stop (approval
+  // checkpoint / merge-ready / done / blocked) must release its runner-coordination
+  // lock immediately so a fresh re-dispatch acquires the lock without a takeover.
+  // The Copilot-loop terminal release in `loop handoff` (#1128) only covers
+  // Copilot-loop terminal states; this covers the gate-coordination terminal stops
+  // the handoff release misses (e.g. an internal-only / local-impl PR stopped at the
+  // approval checkpoint without a terminal handoff).
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(releaseCalls.length, 1, "runner lock released exactly once at the terminal stop");
+    assert.equal(releaseCalls[0].repo, "owner/repo");
+    assert.equal(releaseCalls[0].pr, 10);
+    assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state does NOT release the runner-coordination lock at non-terminal boundaries (#1632)", async () => {
+  // A non-terminal gate boundary (e.g. draft gate needed) must keep the lock held —
+  // the run is still active and mid-gate.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-no-release-"));
+  try {
+    // A clean plan-file promotion body routes to the draft-gate boundary (non-terminal).
+    const cleanBody =
+      `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\n` +
+      "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- [ ] b\n";
+    const cleanEnv = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 11,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: cleanBody,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 11 },
+      buildMockRuntime(cleanEnv, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert.equal(
+      [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL, PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY, PR_CHECKPOINT_ACTION.REPORT_DONE, PR_CHECKPOINT_ACTION.REPORT_BLOCKED].includes(result.nextAction),
+      false,
+      "non-terminal boundary must not be a terminal stop action",
+    );
+    assert.equal(releaseCalls.length, 0, "runner lock NOT released at a non-terminal boundary");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: plan-file marker + bare linked-refinement-doc mention (no checklists) stays missing (fail closed)", async () => {
   // A crafted body pairs the plan-file promotion marker with a plain
   // `tmp/refinement/x.md` mention and zero AC/DoD checklist items. That mention
