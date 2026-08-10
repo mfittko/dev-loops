@@ -200,9 +200,12 @@ export function collectFingerprints(text, set) {
 // legacy spelling to its canonical name, it does not neutralize a hostile
 // character — so it is applied here in addition to, never instead of,
 // sanitizeInline.
-function renderFindingLine({ severity, angle, summary }) {
+function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
+  const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}`
+    : "";
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {

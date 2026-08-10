@@ -940,7 +940,11 @@ export function renderStructuredFindings(angles) {
       const dispositionSuffix = finding.disposition
         ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
         : "";
-      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}`);
+      // Judge relevance-based disposition (#1525).
+      const judgeSuffix = finding.judgeDisposition
+        ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
+        : "";
+      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}${judgeSuffix}`);
     }
     // A finding the normalizer could not interpret is reported explicitly as
     // unparseable — never dropped (#1526). Its severity (when readable) is
