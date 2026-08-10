@@ -184,7 +184,7 @@ function collapseToTarget(items) {
     const listed = items.map(describeItem).join(", ");
     return {
       ok: false,
-      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/loop-continue #N\`.`,
+      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/dev-loops:loop-continue #N\` (or \`/loop-continue #N\` in the dev-loops repo itself).`,
     };
   }
   return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };

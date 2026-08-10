@@ -692,7 +692,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   // copilot/external/reviewer-fixer follow-up strategies otherwise), then
   // enforce ownership — including the linked-issue foreign check — only when
   // that strategy is gated. A ui_review peek is exempt, so a reviewer can run
-  // `/loop-review-ui` against a PR (and its linked issue) they do not own.
+  // `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself)
+  // against a PR (and its linked issue) they do not own.
   // Bypassed (read-only inspection): skip enforcement entirely, mirroring the
   // --issue path above.
   if (!ownershipGateBypassed(env)) {

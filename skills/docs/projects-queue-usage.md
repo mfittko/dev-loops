@@ -171,13 +171,13 @@ issue-backed board entry to reconcile or close for it.
 `scripts/github/create-pr.mjs --lightweight` owns enqueuing that PR item on creation
 (In Progress, on a board-configured repo); a tracker-backed PR never triggers this call.
 
-### Live pickup path (`/loop-continue`)
+### Live pickup path (`/dev-loops:loop-continue`)
 
-The operator-facing pickup path (bare `/loop-continue`) enforces `QUEUE-LIVE-PICKUP-SOURCE` via
+The operator-facing pickup path (bare `/loop-continue` in the dev-loops repo, `/dev-loops:loop-continue` in a consumer install) enforces `QUEUE-LIVE-PICKUP-SOURCE` via
 `scripts/projects/resolve-active-board-item.mjs`: it continues the single **In Progress** item;
 if there is none, it picks the **HEAD of `Next Up` by position** (`source: "next-up"`), failing
 closed on an empty `Next Up`, more than one In-Progress item (pass an explicit
-`/loop-continue #N`), or a `Next Up` query error — see the contract for the exact outcomes.
+`/dev-loops:loop-continue #N` — or `/loop-continue #N` in the dev-loops repo itself), or a `Next Up` query error — see the contract for the exact outcomes.
 
 ### Completion is reflected, never fabricated
 

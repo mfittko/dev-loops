@@ -26,7 +26,7 @@ For **all new ideas** that are not already anchored to an existing issue (includ
 - after approval, run a second async mutation pass (dispatched via the procedure) instead of mutating directly from inherited context
 - verify post-mutation artifact state and record what actually changed
 
-**Quick-capture exemption:** board quick-capture enqueue (the `/loop-enqueue` freeform
+**Quick-capture exemption:** board quick-capture enqueue (the `/dev-loops:loop-enqueue` (or `/loop-enqueue` in the dev-loops repo itself) freeform
 path — freeform text turned directly into a minimal issue, gated on explicit human
 approval, then grilled inline and added to the board) MAY defer the up-front proposal
 artifact, the async classification pass, the async fan-out/fan-in proposal generation, and

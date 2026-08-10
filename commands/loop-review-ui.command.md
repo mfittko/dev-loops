@@ -4,7 +4,7 @@ argument-hint: <pr>
 ---
 Run the `dev-loop` skill with the public intent `review PR $ARGUMENTS in a UI loop`. Resolve authoritative state first, then route through the deterministic internal strategy. Do not pick an internal strategy name yourself.
 
-**Usage:** `/loop-review-ui <pr>`
+**Usage:** `/dev-loops:loop-review-ui <pr>` (or `/loop-review-ui <pr>` in the dev-loops repo itself)
 
 **Arguments:**
 - `<pr>` — the pull request to review, as a number or URL. Required; with no argument the loop cannot resolve a target and stops.
