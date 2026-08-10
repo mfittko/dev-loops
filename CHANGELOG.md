@@ -59,6 +59,78 @@ All notable changes to this project will be documented in this file.
 
 - `scripts/github/post-merge-board-sync.mjs`. It was a second CLI over the same `syncBoardStatus` core with the same best-effort exit contract; the post-merge step now runs `dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true`, which carries both behaviors the hook needed.
 
+## 1.0.0-rc.5 - 2026-08-10
+
+The rc.5 end-to-end drive: fifteen merged items hardening the gate review
+surface (verdict integrity, fan-out enforcement, refusals over degraded
+warnings) and the loop runtime (lock release at terminal stops, cheaper
+outage status checks, faster stuck-CI bail), plus retrospective checkpoint cycle
+scoping and namespaced alternatives for bare `/loop-*` slash commands.
+
+### Added — gate review
+
+- **Dedicated judge agent for relevance disposition (#1525, 5bfc44d7).** A
+  dedicated judge agent now owns the relevance-disposition step of the gate
+  review, separating the disposition decision from the reviewer/fixer roles.
+- **Visible warning on a schema-rejected gate layer (#1578, 212b1865).** A gate
+  layer that the schema rejects now surfaces a visible warning instead of
+  failing silently, so a malformed layer is diagnosable rather than invisible.
+
+### Changed — gate verdict integrity and fan-out enforcement
+
+- **Verdict consistency enforced against the consolidator's `overallVerdict`
+  (#1616, b3466c32).** `upsert-checkpoint-verdict.mjs` refuses a `--verdict`
+  that contradicts the consolidator's computed `overallVerdict` and derives the
+  verdict from it by default — no override flag. Closes the silent contradiction
+  that stuck gates rounds later (PR #1612).
+- **Verdict-write preconditions enforced (#1621, 64632d6d).** Builds on #1616:
+  a non-clean verdict's `next-action` is derived (not caller-supplied prose),
+  an inline round with a blocking finding escalates to full fan-out
+  (`gate:full` label), and a `clean` `pre_approval_gate` is refused while the
+  linked issue still has unticked Acceptance criteria.
+- **Four degraded warnings replaced with refusals (#1626, 3195b49a).** Four
+  MUSTs enforced as an invisible JSON `warning` field are now refusals or
+  explicitly-decided advisories: stale findings-dir artifacts, missing/mismatched
+  closing references, linked-PR detection failure (fails closed), and the
+  context-rebuild advisory (decided, with the MUST enforced separately).
+- **`verify-briefing-prefixes` wired into fan-in (#1618, 33efb9a2).** The
+  fan-in consolidator now runs the briefing-prefix verifier mechanically before
+  consolidation, failing closed (`GATE-EXEC-BRIEFING-PREFIX`) on divergent,
+  missing, or short reviewer sentinels — the rule's cited proof is now actually
+  invoked.
+- **Unparseable findings tracked in the clean-verdict cross-check (#1526,
+  5bfc44d7).** The clean-verdict cross-check accounts for unparseable findings
+  rather than treating them as absent.
+- **No-rebuild-mid-fan-out rule enforced (#1537, 7d032e44).** Rebuilding the
+  gate context mid-fan-out is now refused, so a round's reviewers stay seeded
+  from one invariant briefing.
+- **Reviewer-budget preflight before fan-out dispatch (#1507, 805701b6).** The
+  conductor runs a reviewer-budget preflight before fan-out dispatch, refusing
+  dispatch that would exceed the configured budget rather than 429-ing mid-wave.
+
+### Fixed — loop runtime
+
+- **Auto-release the runner-coordination lock at terminal stops (#1632,
+  f6efc55a).** The runner-coordination lock is released when the loop reaches a
+  terminal stop, so a finished loop never leaves a stranded lock blocking the
+  next run.
+- **Faster stuck-CI bail — zero-allocation stall detector (#1631, 6db457a5).**
+  Stuck-CI detection now bails faster via a zero-allocation stall detector.
+- **Cheaper auto-resume status checks during outages (#1633, f19dcc8d).**
+  Auto-resume status checks are cheaper during provider outages.
+
+### Changed — process and UX
+
+- **Retrospective checkpoint cycle scoping (#1613, 26234da3).**
+  `requireRetrospective` is no longer a one-time gate satisfied forever by a past
+  `complete` checkpoint: it is cycle-scoped via a local git ancestry check (has
+  anything merged to the base branch since the checkpoint's discharge point?),
+  with the checkpoint read/write paths resolving through the one main-checkout
+  file regardless of worktree.
+- **Bare `/loop-*` slash commands get a namespaced alternative (#1485,
+  68c8cb5c).** Bare `/loop-*` slash commands now resolve to a namespaced
+  alternative, so command surfaces stay unambiguous.
+
 ## 1.0.0-rc.4 - 2026-07-30
 
 Consumer-soak fixes for rc.3. The theme is deadlocks: several gate paths could
