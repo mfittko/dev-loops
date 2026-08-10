@@ -69,7 +69,7 @@ scoping and namespaced alternatives for bare `/loop-*` slash commands.
 
 ### Added — gate review
 
-- **Dedicated judge agent for relevance disposition (#1525, 5bfc44d7).** A
+- **Dedicated judge agent for relevance disposition (#1525, f99f40c2).** A
   dedicated judge agent now owns the relevance-disposition step of the gate
   review, separating the disposition decision from the reviewer/fixer roles.
 - **Visible warning on a schema-rejected gate layer (#1578, 212b1865).** A gate
@@ -130,6 +130,12 @@ scoping and namespaced alternatives for bare `/loop-*` slash commands.
 - **Bare `/loop-*` slash commands get a namespaced alternative (#1485,
   68c8cb5c).** Bare `/loop-*` slash commands now resolve to a namespaced
   alternative, so command surfaces stay unambiguous.
+
+### Tests
+
+- **Queue `sync-status` published-package regression coverage (#1555,
+  2e9a5798).** A packaged-install regression test covers the queue
+  `sync-status` published-package path.
 
 ## 1.0.0-rc.4 - 2026-07-30
 
