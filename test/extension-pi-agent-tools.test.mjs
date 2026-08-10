@@ -344,9 +344,11 @@ test("#1659 review agent source is Pi-safe (no search/execute) and keeps bash/re
   // search/execute dropped — these cause Pi to mark the step `failed`
   assert.equal(tools.includes("search"), false, "review agent must not declare `search` (Pi has no builtin — #1659)");
   assert.equal(tools.includes("execute"), false, "review agent must not declare `execute` (Pi has no builtin — #1659)");
-  // bash + read retained so the reviewer can grep and read code on both harnesses
+  // bash + read + edit + write retained — the full Pi-valid toolset (#1659 coverage finding)
   assert.ok(tools.includes("bash"), "review agent must declare `bash` (search via rg/grep on both harnesses)");
   assert.ok(tools.includes("read"), "review agent must declare `read` (read diff/source)");
+  assert.ok(tools.includes("edit"), "review agent must declare `edit` (part of retained toolset)");
+  assert.ok(tools.includes("write"), "review agent must declare `write` (part of retained toolset)");
   // every declared tool is already a Pi builtin — no sync mapping needed
   for (const tool of tools) {
     assert.ok(
