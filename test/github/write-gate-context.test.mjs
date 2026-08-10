@@ -3444,6 +3444,49 @@ test("writeGateContext REFUSES, naming the retirement command and the briefed re
   }
 });
 
+test("writeGateContext detects SHA-256 (64-hex) sentinel filenames, not just SHA-1 (40-hex) (#1652)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-sha256-"));
+  // A SHA-256 head is 64 hex chars; the sentinel filename embeds the full SHA.
+  const fullSha256 = "abc1234567890def".padEnd(64, "0");
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "29", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]',
+      "--acceptance-criteria", "#29",
+    ];
+    const first = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    assert.equal(first.warning, undefined);
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    // Sentinel filename carries the FULL 64-hex SHA-256 component.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha256}.json`), "{}\n", "utf8");
+    // A rebuild that would CHANGE the prefix bytes must REFUSE — the 64-hex
+    // sentinel was detected (regex now accepts 40-hex AND 64-hex, #1652).
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot }),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head abc1234567890def is in flight/);
+        assert.match(err.message, /1 reviewer sentinel/);
+        assert.match(err.message, /tmp\/checkpoint-context-sentinel-draft-gate-scope-[0-9a-f]+\.json/);
+        return true;
+      },
+    );
+    // The refusal wrote NOTHING: the original prefix bytes are untouched.
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 29, gate: "draft_gate", headSha: "abc1234567890def" });
+    const survivingPrefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(survivingPrefix.includes("Original body."), "the refusal left the existing prefix bytes intact (SHA-256 sentinel)");
+    assert.ok(!survivingPrefix.includes("Corrected body."), "no partial write of the refused bytes (SHA-256 sentinel)");
+    // AC3: after the round retires (SHA-256 sentinel removed), a rebuild proceeds.
+    await rm(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha256}.json`));
+    const rebuiltAfterRetire = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Retired-then-rebuilt body."]), { repoRoot });
+    assert.equal(rebuiltAfterRetire.warning, undefined);
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("Retired-then-rebuilt body."));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("writeGateContext REFUSES on a broken live-sentinel scan (fail-closed: cannot rule out an in-flight fan-out) (#1537)", { skip: SKIP_UNDER_ROOT }, async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-scanerr-"));
   try {

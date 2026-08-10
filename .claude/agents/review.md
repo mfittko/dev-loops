@@ -1,7 +1,7 @@
 ---
 name: "review"
 description: "Use for pull request review from a product and engineering perspective: check the implementation against the PR description, relevant plan, acceptance criteria, definition of done, non-goals, coding best practices, security expectations, and merge readiness. Keywords: review, PR review, acceptance criteria review, DoD review, security review, plan compliance."
-tools: Read, Grep, Glob, Bash, Edit, Write
+tools: Read, Bash, Edit, Write
 model: "opus"
 ---
 <!-- GENERATED from agents/review.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
@@ -57,6 +57,24 @@ Follow those owners, then return your findings via the structured artifact below
   `verdict` is `clean` iff `findings` is empty; otherwise `findings_present`. `severity` uses the gate vocabulary (`high` | `medium` | `low` for defects, `question` | `nit` for non-defects — a `question` is answered, never deferred, and an unanswered one blocks gate-close like a defect; a `nit` is cosmetic and deferred immediately with no fixer cycle). `file`/`line`/`recommendation` are optional per finding, but omitting or zeroing `line` has a consequence: a finding without a real in-diff `file`/positive-integer `line` is non-locatable, so it never gets its own review thread, never gets an in-window fix round, and is deferred by construction instead. `line` (when present) is the 1-based ACTUAL line number, an integer with no quotes — the `42` above is a placeholder value, not literal example syntax to copy. `contextWidened` is optional: list only the adjacent files/modules that actually moved your judgment on this angle, never every file you opened (omit or leave empty when nothing you opened moved your judgment, including when you reviewed only `changedFiles`) — absence means "not consulted", never "consulted and clean" (see the [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)).
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
+
+## Tool strategy (harness-agnostic, #1659)
+
+The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash`,
+`edit`, `write`). It does NOT declare `search` or `execute` (harness-neutral tool
+names that Pi does not expose as builtins): declaring unavailable tools causes
+Pi to mark the review step `failed`, which aborts `runs.all` and the
+GATE-EXEC-PRIME primer-then-parallel pattern.
+
+- **Search**: use `bash` (`rg`, `grep`, `find`) to locate cross-cutting issues
+  on both harnesses. On Claude Code the structured `Grep`/`Glob` tools are
+  dropped from this agent's allowlist (bash rg/grep is the substitute, not a
+  1:1 equivalent — the structured tool affordance is lost). On Pi `bash` is
+  the only path and was already the effective search mechanism via sync.
+- **Execute (run-code) verification**: delegated to CI. The review agent does
+  not run code; it reads the diff, the plan, and the source to assess
+  correctness. Code-execution verification belongs to the gate pipeline's
+  bounded test runs, not the reviewer.
 
 ## Review Focus
 - Scope correctness: does the implementation match the PR description's change summary, the stated acceptance criteria, and the relevant plan?

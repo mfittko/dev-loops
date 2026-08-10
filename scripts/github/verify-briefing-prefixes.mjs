@@ -18,7 +18,7 @@ and offline: reads only the sentinel and record files already on disk under tmp/
 keyed by the given head SHA.
 
 Required:
-  --head-sha <sha>  The FULL 40-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
+  --head-sha <sha>  The FULL 40- or 64-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
                      tmp/checkpoint-context-sentinel-<scope>-<headSha>.json.
 
 Output (stdout, JSON):
@@ -62,10 +62,10 @@ the conservative flat rule (all sentinels must share one hash).
 Never manually clear sentinels — after a legitimate context rebuild at the same
 head, retire-gate-round.mjs is the sanctioned path that moves them aside.`.trim();
 
-// Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
+// Full 40- or 64-char SHA required: sentinel filenames embed the full `git rev-parse
 // HEAD` value, so a short prefix would glob zero sentinels and read as a
 // vacuous pass — fail closed on anything shorter instead.
-const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
+const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
 const parseError = buildParseError(USAGE);
@@ -379,7 +379,7 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const headShaArg = resolveFlagValue(argv, "--head-sha");
   if (headShaArg === null || headShaArg === "" || !HEAD_SHA_RE.test(headShaArg)) {
     process.stderr.write(`${formatCliError(
-      parseError(`--head-sha is required and must be the FULL 40-character hex head SHA (short prefixes would match zero sentinels and pass vacuously)${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
+      parseError(`--head-sha is required and must be the FULL 40- or 64-character hex head SHA (short prefixes would match zero sentinels and pass vacuously)${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
     )}\n`);
     return 2;
   }

@@ -29,7 +29,7 @@ Required:
                          (draft-gate-<angle> / pre-approval-gate-<angle>), so
                          this bounds the sweep to ONE gate — the other gate's
                          live round at the same head is never touched.
-  --head-sha <sha>       FULL 40-char head SHA the round was keyed by (the
+  --head-sha <sha>       FULL 40- or 64-char head SHA the round was keyed by (the
                          sentinel filename suffix). A short prefix would match
                          nothing and read as a vacuous success — rejected.
   --reason <text>        Why the round is being retired (recorded verbatim in
@@ -85,7 +85,7 @@ Exit codes:
      (partial retirement is reported as above)
   2  Invalid --jq filter`.trim();
 
-const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
+const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const VALID_GATES = new Set(GATE_NAMES);
 const parseError = buildParseError(USAGE);
 
@@ -113,7 +113,7 @@ export function parseRetireGateRoundArgs(argv) {
   }
   const headSha = headShaRaw.trim().toLowerCase();
   if (!HEAD_SHA_RE.test(headSha)) {
-    throw parseError("--head-sha must be the FULL 40-char hex head SHA the sentinels are keyed by (a short prefix would match nothing and read as a vacuous success)");
+    throw parseError("--head-sha must be the FULL 40- or 64-char hex head SHA the sentinels are keyed by (a short prefix would match nothing and read as a vacuous success)");
   }
   const reason = resolveFlagValue(argv, "--reason");
   if (reason === null || reason.trim().length === 0) {
@@ -165,7 +165,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     throw new Error(`Unknown gate ${JSON.stringify(gate)} — must be draft_gate or pre_approval_gate`);
   }
   if (typeof headSha !== "string" || !HEAD_SHA_RE.test(headSha)) {
-    throw new Error(`headSha must be the FULL 40-char hex head SHA, got ${JSON.stringify(headSha)}`);
+    throw new Error(`headSha must be the FULL 40- or 64-char hex head SHA, got ${JSON.stringify(headSha)}`);
   }
   // Normalize for the sentinel filename match: sentinel names embed the
   // lowercase rev-parse output, so an uppercase programmatic value would

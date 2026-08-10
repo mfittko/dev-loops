@@ -59,7 +59,8 @@ test("mapAgentToolsForPi dedupes and drops todo, preserving first-seen order", (
     mapAgentToolsForPi(["read", "search", "execute", "bash", "agent", "todo", "subagent"]),
     ["read", "bash", "subagent"],
   );
-  // developer/docs/fixer/quality/refiner/review vocabulary: read, search, execute, bash, edit, write
+  // developer/docs/fixer/quality/refiner vocabulary: read, search, execute, bash, edit, write
+  // (review dropped search/execute per #1659 — see the dedicated test below)
   assert.deepEqual(
     mapAgentToolsForPi(["read", "search", "execute", "bash", "edit", "write"]),
     ["read", "bash", "edit", "write"],
@@ -314,7 +315,13 @@ test("#1604 role-agent sources keep neutral search/execute (no Claude regression
   // Role agents MUST keep search/execute in source: Claude maps search->Grep+Glob
   // and execute->Bash; dropping them removes Grep/Glob from the Claude-rendered
   // role agents (a cross-harness regression). Pi sync already maps them to bash.
-  const roleAgents = ["fixer", "developer", "docs", "quality", "refiner", "review"];
+  //
+  // The `review` agent is exempted per #1659: it drops search/execute from source
+  // so Pi does not mark review steps `failed` for unavailable declared tools (which
+  // aborts runs.all / GATE-EXEC-PRIME). The review agent can search via `bash`
+  // (rg/grep) on both harnesses, and code-execution verification is delegated to CI.
+  // See the dedicated `#1659 review agent source is Pi-safe` test below.
+  const roleAgents = ["fixer", "developer", "docs", "quality", "refiner"];
   for (const name of roleAgents) {
     const raw = await readFile(fileURLToPath(new URL(`../agents/${name}.agent.md`, import.meta.url)), "utf8");
     const tools = (raw.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
@@ -322,6 +329,37 @@ test("#1604 role-agent sources keep neutral search/execute (no Claude regression
     assert.ok(tools.includes("execute"), `agents/${name}.agent.md must keep neutral \`execute\` (Claude maps to Bash)`);
     assert.equal(tools.includes("agent"), false, `role agent ${name} must not declare \`agent\``);
     assert.equal(tools.includes("todo"), false, `role agent ${name} must not declare \`todo\``);
+  }
+});
+
+// #1659 — the review agent drops search/execute from source so Pi does not mark
+// review fan-out steps `failed` for unavailable declared tools. The review agent
+// uses `bash` (rg/grep) for search on both harnesses; code-execution verification
+// is delegated to CI. This is the root-cause fix for shallow gate review on Pi:
+// the GATE-EXEC-PRIME primer-then-parallel pattern dispatches `review` agents,
+// and a `failed` status on the primer aborts the entire `runs.all`.
+test("#1659 review agent source is Pi-safe (no search/execute) and keeps bash/read", async () => {
+  const raw = await readFile(fileURLToPath(new URL("../agents/review.agent.md", import.meta.url)), "utf8");
+  const tools = (raw.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
+  // search/execute dropped — these cause Pi to mark the step `failed`
+  assert.equal(tools.includes("search"), false, "review agent must not declare `search` (Pi has no builtin — #1659)");
+  assert.equal(tools.includes("execute"), false, "review agent must not declare `execute` (Pi has no builtin — #1659)");
+  // bash + read + edit + write retained — the full Pi-valid toolset (#1659 coverage finding)
+  assert.ok(tools.includes("bash"), "review agent must declare `bash` (search via rg/grep on both harnesses)");
+  assert.ok(tools.includes("read"), "review agent must declare `read` (read diff/source)");
+  assert.ok(tools.includes("edit"), "review agent must declare `edit` (part of retained toolset)");
+  assert.ok(tools.includes("write"), "review agent must declare `write` (part of retained toolset)");
+  // every declared tool is already a Pi builtin — no sync mapping needed
+  for (const tool of tools) {
+    assert.ok(
+      VALID_PI_TOOLS.has(tool),
+      `review agent source tool must be a Pi builtin (no mapping needed): ${tool}`,
+    );
+    assert.equal(
+      FORBIDDEN_UNDER_PI.includes(tool),
+      false,
+      `review agent must not list a forbidden tool under Pi: ${tool}`,
+    );
   }
 });
 
