@@ -2036,7 +2036,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     const liveSentinelNames = tmpDirEntries.filter((e) => {
       if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
       const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
-      return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
+      return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
     }).map((e) => e.name);
     const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
     const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
