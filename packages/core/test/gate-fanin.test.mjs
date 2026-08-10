@@ -16,7 +16,10 @@ import {
   freshAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
+  reviewerBudgetPreflight,
   normalizeSeverity,
+  applyJudgeDispositions,
+  validateJudgeVerdict,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -769,4 +772,291 @@ test("countFreshDispatchUnits counts auto-chunked groups as single units on a ch
     ]),
     2,
   );
+});
+
+describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fan-out dispatch)", () => {
+  const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+  test("counts one reviewer per dispatch unit (fresh angles + re-verifications)", () => {
+    // 5 dispatch units → 5 required reviewers, regardless of how many angles
+    // each unit covers (a group of N angles is one reviewer's scoped dispatch).
+    const groups = [
+      { name: "group:a+b", angles: ["a", "b"] },
+      { name: "group:c+d", angles: ["c", "d"] },
+      { name: "e", angles: ["e"] },
+    ];
+    const preflight = reviewerBudgetPreflight(groups, 10);
+    assert.equal(preflight.requiredReviewers, 3);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "budget_sufficient");
+  });
+
+  test("#1507 DoD1 — insufficient budget: dispatch is false and shortfall is named (zero reviewers dispatched)", () => {
+    // The conductor reads `preflight.dispatch` before spawning any reviewer.
+    // On `false` it records the shortfall and stops — NO reviewer is spawned.
+    const groups = units(["a", "b", "c", "d", "e"]); // 5 required
+    const preflight = reviewerBudgetPreflight(groups, 2); // only 2 available
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.equal(preflight.requiredReviewers, 5);
+    assert.equal(preflight.availableReviewers, 2);
+    assert.equal(preflight.shortfall, 3); // 5 - 2 = 3 short, named explicitly
+    assert.equal(preflight.reason, "budget_shortfall");
+  });
+
+  test("#1507 DoD1 — exact budget covers dispatch (no shortfall)", () => {
+    const groups = units(["a", "b", "c"]);
+    assert.equal(reviewerBudgetPreflight(groups, 3).dispatch, true);
+    assert.equal(reviewerBudgetPreflight(groups, 3).shortfall, null);
+  });
+
+  test("#1507 DoD1 — zero budget against a non-empty round is a shortfall", () => {
+    const groups = units(["a", "b"]);
+    const preflight = reviewerBudgetPreflight(groups, 0);
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.equal(preflight.shortfall, 2);
+  });
+
+  test("unknown budget (harness does not expose one) proceeds — no shortfall can be proven", () => {
+    const groups = units(["a", "b", "c"]);
+    const preflight = reviewerBudgetPreflight(groups, null);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.availableReviewers, null);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "budget_unknown");
+    // Non-finite values are treated as unknown too (caller bug, not a shortfall).
+    assert.equal(reviewerBudgetPreflight(groups, NaN).dispatch, true);
+    assert.equal(reviewerBudgetPreflight(groups, undefined).dispatch, true);
+  });
+
+  test("empty dispatch plan needs no reviewers", () => {
+    const preflight = reviewerBudgetPreflight([], 0);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.dispatch, true);
+    assert.equal(preflight.requiredReviewers, 0);
+    assert.equal(preflight.shortfall, null);
+    assert.equal(preflight.reason, "no_reviewers_needed");
+    // Non-array input is defensive (no groups → nothing to dispatch).
+    assert.equal(reviewerBudgetPreflight(null, 5).requiredReviewers, 0);
+  });
+
+  test("negative/fractional budget clamps to a non-negative integer floor", () => {
+    const groups = units(["a", "b", "c"]);
+    // negative → 0 → shortfall
+    assert.equal(reviewerBudgetPreflight(groups, -5).availableReviewers, 0);
+    assert.equal(reviewerBudgetPreflight(groups, -5).dispatch, false);
+    assert.equal(reviewerBudgetPreflight(groups, -5).shortfall, 3);
+    // fractional → truncates toward zero (2.9 → 2 → shortfall of 1)
+    assert.equal(reviewerBudgetPreflight(groups, 2.9).availableReviewers, 2);
+    assert.equal(reviewerBudgetPreflight(groups, 2.9).shortfall, 1);
+  });
+
+  test("#1507 DoD2 — a shortfall does NOT yield a clean or inline verdict for a non-light-mode PR", () => {
+    // A shortfall is not a verdict: the preflight result carries no clean
+    // verdict and no inline executionMode. buildPreMergeGateCheck /
+    // evaluateInlineFanoutMode reject a gate with no clean current-head
+    // marker and a non-fanout_fanin executionMode, so a shortfall state fails
+    // closed at merge instead of yielding a clean or inline verdict (#1507 AC4:
+    // no new gate-exemption path).
+    const groups = units(["a", "b", "c", "d", "e"]);
+    const preflight = reviewerBudgetPreflight(groups, 1);
+    assert.equal(preflight.ok, false);
+    assert.equal(preflight.dispatch, false);
+    assert.notEqual(preflight.verdict, "clean");
+    assert.notEqual(preflight.executionMode, "inline_single_agent");
+    assert.equal(preflight.verdict, null);
+    assert.equal(preflight.executionMode, null);
+    // A sufficient budget also never claims a verdict — the preflight is a
+    // pre-dispatch gate, not a verdict producer.
+    const ok = reviewerBudgetPreflight(groups, 10);
+    assert.equal(ok.verdict, null);
+    assert.equal(ok.executionMode, null);
+  });
+
+  describe("#1507 AC3 — same-head skip-completed resume (resumes instead of restarts)", () => {
+    const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+    test("a group whose angles are ALL complete is excluded from requiredReviewers and pendingGroups", () => {
+      // 3 dispatch units; group:b already has a clean artifact at this head.
+      const groups = units(["a", "b", "c"]);
+      const preflight = reviewerBudgetPreflight(groups, 10, { completedAngles: ["b"] });
+      assert.equal(preflight.requiredReviewers, 2); // only a + c remain
+      assert.deepEqual(
+        preflight.pendingGroups.map((g) => g.name),
+        ["a", "c"],
+      );
+      assert.deepEqual(
+        preflight.skippedGroups.map((g) => g.name),
+        ["b"],
+      );
+      assert.deepEqual(preflight.completedAngles, ["b"]);
+      assert.equal(preflight.dispatch, true);
+      assert.equal(preflight.shortfall, null);
+    });
+
+    test("a multi-angle group is skipped only when EVERY angle is complete", () => {
+      // group:a+b is NOT skipped when only one of its angles is complete — the
+      // reviewer still needs to run for the incomplete angle.
+      const groups = [{ name: "group:a+b", angles: ["a", "b"] }, { name: "c", angles: ["c"] }];
+      const partial = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"] });
+      assert.equal(partial.requiredReviewers, 2); // group:a+b still needs a reviewer (b incomplete) + c
+      assert.deepEqual(partial.pendingGroups.map((g) => g.name), ["group:a+b", "c"]);
+      assert.deepEqual(partial.skippedGroups, []);
+      const full = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a", "b"] });
+      assert.equal(full.requiredReviewers, 1); // only c remains
+      assert.deepEqual(full.pendingGroups.map((g) => g.name), ["c"]);
+      assert.deepEqual(full.skippedGroups.map((g) => g.name), ["group:a+b"]);
+    });
+
+    test("all groups complete at this head → zero reviewers, resume finished, still no clean/inline verdict", () => {
+      const groups = units(["a", "b"]);
+      const preflight = reviewerBudgetPreflight(groups, 0, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.requiredReviewers, 0);
+      assert.equal(preflight.dispatch, true); // proceed to fan-in of existing artifacts
+      assert.equal(preflight.shortfall, null);
+      assert.equal(preflight.reason, "no_reviewers_needed");
+      assert.deepEqual(preflight.pendingGroups, []);
+      assert.deepEqual(preflight.skippedGroups.map((g) => g.name), ["a", "b"]);
+      // AC4 still holds: a resume-finished state is not a verdict.
+      assert.equal(preflight.verdict, null);
+      assert.equal(preflight.executionMode, null);
+    });
+
+    test("shortfall is computed against the REMAINING (incomplete) groups, not the full plan", () => {
+      // 5 units; 2 already complete → only 3 remain. A budget of 1 is short by 2,
+      // not by 4 — the later session resumes by dispatching only the 3 pending.
+      const groups = units(["a", "b", "c", "d", "e"]);
+      const preflight = reviewerBudgetPreflight(groups, 1, { completedAngles: ["a", "b"] });
+      assert.equal(preflight.dispatch, false);
+      assert.equal(preflight.requiredReviewers, 3);
+      assert.equal(preflight.shortfall, 2);
+      assert.equal(preflight.reason, "budget_shortfall");
+      assert.deepEqual(preflight.pendingGroups.map((g) => g.name), ["c", "d", "e"]);
+    });
+
+    test("omitting completedAngles is backward-compatible (full dispatch, nothing skipped)", () => {
+      const groups = units(["a", "b"]);
+      assert.equal(reviewerBudgetPreflight(groups, 10).requiredReviewers, 2);
+      assert.equal(reviewerBudgetPreflight(groups, 10, {}).requiredReviewers, 2);
+      assert.deepEqual(reviewerBudgetPreflight(groups, 10).skippedGroups, []);
+    });
+  });
+});
+
+// #1525: the judge agent's relevance-based dispositions (act/defer/reject) are
+// a separate axis from the severity-based disposition deriveDisposition owns.
+// applyJudgeDispositions is the pure merge seam that enriches the consolidated
+// findings with the judge's verdict so the ledger and posted comment carry what
+// was consciously not acted on and why.
+describe("applyJudgeDispositions (#1525)", () => {
+  const baseFindings = [
+    { severity: "high", angle: "correctness", summary: "null deref in parser", disposition: "accepted-for-fix", file: "src/parser.mjs", line: 42 },
+    { severity: "low", angle: "docs", summary: "rename variable for clarity", disposition: "deferred" },
+  ];
+
+  function judgeVerdict(dispositions, scopeDrift = { verdict: "within_scope", rationale: "diff matches the stated AC", driftedAreas: [] }) {
+    return { headSha: "abc123", scopeDrift, dispositions };
+  }
+
+  test("a finding acted on against a named criterion gets judgeDisposition act", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "fixes the null-deref named in AC criterion 1", criterion: "AC-1: parser must not crash on null input" },
+    ]);
+    const { findings, scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[0].judgeDisposition, "act");
+    assert.equal(findings[0].judgeRationale, "fixes the null-deref named in AC criterion 1");
+    assert.equal(findings[0].judgeCriterion, "AC-1: parser must not crash on null input");
+    // severity-based disposition stays intact (complementary, not replaced)
+    assert.equal(findings[0].disposition, "accepted-for-fix");
+    assert.equal(scopeDrift.verdict, "within_scope");
+  });
+
+  test("a finding rejected as out-of-scope against a named non-goal gets judgeDisposition reject", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope defect", criterion: "AC-1" },
+      { index: 1, disposition: "reject", rationale: "variable rename is a style preference; non-goal 3 excludes style churn from this PR", criterion: "Non-goal 3: no stylistic refactors" },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[1].judgeDisposition, "reject");
+    assert.equal(findings[1].judgeRationale, "variable rename is a style preference; non-goal 3 excludes style churn from this PR");
+    assert.equal(findings[1].judgeCriterion, "Non-goal 3: no stylistic refactors");
+    // no followUpDraft on a reject (reject is out-of-scope, not deferred work)
+    assert.equal(findings[1].followUpDraft, undefined);
+  });
+
+  test("a deferred finding carries a fileable follow-up draft (soft-cap contract)", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 1, disposition: "defer", rationale: "valid improvement but outside this PR's scope; track separately", criterion: "Non-goal 2: no broad refactor", followUpDraft: { title: "Rename parser variable for clarity", body: "## Summary\nRename the variable per the reviewer suggestion." } },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(findings[1].judgeDisposition, "defer");
+    assert.deepEqual(findings[1].followUpDraft, { title: "Rename parser variable for clarity", body: "## Summary\nRename the variable per the reviewer suggestion." });
+  });
+
+  test("scope-drift verdict is raised when the diff exceeds the declared scope", () => {
+    const verdict = judgeVerdict(
+      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      { verdict: "drift_detected", rationale: "the diff adds a new CLI flag not in any acceptance criterion; criterion 4 limits scope to the parser", driftedAreas: ["cli surface"] },
+    );
+    const { scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(scopeDrift.verdict, "drift_detected");
+    assert.equal(scopeDrift.driftedAreas[0], "cli surface");
+  });
+
+  test("toFindingsLogShape carries judge fields through to the ledger shape", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 1, disposition: "defer", rationale: "deferred", criterion: "NG-2", followUpDraft: { title: "x", body: "y" } },
+    ]);
+    const { findings } = applyJudgeDispositions(baseFindings, verdict);
+    const logShape = toFindingsLogShape(findings);
+    assert.equal(logShape[0].judgeDisposition, "act");
+    assert.equal(logShape[0].judgeRationale, "in-scope");
+    assert.equal(logShape[1].followUpDraft.title, "x");
+  });
+
+  test("fails closed on an out-of-range disposition index", () => {
+    const verdict = judgeVerdict([
+      { index: 5, disposition: "act", rationale: "x", criterion: "AC-1" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /out of range/);
+  });
+
+  test("fails closed on a malformed judge verdict (missing headSha)", () => {
+    assert.throws(() => applyJudgeDispositions(baseFindings, { scopeDrift: { verdict: "within_scope", rationale: "x", driftedAreas: [] }, dispositions: [] }), /headSha/);
+  });
+
+  test("fails closed when a defer disposition lacks a followUpDraft", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "defer", rationale: "deferred", criterion: "NG-2" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /followUpDraft.*defer/);
+  });
+
+  test("fails closed on a duplicate disposition index (one-per-finding contract)", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 0, disposition: "reject", rationale: "dup", criterion: "NG-2" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /duplicate.*one disposition per finding/);
+  });
+
+  test("fails closed on a non-string driftedAreas element", () => {
+    const verdict = judgeVerdict(
+      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      { verdict: "drift_detected", rationale: "x", driftedAreas: [42] },
+    );
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /driftedAreas.*non-empty string/);
+  });
+
+  test("no judge verdict enrichment leaves findings unchanged (toFindingsLogShape is additive)", () => {
+    const logShape = toFindingsLogShape(baseFindings);
+    assert.equal(logShape[0].judgeDisposition, undefined);
+    assert.equal(logShape[0].followUpDraft, undefined);
+  });
 });

@@ -285,14 +285,18 @@ test("consolidateGateFanin writes --out as the nested findingsJson shape", async
   );
 });
 
-test("consolidateGateFanin writes --ledger-out as the flat findings shape (the --findings-file input write-gate-findings-log.mjs/post-gate-findings.mjs accept)", async () => {
+test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings } wrapper write-gate-findings-log.mjs/post-gate-findings.mjs accept", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
     async (dir) => {
       const ledgerPath = path.join(dir, "out", "ledger.json");
       const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.deepEqual(written, result.findings);
+      // --ledger-out carries the consolidator's computed overallVerdict
+      // alongside the flat findings, so it flows downstream to the durable
+      // ledger (and upsert-checkpoint-verdict.mjs's enforcement) without an
+      // orchestrator hand-off (#1616).
+      assert.deepEqual(written, { overallVerdict: result.overallVerdict, findings: result.findings });
       assert.equal(result.findings.length, 1);
     },
   );
@@ -418,7 +422,7 @@ test("consolidateGateFanin rejects --out === --ledger-out even when the CLI pars
       // The ledger must still be intact on disk, not deleted by the rm() the
       // guard exists to prevent from ever running against it.
       const written = JSON.parse(await readFile(samePath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -437,7 +441,7 @@ test("consolidateGateFanin rejects a --out that is a symlink alias of --ledger-o
         /resolve to the same file/,
       );
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -1711,9 +1715,9 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // normalizes to the canonical output vocabulary.
     assert.deepEqual(result.severityCounts, { high: 1, medium: totalFindings - 2, low: 1, question: 0, nit: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.deepEqual(writtenLedger, result.findings);
-    assert.equal(writtenLedger.length, totalFindings);
-    const pinnedLedgerEntry = writtenLedger.find((f) => f.summary === PINNED_SUMMARY);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
+    assert.equal(writtenLedger.findings.length, totalFindings);
+    const pinnedLedgerEntry = writtenLedger.findings.find((f) => f.summary === PINNED_SUMMARY);
     assert.ok(pinnedLedgerEntry, "the ledger must carry the exact, un-shrunk original summary text");
     assert.equal(pinnedLedgerEntry.angle, MIXED_ANGLE);
 
@@ -2168,8 +2172,8 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
 
     // The ledger is still written in full regardless.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
-    assert.deepEqual(writtenLedger, result.findings);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
   });
 });
 
@@ -2244,7 +2248,7 @@ test("a withheld-tier round still writes a complete ledger when --out is an exis
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
 
@@ -2265,7 +2269,7 @@ test("a marker-tier round still writes a complete ledger when --out's parent dir
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
 
@@ -2436,4 +2440,313 @@ test("consolidateGateFanin exempts a carried angle case-insensitively but never 
       },
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX fan-in integration (#1618): consolidate-fanin MUST
+// run verify-briefing-prefixes before consolidation. The verifier had ZERO
+// callers before this. Each behavior below has a test that fails when reverted
+// (proven by mutation). Sentinel files live directly under <tmpRoot>/ (the tmp/
+// directory) and are read
+// by verifyBriefingPrefixesForHead; the findings artifacts carry headSha stamps
+// matching the round head so the head-stamp guard does not fire first.
+// ---------------------------------------------------------------------------
+
+async function writePrefixSentinel(tmpRoot, scope, headSha, prefixHash) {
+  await mkdir(tmpRoot, { recursive: true });
+  const body = { scope, ...(prefixHash === null ? {} : { prefixHash }) };
+  await writeFile(
+    path.join(tmpRoot, `checkpoint-context-sentinel-${scope}-${headSha}.json`),
+    `${JSON.stringify(body)}\n`,
+    "utf8",
+  );
+}
+
+// A round whose reviewers all recorded the SAME prefix hash consolidates (the
+// invariant-briefing prefix was byte-identical across reviewers). This is the
+// baseline the fail-closed tests below mutate against.
+test("#1618 AC: a round whose sentinels share one prefix hash consolidates", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC4: a head with NO sentinels at all still consolidates — offline/inline/test
+// paths where the fresh-context guard was never invoked stay byte-identical. The
+// count check is skipped (reviewerCount === 0), even with expectedDispatchUnits.
+test("#1618 AC4: a head with no sentinels still consolidates (offline/test path unchanged)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 3 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC1: two sentinels for the head recording DISTINCT prefix hashes → fail
+// closed (a seeded-briefing divergence, the mid-flight-rebuild case). Mutation:
+// revert the verifyBriefingPrefixesForHead call and this passes (the divergence
+// is silently consolidated) — so the test fails when reverted.
+test("#1618 AC1: consolidation fails closed when two sentinels record distinct prefix hashes", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "b".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /DIFFERENT.*prefix hash/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC2: any sentinel for the head recording NO prefix hash → fail closed (the
+// proof was never established for that reviewer — never grandfathered).
+test("#1618 AC2: consolidation fails closed when a sentinel is hashless", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, null);
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /no recorded prefix hash/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 (per-angle framing): expectedDispatchUnits = non-carried angle count, and
+// the sentinel count is short of it → fail closed (a dispatched reviewer never
+// ran the fresh-context guard). expectedDispatchUnits is the dispatch-UNIT
+// count; in per-angle dispatch one unit == one angle, so it equals the angle
+// count here.
+test("#1618 AC3 (per-angle): fails closed when sentinel count < expected dispatch-unit count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Only ONE of two dispatched reviewers wrote a sentinel.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX")
+            && /sentinel count \(1\) is short of the expected dispatch-unit count \(2\)/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 (grouped framing): grouped dispatch writes one sentinel per GROUP. Two
+// angles in ONE group → expectedDispatchUnits=1, and one sentinel SATISFIES it
+// (the non-regression case for #1579/#1601 grouped fan-out — comparing against
+// the angle count would false-fail here). Two groups with only one sentinel →
+// fail closed.
+test("#1618 AC3 (grouped): one sentinel per group — count is the dispatch-UNIT count, not the angle count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Two angles in ONE group → one sentinel satisfies expectedDispatchUnits=1.
+        // (A literal "sentinel count < angle count" check would false-fail here —
+        // this is the regression guard for grouped fan-out.)
+        await writePrefixSentinel(tmpRoot, "draft-gate-group-correctness-input", HEAD_A, "a".repeat(64));
+        const ok = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 1 });
+        assert.equal(ok.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1618 AC3 (grouped): fails closed when sentinel count < group count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Two groups dispatched, only one reviewer wrote a sentinel.
+        await writePrefixSentinel(tmpRoot, "draft-gate-group-a", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 }),
+          /sentinel count \(1\) is short of the expected dispatch-unit count \(2\)/,
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 is skipped (not enforced) when expectedDispatchUnits is omitted — the hash
+// checks (AC1/AC2) still run. This preserves backward compatibility for callers
+// that have not yet threaded the dispatch-unit count.
+test("#1618: without --expected-dispatch-units the count check is skipped (hash checks still run)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // One sentinel for a one-angle round; no expectedDispatchUnits declared.
+        await writePrefixSentinel(tmpRoot, "draft-gate-scope", HEAD_A, "a".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// The briefing-prefix check only runs when --head-sha is given (the same
+// boundary the artifact head-stamp guard uses). Without --head-sha, a divergent
+// sentinel population does not block consolidation (offline/legacy path).
+test("#1618: the briefing-prefix check only runs with --head-sha (no head-sha = no check)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Divergent hashes that WOULD fail AC1 — but no headSha, so no check.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "b".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// CLI parsing: --expected-dispatch-units must be a positive integer.
+test("parseConsolidateFaninCliArgs parses --expected-dispatch-units and rejects non-positive-int", () => {
+  const ok = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--expected-dispatch-units", "3"]);
+  assert.equal(ok.expectedDispatchUnits, 3);
+  assert.equal(ok.tmpRoot, undefined);
+  for (const bad of ["0", "-1", "1.5", "abc"]) {
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--expected-dispatch-units", bad]),
+      /--expected-dispatch-units must be a positive integer/,
+    );
+  }
+});
+
+test("parseConsolidateFaninCliArgs parses --tmp-root", () => {
+  const ok = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--tmp-root", "/var/tmp"]);
+  assert.equal(ok.tmpRoot, "/var/tmp");
+});
+
+// ---------------------------------------------------------------------------
+// #1618 record-matching path: when on-disk per-gate briefing-prefix records
+// exist, consolidate-fanin's verifier exercises the record-matching branch
+// (not only the flat fallback the tests above cover). A sentinel whose hash
+// matches a gate record consolidates; a sentinel whose hash matches NO record
+// fails closed (the production path — write-gate-context persists records).
+// ---------------------------------------------------------------------------
+
+async function writeGateBriefingRecord(tmpRoot, gate, headSha, bytes) {
+  const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${gate}-${headSha}.briefing-prefix.txt`), bytes);
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+test("#1618 record-matching: sentinels whose hashes match an on-disk gate record consolidate", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        // Both sentinels record the SAME hash that matches the draft_gate record.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1618 record-matching: a sentinel whose hash matches NO gate record fails closed", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // A gate record exists, but the sentinels record a DIFFERENT hash.
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /matches no gate briefing-prefix record/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
 });

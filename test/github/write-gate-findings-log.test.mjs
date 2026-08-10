@@ -1241,20 +1241,41 @@ test("checkProvenanceAngleCoverage passes for a fully-covered draft_gate and pre
   });
 });
 
-test("checkProvenanceAngleCoverage: excluding a mandatory angle does not deadlock the write (excludeAngles filters mandatoryAngles)", async () => {
+test("checkProvenanceAngleCoverage: a mandatory angle disabled via enabled:false does not deadlock the write", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-exclude-deadlock-"));
   try {
-    // The deadlock config: yagni is mandatory AND excluded. Without filtering,
-    // every write would fail — missing-mandatory if omitted, foreign if recorded.
+    // The deadlock config: yagni is mandatory AND disabled (enabled: false).
+    // Without filtering, every write would fail — missing-mandatory if omitted,
+    // foreign if recorded. The disabled entry is excluded from the mandatory
+    // check, so the write succeeds with yagni absent from the provenance.
+    // Uses the canonical angle-entry shape (#1578): raw mandatoryAngles/
+    // excludeAngles keys are rejected by the strict gate schema and would be
+    // silently dropped, making this test pin behavior against packaged
+    // defaults rather than the override it names.
     await writeFile(path.join(repoRoot, ".devloops"), [
       "version: 1",
       "gates:",
       "  preApproval:",
-      "    angles: [dry, kiss]",
-      "    mandatoryAngles: [pr-checklist-matrix, yagni]",
-      "    excludeAngles: [yagni]",
+      "    angles:",
+      "      - dry",
+      "      - kiss",
+      "      - name: pr-checklist-matrix",
+      "        mandatory: true",
+      "      - name: yagni",
+      "        mandatory: true",
+      "        enabled: false",
       "",
     ].join("\n"), "utf8");
+    // Assert the override actually loaded (not silently dropped against
+    // packaged defaults — #1578): a schema-rejected layer would surface a
+    // warning from applyLayer. Its absence proves this override took effect,
+    // making the coverage assertion below non-vacuous.
+    const { loadDevLoopConfig } = await import("@dev-loops/core/config");
+    const cfgResult = await loadDevLoopConfig({ repoRoot });
+    assert.ok(
+      !cfgResult.warnings.some((w) => /config layer rejected by schema/.test(w)),
+      "the override layer must load without schema rejection",
+    );
     const result = await checkProvenanceAngleCoverage(
       { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }] },
       "pre_approval_gate",
@@ -1312,6 +1333,117 @@ test("a legacy defer-severity finding normalizes to low in the written log", asy
     const parsed = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(parsed.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
     assert.equal(parsed.findings[0].disposition, "deferred");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// #1616: write-gate-findings-log threads the consolidator's computed
+// overallVerdict (carried in consolidate-fanin.mjs's --ledger-out wrapper
+// `{ overallVerdict, findings }`) into the durable ledger, so
+// upsert-checkpoint-verdict.mjs can enforce verdict consistency against the
+// value the fan-in actually computed — not whatever a caller hand-passed as
+// --verdict. A bare-array input (legacy/hand-authored) leaves overallVerdict
+// absent and writes byte-identically to before.
+test("#1616: writeGateFindingsLog persists overallVerdict from the {overallVerdict,findings} wrapper", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-"));
+  try {
+    const findings = [{ severity: "must-fix", angle: "scope", summary: "blocking finding" }];
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify({ overallVerdict: "findings_present", findings }),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.overallVerdict, "findings_present");
+    assert.equal(parsed.findings.length, 1);
+    assert.equal(parsed.findings[0].severity, "high"); // "must-fix" normalizes to canonical "high"
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-bad-"));
+  try {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: "bogus", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      /"overallVerdict" must be one of: clean, findings_present, or blocked/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: writeGateFindingsLog omits overallVerdict for a bare-array input (legacy unchanged)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-absent-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "clean",
+      findings: JSON.stringify([]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.ok(!("overallVerdict" in parsed), "a bare-array input must not synthesize an overallVerdict");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// #1525: the --judge-verdict flag enriches findings with the judge agent's
+// relevance-based dispositions (act/defer/reject + rationale + follow-up
+// drafts) before writing the ledger, and records the scope-drift verdict.
+test("writeGateFindingsLog enriches findings from --judge-verdict and records scopeDrift (#1525)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-"));
+  try {
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha: "abc1234567890abcdef000000000000000000000",
+      scopeDrift: { verdict: "drift_detected", rationale: "diff adds a CLI flag not in any AC", driftedAreas: ["cli surface"] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+        { index: 1, disposition: "reject", rationale: "style churn excluded by non-goal 3", criterion: "Non-goal 3" },
+      ],
+    }), "utf8");
+
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "must-fix", angle: "correctness", summary: "null deref", disposition: "accepted-for-fix" },
+        { severity: "low", angle: "docs", summary: "rename variable", disposition: "deferred" },
+      ]),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+
+    assert.equal(result.ok, true);
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", "draft_gate-abc1234567890abcdef000000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+    assert.equal(parsed.findings[0].judgeRationale, "fixes the defect named in AC-1");
+    assert.equal(parsed.findings[1].judgeDisposition, "reject");
+    assert.equal(parsed.scopeDrift.verdict, "drift_detected");
+    assert.deepEqual(parsed.scopeDrift.driftedAreas, ["cli surface"]);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

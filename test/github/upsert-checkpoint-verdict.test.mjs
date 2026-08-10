@@ -16,6 +16,8 @@ import {
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -39,6 +41,18 @@ const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 // makeGhMock's runChild instead (a real subprocess is impossible there).
 let gitStubDir = null;
 let originalPath = null;
+// This repo's own .devloops dogfoods gates.requireFanoutEvidence: true. Most
+// tests below exercise behavior orthogonal to fan-out evidence (comment
+// rendering, marker updates, blocking-severity checks — one test
+// even pins "draft_gate blocks on high only" as a live regression guard on
+// this repo's own config) against the ambient repoRoot (process.cwd(), the
+// worktree root) on purpose. Rather than substituting a bare fixture config
+// that would silently drop that coverage, mirror the real .devloops into an
+// isolated repoRoot with ONLY requireFanoutEvidence flipped off — every other
+// setting (angle pools, tiers, blocking severities) stays byte-identical to
+// what upsertCheckpointVerdict resolves from the real repo. Used as the
+// default repoRoot for tests that do not stage their own per-test config.
+let fanoutDisabledRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
@@ -46,10 +60,17 @@ before(async () => {
   await chmod(gitStubPath, 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
+
+  fanoutDisabledRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-fanout-disabled-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  const patched = realDevloops.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  assert.notEqual(patched, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
+  await writeFile(path.join(fanoutDisabledRepoRoot, ".devloops"), patched, "utf8");
 });
 after(async () => {
   if (originalPath !== null) process.env.PATH = originalPath;
   if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
+  if (fanoutDisabledRepoRoot) await rm(fanoutDisabledRepoRoot, { recursive: true, force: true });
 });
 
 // Inline mode is the default execution mode and now requires a non-empty
@@ -84,6 +105,7 @@ const runNode = async (args = [], options = {}) => {
   if (!entries) {
     return runNodeHelper(scriptPath, augmented, {
       ...options,
+      cwd: options.cwd ?? fanoutDisabledRepoRoot,
       env: {
         ...process.env,
         ...(options.env ?? {}),
@@ -105,9 +127,11 @@ const runNode = async (args = [], options = {}) => {
   delete env[GH_MOCK_ENTRIES];
   // Mirror the subprocess cwd: tests that stage a per-test .devloops pass
   // { cwd: tempDir }, so config (gate angle contract, rejectForeignAngles) must
-  // resolve from there rather than the worktree root. Defaults to process.cwd()
-  // (the worktree) — identical to the former subprocess default.
-  const repoRoot = options.cwd ?? process.cwd();
+  // resolve from there rather than the worktree root. Defaults to
+  // fanoutDisabledRepoRoot (the worktree's own config, minus fan-out
+  // enforcement) rather than the bare worktree root, so a test that does not
+  // care about fan-out evidence is not incidentally subject to it.
+  const repoRoot = options.cwd ?? fanoutDisabledRepoRoot;
   // Capture stderr the entry fn writes directly (e.g. foreign-angle warnings) so
   // the assembled stderr matches what the CLI subprocess would have emitted.
   const stderrChunks = [];
@@ -318,7 +342,7 @@ test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed fr
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([]),
-    /requires --repo, --pr, --head-sha, --verdict, --findings-summary .* and --next-action/i,
+    /requires --repo, --pr, --head-sha, --verdict .* --findings-summary .* and --next-action/i,
   );
 
   const parsed = parseUpsertCheckpointVerdictCliArgs([
@@ -423,7 +447,7 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
       nextAction: "next",
       force: true,
       forceReason: "test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild });
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     // force metadata no longer included
@@ -1019,7 +1043,7 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild });
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
 
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
@@ -1512,7 +1536,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
       },
     ], { repeatLastOnOverflow: true });
-    const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1 });
+    const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(created.action, "created");
 
     const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
@@ -1536,7 +1560,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
     ], { repeatLastOnOverflow: true });
-    const second = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild2 });
+    const second = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(second.action, "noop");
     assert.equal(second.commentId, 103);
     // Same-head noop means no create/update comment call fires.
@@ -2506,6 +2530,225 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
   }
 });
 
+// ---------------------------------------------------------------------------
+// #1526 (variant 3): normalizeStructuredFinding returns null for a finding it
+// cannot interpret (no usable summary, or not an object). The clean-verdict
+// cross-check tallies the NORMALIZED findings, so a dropped finding was
+// invisible to the guard — a blocking severity could pass silently by being
+// unparseable rather than by being absent. The fix tracks such findings as
+// UNPARSEABLE on the per-angle section and tallies them on their severity
+// alone (no disposition to resolve against), so a blocking severity fails the
+// clean verdict and a non-blocking one is reported explicitly as unparseable
+// rather than dropped. These tests fail if the guard reverts to dropping.
+// ---------------------------------------------------------------------------
+
+test("normalizeStructuredFindings tracks an unparseable finding (no summary) on the section instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "real finding" }, { severity: "must-fix" }] },
+    { angle: "pr-description", verdict: "clean", findings: [] },
+  ]);
+  // The parseable finding is still rendered; the summary-less one is NOT dropped.
+  assert.equal(angles[0].findings.length, 1);
+  assert.equal(angles[0].findings[0].summary, "real finding");
+  assert.ok(Array.isArray(angles[0].unparseable));
+  assert.equal(angles[0].unparseable.length, 1);
+  // The severity is read off the raw finding so the tally can decide blocking.
+  assert.equal(angles[0].unparseable[0].severity, "high"); // "must-fix" normalizes to "high"
+  // A flat section (no nested findings path) still carries the uniform shape.
+  assert.ok(Array.isArray(angles[1].unparseable));
+  assert.equal(angles[1].unparseable.length, 0);
+});
+
+test("normalizeStructuredFindings tracks a non-object finding entry as unparseable instead of dropping it (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: ["bogus", null, { severity: "nice-to-have" }] },
+  ]);
+  assert.equal(angles[0].findings.length, 0);
+  assert.equal(angles[0].unparseable.length, 3);
+  // A non-object and null carry no readable severity; an object without summary
+  // still exposes its severity.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "low"); // "nice-to-have" -> "low"
+});
+
+test("normalizeStructuredFindings preserves unparseable entries through render's re-normalization (#1526)", () => {
+  // renderGateReviewCommentBody re-normalizes an already-normalized section;
+  // the unparseable list must survive that pass or the rendered body re-drops it.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.match(body, /\[`unparseable`\]/);
+  assert.match(body, /severity: `high`/);
+});
+
+test("normalizeStructuredFindings coerces a non-string severity on a preserved unparseable entry to the canonical vocabulary (#1526)", () => {
+  // A hand-crafted/producer-drift section may carry a non-string severity on
+  // raw.unparseable; re-normalization must coerce it (never copy verbatim, which
+  // normalizeSeverity would skip and the renderer would emit as `[object Object]`).
+  const angles = normalizeStructuredFindings([
+    {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [],
+      unparseable: [{ severity: 5 }, { severity: { x: 1 } }, { severity: "must-fix" }],
+    },
+  ]);
+  assert.equal(angles[0].unparseable.length, 3);
+  // Non-string severities coerce to "" (no readable severity); a string normalizes.
+  assert.equal(angles[0].unparseable[0].severity, "");
+  assert.equal(angles[0].unparseable[1].severity, "");
+  assert.equal(angles[0].unparseable[2].severity, "high");
+  // The renderer never emits `[object Object]` for the coerced entries.
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  assert.ok(!body.includes("[object Object]"));
+});
+
+test("renderGateReviewCommentBody reports an unparseable finding explicitly in the per-angle breakdown (#1526)", () => {
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+  });
+  // The unparseable entry is distinguishable from a non-blocking parseable finding.
+  assert.match(body, /\[`unparseable`\] finding could not be interpreted/);
+  assert.match(body, /severity: `low`/);
+  // The digest counts the unparseable finding so it is not undercounted.
+  assert.match(body, /1 angle reviewed; 2 findings/);
+});
+
+test("renderGateReviewCommentBody's reduced per-angle digest (finding-surface round) counts unparseable findings (#1526)", () => {
+  // A round that carries its own finding surface (nonLocatableFindings is an array)
+  // renders the REDUCED per-angle digest (renderAngleVerdictDigest) instead of the
+  // full breakdown. That reduced digest must also count unparseable findings, or a
+  // finding-surface round would undercount the very findings it surfaces.
+  const angles = normalizeStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
+  ]);
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: angles,
+    // An array (even empty) selects the reduced digest path.
+    nonLocatableFindings: [],
+  });
+  // 1 parseable + 1 unparseable = 2 findings in the reduced one-liner.
+  assert.match(body, /`correctness` → `findings_present` \(2 findings\)/);
+});
+
+test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-blocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> normalizeStructuredFinding returns null -> formerly dropped.
+          findings: [{ severity: "must-fix" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Cannot set verdict "clean"/);
+    assert.match(payload.error, /blocking severities \[high\]/);
+    assert.match(payload.error, /UNPARSEABLE/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries an unparseable finding WITHOUT a blocking severity, and reports it as unparseable (#1526)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-nonblocking-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        {
+          angle: "correctness",
+          verdict: "findings_present",
+          // No `summary` -> unparseable, but severity is non-blocking (low).
+          findings: [{ severity: "nice-to-have" }],
+        },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        // The clean verdict is posted AND the unparseable finding is surfaced in the body.
+        assertStdinIncludes: ["**Verdict:** clean", "unparseable"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
 
@@ -2929,6 +3172,11 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-1455-unsettled-await-"));
 
   try {
+    // This test's cwd IS the CLI's repoRoot (real subprocess spawn), so its
+    // resolved config is otherwise bare defaults — disable fan-out evidence
+    // enforcement explicitly; this repro is about the draft-transition
+    // self-heal deadlock, not fan-out evidence.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const headSha = "abc1234000000000000000000000000000000000";
     const cleanPreApprovalComment = {
       id: 501,
@@ -3203,6 +3451,10 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-stale-takeover-"));
 
   try {
+    // This test's cwd IS the CLI's repoRoot (real subprocess spawn); disable
+    // fan-out evidence enforcement — this test is about stale-runner takeover,
+    // not fan-out evidence.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     // Pre-claim ownership with an old timestamp so the runner is considered stale
     await claimRunnerOwnership({
       repo: "owner/repo",
@@ -4690,7 +4942,10 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
       headSha: "abc1234000000000000000000000000000000000",
       verdict: "findings_present",
       findingsSummary: "ignored in structured mode",
-      nextAction: "fix",
+      // #1621: a non-clean draft_gate verdict's next action is DERIVED (not the
+      // caller's "fix"), so the pre-rendered body must carry the derived value
+      // to stay a same-head noop.
+      nextAction: "stay draft and fix",
       executionMode: "fanout_fanin",
       structuredFindings,
       findingsSeverityCounts,
@@ -4768,6 +5023,335 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     assert.equal(fanout.code, 0, fanout.stderr);
     assert.equal(fanout.stderr, "");
     assert.equal(JSON.parse(fanout.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// --- Post-time fan-out evidence enforcement ---
+// gates.requireFanoutEvidence is already enforced reactively at merge time
+// (detect-checkpoint-evidence.mjs's buildPreMergeGateCheck). These tests cover
+// the PRODUCE-step refusal added to upsert-checkpoint-verdict.mjs: an inline
+// verdict for a required gate that does not qualify for the light-mode
+// carve-out is refused BEFORE it is ever posted, regardless of verdict value.
+
+test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
+  try {
+    // requireFanoutEvidence: true; no explicit base-ref/label mock entry is
+    // staged below, so the light-facts fetch (the shipped default enables
+    // lightMode) gets an unusable response and scope stays un-derivable —
+    // fails closed exactly like an over-threshold PR would.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+
+    for (const verdict of ["clean", "findings_present", "blocked"]) {
+      const env = await writeGhStub(tempDir, [
+        ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      ]);
+      const result = await runNode([
+        "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+        "--verdict", verdict, "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
+        "--execution-mode", "inline_single_agent", "--inline-reason", "over-threshold local change",
+      ], { env, cwd: tempDir });
+      assert.equal(result.code, 1, `verdict=${verdict}: ${result.stderr}`);
+      const payload = JSON.parse(result.stderr);
+      assert.equal(payload.ok, false);
+      // Mirrors the merge-time rejection wording (detect-checkpoint-evidence.mjs's
+      // buildPreMergeGateCheck / evaluateInlineFanoutMode) verbatim, so an operator
+      // sees the SAME diagnosis at post time as they would at merge time.
+      assert.match(
+        payload.error,
+        /draft_gate: requireFanoutEvidence is enabled but executionMode is "inline_single_agent" \(expected "fanout_fanin"\); inline gate verdicts are not accepted/,
+      );
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict accepts an inline verdict under the light-mode threshold", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-light-accept-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      // PR reviews fetch (evidence scan) and the internal-only-file probe both
+      // run before enforcePostTimeFanoutMode's own light-facts fetch.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      // The hermetic `git` PATH stub (see the file-level `before()` hook) always
+      // reports an empty diff, so the merge-base scope re-derivation this fetch
+      // feeds is always "0 files / 0 lines" — genuinely under ANY positive
+      // threshold, exercising the real accept path, not a stubbed shortcut.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "micro-PR, under threshold",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict fails closed on an inline verdict when the base ref cannot be resolved (scope un-derivable)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-scope-underivable-"));
+  try {
+    // lightMode is enabled, but the light-facts fetch below fails — with no
+    // base ref, scope re-derivation is skipped and the light-mode carve-out
+    // can never apply, so the post is refused just like the plain
+    // over-threshold case (same fail-closed posture as merge time).
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], exitCode: 1, stderr: "gh: rate limited\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "cannot prove scope",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of requireFanoutEvidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-fanout-accept-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-json", findingsPath, "--next-action", "mark ready for review",
+      "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).executionMode, "fanout_fanin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict posts an inline verdict without restriction when requireFanoutEvidence is false", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-opted-out-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":401,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-401"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "opted out of fan-out evidence",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// A gate:full label always forces the full fan-out — scope is not even measured
+// — so an inline verdict for a gate:full-labelled PR is refused at post time
+// even when the merge-base scope would otherwise be under threshold. Kills the
+// mutation `hasFullLabel = false` on the post-time light-facts fetch (the label
+// is a first-class term of the acceptance predicate, resolved from the PR only
+// at post time on this boundary).
+test("upsert-checkpoint-verdict refuses an inline verdict at post time when the PR carries the gate:full label", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-gatefull-refuse-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      // light-facts fetch returns a gate:full label: the carve-out cannot apply
+      // (the label always forces fan-out, scope is not even measured).
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[{"name":"gate:full"}]}\n' },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "mark ready for review",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "gate:full forces fan-out",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// pre_approval_gate is the gate that actually gates merge, so post-time
+// enforcement must cover it too — not only draft_gate. Every existing post-time
+// test posts --gate draft_gate; this kills the mutation that removes the
+// pre_approval_gate candidate marker entirely (the `gate === "pre_approval_gate"
+// ? candidateMarker : inactiveMarker` branch), which would silently exempt the
+// most important surface from enforcement.
+test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at post time under requireFanoutEvidence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-preapproval-refuse-"));
+  try {
+    // lightMode disabled so the lazy light-facts fetch does not fire (no fetch
+    // needed to prove the marker is evaluated); requireFanoutEvidence on so the
+    // pre_approval_gate candidate marker IS evaluated by enforcePostTimeFanoutMode.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: false",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        // A Copilot review on the current head lets the coordination state allow
+        // pre_approval_gate entry (otherwise gateActionForbidden refuses with
+        // "request Copilot review before any pre_approval_gate entry" before
+        // enforcement runs — which would not exercise the marker path).
+        reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
+      }),
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "merge ready",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "single-agent pre-approval",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// One shared fixture, driven through BOTH the post-time refusal
+// (upsertCheckpointVerdict, via enforcePostTimeFanoutMode) and the merge-time
+// rejection (buildFanoutEnforcement + evaluateInlineFanoutMode, exactly as
+// buildPreMergeGateCheck calls it) — proving the two boundaries reach the
+// SAME verdict from the SAME facts because they share the one predicate.
+test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence merge-time rejection agree on the same fixture", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-agree-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const fixture = {
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      executionMode: "inline_single_agent",
+      inlineReason: "shared fixture: over-threshold local change",
+    };
+
+    // Post-time: the verdict does not exist yet — upsertCheckpointVerdict must
+    // refuse to record it.
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], headSha: fixture.headSha }),
+    ]);
+    const postTimeResult = await runNode([
+      "--repo", fixture.repo, "--pr", String(fixture.pr), "--gate", fixture.gate, "--head-sha", fixture.headSha,
+      "--verdict", "clean", "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
+      "--execution-mode", fixture.executionMode, "--inline-reason", fixture.inlineReason,
+    ], { env, cwd: tempDir });
+    assert.equal(postTimeResult.code, 1);
+    const postTimeError = JSON.parse(postTimeResult.stderr).error;
+
+    // Merge-time: simulate the SAME verdict as if it HAD been posted (a marker
+    // read back off the PR) and ask the exact merge-time predicate the same
+    // question, from the same config/fixture facts.
+    const { config } = await loadDevLoopConfig({ repoRoot: tempDir });
+    const postedMarker = { visible: true, executionMode: fixture.executionMode, inlineReason: fixture.inlineReason, headSha: fixture.headSha };
+    const invisibleMarker = { visible: false };
+    const mergeTimeEnforcement = await buildFanoutEnforcement({
+      repo: fixture.repo,
+      pr: fixture.pr,
+      currentHeadSha: fixture.headSha,
+      draftGateMarker: postedMarker,
+      preApprovalGateMarker: invisibleMarker,
+      config,
+      cwd: tempDir,
+      hasFullLabel: false,
+      baseRef: null,
+    });
+    assert.equal(mergeTimeEnforcement.required, true);
+    const mergeTimeGate = mergeTimeEnforcement.gates.find((g) => g.name === "draft_gate");
+    const mergeTimeError = evaluateInlineFanoutMode(mergeTimeGate, mergeTimeEnforcement);
+
+    assert.ok(mergeTimeError, "expected merge-time to also reject this fixture");
+    // Post-time wraps the SAME per-gate message with post-time framing; assert
+    // the underlying diagnosis (the merge-time message) is verbatim-contained,
+    // not paraphrased or re-derived.
+    assert.ok(
+      postTimeError.includes(mergeTimeError),
+      `expected post-time error to contain the merge-time message verbatim.\npost-time: ${postTimeError}\nmerge-time: ${mergeTimeError}`,
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -4868,6 +5452,16 @@ const SINGLE_SURFACE_HEAD = "abc1234000000000000000000000000000000000";
 const SINGLE_SURFACE_PATCH = ["@@ -1,3 +1,5 @@", " line1", "-old line2", "+new line2", "+new line3", " line4"].join("\n");
 
 async function writeSingleSurfaceLedger(tempDir, findings, overrides = {}) {
+  // These tests are about the finding-surface/ledger mechanics, not fan-out
+  // evidence, and use a bare tempDir as repoRoot (schema default:
+  // requireFanoutEvidence: true) — disable it unless a test already staged
+  // its own .devloops (e.g. for angle-pool configuration) before calling this.
+  const devloopsPath = path.join(tempDir, ".devloops");
+  try {
+    await readFile(devloopsPath, "utf8");
+  } catch {
+    await writeFile(devloopsPath, "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+  }
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo",
@@ -5311,4 +5905,826 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
   });
   assert.ok(body.includes("[`low`]"));
   assert.ok(!body.includes("[`defer`]"));
+});
+
+// ---------------------------------------------------------------------------
+// #1616: verdict consistency enforcement — upsert-checkpoint-verdict refuses a
+// --verdict that contradicts the consolidated ledger's overallVerdict, derives
+// it by default when the ledger carries one, and fails closed on a malformed
+// ledger. The consolidator's overallVerdict threads from consolidate-fanin.mjs's
+// --ledger-out through write-gate-findings-log.mjs into the durable ledger; an
+// absent overallVerdict preserves today's behavior so inline/fallback paths are
+// unaffected. Enforces GATE-COMMENT-VERDICT-VALUES (clean = no blocking
+// findings remain; findings_present = blocking findings found).
+// ---------------------------------------------------------------------------
+
+const VERDICT_LEDGER_HEAD = "abc1234000000000000000000000000000000000";
+
+async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate" }) {
+  const ledgerPath = path.join(tempDir, "verdict-ledger.json");
+  const log = {
+    repo: "owner/repo",
+    pr: 17,
+    gate,
+    headSha: VERDICT_LEDGER_HEAD,
+    verdict: verdict ?? overallVerdict,
+    loggedAt: "2026-08-09T00:00:00.000Z",
+    findings,
+  };
+  if (overallVerdict !== undefined) {
+    log.overallVerdict = overallVerdict;
+  }
+  await writeFile(ledgerPath, JSON.stringify(log), "utf8");
+  return ledgerPath;
+}
+
+// Full gh entry set for a --findings-ledger round that reaches the finding
+// surface + review POST path. VERDICT_LEDGER_HEAD === SINGLE_SURFACE_HEAD, so
+// singleSurfaceLeadingEntries covers every call the coordination + finding
+// surface path makes; the trailing POST entry accepts the created review.
+function verdictEnforcementEntries() {
+  return [
+    ...singleSurfaceLeadingEntries(),
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
+  ];
+}
+
+// A permissive runChild that dispatches on the gh args and answers every call
+// the verdict-enforcement happy path makes (coordination, finding surface,
+// review POST) without the fragile sequential-entry ordering makeGhMock
+// requires. Used for the derive/match/absent tests that reach resolveFindingSurface.
+function permissiveVerdictRunChild(headSha) {
+  const prJson = JSON.stringify({
+    number: 17, state: "OPEN", isDraft: true, headRefOid: headSha, body: DEFAULT_TEST_PR_BODY,
+    closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+  }) + "\n";
+  return async (cmd, args = [], _env, _stdin = "") => {
+    if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
+    const a = args.join(" ");
+    if (a.includes("pulls/17/reviews") && a.includes("-X POST")) {
+      return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
+    }
+    if (a.includes("requested_reviewers")) return { code: 0, stdout: '{"users":[],"teams":[]}\n', stderr: "" };
+    if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
+    if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("--json") && a.includes("statusCheckRollup")) return { code: 0, stdout: prJson, stderr: "" };
+    if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state")) return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
+    if (a.includes("--json") && a.includes("files")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
+    if (a.includes("--json")) return { code: 0, stdout: prJson, stderr: "" };
+    return { code: 0, stdout: "{}\n", stderr: "" };
+  };
+}
+
+async function runVerdictEnforcement(args, { repoRoot, headSha }) {
+  const options = parseUpsertCheckpointVerdictCliArgs(args);
+  try {
+    const result = await upsertCheckpointVerdict(options, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild: permissiveVerdictRunChild(headSha) });
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n` };
+  }
+}
+
+test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-clean-vs-findings-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "findings_present", "--findings-summary", "operator says findings",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "stay draft and fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /contradicts the consolidated ledger's overallVerdict "clean"/);
+    assert.match(error.error, /--verdict "findings_present"/);
+    assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
+    assert.match(error.error, new RegExp(VERDICT_LEDGER_HEAD));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (clean posted for a findings round)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-findings-vs-clean-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "operator says clean",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /contradicts the consolidated ledger's overallVerdict "findings_present"/);
+    assert.match(error.error, /--verdict "clean"/);
+    assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert derives the verdict from the ledger's overallVerdict when --verdict is omitted", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-derive-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    // Inline mode (no --execution-mode): verdict enforcement is independent of
+    // execution mode — the ledger's overallVerdict derives the verdict.
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-summary", "findings present (derived)",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "stay draft and fix",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+    assert.equal(parsed.gate, "draft_gate");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-match-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert fails closed on a present-but-malformed ledger overallVerdict", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-malformed-"));
+  try {
+    const ledgerPath = path.join(tempDir, "verdict-ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: VERDICT_LEDGER_HEAD,
+      verdict: "clean",
+      findings: [],
+      overallVerdict: "not-a-verdict",
+    }), "utf8");
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /"overallVerdict" must be clean, findings_present, or blocked/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: an absent overallVerdict in the ledger preserves current behavior (explicit --verdict accepted)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-absent-ov-"));
+  try {
+    // Legacy ledger shape (no overallVerdict field) — inline/fallback paths
+    // must be unaffected: the explicit --verdict is accepted as before.
+    const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
+    const result = await runVerdictEnforcement([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}',
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+      "--inline-reason", "verdict enforcement test",
+    ], { repoRoot: fanoutDisabledRepoRoot, headSha: VERDICT_LEDGER_HEAD });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1616: upsert fails closed when --verdict is omitted but the ledger carries no overallVerdict", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-no-verdict-no-ov-"));
+  try {
+    const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries());
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-summary", "no issues found",
+      "--findings-ledger", ledgerPath,
+      "--next-action", "mark ready for review",
+    ], { env });
+    assert.equal(result.code, 1);
+    const error = JSON.parse(result.stderr);
+    assert.match(error.error, /--verdict is required/);
+    assert.match(error.error, /carries no overallVerdict/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---- #1621: verdict-write preconditions (next-action derivation, gate:full
+// light escalation, unticked-AC refusal) ----
+
+const GATE_FULL_HEAD = "abc1234000000000000000000000000000000000";
+const UNTICKED_AC_ISSUE_BODY = [
+  "## Summary", "", "Fix the gate.", "",
+  "## Acceptance criteria", "",
+  "- [ ] first AC is still open", "- [x] second AC is done", "- [ ] third AC remains", "",
+  "## Definition of done", "",
+  "- [ ] tests pass", "",
+].join("\n");
+const TICKED_AC_ISSUE_BODY = [
+  "## Acceptance criteria", "",
+  "- [x] first AC is done", "- [x] second AC is done", "",
+].join("\n");
+
+// Permissive dispatch runChild for #1621 AC tests: answers every gh call the
+// coordination + post path makes from arg shape (not fragile sequential order),
+// captures calls, and is configurable for draft/ready, linked-issue bodies,
+// and gate:full label creation/addition.
+function makeAcRunChild({
+  headSha = GATE_FULL_HEAD,
+  isDraft = true,
+  closingIssues = [],
+  issueBodyByNumber = {},
+  reviews = [],
+  issueComments = [],
+  ciSuccess = true,
+} = {}) {
+  const calls = [];
+  const prJson = JSON.stringify({
+    number: 17, state: "OPEN", isDraft, headRefOid: headSha,
+    body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: closingIssues,
+    reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ciSuccess ? "SUCCESS" : "FAILURE", name: "ci" }],
+  }) + "\n";
+  const runChild = async (cmd, args = [], _env, _stdin = "") => {
+    calls.push({ command: cmd, args: [...args], stdinText: _stdin ?? "" });
+    if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
+    const a = args.join(" ");
+    // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
+    if (args[0] === "issue" && args[1] === "view") {
+      const issue = args[2];
+      const body = issueBodyByNumber[issue];
+      if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
+      return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
+    }
+    // gate:full label resource creation (idempotent).
+    if (args[0] === "label" && args[1] === "create") return { code: 0, stdout: "", stderr: "" };
+    // add gate:full label to the PR.
+    if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-label")) return { code: 0, stdout: "", stderr: "" };
+    if (a.includes("pulls/17/reviews") && a.includes("-X POST")) return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
+    if (a.includes("-X") && (a.includes("PUT") || a.includes("PATCH")) && a.includes("pulls/17/reviews")) return { code: 0, stdout: '{"id":91,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-91"}\n', stderr: "" };
+    if (a.includes("-X") && a.includes("PATCH") && a.includes("issues/comments")) return { code: 0, stdout: '{"id":91,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-91"}\n', stderr: "" };
+    if (a.includes("requested_reviewers")) return { code: 0, stdout: '{"users":[],"teams":[]}\n', stderr: "" };
+    if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
+    if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n", stderr: "" };
+    if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments) + "\n", stderr: "" };
+    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    // Dispatch pr view --json <fields> on the exact --json field list, so the
+    // full pr view (which lists `files` among many fields) is not mistaken for
+    // the dedicated `--json files` files-list call.
+    const jsonIdx = args.indexOf("--json");
+    const jsonFields = jsonIdx >= 0 ? args[jsonIdx + 1] : "";
+    if (jsonFields === "baseRefOid,labels") return { code: 0, stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n', stderr: "" };
+    if (jsonFields === "headRefOid") return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
+    if (jsonFields === "files") return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
+    if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: prJson, stderr: "" };
+    return { code: 0, stdout: "{}\n", stderr: "" };
+  };
+  return { runChild, calls };
+}
+
+// Stage a repoRoot whose .devloops mirrors the real config with
+// requireFanoutEvidence flipped to the requested value (true for the
+// gate:full-label test, false otherwise).
+async function stageConfigRepoRoot(requireFanoutEvidence) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1621-cfg-"));
+  const real = await readFile(path.resolve(".devloops"), "utf8");
+  // Patch the gates.requireFanoutEvidence value regardless of the literal's
+  // current spelling (true/false/absent) so a future default flip does not make
+  // this a silent no-op. Always asserts the replacement landed so a missing key
+  // fails loudly instead of leaking the real (fan-out-on) config into a test
+  // that expects fan-out off.
+  const want = `requireFanoutEvidence: ${requireFanoutEvidence}`;
+  const patched = real.replace(/requireFanoutEvidence:\s*(true|false)\b/, want);
+  // Fails loudly if the key is absent (no patch landed) instead of silently
+  // leaking the real (fan-out-on) config into a fan-out-off test.
+  assert.ok(patched.includes(want), `patched .devloops must carry ${want}`);
+  await writeFile(path.join(dir, ".devloops"), patched, "utf8");
+  return dir;
+}
+
+test("#1621: a findings_present draft_gate verdict DERIVES the next action, ignoring an advancing caller value", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // An ADVANCING next action the caller tried to splice in.
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* merge/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a findings_present pre_approval_gate verdict derives 'rerun gate' (not the caller's advancing action)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({
+      isDraft: false,
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // An ADVANCING action the caller tried to splice into a non-clean verdict.
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* await final human approval/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: same-head idempotency holds after next-action derivation (a rerun is a noop, not a spurious re-post)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const draftGateComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "a high-severity finding remains", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [draftGateComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      // Caller passes an advancing action; it is derived away to the same value
+      // the existing comment already carries.
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "noop");
+    // No re-post occurred.
+    assert.equal(calls.filter((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")).length, 0);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline round that surfaces a blocking finding applies the gate:full label and the post still succeeds", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline blocking finding",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    // The post succeeded.
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    // The label resource was created and added to the PR.
+    const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
+    assert.ok(labelCreate, "gate:full label resource was created");
+    const addLabel = calls.find((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full"));
+    assert.ok(addLabel, "gate:full label was added to the PR");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline CLEAN round does NOT apply the gate:full label", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline clean",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, undefined);
+    assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// #1526: the roundCarriesBlockingSeverity unparseable branch (parallel tally to
+// the clean-verdict cross-check) must escalate gate:full for an inline round
+// that surfaces an UNPARSEABLE blocking finding, exactly as a parseable one
+// would. Fails if the guard reverts to dropping unparseable findings from
+// this tally too.
+test("#1526: an inline round that surfaces an UNPARSEABLE blocking finding applies the gate:full label (roundCarriesBlockingSeverity unparseable branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1526-unparseable-escalate-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        // No `summary` -> normalizeStructuredFinding returns null -> unparseable,
+        // but severity "must-fix" (-> "high") is read and is blocking.
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix" }] },
+      ]),
+      "utf8",
+    );
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsJson: findingsPath,
+      findingsSummary: "an unparseable blocking finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline unparseable blocking finding",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
+    assert.ok(labelCreate, "gate:full label resource was created for an unparseable blocking finding");
+    const addLabel = calls.find((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full"));
+    assert.ok(addLabel, "gate:full label was added to the PR for an unparseable blocking finding");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is REFUSED while the spec-of-record has unticked AC items", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: UNTICKED_AC_ISSUE_BODY },
+      // 5 Copilot reviews on prior heads → round-cap reached; draft_gate clean
+      // comment on the current head; zero unresolved threads; CI green.
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
+        assert.match(err.message, /unticked Acceptance criteria/);
+        assert.match(err.message, /first AC is still open/);
+        assert.match(err.message, /ACCEPT-CRITERIA-VERIFY-AND-REFLECT/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is ALLOWED when the spec-of-record ACs are all ticked", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gate, "pre_approval_gate");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a clean pre_approval_gate verdict is ALLOWED when there is no linked issue (no spec-of-record ACs to check)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [],
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a blocked draft_gate verdict DERIVES 'stay draft and fix' (not the caller's advancing action)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "blocked", findingsSummary: "gate could not complete",
+      // The AC names both findings_present AND blocked; the blocked path must
+      // also derive, not accept the caller's advancing action.
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 blocked test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+    assert.ok(postCall, "a review was posted");
+    const body = JSON.parse(postCall.stdinText).body;
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* mark ready for review/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline round whose --findings-json carries a blocking-severity finding applies gate:full (structuredFindings branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const findingsPath = path.join(repoRoot, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "a real defect", file: "src/x.mjs", line: 1 }] },
+      { angle: "coverage", verdict: "clean", findings: [] },
+    ]), "utf8");
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsJson: findingsPath,
+      findingsSummary: "ignored in structured mode",
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline structured #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: a blocking-severity finding with a resolved disposition does NOT escalate gate:full (structuredFindings branch)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const findingsPath = path.join(repoRoot, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "clean", findings: [{ severity: "high", summary: "already resolved", file: "src/x.mjs", line: 1, disposition: "operator_acknowledged" }] },
+    ]), "utf8");
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsJson: findingsPath,
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      findingsSummary: "ignored in structured mode",
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: "inline structured resolved #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, undefined);
+    assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline UPDATE round that surfaces a blocking finding applies gate:full on the updated path", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    // An existing same-head comment that differs (older summary) → forces an update, not a noop.
+    const existingComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "OLDER summary now changed", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 update test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T19:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [existingComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 update test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "updated");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added on update");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an umbrella ready PR whose first-linked issue is ticked but a sibling has unticked ACs is REFUSED clean", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }, { number: 901 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY, 901: UNTICKED_AC_ISSUE_BODY },
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 umbrella test",
+      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
+        assert.match(err.message, /ACCEPT-CRITERIA-VERIFY-AND-REFLECT/);
+        // The message names BOTH linked issues (no misattribution to the ticked first-linked #900).
+        assert.match(err.message, /#900, #901/);
+        // The unticked ACs come from sibling issue #901.
+        assert.match(err.message, /first AC is still open/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: an inline free-text-only findings_present round (no structuredFindings, no counts) escalates gate:full via the verdict fallback", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      // No findingsJson, no findingsSeverityCounts — exercises roundCarriesBlockingSeverity's
+      // `return verdict === "findings_present"` free-text fallback branch.
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent", inlineReason: "inline free-text #1621 test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added via free-text fallback");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1621: gate:full label is re-applied on a noop rerun (idempotent retry after a prior label failure)", async () => {
+  const repoRoot = await stageConfigRepoRoot(true);
+  try {
+    const draftGateComment = {
+      id: 91,
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "findings_present",
+        findingsSummary: "a high-severity finding remains", nextAction: "stay draft and fix",
+        executionMode: "inline_single_agent", inlineReason: "inline #1621 noop-retry test",
+      }),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    const { runChild, calls } = makeAcRunChild({ isDraft: true, issueComments: [draftGateComment] });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      verdict: "findings_present", findingsSummary: "a high-severity finding remains",
+      findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
+      nextAction: "merge",
+      executionMode: "inline_single_agent", inlineReason: "inline #1621 noop-retry test",
+    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "noop");
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label re-applied on noop");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

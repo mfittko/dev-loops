@@ -180,10 +180,22 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
     prefix, a same-head rebuild after a live description edit yields different prefix bytes,
     which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
-    the context while reviewers for that head are still running. This does not affect the
-    frozen artifact of an already-completed gate pass. Round retirement
+    the context while reviewers for that head are still running. This is now ENFORCED, not
+    merely stated in prose (#1537): `write-gate-context.mjs` REFUSES (throws, exit 1, no
+    bytes written) a same-head rebuild that would change the recorded prefix bytes while
+    this gate's reviewer sentinels for that head are still live (a fan-out is in flight).
+    The refusal names the in-flight head and points at the reviewers already briefed on
+    the prior bytes (their sentinel files + recorded prefix hash). A sentinel scan that
+    fails for any reason other than a missing tmp/ dir (EACCES, ENOTDIR, ...) cannot
+    rule out an in-flight fan-out, so it is REFUSED too (fail-closed) rather than allowed
+    through a broken scan that could hide live sentinels; only an unreadable EXISTING
+    prefix (which cannot be proven to differ) stays advisory. A rebuild after the
+    round has retired — no live sentinels — is unaffected: the frozen artifact of an
+    already-completed gate pass is not the case being protected. Round retirement
     (`GATE-EXEC-ROUND-RETIREMENT`) does not relax this: it recovers a round AFTER a rebuild
-    stranded it, and never licenses rebuilding mid-flight.
+    stranded it, and never licenses rebuilding mid-flight; the sanctioned rebuild path is
+    retire-THEN-rebuild (retire the round, moving its sentinels out of the live namespace,
+    THEN rebuild at the same head).
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -292,6 +304,55 @@ unreadable, or stamped with a different head SHA MUST report a gate-evidence fin
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
+
+<!-- rule: GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT -->
+**Reviewer-budget preflight (issue #1507).** Before fanning out, the conductor
+runs a pure reviewer-budget preflight and reads its result from
+`artifact.fanout.preflight` (emitted by `write-gate-context.mjs`, which derives
+it via `reviewerBudgetPreflight` from `@dev-loops/core/loop/gate-fanin`). The
+preflight derives how many reviewers the round needs — one per dispatch unit
+(the resolved fresh angles + re-verifications, NOT the raw angle count: a group
+of N angles is one reviewer's scoped dispatch) — and compares it against the
+harness's remaining reviewer budget, supplied to `write-gate-context` via
+`--available-reviewers <n>` (the conductor reads whatever budget the harness
+exposes and passes it through). The result shape:
+
+```
+{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode }
+```
+
+- `dispatch: true` (budget sufficient, OR the harness does not expose a budget
+  so no shortfall can be proven) → proceed with the wave-by-wave fan-out below.
+- `dispatch: false` (`reason: "budget_shortfall"`, `shortfall` names the exact
+  count the budget is short) → the conductor MUST NOT spawn any reviewer. Zero
+  reviewers are dispatched. The shortfall is a recorded, resumable state: the
+  gate-context artifact itself is the record (it carries the dispatch plan +
+  preflight for this head), and completed per-angle artifacts stay valid for
+  their head. A later session resumes the fan-out instead of restarting it:
+  `reviewerBudgetPreflight` receives `completedAngles` — the angle names that
+  already have a CLEAN findings artifact stamped for this head (scanned by
+  `write-gate-context.mjs` from the per-angle reviews directory) — and excludes
+  any dispatch unit whose angles are ALL complete from `requiredReviewers` and
+  from `preflight.pendingGroups`. The conductor dispatches only `pendingGroups`
+  (the shortfall), never re-dispatching a group already complete at this head,
+  so a session that exhausted its reviewer budget mid-fan-out picks up exactly
+  where it stopped once a later session re-runs `write-gate-context`
+  (`--available-reviewers` with the now-refreshed budget) at the same head and
+  the preflight clears. Completed per-angle artifacts from PRIOR heads stay
+  valid for their head via the carry-forward seam (see [Angle carry-forward
+  (fail-closed)](#angle-carry-forward-fail-closed)); the same-head resume above
+  is a separate, preflight-driven mechanism — carry-forward is a head-bump
+  provenance check and intentionally fails closed when `--prev-head` equals
+  `--head-sha` (it is never the same-head resume path).
+
+**No new gate-exemption path (#1507 AC4).** A budget shortfall is NOT a
+verdict: `preflight.verdict` and `preflight.executionMode` are always `null`. A
+shortfall never downgrades a required gate to `inline_single_agent` and never
+produces a clean verdict — `buildPreMergeGateCheck` /
+`evaluateInlineFanoutMode` reject a gate with no clean current-head marker and a
+non-`fanout_fanin` execution mode, so a shortfall state fails closed at merge.
+The preflight only blocks on a PROVEN shortfall; when the budget is unexposed
+(`availableReviewers: null`), it proceeds (today's behavior).
 
 Fan out one fresh-context reviewer per resolved **dispatch unit**. In the default grouped
 mode a dispatch unit is a group of angles (`resolveFanoutGroups`, below): configured
@@ -593,25 +654,29 @@ semantics and exit codes.
 **Sanctioned rebuild-and-retire.**
 
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
-`GATE-EXEC-ROUND-RETIREMENT`: When the gate-context bundle is legitimately REBUILT at the
-same head (the builder resolves PR/issue inputs itself, and correcting bad or stale
-seeding is a legitimate rebuild; rebuilding while reviewers are still running remains
-forbidden — see the conductor rule in Phase 1), the new briefing-prefix bytes hash
-differently, so every
+`GATE-EXEC-ROUND-RETIREMENT`: A legitimate rebuild at the same head (the builder resolves PR/issue inputs itself, and correcting bad or stale seeding is a legitimate rebuild) now REQUIRES retiring the round FIRST: under the #1537 enforcement in Phase 1, `write-gate-context.mjs` REFUSES a rebuild that would change the prefix bytes while any of this gate's reviewer sentinels for that head are still live, so the rebuild cannot strand them in the first place — retire-THEN-rebuild is the sanctioned path (rebuilding while reviewers are still running remains forbidden). The recovery framing below — a round whose sentinels were already invalidated and fail closed forever — applies to rounds stranded BEFORE that enforcement landed, or stranded by a path other than `write-gate-context.mjs` (e.g. a sentinel whose recorded hash no longer matches after an out-of-band prefix change): the new briefing-prefix bytes hash differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
 the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
---reason "<why>" [--findings-dir <round artifacts dir>]` (`--head-sha` is the FULL 40-char
-SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
+--reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`
+(`--head-sha` is the FULL 40-char SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
 (and, when given, the round's findings-artifacts directory) into an audited retirement
 directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
 other gate's live round at the same head is never touched), so a
 FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
-one new hash. Retirement MUST be explicit — `write-gate-context.mjs` warns (naming this
-command) when a rebuild overwrites a differing prefix at a head with live sentinels, and
-never retires as a side effect. The caller MUST pass `--findings-dir` whenever the retired
+one new hash. Retirement MUST be explicit — `write-gate-context.mjs` REFUSES a same-head
+rebuild that would change the recorded prefix bytes while this gate's reviewer sentinels
+for that head are still live (#1537, naming this command in the refusal); it never retires
+as a side effect. An operator who needs to rebuild at a head with a live round MUST retire
+first (retire-THEN-rebuild), so the rebuild sees no live sentinels and proceeds. The caller MUST pass `--findings-dir` whenever the retired
 round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
-silently mix into the new round's fan-in; retiring them is the explicit discard. The
+silently mix into the new round's fan-in; retiring them is the explicit discard. This is
+now ENFORCED, not just advised (#1626): when `--findings-dir` is omitted and
+`--no-findings-artifacts` is not set, retirement REFUSES if the canonical per-angle findings
+directory for this gate+head (`tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/`, the path
+`write-gate-context.mjs` / `consolidate-fanin.mjs` use) exists — its artifacts would stay
+LIVE. `--repo` + `--pr` name that canonical path for the check; `--no-findings-artifacts` is
+the explicit opt-out (the operator accepts any live-artifact risk). The
 retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
 into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
 one-hash-per-round invariant covers only artifacts its own reviewers wrote). The
@@ -621,21 +686,35 @@ re-seed the fresh fan-out at the same head via `GATE-EXEC-ANGLE-CARRY-FORWARD` e
 never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
 `verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
 never reads, and sentinels of one LIVE round that disagree still fail closed. A gate+head
-with no sentinels and no `--findings-dir` retires as a no-op.
+with no sentinels and no canonical artifacts dir retires as a no-op; the canonical-dir
+check still runs first (pass `--repo`/`--pr` so it can verify no artifacts exist, or
+`--no-findings-artifacts` to opt out).
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
-Before consolidating, run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`
-(the `GATE-EXEC-BRIEFING-PREFIX` enforcement check); a fail-closed result (mismatched or
-missing prefix hashes across this round's reviewer sentinels) MUST stop the pass rather
-than proceed to consolidation.
+Before consolidating, `consolidate-fanin.mjs` itself runs
+`scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>` (the
+`GATE-EXEC-BRIEFING-PREFIX` enforcement check, #1618 — the verifier previously
+had ZERO callers, so the rule's own cited proof was never invoked); a fail-closed
+result (mismatched or missing prefix hashes across this round's reviewer
+sentinels, or a sentinel count short of the dispatch units the conductor spawned)
+MUST stop the pass rather than proceed to consolidation. The conductor supplies
+the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
+context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
+count; when Phase 1.2 carry-forward carried angles, pass the dispatch-unit count
+over the plan's FRESH angles, since `pendingGroups` includes carried angles and
+would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
+dispatch; NOT the per-angle artifact count, which would false-fail every grouped
+round).
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
-  --gate <draft_gate|pre_approval_gate> --out <path> --ledger-out <path> \
+  --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
+  --out <path> --ledger-out <path> \
   --jq '.severityCounts' \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
@@ -651,10 +730,12 @@ verdict; omitting it falls back to the shipped `["high"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
-included — plus the flat ledger shape (written to `--ledger-out <path>`) —
-the exact `--findings-file` input `write-gate-findings-log.mjs` and
-`post-gate-findings.mjs` accept, so neither tool needs an improvised
-`--jq`/`node -e` extraction step to materialize it — the severity counts, and
+included — plus the `{ overallVerdict, findings }` wrapper (written to
+`--ledger-out <path>`) — the exact `--findings-file` input
+`write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former
+threads `overallVerdict` into the durable ledger for verdict-consistency
+enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
+an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
 asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,
 `severityCounts` (the true, unbudgeted totals), and the `out`/`ledgerOut` paths
@@ -832,7 +913,17 @@ marker-tagged PR issue comment grouped by severity. It is governed by
 `gates.postFindingsComments` (resolved via `resolveGatePostFindingsComments(config)`,
 default false / opt-in) and no-ops with a `skipped` result unless a repo explicitly turns
 it on. A repo that does opt in accepts duplicated finding text on a second surface for
-every reader; nothing in the gate flow requires it.
+every reader; nothing in the gate flow requires it. This comment is itself bounded by
+GitHub's per-comment character limit: a round large enough to approach that limit degrades
+by dropping individual findings, least-urgent first (across every less-urgent severity before
+touching a more-urgent one), so a round only slightly over the limit loses close to only as
+many low-priority findings as it takes to fit — never posting an over-limit body, though the
+search can occasionally settle on dropping a few more findings than the true minimum — naming
+what was omitted in the posted comment and pointing at the disposition ledger (always complete,
+never bounded) as the full record; a round that cannot fit even with every finding dropped, nor
+with only its single most-urgent finding kept, fails the post closed rather than reporting
+success. Do not assume this comment alone carries every finding of a large round — the ledger
+is the one surface with that guarantee.
 
 Because the findings ride the verdict review itself, they occupy the same post-verdict,
 pre-fix slot relative to Phase 4 — unresolved threads exist on the PR before any fix is
@@ -840,10 +931,80 @@ attempted. On `pre_approval_gate`, an unresolved review thread forbids the gate'
 actions, which is why that slot matters there; the same slot is kept for `draft_gate` too,
 for uniformity, even though the draft boundary does not carry that specific refusal.
 
+### Phase 3.5 — Judge: relevance disposition (#1525)
+
+<!-- rule: GATE-EXEC-JUDGE-PHASE -->
+`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), the
+conductor dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
+the linked issue's acceptance criteria, definition of done, and non-goals, the PR's declared
+scope, and the prior rounds' judge ledgers, and decides — per finding — whether this PR is
+the place to act on it. This is the relevance axis; it is distinct from and complementary
+to the severity-based disposition `deriveDisposition` owns (accepted-for-fix / deferred /
+needs-answer), which stays intact.
+
+**Inputs:** the consolidated disposition ledger (`consolidate-fanin`'s `{overallVerdict,
+findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, and the
+prior-round judge verdict artifacts for this gate.
+
+**Output:** the judge writes one verdict artifact to a deterministic path
+(`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`) — its only write.
+The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
+
+```json
+{
+  "headSha": "<sha>",
+  "scopeDrift": { "verdict": "within_scope|drift_detected", "rationale": "...", "driftedAreas": ["..."] },
+  "dispositions": [{ "index": 0, "disposition": "act|defer|reject", "rationale": "...", "criterion": "...", "followUpDraft": { "title": "...", "body": "..." } }]
+}
+```
+
+- `index` is the 0-based position of the finding in the consolidated ledger's `findings`
+  array. One disposition per finding.
+- `act` — in-scope for this PR; the fixer addresses it.
+- `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract).
+- `reject` — out-of-scope against a named non-goal or scope boundary; this PR is not the
+  place, and a follow-up is not warranted.
+- `rationale` MUST name the criterion, non-goal, or scope boundary the disposition turns on.
+- `scopeDrift.verdict` is the PR-as-a-whole scope-drift verdict, distinct from the
+  per-finding dispositions.
+
+**Merge seam.** The conductor enriches the consolidated findings with the judge's
+dispositions via `applyJudgeDispositions(findings, judgeVerdict)` (`@dev-loops/core/loop/gate-fanin`,
+pure, fail-closed on a malformed verdict or an out-of-range index), then writes the durable
+ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched findings carry
+`judgeDisposition` / `judgeRationale` / `judgeCriterion` / `followUpDraft` so the disposition
+ledger and the posted findings comment show what was consciously not acted on and why
+(`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
+
+<!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
+`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
+PR?); the fixer owns **reproduction** (does this finding reproduce / is it a real defect?).
+The fix pass (Phase 4) consumes **only the `act` list** and retains reproduction-based
+rejection — a finding that does not reproduce is dead regardless of what the judge decided —
+but stops being the actor that decides relevance. The judge does NOT soften `must-fix` on
+correctness grounds: a real defect stays a real defect; the judge decides *where* it is
+fixed, not *whether* it is real. When no judge verdict is present (a gate that has not yet
+wired the judge phase), the fixer falls back to the existing severity-based disposition.
+
+<!-- rule: GATE-EXEC-JUDGE-NOT-FRESH -->
+`GATE-EXEC-JUDGE-NOT-FRESH`: The judge is the one actor that must NOT be fresh-context per
+round. Reviewer fresh-context isolation (`GATE-EXEC-BUILD-ONCE-SEED`) is unchanged — the
+judge is a separate agent dispatched after fan-in, not a reviewer. The judge is the
+designated memory: it sees the round history precisely so it can notice accretion,
+self-renewing churn, or findings-about-a-fix. It is seeded with the conductor's accumulated
+state (prior-round ledgers, scope history) rather than a blank slate — the conductor hands
+it the prior-round judge verdict artifacts as an explicit input, so its memory is durable
+and auditable rather than implicit.
+
 ### Phase 4 — Fix
 
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
 
+- When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
+  — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding
+  that does not reproduce is dead regardless of the judge's verdict) but stops deciding
+  relevance (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). When no judge verdict is present, the fixer
+  falls back to the severity-based `blockCleanOnFindingSeverities` set below.
 - apply only the accepted narrow fixes on the same branch
 - do not broaden scope or touch unrelated files
 - run the smallest honest validation for the accepted fix scope
@@ -1023,11 +1184,18 @@ node scripts/github/write-gate-findings-log.mjs \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
-`--findings-file` reads the same JSON array from a file (identical validation) —
+`--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
-`--ledger-out <path>` writes exactly this shape — pass that path straight to
-`--findings-file` on both tools, no hand extraction. A finding with severity
+`--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
+that path straight to `--findings-file` on both tools, no hand extraction.
+`write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the
+consolidator's computed verdict) into the durable ledger, so
+`upsert-checkpoint-verdict.mjs` enforces verdict consistency against it (#1616,
+`GATE-COMMENT-VERDICT-VALUES`): a `--verdict` that contradicts the ledger's
+`overallVerdict` is refused, and when the ledger carries `overallVerdict` the
+verdict is derived from it by default (passing no `--verdict` is valid).
+`post-gate-findings.mjs` unwraps and ignores `overallVerdict`. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools. A
 `question` finding with no `disposition` is derived the same way: `needs-answer`
@@ -1202,26 +1370,26 @@ resolvable thread through which the standard fix loop could otherwise close it.
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the tier-4/withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA, and the pre-merge evidence check fails closed for a required gate otherwise. Repos can opt out with `gates.requireFanoutEvidence: false`. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the tier-4/withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA. Enforcement runs at **both** boundaries, sharing one acceptance predicate (`evaluateInlineFanoutMode`, `detect-checkpoint-evidence.mjs`) so the two can never drift: the **produce step** (`upsert-checkpoint-verdict.mjs`) refuses to record an under-qualified `inline_single_agent` verdict for a required gate BEFORE it is ever posted — for every verdict value (`clean`, `findings_present`, `blocked`), since mode qualification does not depend on the conclusion — and the **pre-merge evidence check** (`buildPreMergeGateCheck`) remains the fail-closed net for a required gate otherwise (e.g. a verdict posted before enforcement existed, or a hand-edited comment). Repos can opt out with `gates.requireFanoutEvidence: false`; there is no per-post override. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 
 `lightMode` (`localImplementation.lightMode`, #1043) collapses the gate fan-out to a
 single `inline_single_agent` check for genuinely small changes. Because
-`requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, the pre-merge
-evidence check (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`) is
-**light-mode-aware** (#1174): it accepts a required gate's `inline_single_agent` verdict
-**only** when **all** of the following hold, and **fails closed** on any one that does
-not — leaving today's rejection byte-identical:
+`requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, both enforcement
+boundaries are **light-mode-aware** (#1174) through the one shared predicate: they accept
+a required gate's `inline_single_agent` verdict **only** when **all** of the following
+hold, and **fail closed** on any one that does not — leaving today's rejection
+byte-identical:
 
 - `localImplementation.lightMode.enabled` is `true` in config;
-- the reviewed head's scope is **re-derived fail-closed** at merge time via
-  `detectMergeBaseScope` (the three-dot merge-base diff, `git diff <base>...<head>`) and
-  is genuinely under the configured `maxFiles`/`maxLines`. This is deliberately NOT the
-  two-dot `detectScope` that `resolve-gate-dispatch` uses at dispatch time: the merge-time
-  check re-derives against the merge base so a non-fast-forward advance cannot understate
-  scope. If scope cannot be derived (missing base ref, git failure), the inline verdict is
-  rejected;
+- the reviewed head's scope is **re-derived fail-closed** — at post time against the
+  PR's current base ref, and again at merge time — via `detectMergeBaseScope` (the
+  three-dot merge-base diff, `git diff <base>...<head>`) and is genuinely under the
+  configured `maxFiles`/`maxLines`. This is deliberately NOT the two-dot `detectScope`
+  that `resolve-gate-dispatch` uses at dispatch time: re-deriving against the merge base
+  means a non-fast-forward advance cannot understate scope. If scope cannot be derived
+  (missing base ref, git failure), the inline verdict is rejected;
 - the PR carries **no `gate:full` label** (the label always forces the full fan-out —
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.

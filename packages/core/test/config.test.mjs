@@ -632,6 +632,50 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  // #1578: a config layer carrying raw gates.<gate>.mandatoryAngles/
+  // excludeAngles keys is rejected by the strict GateConfig schema. The
+  // whole layer is dropped (packaged defaults remain), but the drop MUST NOT
+  // be silent — a visible warning naming the offending keys is pushed to the
+  // `warnings` channel (consistent with existing config warnings), not just
+  // the `errors` channel that many consumers ignore.
+  test("#1578: a raw-key gate layer is dropped with a visible warning naming the offending keys", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-raw-gate-keys-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        [
+          "version: 1",
+          "gates:",
+          "  preApproval:",
+          "    angles: [dry]",
+          "    mandatoryAngles: [pr-checklist-matrix]",
+          "    excludeAngles: [yagni]",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      // The layer was rejected — errors is non-empty.
+      assert.ok(Array.isArray(result.errors) && result.errors.length > 0, "raw-key layer should populate errors");
+      // A visible warning names the offending keys — not a silent drop.
+      // Assert the full prefixed key paths appear (e.g.
+      // gates.preApproval.mandatoryAngles) — the migration hint uses the
+      // placeholder form gates.<gate>.mandatoryAngles, so matching the real
+      // gate name proves the key-extraction worked, not the boilerplate. (#1578)
+      assert.ok(
+        result.warnings.some((w) =>
+          /Offending key\(s\):/.test(w) &&
+          /gates\.preApproval\.mandatoryAngles/.test(w) &&
+          /gates\.preApproval\.excludeAngles/.test(w),
+        ),
+        "warnings should name the offending raw keys with their full path in the Offending key(s) segment",
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L1b: a plain consumer (no .devloops) defaults the retrospective gate OFF (#841)", async () => {
     // The retrospective is a dev-loop-development artifact; shipped defaults must be permissive so
     // an ordinary consumer's product PRs do not carry the meta-process gate. extension-defaults

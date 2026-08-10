@@ -6,7 +6,7 @@ import test, { describe, it } from "node:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -1508,6 +1508,184 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
     assert.equal(result.refinementArtifact?.status, "missing");
     assert.equal(result.refinementArtifact?.specSource, "plan_file");
     assert.equal(result.refinementArtifact?.finding, "missing_refinement_artifact");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state auto-releases the runner-coordination lock at terminal stop boundaries (#1632)", async () => {
+  // A dev-loop run that reaches a gate-coordination terminal stop (approval
+  // checkpoint / merge-ready / done / blocked) must release its runner-coordination
+  // lock immediately so a fresh re-dispatch acquires the lock without a takeover.
+  // The Copilot-loop terminal release in `loop handoff` (#1128) only covers
+  // Copilot-loop terminal states; this covers the gate-coordination terminal stops
+  // the handoff release misses (e.g. an internal-only / local-impl PR stopped at the
+  // approval checkpoint without a terminal handoff).
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(releaseCalls.length, 1, "runner lock released exactly once at the terminal stop");
+    assert.equal(releaseCalls[0].repo, "owner/repo");
+    assert.equal(releaseCalls[0].pr, 10);
+    assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state does NOT release the runner-coordination lock at non-terminal boundaries (#1632)", async () => {
+  // A non-terminal gate boundary (e.g. draft gate needed) must keep the lock held —
+  // the run is still active and mid-gate.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-no-release-"));
+  try {
+    // A clean plan-file promotion body routes to the draft-gate boundary (non-terminal).
+    const cleanBody =
+      `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\n` +
+      "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- [ ] b\n";
+    const cleanEnv = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 11,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: cleanBody,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 11 },
+      buildMockRuntime(cleanEnv, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert.equal(
+      [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL, PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY, PR_CHECKPOINT_ACTION.REPORT_DONE, PR_CHECKPOINT_ACTION.REPORT_BLOCKED].includes(result.nextAction),
+      false,
+      "non-terminal boundary must not be a terminal stop action",
+    );
+    assert.equal(releaseCalls.length, 0, "runner lock NOT released at a non-terminal boundary");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("TERMINAL_RUNNER_RELEASE_ACTIONS covers exactly the four run-completion/stop actions (#1632)", () => {
+  // All four gate-coordination terminal stop actions trigger the release; no
+  // mid-gate / non-terminal action does. Proves the Set membership that the
+  // integration test (REPORT_BLOCKED) exercises for one action holds for all four.
+  // Cardinality is asserted so a future accidental 5th member is caught here
+  // rather than silently releasing at a non-terminal mid-gate boundary.
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.size, 4);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.REPORT_DONE), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.REPORT_BLOCKED), true);
+  // Mid-gate / non-terminal actions must NOT release.
+  for (const action of [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+    PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS,
+  ]) {
+    assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(action), false, `${action} must not release`);
+  }
+});
+
+test("detect-pr-gate-coordination-state is non-fatal when the runner release throws (#1632)", async () => {
+  // A release failure (e.g. a corrupt coordination file, or a thrown release)
+  // must never block gate-coordination detection — the try/catch swallows it.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-throw-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 12,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const throwingRelease = async () => {
+      throw new Error("simulated release failure (corrupt coordination file)");
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 12 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: throwingRelease }),
+    );
+
+    // The detector still returns its result despite the release throwing.
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

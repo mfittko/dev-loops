@@ -24,6 +24,13 @@ Sentinels are per review ROUND, keyed by the current head SHA (\`git rev-parse
 HEAD\`). A retry at a new head naturally gets a fresh sentinel (no manual clear
 step), while a same-scope + same-head re-entry still fails closed. When git is
 unavailable the sentinel is keyed by scope only (legacy behavior).
+
+REQUIRED on every invocation (GATE-EXEC-BRIEFING-PREFIX, #1618): exactly one of
+--prefix-hash or --prefix-file. The invariant-briefing prefix hash is recorded
+on the reviewer's sentinel so verify-briefing-prefixes.mjs (now called at
+fan-in by consolidate-fanin.mjs) can fail closed when reviewers of the same
+round were seeded with different invariant blocks. A sentinel created without a
+recorded hash is a hashless sentinel, which the fan-in never grandfathered in.
 Options:
   --scope <name>  Unique reviewer scope (e.g. "draft-gate-coverage").
                   Must be non-empty, containing only alphanumeric
@@ -110,8 +117,9 @@ Exit codes:
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
   2  Usage or internal error, invalid --jq filter, invalid/conflicting
-     --prefix-hash/--prefix-file, or --same-head-retry given without
-     --prefix-hash/--prefix-file`.trim();
+     --prefix-hash/--prefix-file, or --prefix-hash/--prefix-file omitted
+     entirely (required on every invocation, #1618), or --same-head-retry
+     given without --prefix-hash/--prefix-file`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const parseError = buildParseError(USAGE);
@@ -254,10 +262,19 @@ async function main(argv = process.argv.slice(2)) {
     return 2;
   }
   const sameHeadRetry = argv.includes("--same-head-retry") || argv.includes("--pr-body-fix-retry");
-  if (sameHeadRetry && prefixHashArg === null && prefixFileArg === null) {
-    process.stderr.write(`${formatCliError(
-      parseError("--same-head-retry (alias --pr-body-fix-retry) requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory).")
-    )}\n`);
+  // GATE-EXEC-BRIEFING-PREFIX (#1618): a prefix hash is mandatory on EVERY
+  // path, not only --same-head-retry. Before this, a first-run sentinel could
+  // be created with NO recorded prefix hash — a hashless sentinel that
+  // verify-briefing-prefixes.mjs then fails closed on at fan-in, but only if the
+  // fan-in actually called it (it did not, #1618). Requiring the hash here at
+  // the producer means a sentinel can never be created without the
+  // invariant-briefing proof, so the fan-in's count/hash checks have a
+  // well-formed population to verify. A hashless sentinel is never grandfathered.
+  if (prefixHashArg === null && prefixFileArg === null) {
+    const why = sameHeadRetry
+      ? "--same-head-retry (alias --pr-body-fix-retry) requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory)."
+      : "--prefix-hash or --prefix-file is required on every fresh-context reviewer run (GATE-EXEC-BRIEFING-PREFIX): the invariant-briefing prefix hash is recorded on the reviewer's sentinel so verify-briefing-prefixes.mjs can fail closed at fan-in when reviewers of the same round were seeded with different invariant blocks. A sentinel created without a recorded hash is a hashless sentinel, which the fan-in never grandfathered in.";
+    process.stderr.write(`${formatCliError(parseError(why))}\n`);
     return 2;
   }
   const jqArg = resolveFlagValue(argv, "--jq");

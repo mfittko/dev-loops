@@ -7,7 +7,11 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+// JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
+// the validator's membership check so validateFindingsArray stays self-contained.
+import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
+const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -27,6 +31,12 @@ Optional:
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
+  --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
+                                 enriched with the judge's relevance-based dispositions (judgeDisposition /
+                                 judgeRationale / judgeCriterion / followUpDraft) via applyJudgeDispositions before
+                                 the ledger is written, so the durable ledger and posted findings comment carry what
+                                 was consciously not acted on and why (#1525). Optional; when absent the ledger
+                                 writes byte-identically to before.
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -130,6 +140,26 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].resolvedIn must be a 7-64 char hex SHA`);
       }
       entry.resolvedIn = sha;
+    }
+    // Judge relevance-based dispositions (#1525) — carried through so the
+    // durable ledger and posted findings comment show what was consciously
+    // not acted on and why. Optional and additive: when absent (a round with
+    // no judge verdict) the finding writes exactly as before.
+    if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
+      const jd = f.judgeDisposition.trim();
+      if (!JUDGE_DISPOSITIONS.has(jd)) {
+        throw parseError(`${flagLabel}[${i}].judgeDisposition must be one of: ${[...JUDGE_DISPOSITIONS].join(", ")}`);
+      }
+      entry.judgeDisposition = jd;
+    }
+    if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
+      entry.judgeRationale = f.judgeRationale.trim();
+    }
+    if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
+      entry.judgeCriterion = f.judgeCriterion.trim();
+    }
+    if (f.followUpDraft && typeof f.followUpDraft === "object" && !Array.isArray(f.followUpDraft)) {
+      entry.followUpDraft = f.followUpDraft;
     }
     return entry;
   });
@@ -271,6 +301,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "findings-file": { type: "string" },
       provenance: { type: "string" },
       "full-label": { type: "boolean" },
+      "judge-verdict": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -345,6 +376,14 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.fullLabel = true;
       continue;
     }
+    if (token.name === "judge-verdict") {
+      const judgeVerdict = requireTokenValue(token, parseError).trim();
+      if (judgeVerdict.length === 0) {
+        throw parseError("--judge-verdict requires a non-empty path");
+      }
+      options.judgeVerdict = judgeVerdict;
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -379,7 +418,46 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  const findings = await resolveFindings(options);
+  const { findings: rawFindings, overallVerdict } = await resolveFindings(options);
+  // When a judge verdict artifact is supplied, enrich the findings with the
+  // judge's relevance-based dispositions (act/defer/reject + rationale +
+  // follow-up drafts) before writing the ledger (#1525). The judge runs after
+  // fan-in and before the fix pass; applyJudgeDispositions is the pure merge
+  // seam that fails closed on a malformed verdict or an out-of-range index.
+  let findings = rawFindings;
+  let scopeDrift;
+  if (options.judgeVerdict) {
+    const judgePath = path.resolve(repoRoot, options.judgeVerdict);
+    const { readFile } = await import("node:fs/promises");
+    let judgeVerdict;
+    try {
+      judgeVerdict = JSON.parse(await readFile(judgePath, "utf8"));
+    } catch (error) {
+      throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
+    findings = enriched.findings;
+    scopeDrift = enriched.scopeDrift;
+  }
+  // The consolidator's computed verdict (consolidate-fanin.mjs's
+  // `overallVerdict`) threads through `--ledger-out`'s `{overallVerdict,
+  // findings}` wrapper into here, so the durable ledger records the verdict
+  // the fan-in actually computed for this head/gate — not whatever a caller
+  // hand-passed to `--verdict`. Optional and additive: a bare-array input
+  // (legacy `--findings-file`, hand-authored `--findings`) leaves it
+  // undefined and the ledger writes exactly as before. Validated here so a
+  // malformed wrapper cannot silently record an invalid verdict as the
+  // consolidator's truth (#1616).
+  let normalizedOverallVerdict;
+  if (overallVerdict !== undefined) {
+    const verdict = normalizeVerdict(overallVerdict);
+    if (!verdict) {
+      throw parseError(
+        `--${options.findingsFile ? "findings-file" : "findings"} "${options.findingsFile ?? "<inline>"}" wrapper "overallVerdict" must be one of: clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdict)})`,
+      );
+    }
+    normalizedOverallVerdict = verdict;
+  }
   let provenance;
   if (options.provenance === undefined) {
     provenance = undefined;
@@ -423,12 +501,25 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
+  // The consolidator's computed verdict, threaded from `--ledger-out`'s
+  // wrapper. Optional and additive: when absent (a bare-array input or an
+  // older producer) the ledger writes byte-identically to before, so inline
+  // and fallback paths are unaffected (#1616 AC: absent ledger unchanged).
+  if (normalizedOverallVerdict !== undefined) {
+    log.overallVerdict = normalizedOverallVerdict;
+  }
   // Provenance is optional and additive: when absent the ledger writes exactly
   // as before (no provenance key), preserving byte-identical output for the
   // default / Claude-Code path. When present it records fan-out provenance for
   // gates.requireFanoutProvenance enforcement.
   if (provenance !== undefined) {
     log.provenance = provenance;
+  }
+  // The judge's scope-drift verdict on the PR as a whole (#1525). Optional
+  // and additive: when no judge verdict was supplied, the ledger writes
+  // byte-identically to before.
+  if (scopeDrift !== undefined) {
+    log.scopeDrift = scopeDrift;
   }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(log, null, 2) + "\n", "utf8");

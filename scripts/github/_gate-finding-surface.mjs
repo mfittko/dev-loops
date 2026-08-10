@@ -200,9 +200,12 @@ export function collectFingerprints(text, set) {
 // legacy spelling to its canonical name, it does not neutralize a hostile
 // character — so it is applied here in addition to, never instead of,
 // sanitizeInline.
-function renderFindingLine({ severity, angle, summary }) {
+function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}`;
+  const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}`
+    : "";
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
@@ -355,6 +358,18 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     throw fail(`Gate findings ledger "${ledgerPath}" must contain a JSON object`);
   }
   const { repo, pr, gate, headSha, verdict, findings } = parsed;
+  // The consolidator's computed verdict, threaded from `--ledger-out`'s
+  // wrapper by write-gate-findings-log.mjs. Optional and additive: when absent
+  // the ledger reads exactly as before (inline and fallback paths unaffected).
+  // Fail closed on a present-but-invalid value rather than silently treating it
+  // as absent (#1616): a malformed `overallVerdict` must not let a contradicting
+  // `--verdict` slip through enforcement by defaulting to "no overallVerdict".
+  const overallVerdictRaw = parsed.overallVerdict;
+  if (overallVerdictRaw !== undefined) {
+    if (!VALID_LEDGER_VERDICTS.has(overallVerdictRaw)) {
+      throw fail(`Gate findings ledger "${ledgerPath}" "overallVerdict" must be clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdictRaw)})`);
+    }
+  }
   let repoSlug;
   try {
     const { owner, name } = parseRepoSlug(typeof repo === "string" ? repo.trim() : repo);
@@ -414,7 +429,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   // withheld-tier mandatory-angle check) re-validates with the same function
   // rather than assuming a hand-edited or shadow ledger is honest.
   const provenance = parsed.provenance !== undefined ? parsed.provenance : null;
-  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance };
+  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance, overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null };
 }
 
 // ---------------------------------------------------------------------------

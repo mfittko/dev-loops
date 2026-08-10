@@ -52,9 +52,9 @@ Before merge, ALL of the following MUST hold:
 5. ✅ All review threads resolved
 6. ✅ Explicit merge authorization from operator
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
-8. ✅ PR **title** free of merge-blocking markers — `WIP`, `[WIP]`, `DRAFT`, `DO NOT MERGE`, `🚧` (case-insensitive)
+8. ✅ PR **title** free of merge-blocking markers — see [Title markers](#title-markers) for the exact constructions that count
 
-> Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
+> Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. The release fires both at Copilot-loop terminal states (`loop handoff`, #1128) and at gate-coordination terminal stops (`detect-pr-gate-coordination-state` — approval checkpoint / merge-ready / done / blocked, #1632), so a run that stops at the approval checkpoint without a Copilot-loop terminal state still releases immediately. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
 > Stranded Copilot review request (human-only): a review requested on a head that already carries Copilot's own clean submitted review is never delivered — Copilot does not re-engage a change it effectively approved — so below the round cap the loop waits indefinitely and `pre_approval_gate` cannot post. (At the cap the loop already routes to `round_cap_clean_fallback`, so the gate is not blocked and there is nothing to unstick.) Withdraw it explicitly with `node <resolved-skill-scripts>/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> --reason <why>`. It withdraws only when a request is pending (no request is an exit-0 no-op) and refuses outright unless Copilot has already submitted a review and no unresolved threads remain, and it verifies the withdrawal took effect — so prefer it over a raw `gh pr edit --remove-reviewer`, which has none of those guards. This is an operator judgement about a model's behavior: it is deliberately NOT in the sanctioned-command set and an agent must not invoke it.
 >
@@ -139,7 +139,35 @@ Documented pattern — **write, verify, then merge alone**:
 
 The PR title is a contract surface, so a merge-blocking marker in the title is enforced
 deterministically (`findBlockingTitleMarkers` in `@dev-loops/core/loop/pr-title-markers`), not
-just reviewed:
+just reviewed. `WIP` and `DRAFT` only count as blocking when the title uses one of four
+sanctioned constructions — a genuine status claim, not a plain word match:
+
+- bracketed: `[WIP]`, `[draft]`
+- parenthesized: `(wip)`, `(DRAFT)`
+- colon-suffixed: `WIP: add feature`, `draft: new module`
+- standalone (the entire title, nothing else): `WIP`, `draft`
+
+A hyphen, underscore, or space joining the marker word into a compound noun phrase names a
+component instead of asserting status, and is exempt from every construction —
+`draft-gate`, `draft_gate`, `draft gate`, `wip-branch` never flag; nor does a conventional-commit
+scope that happens to share the marker word, e.g. `fix(draft): support x`. `DO NOT MERGE` and `🚧` (anywhere in the title) are matched directly rather than through the
+four constructions. Only whitespace joins the words of `DO NOT MERGE`, so hyphen- or
+underscore-joined spellings such as `do-not-merge` do not flag — case-insensitive throughout.
+
+A dash-set-off trailing tag (`Fix login flow — WIP`) is deliberately not a construction: no
+dash-based rule closes the tag without also reopening the compound-noun false positive for a
+different dash character, so it stays unflagged; `WIP:`/`DRAFT:` remains one keystroke away.
+
+The bracket/paren/colon constructions require their opening delimiter to sit at the start of the
+title or right after whitespace — never directly after a letter, `/`, or `-`. This anchoring is
+what exempts a conventional-commit scope, a path segment, and a scoped label from matching, and it
+is also why a marker preceded by other punctuation with no space (`Fix bug,(draft)`,
+`Fix login(wip)`) stays unflagged: the anchor is whitespace-only, not punctuation-only. The colon
+construction additionally requires the colon to close the tag — followed by whitespace or
+end-of-title, never another character — so `draft:latest` and `wip:branch` read as an identifier,
+not a status claim.
+
+This is enforced at two points:
 
 - At the **draft → ready-for-review** transition: `ready-for-review` refuses `gh pr ready` while the
   title carries a marker.

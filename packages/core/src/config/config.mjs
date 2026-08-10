@@ -1431,6 +1431,35 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
   // is an existing, separate concern.
   const validation = FileConfigSchema.safeParse(data);
   if (!validation.success) {
+    // Surface a visible WARNING (not just the structured error) so the
+    // whole-layer drop is never silent (#1578): many consumers destructure
+    // only `config` (or `config` + `warnings`) and never read `errors`, so a
+    // schema-rejected layer would vanish without a trace. Naming the
+    // offending keys here lets a stale raw-key config (e.g.
+    // gates.<gate>.mandatoryAngles/excludeAngles) point at the canonical
+    // angle-entry migration path.
+    const offendingKeys = validation.error.issues
+      .flatMap((i) => {
+        if (i.code === "unrecognized_keys" && Array.isArray(i.keys) && i.keys.length) {
+          const prefix = i.path.length ? `${i.path.join(".")}.` : "";
+          return i.keys.map((k) => `${prefix}${k}`);
+        }
+        return i.path.length ? [i.path.join(".")] : [];
+      });
+    // Gate the raw-key migration hint: only append it when the offending
+    // keys actually include the pre-redesign mandatoryAngles/excludeAngles
+    // names, so an unrelated schema failure (e.g. a type error) does not get
+    // misleading raw-key migration guidance. (#1578)
+    const hasRawGateKey = offendingKeys.some((k) => /mandatoryAngles|excludeAngles/.test(k));
+    const migrationHint = hasRawGateKey
+      ? ` Migrate raw gates.<gate>.mandatoryAngles/excludeAngles to the canonical angle-entry shape ` +
+        `(gates.<gate>.angles with { name, mandatory: true } / { name, enabled: false }).`
+      : ` Fix or remove the offending key(s) to restore this config layer.`;
+    warnings.push(
+      `${path.basename(filePath)}: config layer rejected by schema — the whole layer was dropped, so this layer's overrides are not applied (previously merged layers remain in effect). ` +
+      `Offending key(s): ${offendingKeys.length ? offendingKeys.join(", ") : "(unknown)"}.` +
+      migrationHint
+    );
     errors.push({
       path: filePath,
       message: `${path.basename(filePath)}: Schema validation failed: ${validation.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ")}`,

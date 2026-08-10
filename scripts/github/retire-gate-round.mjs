@@ -5,6 +5,7 @@ import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
+import { buildGateReviewsDir } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
 Retire ONE GATE's review round at one head: move every reviewer sentinel of
@@ -45,9 +46,23 @@ Optional:
                          whenever artifacts were written for the retired
                          round: at the SAME head, a stale artifact would pass
                          the consolidate-fanin --head-sha stamp guard and
-                         silently mix into the new round's fan-in. Omitting
-                         it while sentinels are retired emits a warning for
-                         the same reason.
+                         silently mix into the new round's fan-in.
+  --repo <owner/name>    Repo slug for the canonical artifacts-directory check
+                         (#1626). When --findings-dir is omitted and
+                         --no-findings-artifacts is not set, retirement
+                         REFUSES if the canonical per-angle findings directory
+                         (tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/,
+                         the path write-gate-context.mjs / consolidate-fanin
+                         use) exists — its artifacts would stay LIVE and mix
+                         into the next round's fan-in. Required for that check
+                         alongside --pr unless --no-findings-artifacts opts out.
+  --pr <number>          PR number for the canonical artifacts-directory check
+                         (#1626). See --repo.
+  --no-findings-artifacts  Explicit opt-out from the canonical artifacts-directory
+                         check (#1626): acknowledge that the retired round's
+                         per-angle findings artifacts (if any) are left LIVE at
+                         this head. Use only when no canonical artifacts dir
+                         exists or the operator accepts the live-artifact risk.
   --tmp-root <dir>       Root tmp directory holding the sentinels (default:
                          tmp). MUST exist as a directory — a missing root
                          fails closed rather than reading as an empty round.
@@ -55,7 +70,7 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "retired": <n>,
     "sentinels": [...], "findingsDirRetired": <bool>,
-    "retirementDir": "...", "noop": <bool>, "warning"?: "..." }
+    "retirementDir": "...", "noop": <bool> }
   A gate+head with no sentinels (and no --findings-dir to move) is a NO-OP
   (retired: 0, noop: true), not an error.
 On error (stderr, JSON): { "ok": false, "error": "...",
@@ -108,6 +123,23 @@ export function parseRetireGateRoundArgs(argv) {
   if (findingsDir === "") {
     throw parseError("--findings-dir requires a non-empty path");
   }
+  const repo = resolveFlagValue(argv, "--repo");
+  if (repo === "") {
+    throw parseError("--repo requires a non-empty owner/name slug");
+  }
+  const prRaw = resolveFlagValue(argv, "--pr");
+  if (prRaw === "") {
+    throw parseError("--pr requires a positive integer");
+  }
+  let pr = null;
+  if (prRaw !== null) {
+    const prNum = Number(prRaw);
+    if (!/^\d+$/.test(prRaw) || !Number.isInteger(prNum) || prNum <= 0) {
+      throw parseError(`--pr must be a positive integer (got ${JSON.stringify(prRaw)})`);
+    }
+    pr = prNum;
+  }
+  const noFindingsArtifacts = argv.includes("--no-findings-artifacts");
   const tmpRoot = resolveFlagValue(argv, "--tmp-root");
   if (tmpRoot === "") {
     throw parseError("--tmp-root requires a non-empty path");
@@ -118,11 +150,14 @@ export function parseRetireGateRoundArgs(argv) {
     headSha,
     reason: reason.trim(),
     findingsDir: findingsDir ?? null,
+    repo: repo ?? null,
+    pr,
+    noFindingsArtifacts,
     tmpRoot: tmpRoot ?? "tmp",
   };
 }
 
-export async function retireGateRound({ gate, headSha, reason, findingsDir = null, tmpRoot = "tmp" }) {
+export async function retireGateRound({ gate, headSha, reason, findingsDir = null, repo = null, pr = null, noFindingsArtifacts = false, tmpRoot = "tmp" }) {
   // Function-boundary re-validation, same rule as the CLI parser: a direct
   // programmatic caller must not bypass the full-SHA and audited-reason
   // guardrails.
@@ -183,6 +218,34 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     findingsDirPresent = true;
   }
 
+  // #1626: when no --findings-dir is named and the caller did not opt out
+  // with --no-findings-artifacts, refuse if the canonical per-angle findings
+  // directory for this gate+head exists — its artifacts would stay LIVE at
+  // this head and pass the consolidate-fanin --head-sha stamp guard into the
+  // next round's fan-in. The canonical path is the one write-gate-context.mjs
+  // / consolidate-fanin.mjs use (buildGateReviewsDir), so producer and
+  // consumer agree. Placed before the no-op return so orphaned artifacts (a
+  // dir with no surviving sentinels) are still caught.
+  if (!findingsDirPresent && !noFindingsArtifacts) {
+    if (!repo || !pr) {
+      throw new Error(
+        `retiring ${gate} at head ${headSha} without --findings-dir requires --repo and --pr to check the canonical artifacts directory, or --no-findings-artifacts to explicitly opt out (a stale artifact would pass the head-stamp guard into the next round's fan-in)`,
+      );
+    }
+    const canonicalDir = buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot });
+    let canonStats = null;
+    try {
+      canonStats = await lstat(canonicalDir);
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
+    if (canonStats !== null && canonStats.isDirectory()) {
+      throw new Error(
+        `canonical findings-artifacts directory ${JSON.stringify(canonicalDir)} exists for ${gate} at head ${headSha} — pass --findings-dir ${JSON.stringify(canonicalDir)} to retire it, or --no-findings-artifacts to explicitly leave it live`,
+      );
+    }
+  }
+
   if (sentinels.length === 0 && !findingsDirPresent) {
     return { ok: true, gate, headSha, retired: 0, sentinels: [], findingsDirRetired: false, retirementDir: null, noop: true };
   }
@@ -236,14 +299,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       findingsDirRetired = true;
     }
     await writeRecord(false);
-    // An omitted --findings-dir has the same consequence as a mistyped one
-    // when the round DID write artifacts: they stay live at this head. The
-    // omission can be legitimate (no artifacts written), so it warns instead
-    // of failing closed.
-    const warning = findingsDirPresent
-      ? null
-      : "no --findings-dir was given — if the retired round wrote findings artifacts they remain LIVE at this head and would pass the head-stamp guard into the next round's fan-in";
-    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false, ...(warning ? { warning } : {}) };
+    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false };
   } catch (err) {
     // Partial retirement: report what already moved and where it lives, and
     // still write the audit record with the partial state — an unaudited

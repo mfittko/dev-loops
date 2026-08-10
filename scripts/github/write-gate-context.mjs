@@ -35,7 +35,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
-import { scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -149,6 +149,7 @@ Optional:
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
+  --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -273,6 +274,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "prefix-file": { type: "string" },
       "validation-results": { type: "string" },
       "full-label": { type: "boolean" },
+      "available-reviewers": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -297,6 +299,7 @@ export function parseWriteGateContextCliArgs(argv) {
     prefixFile: null,
     validationResultsPath: null,
     fullLabel: false,
+    availableReviewers: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -393,6 +396,18 @@ export function parseWriteGateContextCliArgs(argv) {
       options.fullLabel = true;
       continue;
     }
+    if (token.name === "available-reviewers") {
+      const raw = requireTokenValue(token, parseError).trim();
+      if (raw.length === 0) {
+        throw parseError("--available-reviewers must not be empty/whitespace-only (pass a non-negative integer, or omit to leave the budget unexposed)");
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+        throw parseError(`--available-reviewers must be a non-negative integer (got "${raw}")`);
+      }
+      options.availableReviewers = parsed;
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -425,6 +440,73 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
   const repoSlug = repoSlugFor(repo);
   const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
   return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.json`);
+}
+
+/**
+ * Build the deterministic per-angle findings-artifact directory a gate-review
+ * fan-out writes to (one `<angle>.json` per angle). Mirrors the path
+ * `consolidate-fanin.mjs` reads from, so producer and consumer agree.
+ * Exported for reuse by the same-head skip-completed resume scan.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative directory path
+ */
+export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-reviews", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}`);
+}
+
+/**
+ * #1507 AC3 — same-head skip-completed resume. Scan the per-angle findings
+ * directory for this head and return the angle names that already have a CLEAN
+ * artifact stamped for this head. The preflight excludes groups whose angles are
+ * all in this set, so a later session re-running the fan-out at the same head
+ * dispatches only the shortfall (the groups not yet complete) instead of
+ * restarting. A missing/empty directory (first round, or no prior partial run)
+ * yields `[]` — the preflight then demands the full dispatch as before.
+ *
+ * Best-effort and fail-OPEN to `[]`: a read/parse error never blocks the gate
+ * (the preflight proceeds with the full plan; the only consequence is re-review
+ * of angles that were already complete — wasteful, not incorrect). This mirrors
+ * the head-stamp compare `consolidate-fanin.mjs` uses (trim+lowercase).
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {Promise<string[]>} angle names with a clean artifact at this head
+ */
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const dir = buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot });
+  const want = String(headSha).trim().toLowerCase();
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const completed = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
+      if (typeof parsed.angle === "string" && parsed.angle.length > 0) completed.push(parsed.angle);
+    }
+  }
+  return completed;
 }
 
 /**
@@ -1471,15 +1553,26 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean }} [options]
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number }}
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string> }} [options]
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   const wavePlan = scheduleFanoutWaves(groups, maxConcurrent);
-  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent };
+  // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
+  // before spawning any reviewer; on `false` it records the shortfall (this
+  // artifact is the resumable record) and stops without dispatching. `null`
+  // budget (harness does not expose one) → proceed, no shortfall proven.
+  // `completedAngles` (angles with a clean artifact already stamped at this
+  // head) drives the same-head skip-completed resume (#1507 AC3): groups whose
+  // angles are all complete are excluded from `preflight.requiredReviewers` and
+  // from `pendingGroups`, so the conductor dispatches only the shortfall.
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles });
+  const pendingGroups = preflight.pendingGroups;
+  const pendingWavePlan = scheduleFanoutWaves(pendingGroups, maxConcurrent);
+  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent, preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -1891,60 +1984,76 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
-  // Rebuild detection: overwriting a DIFFERENT prefix at a head that already
-  // has reviewer sentinels invalidates every one of them (their recorded hash
-  // can never match the new bytes), stranding the round. The rebuild itself is
-  // legitimate — warn and name the sanctioned retirement command instead of
-  // refusing or silently invalidating (GATE-EXEC-ROUND-RETIREMENT).
-  let rebuildWarning = null;
+  // No-rebuild-mid-fan-out enforcement (#1537). The contract has always
+  // stated in prose that a conductor MUST NOT rebuild the context while
+  // reviewers for that head are still running: a same-head rebuild after a
+  // live PR/issue description edit yields DIFFERENT prefix bytes and splits one
+  // fan-out across two prefix hashes (every existing sentinel's recorded hash
+  // can never match the new bytes), stranding the round after the reviewer
+  // spend. #1626 made the detection ADVISORY (warn, never refuse) because the
+  // rebuild was treated as the sanctioned first step of rebuild-and-retire.
+  // #1537 ENFORCES the rule instead of relying on conductor discipline: a
+  // rebuild that would CHANGE the recorded prefix bytes while a fan-out for
+  // that head is IN FLIGHT (this gate's reviewer sentinels still live) is
+  // REFUSED, not warned. The refusal throws BEFORE any bytes are written, so
+  // the existing prefix and its in-flight reviewers are left intact.
+  //
+  // The sanctioned rebuild path is retire-THEN-rebuild (retire-gate-round moves
+  // this gate's sentinels out of the live namespace first), so a rebuild after
+  // the round has retired — no live sentinels — proceeds unchanged (AC3: the
+  // frozen artifact of a finished pass is not the case being protected). An
+  // idempotent same-bytes rerun never reaches the byte-differ branch at all.
+  // The readError case (existing prefix exists but is unreadable, so the bytes
+  // cannot be compared) stays ADVISORY: #1537 refuses only the DETECTED
+  // mid-flight byte change, and an unreadable existing prefix cannot be proven
+  // to differ, so it is surfaced as a warning rather than a refusal.
+  const retireCommand = `node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`;
   let existingBytes = null;
   let readError = null;
-  // ONE copy of the operator-facing recovery command: the three warning
-  // branches below differ only in what went wrong, never in the remedy.
-  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>]`;
-  const warn = (text) => {
-    rebuildWarning = text;
-    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
-  };
   try {
     existingBytes = await readFile(fullPrefixPath);
   } catch (err) {
-    // ENOENT is the normal first-build case. Any other read failure means the
-    // rebuild-vs-identical comparison cannot run — surface that AS a warning
-    // (the rebuild is never refused — GATE-EXEC-ROUND-RETIREMENT).
     if (err.code !== "ENOENT") readError = err;
   }
+  let rebuildWarning = null;
   if (readError !== null) {
-    warn(retireHint(`Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
-  } else if (existingBytes !== null) {
-    if (!existingBytes.equals(prefixBytes)) {
-      // Scoped to THIS gate's sentinels (the other gate's live round at the
-      // same head is not invalidated by this rebuild), and matched on the
-      // trailing full-SHA filename component with startsWith so a legitimately
-      // abbreviated --head-sha still detects them.
-      const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
-      const headPrefix = String(options.headSha).trim().toLowerCase();
-      // Only a missing tmp/ dir means "no sentinels". Any other scan failure
-      // (EACCES, ENOTDIR, ...) must neither be swallowed (it could hide live
-      // sentinels) nor refuse the rebuild (the rebuild is never refused —
-      // GATE-EXEC-ROUND-RETIREMENT): it surfaces AS the warning.
-      let scanError = null;
-      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
-        if (err.code === "ENOENT") return [];
-        scanError = err;
-        return [];
-      });
-      const liveSentinels = tmpDirEntries.filter((e) => {
-        if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
-        const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
-        return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
-      }).length;
-      if (scanError !== null) {
-        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
-      } else if (liveSentinels > 0) {
-        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match)`));
-      }
+    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
+    // The rebuild would CHANGE the recorded prefix bytes. Scan THIS gate's live
+    // reviewer sentinels for the head (the other gate's live round at the same
+    // head is not invalidated by this rebuild), matched on the trailing
+    // full-SHA filename component with startsWith so a legitimately abbreviated
+    // --head-sha still detects them.
+    const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
+    const headPrefix = String(options.headSha).trim().toLowerCase();
+    let scanError = null;
+    const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
+      if (err.code === "ENOENT") return [];
+      scanError = err;
+      return [];
+    });
+    const liveSentinelNames = tmpDirEntries.filter((e) => {
+      if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
+      const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
+      return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
+    }).map((e) => e.name);
+    const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
+    const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
+    // Only a missing tmp/ dir means "no sentinels". Any other scan failure
+    // (EACCES, ENOTDIR, ...) could hide live sentinels, and #1537's
+    // enforcement must not be bypassable by a broken scan — fail closed by
+    // refusing the rebuild (the operator can fix the scan or retire first).
+    if (scanError !== null) {
+      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
+    } else if (liveSentinelNames.length > 0) {
+      // AC2: name the in-flight head and point at the reviewers already briefed
+      // on the prior bytes (their sentinel files + the recorded hash they carry).
+      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`);
     }
+    // liveSentinelNames.length === 0: the round is not in flight (already
+    // retired or never fanned out). AC3: a rebuild after the round has
+    // completed is unaffected — proceed to overwrite the frozen artifact.
   }
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
@@ -1978,6 +2087,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
+ * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string }>}
@@ -2023,7 +2133,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false });
+  // #1507 AC3: same-head skip-completed resume — angles with a clean artifact
+  // already stamped at this head are excluded from `preflight.requiredReviewers`
+  // and from `pendingGroups`, so a later session dispatches only the shortfall.
+  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles });
 
   const writeResult = await writeGateContext(
     {
@@ -2453,7 +2567,10 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true });
+      // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
+      // at this head are excluded from the required count + pending plan).
+      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

@@ -77,6 +77,93 @@ export function backoffMaxConcurrent(maxConcurrent) {
   return Math.max(1, Math.floor(cap / 2));
 }
 
+/**
+ * Reviewer-budget preflight for a gate fan-out (issue #1507).
+ *
+ * Before the conductor dispatches any reviewer, it derives how many reviewers
+ * the round needs (one per dispatch unit — fresh angles + re-verifications) and
+ * compares against the harness's remaining reviewer budget. When the budget
+ * cannot cover the dispatch, the preflight reports the shortfall BEFORE any
+ * reviewer spawns, naming the shortfall; the shortfall is a recorded, resumable
+ * state (completed per-angle artifacts stay valid for their head, so a later
+ * session resumes the fan-out instead of restarting it). A budget shortfall
+ * NEVER downgrades a required gate to `inline_single_agent` and NEVER produces a
+ * clean verdict — no new gate-exemption path (#1507 AC4).
+ *
+ * Pure: takes the dispatch plan + available budget, returns the decision. The
+ * conductor reads `artifact.fanout.preflight` (emitted by `write-gate-context`)
+ * and dispatches wave-by-wave only when `dispatch === true`; on `false` it
+ * records the shortfall (the artifact itself is the resumable record) and
+ * stops without spawning a single reviewer. `availableReviewers` is `null` when
+ * the harness does not expose a budget — no shortfall can be proven, so the
+ * preflight proceeds (today's behavior); it only blocks on a PROVEN shortfall.
+ *
+ * The returned `verdict` and `executionMode` are ALWAYS `null`: a shortfall is
+ * not a verdict. `buildPreMergeGateCheck` / `evaluateInlineFanoutMode` reject a
+ * gate with no clean current-head marker and a non-`fanout_fanin` execution
+ * mode, so a shortfall state fails closed at merge rather than yielding a clean
+ * or inline verdict (#1507 DoD).
+ *
+ * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
+ * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
+ * @param {{ completedAngles?: Iterable<string> }} [options] — `completedAngles`: angle names that
+ *   already have a clean per-angle findings artifact stamped for THIS head. A dispatch unit (group)
+ *   whose angles are ALL complete is excluded from the required count and from `pendingGroups`, so a
+ *   later session resumes the fan-out instead of restarting it (issue #1507 AC3): it re-runs the
+ *   preflight and dispatches only the groups not already complete at this head.
+ * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[] }}
+ */
+export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles } = {}) {
+  const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
+  const completedSet = new Set(
+    Array.isArray(completedAngles)
+      ? completedAngles
+      : completedAngles == null
+        ? []
+        : [...completedAngles],
+  );
+  // #1507 AC3: resume instead of restart. One reviewer per dispatch unit (a
+  // group of N angles is one reviewer's scoped dispatch — see resolveFanoutGroups /
+  // countFreshDispatchUnits), but a group already COMPLETE at this head — every
+  // one of its angles has a clean artifact stamped for this head — needs no
+  // reviewer and is excluded from the required count and the pending plan. The
+  // conductor dispatches only `pendingGroups`.
+  const groupIsComplete = (g) =>
+    Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => completedSet.has(a));
+  const pendingGroups = groups.filter((g) => !groupIsComplete(g));
+  const skippedGroups = groups.filter((g) => groupIsComplete(g));
+  // One reviewer per dispatch unit: a group of N angles is one reviewer's
+  // scoped dispatch, so the reviewer count is the pending dispatch-unit count,
+  // not the raw angle count.
+  const requiredReviewers = pendingGroups.length;
+  const verdict = null;
+  const executionMode = null;
+  const resume = { pendingGroups, skippedGroups, completedAngles: [...completedSet] };
+  if (typeof availableReviewers !== "number" || !Number.isFinite(availableReviewers)) {
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode, ...resume };
+  }
+  // A negative/over-spent budget clamps to 0 (budget exhausted → shortfall for
+  // any non-empty round); a fractional budget truncates to the integer floor.
+  const available = Math.max(0, Math.trunc(availableReviewers));
+  if (requiredReviewers === 0) {
+    return { ok: true, dispatch: true, requiredReviewers: 0, availableReviewers: available, shortfall: null, reason: "no_reviewers_needed", verdict, executionMode, ...resume };
+  }
+  if (available >= requiredReviewers) {
+    return { ok: true, dispatch: true, requiredReviewers, availableReviewers: available, shortfall: null, reason: "budget_sufficient", verdict, executionMode, ...resume };
+  }
+  return {
+    ok: false,
+    dispatch: false,
+    requiredReviewers,
+    availableReviewers: available,
+    shortfall: requiredReviewers - available,
+    reason: "budget_shortfall",
+    verdict,
+    executionMode,
+    ...resume,
+  };
+}
+
 // Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
 // scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
 // this single ordered copy of the severity vocabulary instead of each
@@ -737,6 +824,148 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
 }
 
 /**
+ * The judge's relevance-based disposition vocabulary — distinct from the
+ * severity-based `disposition` (accepted-for-fix/deferred/needs-answer) that
+ * `deriveDisposition` owns. The judge decides *where* a finding is acted on
+ * (this PR or a follow-up), never *whether* it is real: a `reject` is a
+ * relevance verdict (out-of-scope against a named non-goal or scope
+ * boundary), not a reproduction verdict. The fixer retains reproduction-based
+ * rejection; the judge owns relevance (#1525).
+ */
+export const JUDGE_DISPOSITIONS = Object.freeze(["act", "defer", "reject"]);
+
+/**
+ * Validate a judge verdict artifact shape (the dedicated `judge` agent's only
+ * write). Pure; throws on a malformed verdict rather than silently enriching
+ * findings with garbage. The judge is the designated memory across rounds, so
+ * its artifact is the authoritative relevance record — a malformed one fails
+ * closed rather than degrading to severity-only disposition.
+ *
+ * Shape:
+ * ```
+ * {
+ *   headSha: "<sha>",
+ *   scopeDrift: { verdict: "within_scope"|"drift_detected", rationale: "...", driftedAreas: ["..."] },
+ *   dispositions: [{ index, disposition: "act"|"defer"|"reject", rationale, criterion?, followUpDraft? }]
+ * }
+ * ```
+ *
+ * @param {unknown} verdict
+ * @returns {{ headSha: string, scopeDrift: object, dispositions: Array<object> }}
+ */
+export function validateJudgeVerdict(verdict) {
+  if (!verdict || typeof verdict !== "object" || Array.isArray(verdict)) {
+    throw new Error("judge verdict must be a JSON object");
+  }
+  const v = /** @type {Record<string, unknown>} */ (verdict);
+  if (typeof v.headSha !== "string" || v.headSha.trim().length === 0) {
+    throw new Error("judge verdict.headSha must be a non-empty string");
+  }
+  if (!v.scopeDrift || typeof v.scopeDrift !== "object" || Array.isArray(v.scopeDrift)) {
+    throw new Error("judge verdict.scopeDrift must be an object");
+  }
+  const sd = /** @type {Record<string, unknown>} */ (v.scopeDrift);
+  if (sd.verdict !== "within_scope" && sd.verdict !== "drift_detected") {
+    throw new Error("judge verdict.scopeDrift.verdict must be 'within_scope' or 'drift_detected'");
+  }
+  if (typeof sd.rationale !== "string" || sd.rationale.trim().length === 0) {
+    throw new Error("judge verdict.scopeDrift.rationale must be a non-empty string");
+  }
+  if (!Array.isArray(sd.driftedAreas)) {
+    throw new Error("judge verdict.scopeDrift.driftedAreas must be an array");
+  }
+  for (const [di, area] of sd.driftedAreas.entries()) {
+    if (typeof area !== "string" || area.trim().length === 0) {
+      throw new Error(`judge verdict.scopeDrift.driftedAreas[${di}] must be a non-empty string`);
+    }
+  }
+  if (!Array.isArray(v.dispositions)) {
+    throw new Error("judge verdict.dispositions must be an array");
+  }
+  const seenIndices = new Set();
+  for (const [i, d] of v.dispositions.entries()) {
+    if (!d || typeof d !== "object" || Array.isArray(d)) {
+      throw new Error(`judge verdict.dispositions[${i}] must be an object`);
+    }
+    const entry = /** @type {Record<string, unknown>} */ (d);
+    if (!Number.isInteger(entry.index) || entry.index < 0) {
+      throw new Error(`judge verdict.dispositions[${i}].index must be a non-negative integer`);
+    }
+    if (seenIndices.has(entry.index)) {
+      throw new Error(`judge verdict.dispositions[${i}].index ${entry.index} is a duplicate — the contract is one disposition per finding`);
+    }
+    seenIndices.add(entry.index);
+    if (!JUDGE_DISPOSITIONS.includes(entry.disposition)) {
+      throw new Error(`judge verdict.dispositions[${i}].disposition must be one of: ${JUDGE_DISPOSITIONS.join(", ")}`);
+    }
+    if (typeof entry.rationale !== "string" || entry.rationale.trim().length === 0) {
+      throw new Error(`judge verdict.dispositions[${i}].rationale must be a non-empty string naming the criterion, non-goal, or scope boundary`);
+    }
+    // followUpDraft is REQUIRED on a defer disposition (soft-cap contract: a
+    // deferred finding carries a fileable follow-up draft). Optional otherwise.
+    if (entry.disposition === "defer") {
+      if (!entry.followUpDraft || typeof entry.followUpDraft !== "object" || Array.isArray(entry.followUpDraft)) {
+        throw new Error(`judge verdict.dispositions[${i}].followUpDraft is required on a defer disposition`);
+      }
+      const draft = /** @type {Record<string, unknown>} */ (entry.followUpDraft);
+      if (typeof draft.title !== "string" || draft.title.trim().length === 0 || typeof draft.body !== "string") {
+        throw new Error(`judge verdict.dispositions[${i}].followUpDraft must have a non-empty title and a body string`);
+      }
+    }
+  }
+  return { headSha: v.headSha, scopeDrift: v.scopeDrift, dispositions: v.dispositions };
+}
+
+/**
+ * Merge the judge's relevance-based dispositions into the consolidated findings
+ * array (the flat per-finding shape `consolidateFanin` / `toFindingsLogShape`
+ * produce). The judge runs AFTER fan-in and BEFORE the fix pass (#1525): it
+ * receives the consolidated ledger, the issue's AC/DoD/non-goals, the PR's
+ * declared scope, and prior-round ledgers, and emits a per-finding disposition
+ * (`act` / `defer` / `reject`) plus a scope-drift verdict on the PR as a whole.
+ *
+ * This function enriches each finding with `judgeDisposition`, `judgeRationale`,
+ * and (for `defer`) `followUpDraft` so the disposition ledger and posted findings
+ * comment carry what was consciously not acted on and why. The severity-based
+ * `disposition` (accepted-for-fix/deferred/needs-answer) is LEFT INTACT — the
+ * judge's relevance axis is complementary, not a replacement (a real defect
+ * stays a real defect; the judge decides *where* it is fixed, not *whether* it
+ * is real).
+ *
+ * The fix pass consumes only the `act` list; the fixer retains reproduction-
+ * based rejection (a finding that does not reproduce is dead regardless of the
+ * judge's verdict) but stops deciding relevance.
+ *
+ * Pure. Fails closed (throws) when a disposition references an out-of-range
+ * index — a judge verdict that names a finding that is not in the ledger is a
+ * mismatch, never a silent enrichment.
+ *
+ * @param {Array<object>} findings — the flat consolidated findings array
+ * @param {object} judgeVerdict — the validated judge verdict artifact
+ * @returns {{ findings: Array<object>, scopeDrift: object }}
+ */
+export function applyJudgeDispositions(findings, judgeVerdict) {
+  const validated = validateJudgeVerdict(judgeVerdict);
+  const list = Array.isArray(findings) ? findings : [];
+  const enriched = list.map((f) => ({ ...f }));
+  for (const d of validated.dispositions) {
+    if (d.index >= enriched.length) {
+      throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries)`);
+    }
+    const target = enriched[d.index];
+    target.judgeDisposition = d.disposition;
+    target.judgeRationale = d.rationale;
+    if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
+      target.judgeCriterion = d.criterion.trim();
+    }
+    if (d.disposition === "defer" && d.followUpDraft) {
+      target.followUpDraft = d.followUpDraft;
+    }
+  }
+  return { findings: enriched, scopeDrift: validated.scopeDrift };
+}
+
+/**
  * Map consolidated findings into the `--findings` JSON shape consumed by
  * scripts/github/write-gate-findings-log.mjs (severity, angle, summary,
  * disposition, optional files, optional line). Pure.
@@ -766,6 +995,21 @@ export function toFindingsLogShape(findings) {
     }
     if (Number.isInteger(f.line) && f.line > 0) {
       entry.line = f.line;
+    }
+    // Carry the judge's relevance-based dispositions through (#1525) so the
+    // durable ledger and posted findings comment show what was consciously not
+    // acted on and why.
+    if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
+      entry.judgeDisposition = f.judgeDisposition.trim();
+    }
+    if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
+      entry.judgeRationale = f.judgeRationale.trim();
+    }
+    if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
+      entry.judgeCriterion = f.judgeCriterion.trim();
+    }
+    if (f.followUpDraft && typeof f.followUpDraft === "object" && !Array.isArray(f.followUpDraft)) {
+      entry.followUpDraft = f.followUpDraft;
     }
     return entry;
   });

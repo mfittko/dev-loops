@@ -541,27 +541,34 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     let issueLinkageResolution = "resolved_no_open_pr";
     let linkedPr = null;
     let ownership = "local";
+    let linkagePayload = null;
     try {
       const linkageJson = execFileSync(process.execPath, [
         path.join(repoRoot, "scripts/github/detect-linked-issue-pr.mjs"),
         "--repo", repo, "--issue", String(issue),
       ], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      const linkage = JSON.parse(linkageJson);
-      if (linkage.hasOpenLinkedPr) {
-        issueLinkageResolution = "resolved_linked_pr";
-        linkedPr = linkage.prNumber;
-        try {
-          const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot);
-          ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
-          artifactState = mapGhState(prJson?.state ?? "OPEN");
-        } catch {
-          warnings.push(
-            `linkedPr authorship: using default ownership "${ownership}" for PR #${linkedPr} — gh pr view failed`,
-          );
-        }
+      linkagePayload = JSON.parse(linkageJson);
+    } catch (err) {
+      // Fail closed (#1626): a transient gh failure must NOT fabricate
+      // `resolved_no_open_pr` — that self-consistent default would route an
+      // issue that HAS an open linked PR to `issue_intake`, which the router
+      // cannot catch. Refuse rather than guess.
+      throw new Error(
+        `issueLinkageResolution: linked-PR detection failed for issue #${issue} (${err instanceof Error ? err.message : String(err)}) — refusing to fabricate "resolved_no_open_pr" because a transient failure would misroute an issue that has an open linked PR. Re-run once GitHub/detect-linked-issue-pr is reachable.`,
+      );
+    }
+    if (linkagePayload?.hasOpenLinkedPr) {
+      issueLinkageResolution = "resolved_linked_pr";
+      linkedPr = linkagePayload.prNumber;
+      try {
+        const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot);
+        ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
+        artifactState = mapGhState(prJson?.state ?? "OPEN");
+      } catch {
+        warnings.push(
+          `linkedPr authorship: using default ownership "${ownership}" for PR #${linkedPr} — gh pr view failed`,
+        );
       }
-    } catch {
-      warnings.push(`issueLinkageResolution: using default "${issueLinkageResolution}" — linked-PR detection unavailable`);
     }
     let issueReadiness;
     try {
