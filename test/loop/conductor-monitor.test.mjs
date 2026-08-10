@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runConductorMonitor, isPrHealthy } from "../../scripts/loop/conductor-monitor.mjs";
+import { runConductorMonitor, isPrHealthy, fetchGithubStatus } from "../../scripts/loop/conductor-monitor.mjs";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/conductor-monitor.mjs");
@@ -431,6 +431,49 @@ test("conductor-monitor --auto-resume status pre-flight calls the status endpoin
 
     assert.equal(fetchImpl.calls.length, 1);
     assert.equal(fetchImpl.calls[0].url, "https://api.github.com/status");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fetchGithubStatus fail-opens (proceed) when the status endpoint hangs past the timeout (#1633)", async () => {
+  const hangingFetch = (_url, { signal }) => new Promise((_resolve, reject) => {
+    if (signal) signal.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+  });
+  const result = await fetchGithubStatus({ fetchImpl: hangingFetch, timeoutMs: 50 });
+  assert.equal(result.degraded, false);
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /aborted/i);
+});
+
+test("conductor-monitor --auto-resume honors DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-env-skip-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    // A fetch that WOULD bail (degraded) — but the env var skips the pre-flight entirely.
+    let called = false;
+    const fetchImpl = async () => { called = true; return { ok: true, status: 200, json: async () => ({ status: "minor" }) }; };
+
+    const result = await runConductorMonitor(
+      { repo: "owner/repo", autoResume: true },
+      {
+        runChild,
+        repoRoot,
+        sessionRoots: [sessionsRoot],
+        asyncRunRoots: [asyncRunsRoot],
+        asyncResultRoots: [asyncResultsRoot],
+        fetchImpl,
+        env: { ...process.env, DEVLOOPS_SKIP_GITHUB_STATUS_CHECK: "1" },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

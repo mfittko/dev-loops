@@ -151,7 +151,7 @@ const STATUS_CHECK_TIMEOUT_MS = 5_000;
  *  costs near-zero (one HTTP GET) instead of burning a dev-loop startup (#1633).
  *  Fail-open on fetch error (the status endpoint itself being unreachable is
  *  ambiguous; the normal `listOpenPrs` flow is the backstop there). */
-async function fetchGithubStatus({
+export async function fetchGithubStatus({
   fetchImpl = fetch,
   statusUrl = DEFAULT_GITHUB_STATUS_URL,
   timeoutMs = STATUS_CHECK_TIMEOUT_MS,
@@ -169,7 +169,8 @@ async function fetchGithubStatus({
     const payload = await response.json();
     const degraded = typeof payload?.status === "string" && payload.status !== "good";
     const status = typeof payload?.status === "string" ? payload.status : "unknown";
-    return { ok: true, degraded, status, detail: degraded ? `GitHub status: ${status}` : "GitHub status: good" };
+    const detail = degraded ? `GitHub status: ${status}` : (status === "unknown" ? "status endpoint returned no string status field" : "GitHub status: good");
+    return { ok: true, degraded, status, detail };
   } catch (error) {
     return { ok: false, degraded: false, status: "unknown", detail: error instanceof Error ? error.message : String(error) };
   } finally {
@@ -1855,7 +1856,12 @@ export async function runConductorMonitor(
     statusCheckTimeoutMs = STATUS_CHECK_TIMEOUT_MS,
   } = {},
 ) {
-  if (autoResume && !skipStatusCheck) {
+  // Honor the env-var escape hatch in-core (not just in runCli) so programmatic
+  // callers that set DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1 also skip the network
+  // pre-flight — consistent with DEVLOOPS_GITHUB_STATUS_URL being read here too.
+  const effectiveSkipStatusCheck = skipStatusCheck
+    || (env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK ?? "").trim() === "1";
+  if (autoResume && !effectiveSkipStatusCheck) {
     const statusCheck = await fetchGithubStatus({ fetchImpl, statusUrl, timeoutMs: statusCheckTimeoutMs });
     if (statusCheck.degraded) {
       return buildGithubDegradedResult(repo, statusCheck);
@@ -1909,11 +1915,11 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const skipStatusCheck = options.skipStatusCheck || (env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK ?? "").trim() === "1";
-  const result = await runConductorMonitor(
-    { ...options, skipStatusCheck },
-    { env, ghCommand, repoRoot: cwd },
-  );
+  const result = await runConductorMonitor(options, {
+    env,
+    ghCommand,
+    repoRoot: cwd,
+  });
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
