@@ -953,13 +953,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability (#560)
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
-  // Auto-release the runner-coordination lock at terminal stop boundaries (#1632):
-  // a dev-loop run that completes (merge-ready / done) or stops (approval checkpoint /
-  // blocked) releases its claim immediately so a fresh re-dispatch acquires the lock
-  // without a takeover, instead of relying on the 30-min TTL. The 30-min TTL remains
-  // the fallback when a run crashes before reaching here. Best-effort and env-aware
-  // (no-op without DEVLOOPS_RUN_ID); never blocks the detector and never clears a
-  // claim owned by a genuinely active competing run (fail-closed competitor preserved).
+  // Auto-release the runner-coordination lock at gate-coordination terminal stop
+  // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
+  // (#1632: success-or-stop release vs 30-min TTL; env-aware, best-effort,
+  // fail-closed competitor preserved).
   if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
     const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
     try {
