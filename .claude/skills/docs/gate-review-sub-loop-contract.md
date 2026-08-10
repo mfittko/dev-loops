@@ -654,11 +654,7 @@ semantics and exit codes.
 **Sanctioned rebuild-and-retire.**
 
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
-`GATE-EXEC-ROUND-RETIREMENT`: When the gate-context bundle is legitimately REBUILT at the
-same head (the builder resolves PR/issue inputs itself, and correcting bad or stale
-seeding is a legitimate rebuild; rebuilding while reviewers are still running remains
-forbidden — see the conductor rule in Phase 1), the new briefing-prefix bytes hash
-differently, so every
+`GATE-EXEC-ROUND-RETIREMENT`: A legitimate rebuild at the same head (the builder resolves PR/issue inputs itself, and correcting bad or stale seeding is a legitimate rebuild) now REQUIRES retiring the round FIRST: under the #1537 enforcement in Phase 1, `write-gate-context.mjs` REFUSES a rebuild that would change the prefix bytes while any of this gate's reviewer sentinels for that head are still live, so the rebuild cannot strand them in the first place — retire-THEN-rebuild is the sanctioned path (rebuilding while reviewers are still running remains forbidden). The recovery framing below — a round whose sentinels were already invalidated and fail closed forever — applies to rounds stranded BEFORE that enforcement landed, or stranded by a path other than `write-gate-context.mjs` (e.g. a sentinel whose recorded hash no longer matches after an out-of-band prefix change): the new briefing-prefix bytes hash differently, so every
 existing sentinel of that round fails closed forever — including under `--same-head-retry`,
 whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
 the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
