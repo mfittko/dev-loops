@@ -42,7 +42,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 // env-aware (no-op without DEVLOOPS_RUN_ID) and best-effort/non-fatal, so it is
 // safe for the conductor (polls all PRs with no run id) and read-only
 // inspections — it only ever clears a claim THIS run owns.
-const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
+export const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
   PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
   PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
   PR_CHECKPOINT_ACTION.REPORT_DONE,
