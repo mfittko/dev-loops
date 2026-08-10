@@ -68,9 +68,11 @@ that Pi has no builtin for): declaring unavailable tools causes Pi to mark the
 review step `failed`, which aborts `runs.all` and the GATE-EXEC-PRIME
 primer-then-parallel pattern.
 
-- **Search**: use `bash` (`rg`, `grep`, `find`) to locate cross-cutting issues.
-  On Claude Code the structured `Grep`/`Glob` tools are available via `bash`
-  equivalents; on Pi `bash` is the only path. Both harnesses can search.
+- **Search**: use `bash` (`rg`, `grep`, `find`) to locate cross-cutting issues
+  on both harnesses. On Claude Code the structured `Grep`/`Glob` tools are
+  dropped from this agent's allowlist (bash rg/grep is the substitute, not a
+  1:1 equivalent — the structured tool affordance is lost). On Pi `bash` is
+  the only path and was already the effective search mechanism via sync.
 - **Execute (run-code) verification**: delegated to CI. The review agent does
   not run code; it reads the diff, the plan, and the source to assess
   correctness. Code-execution verification belongs to the gate pipeline's
