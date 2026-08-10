@@ -23,6 +23,10 @@ Required:
 Optional:
   --auto-resume         Inspect documented async run artifacts, detect orphaned
                         PR follow-up runs, and emit deterministic resume plans.
+  --skip-status-check   Skip the cheap GitHub-status pre-flight (the near-zero-cost
+                        gate that bails --auto-resume when GitHub is degraded so
+                        the schedule never dispatches a dev-loop run during an
+                        outage). Also skipped via DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1.
 Success output (stdout, JSON):
   {
     "ok": true,
@@ -70,10 +74,29 @@ Additional success fields when --auto-resume is present:
     "resumePlans": [...],
     "needsManualAttention": [...]
   }
+GitHub-degraded bail (--auto-resume only, near-zero-cost pre-flight #1633):
+  When the GitHub status API reports anything other than "good", the run bails
+  BEFORE listing PRs or building reports, so no resume plans are emitted and
+  the auto-resume schedule never dispatches a dev-loop run during an outage:
+  {
+    "ok": true,
+    "repo": "owner/repo",
+    "queueStatus": "github_degraded",
+    "autoResumeRequested": true,
+    "githubDegraded": true,
+    "githubStatus": { "status": "minor", "detail": "GitHub status: minor" },
+    "orphanedPrCount": 0,
+    "resumePlanCount": 0,
+    "resumePlans": [],
+    "needsManualAttention": []
+  }
+  A fetch error on the status endpoint itself is fail-open (the normal
+  listOpenPrs flow is the backstop); only a clear degraded status bails.
 Queue status values:
   queue_complete   No open PRs remain in the repo queue
   monitoring       Open PRs exist, but all are in healthy wait states
   attention_needed At least one open PR needs human-in-the-loop follow-up
+  github_degraded  --auto-resume bailed: GitHub status API reported degraded (#1633)
 Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
@@ -116,11 +139,74 @@ const MANUAL_REASON = {
   HANDOFF_CONTRACT_INVALID: "handoff_contract_invalid",
   HANDOFF_CONTRACT_MISMATCH: "handoff_contract_mismatch",
 };
+
+/** GitHub status API endpoint. Returns `{ "status": "good"|"minor"|"major"|... }`.
+ *  `good` = all systems operational; anything else = degraded. */
+const DEFAULT_GITHUB_STATUS_URL = "https://api.github.com/status";
+const STATUS_CHECK_TIMEOUT_MS = 5_000;
+
+/** Cheap GitHub-health pre-flight for `--auto-resume`. Curls the GitHub status
+ *  API and bails BEFORE any `gh` API call or dev-loop dispatch when GitHub is
+ *  degraded, so an auto-resume schedule firing during a GitHub Actions outage
+ *  costs near-zero (one HTTP GET) instead of burning a dev-loop startup (#1633).
+ *  Fail-open on fetch error (the status endpoint itself being unreachable is
+ *  ambiguous; the normal `listOpenPrs` flow is the backstop there). */
+async function fetchGithubStatus({
+  fetchImpl = fetch,
+  statusUrl = DEFAULT_GITHUB_STATUS_URL,
+  timeoutMs = STATUS_CHECK_TIMEOUT_MS,
+} = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(statusUrl, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return { ok: false, degraded: false, status: "unknown", detail: `status endpoint HTTP ${response.status}` };
+    }
+    const payload = await response.json();
+    const status = typeof payload?.status === "string" ? payload.status : "unknown";
+    const degraded = status !== "good";
+    return { ok: true, degraded, status, detail: degraded ? `GitHub status: ${status}` : "GitHub status: good" };
+  } catch (error) {
+    return { ok: false, degraded: false, status: "unknown", detail: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Near-zero-cost bail result when GitHub is degraded: no PRs listed, no resume
+ *  plans, so the auto-resume schedule never dispatches a dev-loop run (#1633). */
+function buildGithubDegradedResult(repo, statusCheck) {
+  return {
+    ok: true,
+    repo,
+    checkedAt: new Date().toISOString(),
+    prCount: 0,
+    queueStatus: "github_degraded",
+    needsAttentionCount: 0,
+    summary: { waiting: 0, needsAttention: 0, blocked: 0, done: 0 },
+    prs: [],
+    autoResumeRequested: true,
+    githubDegraded: true,
+    githubStatus: { status: statusCheck.status, detail: statusCheck.detail },
+    orphanedPrCount: 0,
+    resumePlanCount: 0,
+    manualAttentionCount: 0,
+    resumePlans: [],
+    needsManualAttention: [],
+    localPhaseOrphanedCount: 0,
+    localPhaseResumePlans: [],
+  };
+}
 function parseCliArgs(argv) {
   const options = {
     help: false,
     repo: undefined,
     autoResume: false,
+    skipStatusCheck: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -128,6 +214,7 @@ function parseCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       "auto-resume": { type: "boolean" },
+      "skip-status-check": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -151,6 +238,10 @@ function parseCliArgs(argv) {
     }
     if (token.name === "auto-resume") {
       options.autoResume = true;
+      continue;
+    }
+    if (token.name === "skip-status-check") {
+      options.skipStatusCheck = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1750,7 +1841,7 @@ function applyAutoResumeToBaseResult(baseResult, autoResume) {
   };
 }
 export async function runConductorMonitor(
-  { repo, autoResume = false },
+  { repo, autoResume = false, skipStatusCheck = false },
   {
     env = process.env,
     ghCommand = "gh",
@@ -1759,8 +1850,17 @@ export async function runConductorMonitor(
     sessionRoots,
     asyncRunRoots,
     asyncResultRoots,
+    fetchImpl = fetch,
+    statusUrl = env.DEVLOOPS_GITHUB_STATUS_URL || DEFAULT_GITHUB_STATUS_URL,
+    statusCheckTimeoutMs = STATUS_CHECK_TIMEOUT_MS,
   } = {},
 ) {
+  if (autoResume && !skipStatusCheck) {
+    const statusCheck = await fetchGithubStatus({ fetchImpl, statusUrl, timeoutMs: statusCheckTimeoutMs });
+    if (statusCheck.degraded) {
+      return buildGithubDegradedResult(repo, statusCheck);
+    }
+  }
   const prs = await listOpenPrs({ repo }, { env, ghCommand, runChild });
   if (prs.length === 0) {
     const baseResult = buildBaseResult(repo, []);
@@ -1809,11 +1909,11 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await runConductorMonitor(options, {
-    env,
-    ghCommand,
-    repoRoot: cwd,
-  });
+  const skipStatusCheck = options.skipStatusCheck || env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK === "1";
+  const result = await runConductorMonitor(
+    { ...options, skipStatusCheck },
+    { env, ghCommand, repoRoot: cwd },
+  );
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
