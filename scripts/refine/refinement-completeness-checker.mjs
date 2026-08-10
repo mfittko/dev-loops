@@ -13,6 +13,10 @@ const USAGE = `Usage:
   refinement-completeness-checker.mjs --input <path> [--json]
 Validate required refinement sections: Acceptance criteria, Definition of done, Non-goals, and AC / DoD matrix.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
+// ponytail: distance caps ({0,200}? and {0,120}?) bound the gap between
+// "owns"/"does not own"/(#N) so a single match cannot span the whole body.
+// A boundary sentence exceeding these generous limits would false-negative;
+// raise the caps if a real conforming boundary ever exceeds them.
 const SCOPE_BOUNDARY_PATTERN = /\bowns?\b[\s\S]{0,200}?\bdoes\s+not\s+own\b[\s\S]{0,120}?\(\s*#\s*\d+\s*\)/iu;
 
 function hasScopeBoundary(body) {

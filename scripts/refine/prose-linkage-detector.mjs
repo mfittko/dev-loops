@@ -30,6 +30,14 @@ function hasDuplicateChildChecklist(issue) {
     }
     const content = listItemMatch[1];
 
+    // Skip scope-boundary prose — it states ownership boundaries ("does NOT own
+    // Y (#NNN)"), not a duplicated child checklist. Without this, a conforming
+    // boundary bullet with any bare (unparenthesized) child refs would
+    // false-positive as a duplicated checklist.
+    if (/\bdoes\s+not\s+own\b/iu.test(content)) {
+      continue;
+    }
+
     const checkedMatch = /^\[[xX]\]\s*#(\d+)/u.exec(content);
     if (checkedMatch && childSet.has(Number(checkedMatch[1]))) {
       hasCheckedChildItem = true;

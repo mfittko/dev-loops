@@ -248,6 +248,29 @@ test("duplicate_child_checklist also fires on a checked child item", () => {
   assert.ok(result.errors.some((entry) => entry.code === "duplicate_child_checklist"));
 });
 
+test("duplicate_child_checklist does not fire on a single child reference (coverage boundary)", () => {
+  const body = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2) or ui (#3).",
+    "",
+    "## Notes",
+    "- see #2 for api details",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [2, 3], body }] });
+  const result = runProseLinkageDetector(tree);
+  assert.ok(!result.errors.some((entry) => entry.code === "duplicate_child_checklist"), result.errors.map((e) => e.message).join("\n"));
+});
+
+test("duplicate_child_checklist does not fire on a boundary bullet with mixed paren/bare child refs", () => {
+  const body = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2) or ui #3.",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [2, 3], body }] });
+  const result = runProseLinkageDetector(tree);
+  assert.ok(!result.errors.some((entry) => entry.code === "duplicate_child_checklist"), result.errors.map((e) => e.message).join("\n"));
+});
+
 test("each refusal names the rule it upholds (AC5)", () => {
   const noBoundaryTree = normalizeTreePayload({
     root: 1,
