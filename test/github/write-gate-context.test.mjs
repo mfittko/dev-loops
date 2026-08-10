@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -3140,6 +3140,51 @@ test("CLI: a rebuild at the SAME head re-resolves the spec-of-record, so the art
   }
 });
 
+test("#1537 regression: an ALLOWED rebuild re-resolves the spec-of-record so the artifact never regresses to a null AC (the mixed case that broke the first attempt)", async () => {
+  // PR #1515 reused the on-disk prefix to prevent a mid-fan-out split, but that
+  // reuse path skipped resolvePrSpecContext while still rebuilding the JSON
+  // artifact, writing scope.acceptanceCriteria: null with no source — the exact
+  // fail-open state #1496 removed. #1537 refuses mid-flight rebuilds instead
+  // of reusing, so an ALLOWED rebuild (no in-flight fan-out) must re-resolve
+  // the spec just like the first build. This test covers the mixed case: build,
+  // rebuild, assert BOTH the prefix bytes AND the artifact's spec fields.
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const build = (prBody) => main([
+      "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b" }) });
+
+    const first = await build("first-build body");
+    assert.equal(process.exitCode, 0, "first build exited clean");
+    process.exitCode = 0;
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha });
+    const firstPrefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(firstPrefix.includes("first-build body"), "first build wrote its PR body into the prefix bytes");
+    const firstArtifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(firstArtifact.scope.acceptanceCriteria, "#42");
+    assert.equal(firstArtifact.scope.acceptanceCriteriaSource, "linked-issue");
+
+    // Rebuild at the same head with NO live sentinels (round not in flight) —
+    // this is the ALLOWED path, and it must re-resolve the spec-of-record.
+    await build("second-build body");
+    assert.equal(process.exitCode, 0, "rebuild exited clean");
+    process.exitCode = 0;
+
+    // AC5: assert BOTH the prefix bytes...
+    const rebuiltPrefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(rebuiltPrefix.includes("second-build body"), "rebuild wrote the NEW PR body into the prefix bytes (no stale reuse)");
+    assert.ok(!rebuiltPrefix.includes("first-build body"), "the prior body was overwritten, not preserved by a reuse path");
+    // ...AND the artifact's spec fields (AC4: no reuse path skips resolvePrSpecContext).
+    const rebuiltArtifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(rebuiltArtifact.scope.acceptanceCriteria, "#42", "rebuild re-resolved the linked-issue pointer (not null)");
+    assert.equal(rebuiltArtifact.scope.acceptanceCriteriaSource, "linked-issue", "rebuild carried the same source as the build it reuses from");
+    assert.notEqual(rebuiltArtifact.prefixMode, "file", "no reuse-via-prefix-file path was introduced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolvePrSpecContext: a programmatic caller that OMITS the spec fields still gets them resolved", async () => {
   // Only the CLI defaults these to null. An exported-API caller omitting them
   // leaves undefined, which must not read as "the caller provided this".
@@ -3325,12 +3370,12 @@ test("#1603: scoped briefing variants omit the source-read invariant when worktr
   });
   assert.ok(!text.includes("## Reviewer source-read invariant"));
 });
-test("writeGateContext warns, naming the retirement command, when a rebuild overwrites a differing prefix at a head with live sentinels", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-warn-"));
+test("writeGateContext REFUSES, naming the retirement command and the briefed reviewers, when a rebuild would change the prefix bytes at a head with live sentinels (#1537)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-refuse-"));
   const fullSha = "abc1234567890def".padEnd(40, "0");
   try {
     // --head-sha may legitimately be abbreviated; the sentinel filename always
-    // embeds the FULL sha, and the warning must still fire (matched on the
+    // embeds the FULL sha, and the refusal must still fire (matched on the
     // trailing full-SHA component with startsWith).
     const baseArgs = [
       "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate",
@@ -3344,26 +3389,143 @@ test("writeGateContext warns, naming the retirement command, when a rebuild over
     await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
     // The OTHER gate's sentinel at the same head must not count.
     await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-pre-approval-gate-yagni-${fullSha}.json`), "{}\n", "utf8");
-    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
-    assert.match(rebuilt.warning, /retire-gate-round\.mjs --gate draft_gate/);
-    assert.match(rebuilt.warning, /1 reviewer sentinel/);
-    // Same-bytes rewrite never warns (idempotent rerun, no invalidation).
-    const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    // AC1: a rebuild that would CHANGE the prefix bytes while a fan-out is in
+    // flight is REFUSED, not warned — the existing prefix is left intact.
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot }),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head abc1234567890def is in flight/);
+        assert.match(err.message, /retire-gate-round\.mjs --gate draft_gate/);
+        // AC2: names the in-flight head and points at the reviewers already
+        // briefed on the prior bytes (their sentinel file + prior prefix hash).
+        assert.match(err.message, /1 reviewer sentinel/);
+        assert.match(err.message, /tmp\/checkpoint-context-sentinel-draft-gate-scope-[0-9a-f]+\.json/);
+        assert.match(err.message, /prior prefix hash [0-9a-f]{64}/);
+        assert.match(err.message, /new hash [0-9a-f]{64}/);
+        return true;
+      },
+    );
+    // The refusal wrote NOTHING: the original prefix bytes are untouched.
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: "abc1234567890def" });
+    const survivingPrefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(survivingPrefix.includes("Original body."), "the refusal left the existing prefix bytes intact");
+    assert.ok(!survivingPrefix.includes("Corrected body."), "no partial write of the refused bytes");
+    // Same-bytes rewrite never refuses (idempotent rerun, no byte change).
+    const idempotent = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
     assert.equal(idempotent.warning, undefined);
-    // The pre-approval gate's own rebuild warns against ITS sentinel only.
+    // AC3: after the round retires (sentinels removed from the live namespace),
+    // a rebuild with different bytes is UNAFFECTED — it proceeds.
+    await rm(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`));
+    const rebuiltAfterRetire = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Retired-then-rebuilt body."]), { repoRoot });
+    assert.equal(rebuiltAfterRetire.warning, undefined);
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("Retired-then-rebuilt body."));
+    // The pre-approval gate's own rebuild refuses against ITS sentinel only.
     const paArgs = baseArgs.map((a) => (a === "draft_gate" ? "pre_approval_gate" : a));
     await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA body."]), { repoRoot });
-    const paRebuilt = await writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA corrected."]), { repoRoot });
-    assert.match(paRebuilt.warning, /retire-gate-round\.mjs --gate pre_approval_gate/);
-    assert.match(paRebuilt.warning, /1 reviewer sentinel/);
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-pre-approval-gate-yagni-${fullSha}.json`), "{}\n", "utf8");
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...paArgs, "--pr-body", "PA corrected."]), { repoRoot }),
+      (err) => {
+        assert.match(err.message, /retire-gate-round\.mjs --gate pre_approval_gate/);
+        assert.match(err.message, /1 reviewer sentinel/);
+        return true;
+      },
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-// ---------------------------------------------------------------------------
-// AC8 (#1572) — prefix hunk-collapse: collapsePureSubstitutionRuns
-// ---------------------------------------------------------------------------
+test("writeGateContext REFUSES on a broken live-sentinel scan (fail-closed: cannot rule out an in-flight fan-out) (#1537)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-scanerr-"));
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "19", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]',
+      "--acceptance-criteria", "#19",
+    ];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    // Make tmp/ listable-fail (execute-only: traversal to the prefix still works,
+    // but readdir cannot list). readFile of the existing prefix succeeds, so the
+    // rebuild reaches the byte-differ branch and then the sentinel scan fails.
+    await chmod(path.resolve(repoRoot, "tmp"), 0o111);
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot }),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /Refusing to rebuild the briefing prefix with DIFFERENT bytes at head abc1234567890def/);
+        assert.match(err.message, /live-sentinel scan failed/);
+        assert.match(err.message, /cannot rule out an in-flight fan-out/);
+        assert.match(err.message, /existing \(recorded\) prefix hash is [0-9a-f]{64}; the attempted rebuild would write hash [0-9a-f]{64}/);
+        assert.match(err.message, /make tmp\/ listable again/);
+        assert.match(err.message, /retire-gate-round\.mjs --gate draft_gate/);
+        return true;
+      },
+    );
+    // The refusal wrote NOTHING: the original prefix bytes are intact.
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 19, gate: "draft_gate", headSha: "abc1234567890def" });
+    await chmod(path.resolve(repoRoot, "tmp"), 0o755);
+    const survivingPrefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(survivingPrefix.includes("Original body."), "the refusal left the existing prefix bytes intact");
+    assert.ok(!survivingPrefix.includes("Corrected body."), "no partial write of the refused bytes");
+  } finally {
+    // Ensure tmp/ is restorable before rm so cleanup does not EACCES.
+    try { await chmod(path.join(repoRoot, "tmp"), 0o755); } catch {}
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("writeGateContext does NOT refuse when the only live sentinel is for a DIFFERENT head (#1537 startsWith boundary)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-otherhead-"));
+  const headSha = "abc1234567890def";
+  const otherHeadSha = "fedcba9876543210".padEnd(40, "1");
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "29", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--acceptance-criteria", "#29",
+    ];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    // A sentinel keyed by a DIFFERENT head must not count as in-flight for this head.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${otherHeadSha}.json`), "{}\n", "utf8");
+    // Different bytes, but no in-flight sentinel for THIS head -> proceeds (AC3).
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Other-head-safe rebuild."]), { repoRoot });
+    assert.equal(rebuilt.warning, undefined, "a sentinel at a different head does not make this an in-flight rebuild");
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 29, gate: "draft_gate", headSha });
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("Other-head-safe rebuild."));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("writeGateContext keeps the unreadable-existing-prefix (readError) case ADVISORY, not a refusal (#1537)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-readerr-"));
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "39", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890def",
+      "--angles", '["scope"]', "--acceptance-criteria", "#39",
+    ];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original body."]), { repoRoot });
+    // Make the EXISTING prefix file unreadable but still writable (write-only).
+    // readFile fails (EACCES, no read perm) so bytes cannot be compared, but the
+    // rebuild can still overwrite — this is the ADVISORY case (warning + proceed),
+    // not the detected mid-flight refusal.
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 39, gate: "draft_gate", headSha: "abc1234567890def" });
+    await chmod(path.resolve(repoRoot, prefixPath), 0o222);
+    const result = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Corrected body."]), { repoRoot });
+    assert.match(result.warning, /Could not read the existing briefing prefix/, "the unreadable-prefix case surfaces an advisory warning");
+    assert.match(result.warning, /retire-gate-round\.mjs --gate draft_gate/);
+    assert.equal(result.ok, true, "the rebuild proceeds (advisory, not a refusal) — bytes cannot be proven to differ");
+    // Restore and confirm the new bytes landed (the advisory did not block the write).
+    await chmod(path.resolve(repoRoot, prefixPath), 0o644);
+    assert.ok((await readFile(path.resolve(repoRoot, prefixPath), "utf8")).includes("Corrected body."));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 test("collapsePureSubstitutionRuns: a lone (length-1) pure single-token substitution run stays below the collapse floor and renders in full", () => {
   const diff = [

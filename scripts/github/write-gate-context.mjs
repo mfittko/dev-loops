@@ -1984,73 +1984,76 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // leave a complete-looking artifact pointing at a missing prefix file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
-  // Rebuild detection: overwriting a DIFFERENT prefix at a head that already
-  // has reviewer sentinels invalidates every one of them (their recorded hash
-  // can never match the new bytes), stranding the round.
+  // No-rebuild-mid-fan-out enforcement (#1537). The contract has always
+  // stated in prose that a conductor MUST NOT rebuild the context while
+  // reviewers for that head are still running: a same-head rebuild after a
+  // live PR/issue description edit yields DIFFERENT prefix bytes and splits one
+  // fan-out across two prefix hashes (every existing sentinel's recorded hash
+  // can never match the new bytes), stranding the round after the reviewer
+  // spend. #1626 made the detection ADVISORY (warn, never refuse) because the
+  // rebuild was treated as the sanctioned first step of rebuild-and-retire.
+  // #1537 ENFORCES the rule instead of relying on conductor discipline: a
+  // rebuild that would CHANGE the recorded prefix bytes while a fan-out for
+  // that head is IN FLIGHT (this gate's reviewer sentinels still live) is
+  // REFUSED, not warned. The refusal throws BEFORE any bytes are written, so
+  // the existing prefix and its in-flight reviewers are left intact.
   //
-  // rebuildWarning contract (#1626 — decided advisory-by-design, NOT a refusal):
-  // The context rebuild is the sanctioned FIRST step of
-  // GATE-EXEC-ROUND-RETIREMENT (rebuild context → retire round → re-fan). The
-  // rebuild itself is legitimate, so each of the three warning branches below is
-  // ADVISORY rather than a refusal; each names the explicit recovery command
-  // (retire-gate-round) so an operator following up is never left stranded.
-  // These are NOT "MUSTs degraded to a warning": the MUST (round retirement
-  // before re-fan) is enforced separately by verify-fresh-review-context.mjs,
-  // which fails closed on a sentinel whose recorded prefix hash no longer
-  // matches — a retired round has no live sentinels, so a re-fan at the same
-  // head proceeds; an un-retired invalidated round's sentinels fail closed and
-  // block consolidation. The warning here only surfaces the consequence EARLY,
-  // at the moment of invalidation, because that is genuinely advisory context
-  // (the operator may retire immediately or continue and retire next).
-  let rebuildWarning = null;
+  // The sanctioned rebuild path is retire-THEN-rebuild (retire-gate-round moves
+  // this gate's sentinels out of the live namespace first), so a rebuild after
+  // the round has retired — no live sentinels — proceeds unchanged (AC3: the
+  // frozen artifact of a finished pass is not the case being protected). An
+  // idempotent same-bytes rerun never reaches the byte-differ branch at all.
+  // The readError case (existing prefix exists but is unreadable, so the bytes
+  // cannot be compared) stays ADVISORY: #1537 refuses only the DETECTED
+  // mid-flight byte change, and an unreadable existing prefix cannot be proven
+  // to differ, so it is surfaced as a warning rather than a refusal.
+  const retireCommand = `node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`;
   let existingBytes = null;
   let readError = null;
-  // ONE copy of the operator-facing recovery command: the three warning
-  // branches below differ only in what went wrong, never in the remedy.
-  const retireHint = (lead) => `${lead}. Verify and retire the round explicitly before re-fanning: node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`;
-  const warn = (text) => {
-    rebuildWarning = text;
-    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
-  };
   try {
     existingBytes = await readFile(fullPrefixPath);
   } catch (err) {
-    // ENOENT is the normal first-build case. Any other read failure means the
-    // rebuild-vs-identical comparison cannot run — surface that AS a warning
-    // (the rebuild is never refused — GATE-EXEC-ROUND-RETIREMENT).
     if (err.code !== "ENOENT") readError = err;
   }
+  let rebuildWarning = null;
   if (readError !== null) {
-    warn(retireHint(`Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
-  } else if (existingBytes !== null) {
-    if (!existingBytes.equals(prefixBytes)) {
-      // Scoped to THIS gate's sentinels (the other gate's live round at the
-      // same head is not invalidated by this rebuild), and matched on the
-      // trailing full-SHA filename component with startsWith so a legitimately
-      // abbreviated --head-sha still detects them.
-      const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
-      const headPrefix = String(options.headSha).trim().toLowerCase();
-      // Only a missing tmp/ dir means "no sentinels". Any other scan failure
-      // (EACCES, ENOTDIR, ...) must neither be swallowed (it could hide live
-      // sentinels) nor refuse the rebuild (the rebuild is never refused —
-      // GATE-EXEC-ROUND-RETIREMENT): it surfaces AS the warning.
-      let scanError = null;
-      const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
-        if (err.code === "ENOENT") return [];
-        scanError = err;
-        return [];
-      });
-      const liveSentinels = tmpDirEntries.filter((e) => {
-        if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
-        const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
-        return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
-      }).length;
-      if (scanError !== null) {
-        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes but the live-sentinel scan failed (${scanError.code ?? scanError.message}) — if reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed`));
-      } else if (liveSentinels > 0) {
-        warn(retireHint(`Rebuilt the briefing prefix with DIFFERENT bytes while ${liveSentinels} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one of them now fails closed (recorded hash can no longer match)`));
-      }
+    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
+    // The rebuild would CHANGE the recorded prefix bytes. Scan THIS gate's live
+    // reviewer sentinels for the head (the other gate's live round at the same
+    // head is not invalidated by this rebuild), matched on the trailing
+    // full-SHA filename component with startsWith so a legitimately abbreviated
+    // --head-sha still detects them.
+    const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
+    const headPrefix = String(options.headSha).trim().toLowerCase();
+    let scanError = null;
+    const tmpDirEntries = await readdir(path.resolve(repoRoot, "tmp"), { withFileTypes: true }).catch((err) => {
+      if (err.code === "ENOENT") return [];
+      scanError = err;
+      return [];
+    });
+    const liveSentinelNames = tmpDirEntries.filter((e) => {
+      if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
+      const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
+      return /^[0-9a-f]{40}$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
+    }).map((e) => e.name);
+    const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
+    const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
+    // Only a missing tmp/ dir means "no sentinels". Any other scan failure
+    // (EACCES, ENOTDIR, ...) could hide live sentinels, and #1537's
+    // enforcement must not be bypassable by a broken scan — fail closed by
+    // refusing the rebuild (the operator can fix the scan or retire first).
+    if (scanError !== null) {
+      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
+    } else if (liveSentinelNames.length > 0) {
+      // AC2: name the in-flight head and point at the reviewers already briefed
+      // on the prior bytes (their sentinel files + the recorded hash they carry).
+      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`);
     }
+    // liveSentinelNames.length === 0: the round is not in flight (already
+    // retired or never fanned out). AC3: a rebuild after the round has
+    // completed is unaffected — proceed to overwrite the frozen artifact.
   }
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
