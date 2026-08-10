@@ -51,7 +51,7 @@ ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")
   1  Red (status "failure"), or an argument/gh/runtime error
-  2  Not settled (status "timeout"/"changed"/"pending")
+  2  Not settled (status "timeout"/"changed"/"pending"/"stuck")
 With --jq/--silent, the standard jq-output contract above applies instead
 (0/1 by result truthiness; 2 reserved for an invalid --jq filter).`.trim();
 

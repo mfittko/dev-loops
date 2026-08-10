@@ -219,5 +219,5 @@ test("wait-pr-checks --help prints usage and exits 0", async () => {
   // USAGE must match the actual exit-code behavior: argument/gh/runtime errors
   // exit 1 (repo convention, asserted above), exit 2 is not-settled only.
   assert(result.stdout.includes('1  Red (status "failure"), or an argument/gh/runtime error'));
-  assert(result.stdout.includes('2  Not settled (status "timeout"/"changed"/"pending")'));
+  assert(result.stdout.includes('2  Not settled (status "timeout"/"changed"/"pending"/"stuck")'));
 });
