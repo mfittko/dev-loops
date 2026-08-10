@@ -24,9 +24,30 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+// Gate-coordination terminal stop actions where the dev-loop run is completing or
+// stopping (success OR stop). The runner-coordination lock is auto-released at these
+// boundaries so a fresh re-dispatch on the same PR acquires the lock without a
+// takeover (#1632). The Copilot-loop terminal release in `loop handoff` (#1128)
+// only covers Copilot-loop terminal states (CLEAN_CONVERGED / BLOCKED / DONE); a
+// merge-ready PR that is NOT in a Copilot-loop terminal state (e.g. an
+// internal-only PR at `pr_ready_no_feedback`, or a local-implementation gate
+// drive that stops at the approval checkpoint without a terminal handoff) would
+// otherwise hold a stale claim until the 30-min TTL. This set is the
+// gate-coordination counterpart: it fires at every run-completion/stop boundary
+// the agent reaches via this detector. `releaseAsyncRunnerOwnership` is
+// env-aware (no-op without DEVLOOPS_RUN_ID) and best-effort/non-fatal, so it is
+// safe for the conductor (polls all PRs with no run id) and read-only
+// inspections — it only ever clears a claim THIS run owns.
+export const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
+  PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+  PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+  PR_CHECKPOINT_ACTION.REPORT_DONE,
+  PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+]);
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
 Determine which PR gate/transition is legal next for a pull request.
@@ -932,6 +953,23 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability (#560)
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // Auto-release the runner-coordination lock at gate-coordination terminal stop
+  // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
+  // (#1632: success-or-stop release vs 30-min TTL; env-aware, best-effort,
+  // fail-closed competitor preserved).
+  if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
+    const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
+    try {
+      await releaseImpl({
+        repo: options.repo,
+        pr: options.pr,
+        env: runtime.env ?? process.env,
+        cwd: repoRoot,
+      });
+    } catch {
+      // Best-effort: a release failure must never block gate-coordination detection.
+    }
+  }
   return result;
 }
 async function main() {
