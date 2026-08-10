@@ -34,7 +34,7 @@ Optional:
   --timeout-ms <n>              Total watch budget (default 1800000; 0 = single check, no wait)
   --poll-interval-ms <n>        Delay between polls (default 60000)
 Output (stdout, JSON):
-  { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed",
+  { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed"|"stuck",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
     "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
     "excludedFailureDetails": ["gate-evidence", ...] }
@@ -44,6 +44,10 @@ Statuses:
   pending    Timed-out single check (timeout-ms 0) found CI still in flight
   timeout    Watch budget elapsed while CI was still pending
   changed    Head SHA advanced during the wait; caller must re-baseline
+  stuck      Zero-allocation stall bail (#1631): every check-run stayed QUEUED
+             with zero jobs allocated (no runner picked up) and no other provider
+             reporting activity for ~5 min; treated as a stuck GitHub Actions
+             queue and bailed early instead of burning the full watch budget
 No-checks rule (grace, race-safe):
   Zero check-runs AND zero commit-statuses is NOT settled green on the first
   poll — a provider (CircleCI/Actions) may post its first check a beat after a
@@ -240,7 +244,11 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
           : nonLoopDerivedRuns;
         const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
         const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
-        checkRunsSignal = { ...visibleSignal, unsupportedCompleted: fullSignal.unsupportedCompleted };
+        checkRunsSignal = {
+          ...visibleSignal,
+          unsupportedCompleted: fullSignal.unsupportedCompleted,
+          allQueued: fullSignal.allQueued,
+        };
         checkRunsCount = nonLoopDerivedRuns.length;
       } else {
         checkRunsError = true; // exit 0 but no check_runs array → malformed payload, not empty
@@ -318,7 +326,18 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
     checkRunsCount === 0 &&
     statusesCount === 0 &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
-  return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails };
+  // Zero-allocation stall (#1631): at least one real check-run, ALL of them
+  // still `queued` (no runner allocated / no job picked up), and no other
+  // provider reporting activity (commit-status none). The watcher bails after
+  // ZERO_ALLOCATION_STALL_BAIL_MS of observing this instead of burning its
+  // full budget on a stuck GitHub Actions queue. A run with any job
+  // in_progress/completed, or another provider pending, never qualifies.
+  const allCheckRunsQueued =
+    !fetchError &&
+    checkRunsCount > 0 &&
+    checkRunsSignal?.allQueued === true &&
+    commitStatus === "none";
+  return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails, allCheckRunsQueued };
 }
 
 function buildAttemptBudget(timeoutMs, pollIntervalMs) {
@@ -361,6 +380,14 @@ function settledResult(state, { settled, status }) {
  *  has no CI still settles after the grace instead of hanging to timeout. */
 export const NO_CHECKS_GRACE_POLLS = 2;
 
+/** Zero-allocation stall bail budget (#1631): when a CI run is QUEUED with zero
+ *  jobs allocated (no runner picked up — every check-run still `queued`, no other
+ *  provider reporting activity), the watcher bails after ~5 min instead of burning
+ *  the full 30-min watch budget on a stuck GitHub Actions queue. A run that IS
+ *  progressing (any check-run in_progress/completed, or another provider pending)
+ *  is never bailed early. */
+export const ZERO_ALLOCATION_STALL_BAIL_MS = 300_000; // ~5 minutes
+
 /**
  * Map a head CI state to a terminal watcher status, or null when still in flight.
  * - failure / success classify immediately (a check is terminal).
@@ -397,6 +424,12 @@ export async function watchCiStatus(
   // immediately (preserves single-check semantics). A real watch awaits the grace.
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
   let consecutiveNoChecks = 0;
+  // Zero-allocation stall bail (#1631): track the first poll that observed a
+  // zero-allocation stall (all check-runs queued, no provider activity). The
+  // watcher bails once the stall has persisted for stallBailMs instead of
+  // burning the full watch budget on a stuck GitHub Actions queue.
+  const stallBailMs = options.stallBailMs ?? ZERO_ALLOCATION_STALL_BAIL_MS;
+  let stallStartedAtMs = null;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
     // Attempt 1 polls at t=0 (CI may already be terminal); sleep only between
     // subsequent polls so the watcher never burns a full interval before its
@@ -473,6 +506,17 @@ export async function watchCiStatus(
         settled: true,
         status: terminal,
       });
+    }
+    if (state.allCheckRunsQueued) {
+      if (stallStartedAtMs === null) stallStartedAtMs = now();
+      if (now() - stallStartedAtMs >= stallBailMs) {
+        return settledResult({ ...state, headSha: currentSha, attempts: attempt }, {
+          settled: false,
+          status: "stuck",
+        });
+      }
+    } else {
+      stallStartedAtMs = null;
     }
   }
   // Budget exhausted while still pending. Re-resolve the head before the final

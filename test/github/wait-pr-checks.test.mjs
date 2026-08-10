@@ -175,6 +175,7 @@ test("exitCodeForWaitResult maps status to the documented exit codes", () => {
   assert.equal(exitCodeForWaitResult({ status: "timeout" }), 2);
   assert.equal(exitCodeForWaitResult({ status: "changed" }), 2);
   assert.equal(exitCodeForWaitResult({ status: "pending" }), 2);
+  assert.equal(exitCodeForWaitResult({ status: "stuck" }), 2);
 });
 
 test("wait-pr-checks parses --timeout/--poll in seconds into ms, with policy-derived defaults", () => {

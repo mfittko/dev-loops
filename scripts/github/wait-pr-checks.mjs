@@ -36,11 +36,14 @@ Not-yet-registered-check race guard:
   check-less. A repo with no CI at all still settles after that grace instead
   of hanging to timeout.
 Output (stdout, JSON, the final per-check summary):
-  { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed",
+  { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed"|"stuck",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
     "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
     "excludedFailureDetails": ["gate-evidence", ...] }
 "changed" means the head SHA advanced during the wait; re-baseline and re-run.
+"stuck" means a zero-allocation stall bail (#1631): every check-run stayed
+QUEUED with zero jobs allocated for ~5 min; bailed early instead of the full
+budget.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }

@@ -808,3 +808,160 @@ test("watch-ci: a head with ONLY loop-derived entries settles success after grac
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// Zero-allocation stall bail (#1631): a CI run QUEUED with zero jobs allocated
+// (every check-run still `queued`, no runner picked up) is treated as stuck
+// and bails after ~5 min instead of burning the full 30-min watch budget. A
+// run that IS progressing (in_progress/completed) or has another provider
+// pending is never bailed early.
+// ---------------------------------------------------------------------------
+
+// Advancing clock: delayImpl advances a mutable time, now() reads it. Lets a
+// real inter-poll delay elapse (so the stall window can mature) without sleeping.
+function advancingDeps(env) {
+  let clock = 0;
+  return {
+    env,
+    ghCommand: "gh",
+    delayImpl: async (ms) => { clock += ms; },
+    now: () => clock,
+  };
+}
+
+test("watch-ci bails stuck within the stall window when all check-runs are queued (#1631)", async () => {
+  // Every check-run stays `queued` (zero jobs allocated, no job picked up). The
+  // watcher bails "stuck" once the stall has persisted past stallBailMs instead
+  // of burning the full watch budget.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build", "lint"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "queued", conclusion: null, name: "build" },
+          { status: "queued", conclusion: null, name: "lint" },
+        ]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 10_000, stallBailMs: 50 },
+        advancingDeps(env),
+      );
+      assert.equal(result.status, "stuck");
+      assert.equal(result.settled, false);
+      assert.equal(result.ciStatus, "pending");
+      // attempt 1 @ t=0 (stall starts), attempt 2 @ t=30, attempt 3 @ t=60 -> bail.
+      assert.equal(result.attempts, 3);
+    },
+  );
+});
+
+test("watch-ci does NOT bail stuck when a run is progressing (in_progress, #1631)", async () => {
+  // A run that IS progressing must never be bailed early: it waits out the budget
+  // and reports timeout, never "stuck".
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+        { match: ["check-runs"], stdout: checkRuns([{ status: "in_progress", conclusion: null, name: "build" }]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 40, stallBailMs: 10 },
+        advancingDeps(env),
+      );
+      assert.equal(result.status, "timeout");
+      assert.notEqual(result.status, "stuck");
+    },
+  );
+});
+
+test("watch-ci does NOT bail stuck when another provider is pending (commit-status, #1631)", async () => {
+  // Check-runs all queued, BUT a commit-status (e.g. CircleCI) is pending - CI IS
+  // progressing on another provider, so the watcher must not bail. It waits out
+  // the budget and reports timeout, never "stuck".
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+        { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+        { match: ["/status"], stdout: statuses([{ state: "pending", context: "ci/circleci: build" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 40, stallBailMs: 10 },
+        advancingDeps(env),
+      );
+      assert.equal(result.status, "timeout");
+      assert.notEqual(result.status, "stuck");
+    },
+  );
+});
+
+test("watch-ci resets the stall when a stuck run starts progressing and settles success (#1631)", async () => {
+  // Polls 1-2: all queued (stall accumulates but under the bail window). Poll 3:
+  // the run starts progressing and completes success. Must settle success, NOT
+  // bail stuck - the stall window resets the moment a job is picked up.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-ci-stallreset-"));
+  try {
+    const ghPath = path.join(tempDir, "gh");
+    const counterPath = path.join(tempDir, "cr-counter.txt");
+    await writeFile(counterPath, "0", "utf8");
+    const script = [
+      "#!/usr/bin/env node",
+      'const { readFileSync, writeFileSync } = require("node:fs");',
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      'const argv = process.argv.slice(2).join(" ");',
+      'const has = (n) => argv.includes(n);',
+      `if (has("pr") && has("view")) { process.stdout.write(${JSON.stringify(prView("sha-a", ["build"]))}); process.exit(0); }`,
+      'if (has("check-runs")) {',
+      '  const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
+      '  writeFileSync(counterPath, String(i + 1));',
+      '  const run = i < 2 ? { status: "queued", conclusion: null, name: "build" } : { status: "completed", conclusion: "success", name: "build" };',
+      '  process.stdout.write(JSON.stringify({ check_runs: [run] })); process.exit(0);',
+      '}',
+      `if (has("/status")) { process.stdout.write(${JSON.stringify(statuses([]))}); process.exit(0); }`,
+      'process.stderr.write(`unexpected gh args: ${argv}\\n`); process.exit(97);',
+      "",
+    ].join("\n");
+    await writeFile(ghPath, script, "utf8");
+    await chmod(ghPath, 0o755);
+    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+    const result = await watchCiStatus(
+      { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 10_000, stallBailMs: 100 },
+      advancingDeps(env),
+    );
+    assert.equal(result.status, "success");
+    assert.equal(result.settled, true);
+    assert.equal(result.attempts, 3);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("watch-ci single check (timeout-ms 0) on an all-queued run reports pending, never stuck (#1631)", async () => {
+  // No waiting budget -> no stall window can mature -> a single live check of an
+  // all-queued head reports the live "pending" state, never bails "stuck".
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+        { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 0, stallBailMs: 1 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "pending");
+      assert.equal(result.attempts, 1);
+    },
+  );
+});
