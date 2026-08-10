@@ -1241,20 +1241,41 @@ test("checkProvenanceAngleCoverage passes for a fully-covered draft_gate and pre
   });
 });
 
-test("checkProvenanceAngleCoverage: excluding a mandatory angle does not deadlock the write (excludeAngles filters mandatoryAngles)", async () => {
+test("checkProvenanceAngleCoverage: a mandatory angle disabled via enabled:false does not deadlock the write", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-exclude-deadlock-"));
   try {
-    // The deadlock config: yagni is mandatory AND excluded. Without filtering,
-    // every write would fail — missing-mandatory if omitted, foreign if recorded.
+    // The deadlock config: yagni is mandatory AND disabled (enabled: false).
+    // Without filtering, every write would fail — missing-mandatory if omitted,
+    // foreign if recorded. The disabled entry is excluded from the mandatory
+    // check, so the write succeeds with yagni absent from the provenance.
+    // Uses the canonical angle-entry shape (#1578): raw mandatoryAngles/
+    // excludeAngles keys are rejected by the strict gate schema and would be
+    // silently dropped, making this test pin behavior against packaged
+    // defaults rather than the override it names.
     await writeFile(path.join(repoRoot, ".devloops"), [
       "version: 1",
       "gates:",
       "  preApproval:",
-      "    angles: [dry, kiss]",
-      "    mandatoryAngles: [pr-checklist-matrix, yagni]",
-      "    excludeAngles: [yagni]",
+      "    angles:",
+      "      - dry",
+      "      - kiss",
+      "      - name: pr-checklist-matrix",
+      "        mandatory: true",
+      "      - name: yagni",
+      "        mandatory: true",
+      "        enabled: false",
       "",
     ].join("\n"), "utf8");
+    // Assert the override actually loaded (not silently dropped against
+    // packaged defaults — #1578): a schema-rejected layer would surface a
+    // warning from applyLayer. Its absence proves this override took effect,
+    // making the coverage assertion below non-vacuous.
+    const { loadDevLoopConfig } = await import("@dev-loops/core/config");
+    const cfgResult = await loadDevLoopConfig({ repoRoot });
+    assert.ok(
+      !cfgResult.warnings.some((w) => /config layer rejected by schema/.test(w)),
+      "the override layer must load without schema rejection",
+    );
     const result = await checkProvenanceAngleCoverage(
       { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }] },
       "pre_approval_gate",
