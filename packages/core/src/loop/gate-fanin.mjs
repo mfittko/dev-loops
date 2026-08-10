@@ -874,9 +874,15 @@ export function validateJudgeVerdict(verdict) {
   if (!Array.isArray(sd.driftedAreas)) {
     throw new Error("judge verdict.scopeDrift.driftedAreas must be an array");
   }
+  for (const [di, area] of sd.driftedAreas.entries()) {
+    if (typeof area !== "string" || area.trim().length === 0) {
+      throw new Error(`judge verdict.scopeDrift.driftedAreas[${di}] must be a non-empty string`);
+    }
+  }
   if (!Array.isArray(v.dispositions)) {
     throw new Error("judge verdict.dispositions must be an array");
   }
+  const seenIndices = new Set();
   for (const [i, d] of v.dispositions.entries()) {
     if (!d || typeof d !== "object" || Array.isArray(d)) {
       throw new Error(`judge verdict.dispositions[${i}] must be an object`);
@@ -885,6 +891,10 @@ export function validateJudgeVerdict(verdict) {
     if (!Number.isInteger(entry.index) || entry.index < 0) {
       throw new Error(`judge verdict.dispositions[${i}].index must be a non-negative integer`);
     }
+    if (seenIndices.has(entry.index)) {
+      throw new Error(`judge verdict.dispositions[${i}].index ${entry.index} is a duplicate — the contract is one disposition per finding`);
+    }
+    seenIndices.add(entry.index);
     if (!JUDGE_DISPOSITIONS.includes(entry.disposition)) {
       throw new Error(`judge verdict.dispositions[${i}].disposition must be one of: ${JUDGE_DISPOSITIONS.join(", ")}`);
     }

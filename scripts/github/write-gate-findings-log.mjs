@@ -8,6 +8,10 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+// JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
+// the validator's membership check so validateFindingsArray stays self-contained.
+import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
+const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -142,7 +146,11 @@ function validateFindingsArray(parsed, flagLabel) {
     // not acted on and why. Optional and additive: when absent (a round with
     // no judge verdict) the finding writes exactly as before.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
-      entry.judgeDisposition = f.judgeDisposition.trim();
+      const jd = f.judgeDisposition.trim();
+      if (!JUDGE_DISPOSITIONS.has(jd)) {
+        throw parseError(`${flagLabel}[${i}].judgeDisposition must be one of: ${[...JUDGE_DISPOSITIONS].join(", ")}`);
+      }
+      entry.judgeDisposition = jd;
     }
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();

@@ -1038,6 +1038,22 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /followUpDraft.*defer/);
   });
 
+  test("fails closed on a duplicate disposition index (one-per-finding contract)", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 0, disposition: "reject", rationale: "dup", criterion: "NG-2" },
+    ]);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /duplicate.*one disposition per finding/);
+  });
+
+  test("fails closed on a non-string driftedAreas element", () => {
+    const verdict = judgeVerdict(
+      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      { verdict: "drift_detected", rationale: "x", driftedAreas: [42] },
+    );
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /driftedAreas.*non-empty string/);
+  });
+
   test("no judge verdict enrichment leaves findings unchanged (toFindingsLogShape is additive)", () => {
     const logShape = toFindingsLogShape(baseFindings);
     assert.equal(logShape[0].judgeDisposition, undefined);
