@@ -73,22 +73,86 @@ export function normalizeRetrospectiveCheckpointState(value) {
 }
 
 /**
- * Returns true if a routing result represents a qualifying GitHub-first async
- * dev-loop completion that requires a post-run behavioral retrospective before
- * the next start/resume.
+ * Normalizes a dev-loop cycle identity — the minimum facts that pin a
+ * checkpoint record to one specific qualifying completion: repo, PR number,
+ * and merge commit. Returns null when any field is missing or malformed, so a
+ * partial/garbled identity can never be mistaken for a valid one.
  *
- * A qualifying completion is one that:
- * - has a `selectedGate` in RETROSPECTIVE_QUALIFYING_GATES
- * - with `routeKind === "route"` (inspect/status-only results do not qualify)
+ * @param {unknown} identity
+ * @returns {{repo: string, prNumber: number, mergeCommit: string}|null}
  */
-export function isQualifyingAsyncCompletion(routingResult) {
-  if (!routingResult || typeof routingResult !== "object") return false;
-  const { routeKind, selectedGate } = routingResult;
-  if (routeKind !== "route") {
-    return false;
+export function normalizeCheckpointCycleIdentity(identity) {
+  if (!identity || typeof identity !== "object") {
+    return null;
   }
-  if (typeof selectedGate !== "string") return false;
-  return RETROSPECTIVE_QUALIFYING_GATES.includes(selectedGate);
+  const repo = typeof identity.repo === "string" ? identity.repo.trim() : "";
+  const prNumber = Number.isInteger(identity.prNumber) && identity.prNumber > 0 ? identity.prNumber : null;
+  const mergeCommit = typeof identity.mergeCommit === "string" ? identity.mergeCommit.trim() : "";
+  if (repo.length === 0 || prNumber === null || mergeCommit.length === 0) {
+    return null;
+  }
+  return { repo, prNumber, mergeCommit };
+}
+
+/**
+ * Resolves the RETROSPECTIVE_CHECKPOINT_STATE for a durable checkpoint
+ * artifact, scoped to the recorded cycle's recency (issue: a one-time
+ * `complete`/`skipped` checkpoint must not satisfy every later qualifying
+ * cycle forever).
+ *
+ * A `complete` or `skipped` artifact is scoped by `hasNewerMergeSinceCheckpoint`:
+ * when true, something has merged since the checkpoint's recorded discharge
+ * point (or that point could not be verified at all), so the checkpoint
+ * cannot cover the newer cycle — it fails closed to MISSING. The caller
+ * derives `hasNewerMergeSinceCheckpoint` itself (this module stays
+ * pure/I/O-free) by checking local git ancestry between the checkpoint's
+ * recorded merge commit and the base branch, so this runs fresh on every
+ * evaluation rather than depending on anything having written a fresh
+ * `required` record for the new cycle.
+ *
+ * `required`/`none` are not scoped by this comparison: `required` already
+ * maps to MISSING regardless of recency (an outstanding requirement blocks
+ * the gate no matter which cycle triggered it), and `none` means no
+ * completion has ever been observed.
+ *
+ * @param {object|null|undefined} artifact - Parsed checkpoint JSON, or
+ *   `undefined` when the durable artifact is genuinely ABSENT (no file). Any
+ *   other non-plain-object value — including the JSON literal `null` (a file
+ *   that IS present but contains malformed content) and a corrupt-but-valid
+ *   scalar/array — is treated as present-but-malformed and fails closed to
+ *   MISSING; only a genuinely absent artifact resolves to NONE.
+ * @param {object} [options]
+ * @param {boolean} [options.hasNewerMergeSinceCheckpoint] - True when the
+ *   caller has determined (or could not rule out) that something has merged
+ *   to the base branch since the checkpoint's recorded discharge point.
+ *   Ignored for states other than `complete`/`skipped`. Defaults to `false`
+ *   (trust the recorded state) so callers that never verify recency (e.g.
+ *   `workflow.requireRetrospective` disabled) see unchanged behavior.
+ * @returns {"none"|"complete"|"skipped"|"missing"}
+ */
+export function resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint = false } = {}) {
+  if (artifact === undefined) {
+    return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
+  }
+  if (artifact === null || typeof artifact !== "object" || Array.isArray(artifact)) {
+    // Present but malformed — fail closed, do not treat as "nothing observed".
+    return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+  }
+  const rawState = typeof artifact.state === "string" ? artifact.state.trim().toLowerCase() : null;
+  if (rawState === "required" || rawState === "missing") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+  }
+  if (rawState === "none") {
+    return RETROSPECTIVE_CHECKPOINT_STATE.NONE;
+  }
+  if (rawState === "skipped") {
+    return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
+  }
+  if (rawState === "complete") {
+    return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
+  }
+  // Malformed/unrecognized durable state — fail closed.
+  return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
 }
 
 /**

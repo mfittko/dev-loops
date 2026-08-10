@@ -424,7 +424,7 @@ const WorkflowConfig = z.strictObject({
   // it here would also mean renaming a shipped artifact contract, not just a
   // config key. Out of scope for this config-shape RFC; revisit as its own
   // change against skills/docs/gate-review-comment-contract.md + the envelope schema.
-  requireRetrospective: z.boolean().describe("Require a retrospective checkpoint before a loop completes."),
+  requireRetrospective: z.boolean().describe("Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
   // No default here and absent from BUILT_IN_DEFAULTS — unset means "keep

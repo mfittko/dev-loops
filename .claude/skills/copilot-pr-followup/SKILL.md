@@ -462,19 +462,21 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
 
 ### Mandatory post-merge retrospective checkpoint write
 
-After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session:
+After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective gate is derived at the START of the NEXT loop by checking local git ancestry between this checkpoint's recorded `identity.mergeCommit` and the base branch — an identity-less record can never be verified, so it is treated the same as a stale one; carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `node <resolved-skill-scripts>/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid` reports) is MUST, not optional (the CLI now rejects `complete`/`skipped` without it):
 
 ```sh
-node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --notes "<one-line retrospective summary>"
+node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --notes "<one-line retrospective summary>" \
+  --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
 ```
 
 For an explicit skip:
 
 ```sh
-node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --reason "<why retrospective is skipped>"
+node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --reason "<why retrospective is skipped>" \
+  --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
 ```
 
-Do not report completion or advance to the next PR queue item until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped`.
+Do not report completion or advance to the next PR queue item until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped` carrying this cycle's identity.
 
 ### Post-merge board sync (best-effort)
 

@@ -2,7 +2,12 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resolveAuthoritativeStartupResumeBundle } from "@dev-loops/core/loop/public-dev-loop-routing";
+import {
+  resolveAuthoritativeStartupResumeBundle,
+  normalizeCheckpointCycleIdentity,
+  resolveCheckpointStateFromArtifact,
+} from "@dev-loops/core/loop/public-dev-loop-routing";
+import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -283,17 +288,76 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   }
   return options;
 }
+// Bounds every synchronous `gh` call this file makes (including the
+// retrospective-completion query) so a hung/offline `gh` can never block
+// startup indefinitely — it fails (and callers treat that as a normal `gh`
+// failure) after this timeout instead of hanging forever.
+const GH_CALL_TIMEOUT_MS = 10000;
 function ghJson(args, cwd) {
   try {
     const stdout = execFileSync("gh", args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: GH_CALL_TIMEOUT_MS,
     });
     return JSON.parse(stdout);
   } catch (err) {
     throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+// Bounds the best-effort `git fetch` below so a slow/offline remote can never
+// delay startup indefinitely.
+const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
+/**
+ * True when the base branch (as tracked at `origin/<baseBranch>`) carries any
+ * commit after `mergeCommit` — i.e. something has merged since the
+ * checkpoint's recorded discharge point. This is a purely local git ancestry
+ * check (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query:
+ * recency is a fact of this repo's own commit graph, so it never depends on
+ * `gh`, an API rate limit, or a Copilot-assignee proxy that may match nothing.
+ *
+ * A best-effort `git fetch origin <baseBranch>` runs first so the ordinary
+ * case (a commit merged after this checkout last fetched) resolves correctly;
+ * the fetch failing is not fatal on its own — an already-current local
+ * `origin/<baseBranch>` still answers correctly without it.
+ *
+ * Returns `true` (fail closed) when `mergeCommit` cannot be resolved against
+ * `origin/<baseBranch>` at all — unfetched, a shallow clone missing the
+ * history, or a garbage value. An unverifiable discharge claim must not be
+ * trusted, so "cannot tell" collapses to the same outcome as "yes, something
+ * newer exists" rather than a separate "unknown" state.
+ *
+ * This repo (and any repo using this check) squash-merges: the recorded
+ * `mergeCommit` is the single squash commit that lands on the base branch, so
+ * plain first-parent-agnostic `git log` ancestry is correct — filtering on
+ * `--merges` would match nothing.
+ *
+ * @param {{mergeCommit: string, baseBranch: string, cwd: string}} params
+ * @returns {boolean}
+ */
+export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, cwd }) {
+  try {
+    execFileSync("git", ["fetch", "origin", baseBranch], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: RETROSPECTIVE_FETCH_TIMEOUT_MS,
+    });
+  } catch {
+    // Best-effort — an already-current local origin/<baseBranch> still works.
+  }
+  let log;
+  try {
+    log = execFileSync("git", ["log", `${mergeCommit}..origin/${baseBranch}`, "--oneline"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    // mergeCommit is unresolvable locally — fail closed.
+    return true;
+  }
+  return log.trim().length > 0;
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -943,7 +1007,14 @@ export function summarizeCanonicalState(bundle) {
       : false,
   };
 }
-export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdapter(), env, cwd, asyncStartMode = "required", config } = {}) {
+export function buildResolveDevLoopStartupResult(input, {
+  adapter = createPiAdapter(),
+  env,
+  cwd,
+  asyncStartMode = "required",
+  config,
+  resolveHasNewerMerge = resolveHasNewerMergeSinceCheckpoint,
+} = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
   // A configured workflow.baseBranch (#1368) is surfaced in the worktree
@@ -965,33 +1036,67 @@ export function buildResolveDevLoopStartupResult(input, { adapter = createPiAdap
   // result, mirroring planFileIntakeState/spikeIntakeState.
   const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
   input = routingInput;
+  // Retrospective checkpoint gate. The durable checkpoint file (if present)
+  // is always honored — unchanged from before cycle-scoping existed. Cycle
+  // scoping itself (a stale `complete`/`skipped` must not satisfy every later
+  // cycle forever) is derived entirely at READ time, on every evaluation, via
+  // a local git ancestry check — no write-time "arming" seam to miss (never
+  // re-resolved after merge, never cwd-relative, never a read-only preview's
+  // side effect, never racy) and no GitHub query at all. Gated on
+  // workflow.requireRetrospective so a repo that never opts into cycle
+  // scoping never pays for the extra git calls — the plain checkpoint file
+  // read below is unaffected either way. `durableCheckpoint` stays
+  // `undefined` when the file is genuinely absent (ENOENT) so
+  // resolveCheckpointStateFromArtifact can tell that apart from a file
+  // present but containing the JSON literal `null`.
+  //
+  // The path is resolved from the REPO ROOT (the main checkout), not
+  // cwd-relative: the checkpoint is gitignored and lives ONCE per repo, not
+  // once per worktree. `checkpoint-contract.mjs`'s write path resolves the
+  // exact same root via `resolveCheckpointRepoRoot`, so a worktree, a
+  // subdirectory, and the main checkout all address one file — a worktree
+  // write is not silently discarded the moment that worktree is removed, and
+  // the main checkout and a worktree of the same repo never disagree about
+  // the checkpoint state depending on which one last wrote it.
+  const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
+  let durableCheckpoint;
+  let checkpointReadFailed = false;
   try {
-    const checkpointText = readFileSync(
-      path.join(effectiveCwd, ".pi", "dev-loop-retrospective-checkpoint.json"),
-      "utf8",
-    );
-    const checkpoint = JSON.parse(checkpointText);
-    const rawState = checkpoint?.state;
-    const DURABLE_STATE_MAP = {
-      none: "none",
-      complete: "complete",
-      skipped: "skipped",
-      missing: "missing",
-      required: "missing",  // durable artifact uses "required" to mean pending retrospective
-    };
-    const normalizedRaw = typeof rawState === "string" ? rawState.trim().toLowerCase() : null;
-    const mappedState = DURABLE_STATE_MAP[normalizedRaw] ?? null;
-    if (mappedState) {
-      input = { ...input, retrospectiveCheckpointState: mappedState };
-    } else {
-      input = { ...input, retrospectiveCheckpointState: "missing" };
-    }
+    durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
   } catch (err) {
-    if (err?.code === "ENOENT") {
-    } else {
-      input = { ...input, retrospectiveCheckpointState: "missing" };
+    if (err?.code !== "ENOENT") {
+      checkpointReadFailed = true;
     }
   }
+  // Only a `complete`/`skipped` checkpoint needs a recency check — every
+  // other state ignores `hasNewerMergeSinceCheckpoint` (see
+  // resolveCheckpointStateFromArtifact). An unresolvable/absent recorded
+  // `mergeCommit` is an unverifiable discharge claim — it must not be
+  // trusted, so it fails closed exactly like a confirmed newer merge.
+  let hasNewerMergeSinceCheckpoint = false;
+  const durableState = typeof durableCheckpoint?.state === "string"
+    ? durableCheckpoint.state.trim().toLowerCase()
+    : null;
+  if (
+    resolveWorkflowConfig(config, "requireRetrospective") === true &&
+    (durableState === "complete" || durableState === "skipped")
+  ) {
+    const identity = normalizeCheckpointCycleIdentity(durableCheckpoint.identity);
+    if (identity === null) {
+      hasNewerMergeSinceCheckpoint = true;
+    } else {
+      const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
+      hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
+        mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
+      });
+    }
+  }
+  input = {
+    ...input,
+    retrospectiveCheckpointState: checkpointReadFailed
+      ? "missing"
+      : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint }),
+  };
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {

@@ -4,8 +4,9 @@ import test from "node:test";
 import {
   RETROSPECTIVE_CHECKPOINT_STATE,
   RETROSPECTIVE_QUALIFYING_GATES,
-  isQualifyingAsyncCompletion,
   evaluateRetrospectiveGate,
+  normalizeCheckpointCycleIdentity,
+  resolveCheckpointStateFromArtifact,
 } from "../src/loop/retrospective-checkpoint.mjs";
 
 import {
@@ -57,128 +58,6 @@ test("RETROSPECTIVE_QUALIFYING_GATES aligns with actual DEV_LOOP_GATE values", (
       `qualifying gate "${gate}" must be a valid DEV_LOOP_GATE value`,
     );
   }
-});
-
-// ---------------------------------------------------------------------------
-// isQualifyingAsyncCompletion — classification
-// ---------------------------------------------------------------------------
-
-test("isQualifyingAsyncCompletion: routed GitHub-first copilot_pr_followup completion qualifies", () => {
-  // This is the primary routed GitHub-first async path.
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR,
-    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
-    },
-    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
-  });
-
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.ok(
-    isQualifyingAsyncCompletion(result),
-    "copilot_pr_followup route must be classified as a qualifying async completion",
-  );
-});
-
-test("isQualifyingAsyncCompletion: routed GitHub-first issue_intake completion qualifies", () => {
-  // Issue intake is also a qualifying GitHub-first path (Copilot assignment flow).
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
-    target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 112 },
-    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
-  });
-
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.ISSUE_INTAKE);
-  assert.ok(
-    isQualifyingAsyncCompletion(result),
-    "issue_intake route must be classified as a qualifying async completion",
-  );
-});
-
-test("isQualifyingAsyncCompletion: local_implementation route does not qualify", () => {
-  // Local implementation runs are not async GitHub-first completions.
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.START_ISSUE_LOCALLY,
-    target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
-  });
-
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.LOCAL_IMPLEMENTATION);
-  assert.equal(isQualifyingAsyncCompletion(result), false);
-});
-
-test("isQualifyingAsyncCompletion: wait/watch route does not qualify (not a completion)", () => {
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.WAITING,
-      authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
-    },
-    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
-  });
-
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.WAIT);
-  assert.equal(isQualifyingAsyncCompletion(result), false);
-});
-
-test("isQualifyingAsyncCompletion: inspect route does not qualify", () => {
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.INSPECT_STATE,
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
-    },
-  });
-
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.INSPECT);
-  assert.equal(isQualifyingAsyncCompletion(result), false);
-});
-
-test("isQualifyingAsyncCompletion: stop result does not qualify", () => {
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.BLOCKED,
-      authorization: DEV_LOOP_AUTHORIZATION.NOT_AUTHORIZED,
-    },
-    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
-  });
-
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.STOP);
-  assert.equal(isQualifyingAsyncCompletion(result), false);
-});
-
-test("isQualifyingAsyncCompletion: needs_reconcile result does not qualify", () => {
-  // Invalid inputs produce needs_reconcile, which is not a qualifying completion.
-  const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
-    // Missing required currentState — produces needs_reconcile
-  });
-
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
-  assert.equal(isQualifyingAsyncCompletion(result), false);
-});
-
-test("isQualifyingAsyncCompletion: returns false for null and non-object inputs", () => {
-  assert.equal(isQualifyingAsyncCompletion(null), false);
-  assert.equal(isQualifyingAsyncCompletion(undefined), false);
-  assert.equal(isQualifyingAsyncCompletion("route"), false);
-  assert.equal(isQualifyingAsyncCompletion(42), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -378,4 +257,122 @@ test("evaluateRetrospectiveGate: fail-closed reconcile result keeps stable routi
 test("evaluateRetrospectiveGate: called with no arguments returns a fail-closed reconcile result", () => {
   const result = evaluateRetrospectiveGate();
   assert.equal(result.routeKind, "needs_reconcile");
+});
+
+// ---------------------------------------------------------------------------
+// normalizeCheckpointCycleIdentity — cycle identity normalization
+// ---------------------------------------------------------------------------
+
+const VALID_IDENTITY = { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: "abc123" };
+
+test("normalizeCheckpointCycleIdentity: accepts a well-formed identity", () => {
+  assert.deepEqual(normalizeCheckpointCycleIdentity(VALID_IDENTITY), VALID_IDENTITY);
+});
+
+test("normalizeCheckpointCycleIdentity: trims repo and mergeCommit", () => {
+  const result = normalizeCheckpointCycleIdentity({ repo: " mfittko/dev-loops ", prNumber: 1613, mergeCommit: " abc123 " });
+  assert.deepEqual(result, VALID_IDENTITY);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a missing repo", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ prNumber: 1613, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "", prNumber: 1613, mergeCommit: "abc123" }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a non-positive-integer prNumber", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 0, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: -1, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1.5, mergeCommit: "abc123" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: "1613", mergeCommit: "abc123" }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for a missing mergeCommit", () => {
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1613, mergeCommit: "" }), null);
+  assert.equal(normalizeCheckpointCycleIdentity({ repo: "a/b", prNumber: 1613 }), null);
+});
+
+test("normalizeCheckpointCycleIdentity: returns null for null/undefined/non-object input", () => {
+  assert.equal(normalizeCheckpointCycleIdentity(null), null);
+  assert.equal(normalizeCheckpointCycleIdentity(undefined), null);
+  assert.equal(normalizeCheckpointCycleIdentity("mfittko/dev-loops#1613"), null);
+});
+
+// ---------------------------------------------------------------------------
+// resolveCheckpointStateFromArtifact — durable artifact -> scoped state
+// ---------------------------------------------------------------------------
+
+test("resolveCheckpointStateFromArtifact: a genuinely absent artifact (undefined) resolves to NONE", () => {
+  assert.equal(resolveCheckpointStateFromArtifact(undefined), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+});
+
+test("resolveCheckpointStateFromArtifact: a present artifact that is the JSON literal null fails closed to MISSING, not NONE", () => {
+  // A file that exists on disk but contains the text "null" is present, just
+  // malformed — it must not be indistinguishable from a genuinely absent file.
+  assert.equal(resolveCheckpointStateFromArtifact(null), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+});
+
+test("resolveCheckpointStateFromArtifact: a present-but-non-object artifact fails closed to MISSING (not NONE)", () => {
+  assert.equal(resolveCheckpointStateFromArtifact("not an object"), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+  assert.equal(resolveCheckpointStateFromArtifact(42), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+  assert.equal(resolveCheckpointStateFromArtifact(["state", "complete"]), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+});
+
+test("resolveCheckpointStateFromArtifact: state 'required' resolves to MISSING regardless of hasNewerMergeSinceCheckpoint", () => {
+  const artifact = { state: "required", triggeredAt: "2026-08-08T00:00:00.000Z" };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint: false }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: skipped with no newer merge resolves to SKIPPED", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint: false }),
+    RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: skipped defaults to trusted (hasNewerMergeSinceCheckpoint omitted)", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED);
+});
+
+test("resolveCheckpointStateFromArtifact: stale-skipped (newer merge observed) resolves to MISSING — skipped is cycle-scoped like complete", () => {
+  const staleArtifact = { state: "skipped", skippedAt: "2026-08-06T01:00:38.000Z", reason: "trivial docs change", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(staleArtifact, { hasNewerMergeSinceCheckpoint: true }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: matching-complete (no newer merge) resolves to COMPLETE", () => {
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint: false }),
+    RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: complete defaults to trusted (hasNewerMergeSinceCheckpoint omitted)", () => {
+  // The caller never verified recency this call (e.g. requireRetrospective
+  // disabled) — nothing to compare against, so the recorded completion stands.
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE);
+});
+
+test("resolveCheckpointStateFromArtifact: stale-complete (newer merge observed) resolves to MISSING — fail-closed backstop", () => {
+  const staleArtifact = { state: "complete", completedAt: "2026-08-06T01:00:38.000Z", notes: "old cycle", identity: VALID_IDENTITY };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(staleArtifact, { hasNewerMergeSinceCheckpoint: true }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: state 'none' resolves to NONE", () => {
+  assert.equal(resolveCheckpointStateFromArtifact({ state: "none" }), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+});
+
+test("resolveCheckpointStateFromArtifact: an unrecognized state fails closed to MISSING", () => {
+  assert.equal(resolveCheckpointStateFromArtifact({ state: "bogus_unknown_state" }), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
 });

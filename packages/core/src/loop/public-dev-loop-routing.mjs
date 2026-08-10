@@ -1,6 +1,8 @@
 import {
   evaluateRetrospectiveGate,
   normalizeRetrospectiveCheckpointState,
+  normalizeCheckpointCycleIdentity,
+  resolveCheckpointStateFromArtifact,
 } from "./retrospective-checkpoint.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -31,6 +33,16 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 
 export * from "./public-dev-loop-routing-contract.mjs";
+
+// Re-exported so script-layer callers (e.g. resolve-dev-loop-startup.mjs and
+// checkpoint-contract.mjs) can normalize a checkpoint cycle identity and
+// resolve a durable checkpoint artifact's state through the public routing
+// surface, without retrospective-checkpoint.mjs itself becoming a public
+// package export (see skills/docs/retrospective-checkpoint-contract.md).
+export {
+  normalizeCheckpointCycleIdentity,
+  resolveCheckpointStateFromArtifact,
+};
 
 const COPILOT_ISSUE_ASSIGNEE = "copilot-swe-agent";
 

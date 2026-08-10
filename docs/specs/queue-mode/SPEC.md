@@ -126,7 +126,7 @@ During any gate review (draft_gate, pre_approval_gate):
 ### Phase 3: Autonomous merge + retrospectives
 
 - [ ] Pre-authorized merge: when queue started with merge authorization, merge on all-gates-pass
-- [ ] Per-merge retrospective checkpoint write (`checkpoint-contract.mjs --state complete`)
+- [ ] Per-merge retrospective checkpoint write (`checkpoint-contract.mjs --state complete --repo <owner/name> --pr <n> --merge-commit <full oid>` — identity flags are mandatory for `complete`)
 - [ ] Merge gate evidence check (`detect-checkpoint-evidence.mjs`) before each merge
 - [ ] Tests: merge flow, retrospective write
 
