@@ -167,8 +167,8 @@ async function fetchGithubStatus({
       return { ok: false, degraded: false, status: "unknown", detail: `status endpoint HTTP ${response.status}` };
     }
     const payload = await response.json();
+    const degraded = typeof payload?.status === "string" && payload.status !== "good";
     const status = typeof payload?.status === "string" ? payload.status : "unknown";
-    const degraded = status !== "good";
     return { ok: true, degraded, status, detail: degraded ? `GitHub status: ${status}` : "GitHub status: good" };
   } catch (error) {
     return { ok: false, degraded: false, status: "unknown", detail: error instanceof Error ? error.message : String(error) };
@@ -1909,7 +1909,7 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const skipStatusCheck = options.skipStatusCheck || env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK === "1";
+  const skipStatusCheck = options.skipStatusCheck || (env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK ?? "").trim() === "1";
   const result = await runConductorMonitor(
     { ...options, skipStatusCheck },
     { env, ghCommand, repoRoot: cwd },

@@ -429,7 +429,7 @@ Contract:
 
 Success output shape:
 - default:
-  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
+  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed"|"github_degraded", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
 - with `--auto-resume`:
   - adds
     `{ "autoResumeRequested": true, "orphanedPrCount": 1, "resumePlanCount": 1, "manualAttentionCount": 0, "resumePlans": [...], "needsManualAttention": [...] }`

@@ -13,11 +13,17 @@ const mixedThreadsFixturePath = path.resolve("packages/core/test/fixtures/github
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
 function githubStatusFetch(status) {
-  return async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ status }),
-  });
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, signal: init?.signal });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ status }),
+    };
+  };
+  fn.calls = calls;
+  return fn;
 }
 const healthyGithubStatusFetch = githubStatusFetch("good");
 const degradedGithubStatusFetch = githubStatusFetch("minor");
@@ -342,6 +348,87 @@ test("conductor-monitor --auto-resume fail-opens on a status-endpoint fetch erro
     assert.equal(result.githubDegraded ?? false, false);
     assert.equal(result.prCount, 1);
     assert.equal(result.queueStatus, "monitoring");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume fail-opens on a non-2xx status-endpoint response (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-http-error-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const httpErrorFetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: httpErrorFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume fail-opens on a malformed 200 status body (no string status field) (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-malformed-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const malformedFetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: malformedFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume status pre-flight calls the status endpoint exactly once (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-call-count-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const fetchImpl = githubStatusFetch("good");
+
+    await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl,
+    });
+
+    assert.equal(fetchImpl.calls.length, 1);
+    assert.equal(fetchImpl.calls[0].url, "https://api.github.com/status");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
