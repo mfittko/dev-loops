@@ -151,3 +151,28 @@ test("computeBareSlashFailuresForContent flags an uncovered bare reference, clea
   assert.match(trailingHyphen[0], /`\/loop-grill`/);
   assert.doesNotMatch(trailingHyphen[0], /`\/loop-grill-`/);
 });
+
+// Multi-root case: two distinct bare commands in one file where only one has
+// the namespaced alternative — the uncovered root is flagged, the covered one
+// is not. This pins the per-root Set dedup + per-root `includes` check against a
+// regression that accepts any-namespaced-form-present instead of per-root.
+test("computeBareSlashFailuresForContent flags only the uncovered root when one bare command has the alternative and another does not", () => {
+  const relSurface = "skills/dev-loop/SKILL.md";
+  const mixed = computeBareSlashFailuresForContent(
+    relSurface,
+    "run `/dev-loops:loop-continue #N` (or `/loop-continue #N` in the dev-loops repo); also run `/loop-grill --auto`.",
+  );
+  assert.equal(mixed.length, 1);
+  assert.match(mixed[0], /`\/loop-grill`/);
+  assert.doesNotMatch(mixed[0], /`\/loop-continue`/);
+});
+
+// Allowlist path: `.claude/commands/<name>.md` is the source-repo-local
+// command doc where the bare form is the runnable command itself, so it is
+// skipped entirely; a non-allowlisted `.claude` mirror with a bare reference
+// is NOT skipped.
+test("isAllowlisted skips only .claude/commands/ surfaces", () => {
+  assert.equal(isAllowlisted(REPO_ROOT, path.join(REPO_ROOT, ".claude/commands/loop-continue.md")), true);
+  assert.equal(isAllowlisted(REPO_ROOT, path.join(REPO_ROOT, ".claude/skills/dev-loop/SKILL.md")), false);
+  assert.equal(isAllowlisted(REPO_ROOT, path.join(REPO_ROOT, "skills/dev-loop/SKILL.md")), false);
+});
