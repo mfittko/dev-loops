@@ -262,10 +262,18 @@ test("verify-briefing-prefixes rejects a malformed --head-sha", () => {
 test("verify-briefing-prefixes rejects a SHORT head SHA (would glob zero sentinels and pass vacuously)", () => {
   const result = runChecker(["--head-sha", "abc1234"]);
   assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /FULL 40-character/);
+  assert.match(result.stderr, /FULL 40- or 64-character/);
 });
 
 const FULL_TEST_SHA = "abc1234abc1234abc1234abc1234abc1234abc12";
+const FULL_TEST_SHA_256 = "d4".repeat(32);
+
+test("verify-briefing-prefixes accepts a 64-hex (SHA-256) head SHA (#1652)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const result = runChecker(["--head-sha", FULL_TEST_SHA_256], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
 
 test("verify-briefing-prefixes exits 0 with reviewerCount 0 when no sentinels exist for the head SHA", async () => {
   await withTmpDir(async (tmpDir) => {

@@ -24,7 +24,7 @@ function sentinelName(scope, head) {
 
 test("parseRetireGateRoundArgs requires a full head SHA and a reason", () => {
   assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--reason", "x"]), /--head-sha/);
-  assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", "abc1234", "--reason", "x"]), /FULL 40-char/);
+  assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", "abc1234", "--reason", "x"]), /FULL 40- or 64-char/);
   assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", HEAD_A]), /--reason/);
   assert.throws(() => parseRetireGateRoundArgs(["--head-sha", HEAD_A, "--reason", "x"]), /--gate/);
   const parsed = parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", HEAD_A.toUpperCase(), "--reason", "rebuilt", "--findings-dir", "/tmp/x", "--repo", "owner/repo", "--pr", "7", "--no-findings-artifacts", "--tmp-root", "tmp2"]);
@@ -35,6 +35,11 @@ test("parseRetireGateRoundArgs requires a full head SHA and a reason", () => {
   assert.equal(parsed.pr, 7);
   assert.equal(parsed.noFindingsArtifacts, true);
   assert.equal(parsed.tmpRoot, "tmp2");
+  // A 64-hex (SHA-256) head SHA is accepted (#1652).
+  const sha256 = "c3".repeat(32);
+  const parsed256 = parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", sha256, "--reason", "rebuilt"]);
+  assert.equal(parsed256.headSha, sha256);
+  assert.equal(parsed256.gate, "draft_gate");
   // repo/pr default to null when not supplied.
   const bare = parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "rebuilt"]);
   assert.equal(bare.repo, null);
@@ -208,7 +213,7 @@ test("retireGateRound re-validates headSha and reason at the function boundary",
   await withTmpRoot(async (tmpRoot) => {
     await assert.rejects(
       () => retireGateRound({ gate: "draft_gate", headSha: "abc1234", reason: "x", tmpRoot }),
-      /FULL 40-char/,
+      /FULL 40- or 64-char/,
     );
     await assert.rejects(
       () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "   ", tmpRoot }),
