@@ -1625,6 +1625,9 @@ test("TERMINAL_RUNNER_RELEASE_ACTIONS covers exactly the four run-completion/sto
   // All four gate-coordination terminal stop actions trigger the release; no
   // mid-gate / non-terminal action does. Proves the Set membership that the
   // integration test (REPORT_BLOCKED) exercises for one action holds for all four.
+  // Cardinality is asserted so a future accidental 5th member is caught here
+  // rather than silently releasing at a non-terminal mid-gate boundary.
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.size, 4);
   assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL), true);
   assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY), true);
   assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.REPORT_DONE), true);
