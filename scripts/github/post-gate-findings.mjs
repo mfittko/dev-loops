@@ -124,6 +124,16 @@ function validateFindingsArray(parsed, flagLabel) {
       // through, so the two can never restate it out of sync.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
+    // Preserve the judge's relevance-based dispositions (#1525) so the
+    // rendered findings comment shows what was consciously not acted on and
+    // why — without this the judge suffix in renderFindingsCommentBody is
+    // unreachable dead code.
+    if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
+      entry.judgeDisposition = f.judgeDisposition.trim();
+    }
+    if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
+      entry.judgeRationale = f.judgeRationale.trim();
+    }
     return entry;
   });
 }

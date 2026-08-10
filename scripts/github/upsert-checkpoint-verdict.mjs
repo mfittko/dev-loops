@@ -688,6 +688,11 @@ function normalizeStructuredFinding(f) {
   if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
     entry.disposition = f.disposition.trim();
   }
+  // Preserve the judge's relevance-based dispositions (#1525) so the
+  // structured findings render shows what was consciously not acted on.
+  if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
+    entry.judgeDisposition = f.judgeDisposition.trim();
+  }
   return entry;
 }
 // Sort findings by severity (high first, unknown/missing last) for

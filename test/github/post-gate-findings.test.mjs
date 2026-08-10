@@ -1566,3 +1566,23 @@ test("parseFindings defaults disposition: low/nit/question all default to deferr
   assert.ok(questionLine, "expected a rendered line for the scope (question) finding");
   assert.ok(questionLine.includes("deferred"), `question finding line should render "deferred" (non-locatable, this shape has no line field): ${questionLine}`);
 });
+
+// #1525: the judge disposition suffix renders in the posted findings comment
+// so a reader can see what was consciously not acted on.
+test("renderFindingsCommentBody renders the judge disposition suffix (#1525)", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "high", angle: "correctness", summary: "null deref", disposition: "accepted-for-fix", files: ["src/a.mjs"], judgeDisposition: "act" },
+    { severity: "low", angle: "docs", summary: "rename variable", disposition: "deferred", judgeDisposition: "reject" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(body.includes("judge: _act_"), "act disposition should render");
+  assert.ok(body.includes("judge: _reject_"), "reject disposition should render");
+});
+
+test("renderFindingsCommentBody omits judge suffix when judgeDisposition absent (#1525)", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "high", angle: "scope", summary: "bad scope", disposition: "accepted-for-fix", files: ["src/a.mjs"] },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.ok(!body.includes("judge:"), "no judge suffix when judgeDisposition absent");
+});
