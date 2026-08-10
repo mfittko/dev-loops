@@ -244,20 +244,22 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
 // decider, which is covered in packages/core/test/claude-hook-decisions.test.mjs). Mutation
 // anchor: revert the guard's block branch and the dirty case stops blocking.
 
-function makeDirtyWorktree(slug) {
+function makeWorktree(slug, dirty) {
   const dir = path.join(repoRoot, "tmp", "worktrees", `subagent-stop-test-${slug}-${process.pid}`);
   fs.mkdirSync(dir, { recursive: true });
+  // A fresh `git init` is already a clean worktree (empty `git status --porcelain`). git commit
+  // is intentionally avoided so the test does not depend on a configured git user identity —
+  // CI runners may omit user.name/user.email, which left `committed.txt` staged and made the
+  // "clean" case dirty (the #1619 CI regression). An untracked file is enough to be dirty.
   spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
-  // A committed file keeps the repo non-empty; an uncommitted new file makes it dirty.
-  fs.writeFileSync(path.join(dir, "committed.txt"), "base\n", "utf8");
-  spawnSync("git", ["add", "committed.txt"], { cwd: dir, encoding: "utf8" });
-  spawnSync("git", ["commit", "-q", "-m", "base"], { cwd: dir, encoding: "utf8" });
-  fs.writeFileSync(path.join(dir, "uncommitted.txt"), "dirty\n", "utf8");
+  if (dirty) {
+    fs.writeFileSync(path.join(dir, "uncommitted.txt"), "dirty\n", "utf8");
+  }
   return dir;
 }
 
 test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/worktrees/ (#1619)", () => {
-  const dir = makeDirtyWorktree("dirty");
+  const dir = makeWorktree("dirty", true);
   try {
     const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 2, "dirty worktree must be refused (exit 2)");
@@ -271,9 +273,7 @@ test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/w
 });
 
 test("SubagentStop hook allows a clean worktree under tmp/worktrees/ (#1619)", () => {
-  const dir = makeDirtyWorktree("clean");
-  // Remove the dirty file so the worktree is clean.
-  fs.rmSync(path.join(dir, "uncommitted.txt"), { force: true });
+  const dir = makeWorktree("clean", false);
   try {
     const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 0, "clean worktree must stop normally");
@@ -299,7 +299,7 @@ test("SubagentStop hook is unaffected by a cwd outside tmp/worktrees/ (#1619)", 
 });
 
 test("SubagentStop hook exempts an interactive session awaiting commit authorization (#1619)", () => {
-  const dir = makeDirtyWorktree("exempt");
+  const dir = makeWorktree("exempt", true);
   try {
     const { code, stderrJson } = runHook(
       "subagent-stop-uncommitted-guard.mjs",
