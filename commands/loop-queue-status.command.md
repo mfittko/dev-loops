@@ -10,7 +10,7 @@ Show the dev-loop queue board. Takes no arguments; if `$ARGUMENTS` is non-empty,
 
    ```
    Backlog (2)
-     #1035 Add /loop-enqueue and /loop-queue-status commands
+     #1035 Add loop-enqueue and loop-queue-status commands
      #1042 Fix article layout
    Next Up (0)
    In Progress (1)

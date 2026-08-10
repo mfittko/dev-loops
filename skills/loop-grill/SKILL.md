@@ -30,6 +30,8 @@ This grill is the bounded, closed sub-loop modeled by `packages/core/src/loop/re
 /loop-grill <path/to/plan.md> --auto   # local-planning, auto-answer
 ```
 
+In a consumer (plugin) install these run as `/dev-loops:loop-grill …`; the bare `/loop-grill` form is dev-loops-repo-local (repo-local `.claude/commands`).
+
 PR bodies are supported the same way as issues: fetch/edit the PR body via the existing PR wrappers (`scripts/github/view-pr.mjs` / `scripts/github/edit-pr.mjs`), never raw `gh`.
 
 ## Argument validation (fail-closed)
