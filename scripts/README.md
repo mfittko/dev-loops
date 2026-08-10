@@ -404,6 +404,7 @@ Required:
 
 Optional:
 - `--auto-resume` — inspect documented pi-subagents async/session artifacts on disk, detect orphaned open PR follow-up runs, and emit deterministic resume plans without executing `subagent({ action: "resume" })`
+- `--skip-status-check` — skip the cheap GitHub-status pre-flight that gates `--auto-resume` (also skipped via `DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1`). The pre-flight curls the GitHub status API and bails before listing PRs when GitHub is degraded, so an auto-resume schedule firing during a GitHub outage costs near-zero instead of burning a dev-loop startup (#1633).
 
 Contract:
 - lists all open PRs via `gh pr list --state open --limit 1000` to avoid GitHub CLI default truncation
@@ -424,10 +425,12 @@ Contract:
 - matches exited runs to open PRs only by PR number parsed from artifact text; branch names, issue numbers, or worktree paths alone are never sufficient identity
 - fail-closes to `needsManualAttention` when PR identity, artifact state, or resume inputs are missing, contradictory, or ambiguous
 - `--auto-resume` remains single-shot only; it does not poll, sleep, watch, or execute the resume itself
+- when `--auto-resume` is present and the status check is not skipped, a degraded GitHub status (anything other than `good`) bails with `queueStatus: "github_degraded"`, `githubDegraded: true`, a `githubStatus: { status, detail }` field, and zero resume plans, so the auto-resume schedule never dispatches a dev-loop run during an outage (#1633); a status-endpoint fetch error is fail-open (the normal `listOpenPrs` flow is the backstop)
+- `DEVLOOPS_GITHUB_STATUS_URL` overrides the GitHub status endpoint (default `https://api.github.com/status`); `DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1` skips the pre-flight entirely
 
 Success output shape:
 - default:
-  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
+  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed"|"github_degraded", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
 - with `--auto-resume`:
   - adds
     `{ "autoResumeRequested": true, "orphanedPrCount": 1, "resumePlanCount": 1, "manualAttentionCount": 0, "resumePlans": [...], "needsManualAttention": [...] }`

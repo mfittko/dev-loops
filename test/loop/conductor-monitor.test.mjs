@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runConductorMonitor, isPrHealthy } from "../../scripts/loop/conductor-monitor.mjs";
+import { runConductorMonitor, isPrHealthy, fetchGithubStatus } from "../../scripts/loop/conductor-monitor.mjs";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/conductor-monitor.mjs");
@@ -12,8 +12,27 @@ const mixedThreadsFixturePath = path.resolve("packages/core/test/fixtures/github
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
+function githubStatusFetch(status) {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, signal: init?.signal });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ status }),
+    };
+  };
+  fn.calls = calls;
+  return fn;
+}
+// Plain (non-spy) defaults for the ~30 auto-resume tests that don't assert on
+// call counts — avoids shared mutable state accumulating across tests.
+const healthyGithubStatusFetch = async () => ({ ok: true, status: 200, json: async () => ({ status: "good" }) });
+const degradedGithubStatusFetch = async () => ({ ok: true, status: 200, json: async () => ({ status: "minor" }) });
+
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries);
+  env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK = "1";
   return env;
 }
 
@@ -178,7 +197,7 @@ async function writeAsyncRun({
   return { statusPath, outputPath, eventsPath };
 }
 
-async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo, runChild }) {
+async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot, repo, runChild, fetchImpl }) {
   return runConductorMonitor(
     { repo, autoResume: true },
     {
@@ -187,6 +206,7 @@ async function runAutoResumeMonitor({ repoRoot, sessionsRoot, asyncRunsRoot, asy
       sessionRoots: [sessionsRoot],
       asyncRunRoots: [asyncRunsRoot],
       asyncResultRoots: [asyncResultsRoot],
+      fetchImpl: fetchImpl ?? healthyGithubStatusFetch,
     },
   );
 }
@@ -242,6 +262,276 @@ test("conductor-monitor --auto-resume keeps queue_complete semantics when no ope
     assert.equal(payload.manualAttentionCount, 0);
     assert.deepEqual(payload.resumePlans, []);
     assert.deepEqual(payload.needsManualAttention, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume bails with a near-zero-cost status check when GitHub is degraded (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-degraded-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild, calls } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: degradedGithubStatusFetch,
+    });
+
+    assert.equal(result.queueStatus, "github_degraded");
+    assert.equal(result.autoResumeRequested, true);
+    assert.equal(result.githubDegraded, true);
+    assert.equal(result.githubStatus.status, "minor");
+    assert.equal(result.prCount, 0);
+    assert.equal(result.resumePlanCount, 0);
+    assert.deepEqual(result.resumePlans, []);
+    assert.deepEqual(result.needsManualAttention, []);
+    // AC1: bails BEFORE listing PRs — no gh API call must have been made.
+    assert.equal(calls.length, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume proceeds to list PRs when GitHub status is good (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-good-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: healthyGithubStatusFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.queueStatus, "monitoring");
+    assert.equal(result.autoResumeRequested, true);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume fail-opens on a status-endpoint fetch error (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-fetch-error-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const throwingFetch = async () => { throw new Error("ECONNREFUSED"); };
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: throwingFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+    assert.equal(result.queueStatus, "monitoring");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume fail-opens on a non-2xx status-endpoint response (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-http-error-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const httpErrorFetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: httpErrorFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume fail-opens on a malformed 200 status body (no string status field) (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-malformed-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const malformedFetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+
+    const result = await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl: malformedFetch,
+    });
+
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume status pre-flight calls the status endpoint exactly once (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-call-count-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const fetchImpl = githubStatusFetch("good");
+
+    await runAutoResumeMonitor({
+      repo: "owner/repo",
+      repoRoot,
+      sessionsRoot,
+      asyncRunsRoot,
+      asyncResultsRoot,
+      runChild,
+      fetchImpl,
+    });
+
+    assert.equal(fetchImpl.calls.length, 1);
+    assert.equal(fetchImpl.calls[0].url, "https://api.github.com/status");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fetchGithubStatus fail-opens (proceed) when the status endpoint hangs past the timeout (#1633)", async () => {
+  const hangingFetch = (_url, { signal }) => new Promise((_resolve, reject) => {
+    if (signal) signal.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+  });
+  const result = await fetchGithubStatus({ fetchImpl: hangingFetch, timeoutMs: 50 });
+  assert.equal(result.degraded, false);
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /aborted/i);
+});
+
+test("conductor-monitor --auto-resume honors DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-env-skip-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    // A fetch that WOULD bail (degraded) — but the env var skips the pre-flight entirely.
+    let called = false;
+    const fetchImpl = async () => { called = true; return { ok: true, status: 200, json: async () => ({ status: "minor" }) }; };
+
+    const result = await runConductorMonitor(
+      { repo: "owner/repo", autoResume: true },
+      {
+        runChild,
+        repoRoot,
+        sessionRoots: [sessionsRoot],
+        asyncRunRoots: [asyncRunsRoot],
+        asyncResultRoots: [asyncResultsRoot],
+        fetchImpl,
+        env: { ...process.env, DEVLOOPS_SKIP_GITHUB_STATUS_CHECK: "1" },
+      },
+    );
+
+    assert.equal(called, false);
+    assert.equal(result.githubDegraded ?? false, false);
+    assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume honors DEVLOOPS_GITHUB_STATUS_URL override (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-url-override-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const overriddenUrl = "https://status.example.test/api";
+    const fetchImpl = githubStatusFetch("good");
+
+    await runConductorMonitor(
+      { repo: "owner/repo", autoResume: true },
+      {
+        runChild,
+        repoRoot,
+        sessionRoots: [sessionsRoot],
+        asyncRunRoots: [asyncRunsRoot],
+        asyncResultRoots: [asyncResultsRoot],
+        fetchImpl,
+        env: { ...process.env, DEVLOOPS_GITHUB_STATUS_URL: overriddenUrl },
+      },
+    );
+
+    assert.equal(fetchImpl.calls.length, 1);
+    assert.equal(fetchImpl.calls[0].url, overriddenUrl);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume --skip-status-check bypasses the GitHub-status pre-flight (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-skip-status-check-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const env = await writeGhStub(tempDir, buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    delete env.DEVLOOPS_SKIP_GITHUB_STATUS_CHECK;
+    env.PI_AGENT_SESSIONS_DIR = sessionsRoot;
+    env.PI_SUBAGENT_ASYNC_RUNS_DIR = asyncRunsRoot;
+    env.PI_SUBAGENT_ASYNC_RESULTS_DIR = asyncResultsRoot;
+
+    const result = await runNode(["--repo", "owner/repo", "--auto-resume", "--skip-status-check"], { env, cwd: repoRoot });
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.githubDegraded ?? false, false);
+    assert.equal(payload.prCount, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
