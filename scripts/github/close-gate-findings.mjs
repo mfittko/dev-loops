@@ -34,7 +34,10 @@ triage; #1585). question always stays open too — it is answered, never deferre
 so an unanswered question blocks gate-close exactly like an open defect; nit is
 replied-to + resolved immediately, with no fixer cycle. A deferred thread's marker is
 stamped \`disposition=deferred\` before it is resolved, so the deferral disposition
-lives on the thread itself and in the durable tmp ledger.
+lives on the thread itself and in the durable tmp ledger. A
+contract-violating disposition=deferred stamp on a question or in-window medium
+thread (a subagent bypass of selectDispositionTargets) is detected and rejected
+before the pass runs (#1672).
 
 Round number = the MAXIMUM of three worktree-independent-first sources:
   (A) count of DISTINCT reviewed-head SHAs across this gate's own verdict surfaces —
@@ -73,6 +76,47 @@ function parseError(message) {
 // ---------------------------------------------------------------------------
 // Disposition pass
 // ---------------------------------------------------------------------------
+
+// #1672: Scan every unresolved gate-authored thread for a contract-violating
+// disposition=deferred stamp — one that selectDispositionTargets would never
+// have produced (question is never deferred; medium is deferred only past the
+// fix window). A subagent that manually stamped disposition=deferred on a
+// question or in-window medium thread (bypassing selectDispositionTargets /
+// stampDeferredDisposition entirely, via a direct gh api PATCH) leaves exactly
+// this signature. The mechanical enforcement (isDeferredAtRound in
+// selectDispositionTargets) is correct, but it only governs what THIS pass
+// stamps — it cannot prevent a manual stamp. This scan detects the bypass
+// BEFORE the disposition pass runs, so a contract-violating stamp surfaces as
+// a gate failure (throw) rather than silently proceeding to reply+resolve or
+// being counted as a clean deferral.
+function detectContractViolatingDeferredStamps(threads, login, round, mediumFixWindow) {
+  const violations = [];
+  for (const thread of threads) {
+    // Only scan UNRESOLVED threads: the scan uses the CURRENT gate's round,
+    // but a resolved thread may have been legitimately deferred by a PRIOR
+    // gate at a higher round (e.g. draft_gate round 4 defers a medium;
+    // pre_approval_gate at round 1 would falsely flag it). The marker
+    // carries no cross-gate deferral provenance, so scanning resolved
+    // threads would cause cross-gate false positives that hard-block the
+    // gate with no recovery path. The stamp-only bypass (unresolved thread
+    // with an invalid disposition=deferred stamp) is the case this scan
+    // catches; the full bypass (stamp + resolve) is caught by the
+    // stampDeferredDisposition guard when the sanctioned path is used,
+    // and a raw gh-api bypass is a process violation no code guard can
+    // mechanically prevent.
+    if (thread.isResolved) continue;
+    if (thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue;
+    if (marker.disposition === "deferred" && !isDeferredAtRound(marker.severity, round, mediumFixWindow)) {
+      violations.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity, round, mediumFixWindow });
+    }
+  }
+  if (violations.length > 0) {
+    const details = violations.map((v) => `thread ${v.threadId} (comment ${v.commentId}): severity=${v.severity} at round=${v.round} (mediumFixWindow=${v.mediumFixWindow}) carries disposition=deferred but isDeferredAtRound=false`).join("; ");
+    throw new Error(`GATE-EXEC-THREAD-DISPOSITION violation: ${violations.length} gate-authored thread(s) carry a contract-violating disposition=deferred stamp (${details}). A question must be answered (never deferred) and an in-window medium (round ≤ mediumFixWindow) must stay unresolved to force a fix round. Refuse to proceed with the disposition pass.`);
+  }
+}
 
 // The window/disposition reason named in the reply: a medium thread deferred
 // because it stayed open past the in-gate fix window vs. a low finding that is
@@ -138,7 +182,7 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow) {
 // `/disposition=deferred/` body search): a finding whose own summary or
 // recommendation happens to quote that literal token must never be mistaken
 // for an already-stamped marker.
-async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand }) {
+async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindow }, { env, ghCommand }) {
   const payload = await runGhJson(["api", `repos/${repo}/pulls/comments/${commentId}`], { env, ghCommand });
   // Trimmed to match parseReviewThreads' normalizeBody, which is what
   // selectDispositionTargets parsed thread.body through to select this exact
@@ -149,6 +193,16 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
   const marker = parseFindingMarker(body);
   if (!marker) {
     throw new Error(`Review comment ${commentId} was selected as a deferral target but no longer carries a parseable finding marker; refuse to resolve it unstamped.`);
+  }
+  // #1672: Defense-in-depth guard — validate that this severity/round is
+  // actually deferrable BEFORE stamping or skipping. selectDispositionTargets
+  // already filters via isDeferredAtRound, so this should never fire in normal
+  // flow; it catches a direct call to stampDeferredDisposition on a question or
+  // in-window medium (a subagent bypass) and an already-stamped marker that a
+  // subagent applied manually. Without this, an already-stamped invalid marker
+  // would silently skip (the return below) and proceed to reply+resolve.
+  if (!isDeferredAtRound(marker.severity, round, mediumFixWindow)) {
+    throw new Error(`Review comment ${commentId} carries severity=${marker.severity} at round=${round} (mediumFixWindow=${mediumFixWindow}) which must not be deferred (isDeferredAtRound=false); refuse to stamp or resolve a contract-violating disposition=deferred (GATE-EXEC-THREAD-DISPOSITION).`);
   }
   if (marker.disposition === "deferred") return;
   const stamped = body.replace(FINDING_MARKER_RE, (m) => m.replace(/\s*-->$/, " disposition=deferred -->"));
@@ -163,13 +217,16 @@ async function stampDeferredDisposition({ repo, commentId }, { env, ghCommand })
 // the reply-target validation snapshot rather than re-fetching it, since it is
 // already fresh (fetched immediately before this pass runs).
 async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow }, { env, ghCommand }) {
+  // #1672: Before stamping, detect any contract-violating disposition=deferred
+  // stamps already present on gate-authored threads (a subagent bypass).
+  detectContractViolatingDeferredStamps(threads, login, round, mediumFixWindow);
   const targets = selectDispositionTargets(threads, round, login, mediumFixWindow);
   if (targets.length === 0) {
     return { deferredResolved: 0 };
   }
   let deferredResolved = 0;
   for (const target of targets) {
-    await stampDeferredDisposition({ repo, commentId: target.commentId }, { env, ghCommand });
+    await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow }, { env, ghCommand });
     const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow });
     await replyAndMaybeResolve(
       { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },

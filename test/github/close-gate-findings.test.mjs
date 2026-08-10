@@ -638,6 +638,123 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
   ));
 });
 
+// ---------------------------------------------------------------------------
+// #1672: GATE-EXEC-THREAD-DISPOSITION enforcement — guard against a subagent
+// manually stamping disposition=deferred on a question or in-window medium
+// thread (bypassing selectDispositionTargets / stampDeferredDisposition).
+// ---------------------------------------------------------------------------
+
+// (a) round-1 medium NOT defer-closed (default window=3): the disposition pass
+// must leave an in-window medium thread unresolved (it forces a fix round).
+test("#1672 (a): a round-1 medium thread is NOT defer-closed (stays unresolved, forces a fix round)", async () => {
+  const mediumBody = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation`;
+  const thread = threadNode({ id: "THREAD_MED_R1", path: "src/config.mjs", line: 4, commentId: 9001, body: mediumBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No GET/PATCH/reply/resolve entries: a regression that defer-closed this
+    // in-window medium thread would overflow the stub and fail the run.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+// (b) question NOT defer-closed: the disposition pass must leave a question
+// thread unresolved (it must be answered, never deferred).
+test("#1672 (b): a question thread is NOT defer-closed (stays unresolved, must be answered)", async () => {
+  const questionBody = `${buildFindingMarker({ fp: "bbbbbbbbbbbbbbbb", severity: "question", angle: "correctness", round: 1 })}\n**question** (\`correctness\`): why is overallVerdict not cross-checked against verdict?`;
+  const thread = threadNode({ id: "THREAD_Q_R1", path: "src/verdict.mjs", line: 4, commentId: 9002, body: questionBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No disposition entries: a regression that defer-closed this question
+    // thread would overflow the stub and fail the run.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+// (c) round-4 medium IS defer-closed (default window=3): past the fix window,
+// an open medium thread is replied-to + resolved by the disposition pass.
+test("#1672 (c): a round-4 medium thread IS defer-closed (past the default window)", async () => {
+  const mediumBody = `${buildFindingMarker({ fp: "cccccccccccccccc", severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation`;
+  const thread = threadNode({ id: "THREAD_MED_R4", path: "src/config.mjs", line: 4, commentId: 9003, body: mediumBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      getReviewCommentEntry(9003, mediumBody),
+      patchReviewCommentEntry(9003),
+      postReplyEntry(9003, { id: 9103 }),
+      resolveThreadEntry("THREAD_MED_R4"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// (d) high never defer-closed: even past the fix window, a high thread stays
+// unresolved (it forces per-gate continuation until the round cap escalates).
+test("#1672 (d): a high thread is never defer-closed (even past the fix window)", async () => {
+  const highBody = `${buildFindingMarker({ fp: "dddddddddddddddd", severity: "high", angle: "security", round: 1 })}\n**high** (\`security\`): SQL injection`;
+  const thread = threadNode({ id: "THREAD_HIGH", path: "src/db.mjs", line: 2, commentId: 9004, body: highBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No disposition entries: a regression that defer-closed this high thread
+    // would overflow the stub and fail the run.
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
+// #1672 guard: a contract-violating disposition=deferred stamp on a QUESTION
+// thread (manually stamped by a subagent bypassing selectDispositionTargets)
+// is detected and rejected BEFORE the disposition pass proceeds.
+test("#1672 guard: a disposition=deferred stamp on a question thread is rejected (throws, does not silently skip)", async () => {
+  const stampedQuestion = `${buildFindingMarker({ fp: "eeeeeeeeeeeeeeee", severity: "question", angle: "correctness", round: 2, disposition: "deferred" })}\n**question** (\`correctness\`): why is overallVerdict not cross-checked?`;
+  const thread = threadNode({ id: "THREAD_Q_STAMPED", path: "src/verdict.mjs", line: 4, commentId: 9005, body: stampedQuestion });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No GET/PATCH/reply/resolve entries: the scan runs before any of those,
+    // and a regression that proceeded to stamp/resolve would overflow the stub.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*isDeferredAtRound=false/s,
+      );
+    },
+  ));
+});
+
+// #1672 guard: a contract-violating disposition=deferred stamp on an IN-WINDOW
+// medium thread (round 1, default window 3 — manually stamped by a subagent)
+// is detected and rejected BEFORE the disposition pass proceeds.
+test("#1672 guard: a disposition=deferred stamp on an in-window medium thread is rejected (throws, does not silently skip)", async () => {
+  const stampedMedium = `${buildFindingMarker({ fp: "ffffffffffffffff", severity: "medium", angle: "config-drift", round: 1, disposition: "deferred" })}\n**medium** (\`config-drift\`): missing schema validation`;
+  const thread = threadNode({ id: "THREAD_MED_STAMPED", path: "src/config.mjs", line: 4, commentId: 9006, body: stampedMedium });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No GET/PATCH/reply/resolve entries: the scan runs before any of those.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*round=1.*isDeferredAtRound=false/s,
+      );
+    },
+  ));
+});
+
 // commentId is validated BEFORE it is ever interpolated into a
 // `pulls/comments/{commentId}` API path.
 test("a gate-authored thread selected for deferral with no resolvable comment id fails closed, named by threadId", async () => {
