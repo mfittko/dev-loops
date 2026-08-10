@@ -2045,7 +2045,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // enforcement must not be bypassable by a broken scan — fail closed by
     // refusing the rebuild (the operator can fix the scan or retire first).
     if (scanError !== null) {
-      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing prefix hash is ${priorPrefixHash}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
     } else if (liveSentinelNames.length > 0) {
       // AC2: name the in-flight head and point at the reviewers already briefed
       // on the prior bytes (their sentinel files + the recorded hash they carry).

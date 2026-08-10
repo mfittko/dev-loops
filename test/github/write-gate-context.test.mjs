@@ -3458,6 +3458,8 @@ test("writeGateContext REFUSES on a broken live-sentinel scan (fail-closed: cann
         assert.match(err.message, /Refusing to rebuild the briefing prefix with DIFFERENT bytes at head abc1234567890def/);
         assert.match(err.message, /live-sentinel scan failed/);
         assert.match(err.message, /cannot rule out an in-flight fan-out/);
+        assert.match(err.message, /existing \(recorded\) prefix hash is [0-9a-f]{64}; the attempted rebuild would write hash [0-9a-f]{64}/);
+        assert.match(err.message, /make tmp\/ listable again/);
         assert.match(err.message, /retire-gate-round\.mjs --gate draft_gate/);
         return true;
       },
