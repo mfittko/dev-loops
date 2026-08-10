@@ -34,6 +34,13 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 
+// #1653: chmod-based refusal tests (scanError/readError) rely on filesystem
+// permissions that root bypasses — skip with a recorded reason under root so
+// they don't false-pass instead of refusing as the test asserts.
+const SKIP_UNDER_ROOT = typeof process.getuid === "function" && process.getuid() === 0
+  ? "skipped under root: chmod-based permission refusal is bypassed by root (#1653)"
+  : false;
+
 // #1592: a few fixtures below use pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as generic example diff text
 // (collapsePureSubstitutionRuns fixtures) or backward-compat INPUT — not
@@ -3437,7 +3444,7 @@ test("writeGateContext REFUSES, naming the retirement command and the briefed re
   }
 });
 
-test("writeGateContext REFUSES on a broken live-sentinel scan (fail-closed: cannot rule out an in-flight fan-out) (#1537)", async () => {
+test("writeGateContext REFUSES on a broken live-sentinel scan (fail-closed: cannot rule out an in-flight fan-out) (#1537)", { skip: SKIP_UNDER_ROOT }, async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-scanerr-"));
   try {
     const baseArgs = [
@@ -3500,7 +3507,7 @@ test("writeGateContext does NOT refuse when the only live sentinel is for a DIFF
   }
 });
 
-test("writeGateContext keeps the unreadable-existing-prefix (readError) case ADVISORY, not a refusal (#1537)", async () => {
+test("writeGateContext keeps the unreadable-existing-prefix (readError) case ADVISORY, not a refusal (#1537)", { skip: SKIP_UNDER_ROOT }, async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-readerr-"));
   try {
     const baseArgs = [
