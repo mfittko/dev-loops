@@ -10,8 +10,9 @@
  * subagent commits before exiting. Post-merge cleanup that force-removes worktrees can no
  * longer destroy uncommitted work silently.
  *
- * Interactive sessions awaiting commit authorization set `DEVLOOPS_COMMIT_AUTH_PENDING=1` and
- * are exempt — they legitimately hold uncommitted work while waiting for the operator.
+ * Interactive sessions awaiting commit authorization set `DEVLOOPS_COMMIT_AUTH_PENDING=1` (an
+ * opt-in operator/coordination-path signal, like `DEVLOOPS_MAIN_AGENT_READONLY`) and are
+ * exempt — they legitimately hold uncommitted work while waiting for the operator.
  *
  * A cwd outside `tmp/worktrees/` is unaffected; a clean worktree stops normally; a non-git cwd
  * (git unavailable) allows the stop (nothing to guard).

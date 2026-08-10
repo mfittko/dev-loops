@@ -272,11 +272,13 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
  * Env var that exempts an interactive session awaiting commit authorization from the
  * SubagentStop uncommitted-work guard (#1619).
  *
- * The dev-loop interactive coordination path sets this when it is intentionally holding
- * uncommitted work pending operator commit authorization — a non-interactive (dispatched)
- * subagent never sets it, so its commit-before-exit obligation stays enforced. Consistent with
- * the `DEVLOOPS_*` availability/bypass env-var pattern (`DEVLOOPS_MAIN_AGENT_READONLY`,
- * `DEVLOOPS_ALLOW_MAIN`, `DEVLOOPS_SUBAGENT_AVAILABLE`).
+ * An opt-in signal set by the operator or the interactive coordination path
+ * (`DEVLOOPS_COMMIT_AUTH_PENDING=1`) when intentionally holding uncommitted work pending
+ * operator commit authorization — consistent with the operator-set `DEVLOOPS_*` env vars in
+ * this repo (`DEVLOOPS_MAIN_AGENT_READONLY`, `DEVLOOPS_ALLOW_MAIN`, `DEVLOOPS_SUBAGENT_AVAILABLE`),
+ * which are environment/operator signals rather than values written by a code path. A
+ * non-interactive (dispatched) subagent leaves it unset, so its commit-before-exit obligation
+ * stays enforced.
  */
 export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
 
@@ -299,7 +301,8 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * @param {string} params.cwd - Current working directory.
  * @param {string} params.porcelain - Raw `git status --porcelain` output ("" when clean).
  * @param {boolean} [params.pendingCommitAuthorization] - True when the interactive session is
- *   awaiting commit authorization (exempt).
+ *   awaiting commit authorization (exempt) — derived by the hook script from the
+ *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.
  * @returns {HookDecision}
  */
 export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false }) {
