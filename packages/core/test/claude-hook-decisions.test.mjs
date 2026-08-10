@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideBashGate, decideWriteGuard } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideSubagentStopGuard } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -480,4 +480,63 @@ test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass vi
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// decideSubagentStopGuard (#1619)
+// ---------------------------------------------------------------------------
+
+const WT = "/Users/mfittko/github/dev-loops/tmp/worktrees/dev-loops/issue-1619";
+
+// Mutation anchor: if the guard is reverted (no block on dirty porcelain), this fails. The
+// refusal names LOCAL-COMMIT-BEFORE-EXIT (#1619 AC).
+test("decideSubagentStopGuard blocks a subagent stop with a dirty worktree under tmp/worktrees/, naming LOCAL-COMMIT-BEFORE-EXIT and the dirty paths", () => {
+  const porcelain = [" M packages/core/src/claude/hook-decisions.mjs", "?? .claude/hooks/subagent-stop-uncommitted-guard.mjs"].join("\n");
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  assert.match(d.reason, /hook-decisions\.mjs/);
+  assert.match(d.reason, /subagent-stop-uncommitted-guard\.mjs/);
+});
+
+test("decideSubagentStopGuard allows a clean worktree (empty porcelain)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: "" }).decision, "allow");
+});
+
+test("decideSubagentStopGuard allows a clean worktree (whitespace-only porcelain)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: "   \n  " }).decision, "allow");
+});
+
+test("decideSubagentStopGuard allows a non-string porcelain (git error) — fail safe, allow the stop", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: undefined }).decision, "allow");
+});
+
+test("decideSubagentStopGuard is unaffected by a cwd outside tmp/worktrees/ (main checkout)", () => {
+  const d = decideSubagentStopGuard({ cwd: "/Users/mfittko/github/dev-loops", porcelain: " M src/x.mjs" });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideSubagentStopGuard is unaffected by a cwd outside tmp/worktrees/ (arbitrary path)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: "/tmp", porcelain: " M x" }).decision, "allow");
+});
+
+test("decideSubagentStopGuard exempts an interactive session awaiting commit authorization", () => {
+  // Same dirty porcelain + worktree cwd that would otherwise block, but the pending-commit-
+  // authorization exemption (set by the interactive coordination path) allows the stop.
+  const d = decideSubagentStopGuard({
+    cwd: WT,
+    porcelain: " M src/x.mjs\n?? y",
+    pendingCommitAuthorization: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideSubagentStopGuard blocks when pendingCommitAuthorization is false (non-interactive dispatched subagent)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", pendingCommitAuthorization: false });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
+test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });

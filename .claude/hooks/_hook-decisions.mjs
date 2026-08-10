@@ -11,6 +11,7 @@
  */
 
 import { resolveRunId } from "./_run-context.mjs";
+import { isUnderWorktreePath } from "./_worktree-guard.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
@@ -264,5 +265,64 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
       `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
       "All repository mutations must flow through the dev-loop subagent. " +
       "See skills/docs/main-agent-contract.md.",
+  };
+}
+
+/**
+ * Env var that exempts an interactive session awaiting commit authorization from the
+ * SubagentStop uncommitted-work guard (#1619).
+ *
+ * The dev-loop interactive coordination path sets this when it is intentionally holding
+ * uncommitted work pending operator commit authorization — a non-interactive (dispatched)
+ * subagent never sets it, so its commit-before-exit obligation stays enforced. Consistent with
+ * the `DEVLOOPS_*` availability/bypass env-var pattern (`DEVLOOPS_MAIN_AGENT_READONLY`,
+ * `DEVLOOPS_ALLOW_MAIN`, `DEVLOOPS_SUBAGENT_AVAILABLE`).
+ */
+export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
+
+/**
+ * Decide whether a SubagentStop must be blocked because the subagent's worktree has
+ * uncommitted changes (#1619).
+ *
+ * `scripts/loop/cleanup-worktree.mjs` runs `git worktree remove --force` after a merge, so
+ * uncommitted changes in a worktree are destroyed with no warning. `LOCAL-COMMIT-BEFORE-EXIT`
+ * existed only as prose. This decider makes it mechanical: refuse the subagent stop when the
+ * cwd is under `tmp/worktrees/` and `git status --porcelain` is non-empty, unless the session
+ * is an interactive one awaiting commit authorization (exempt). A clean worktree, a cwd
+ * outside `tmp/worktrees/`, and a git-error/empty-porcelain case all allow the stop.
+ *
+ * Pure and side-effect free. The hook script gathers `cwd` and the `git status --porcelain`
+ * output and calls this; the block decision is surfaced via exit code 2 + stderr JSON by the
+ * hook (the SubagentStop contract differs from PreToolUse's `permissionDecision` form).
+ *
+ * @param {Object} params
+ * @param {string} params.cwd - Current working directory.
+ * @param {string} params.porcelain - Raw `git status --porcelain` output ("" when clean).
+ * @param {boolean} [params.pendingCommitAuthorization] - True when the interactive session is
+ *   awaiting commit authorization (exempt).
+ * @returns {HookDecision}
+ */
+export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false }) {
+  if (typeof cwd !== "string" || !isUnderWorktreePath(cwd)) {
+    return ALLOW;
+  }
+  if (pendingCommitAuthorization) {
+    return ALLOW;
+  }
+  if (typeof porcelain !== "string" || porcelain.trim() === "") {
+    return ALLOW;
+  }
+  const dirty = porcelain
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return {
+    decision: "block",
+    reason:
+      "LOCAL-COMMIT-BEFORE-EXIT: the worktree has uncommitted changes — refusing subagent exit " +
+      "to prevent silent data loss from post-merge worktree cleanup (cleanup-worktree.mjs runs " +
+      "`git worktree remove --force`). Commit your work before stopping. " +
+      `Dirty paths (${dirty.length}):\n` +
+      dirty.map((p) => "  " + p).join("\n"),
   };
 }

@@ -123,6 +123,7 @@ const HOOK_BUNDLE = [
     rewrites: [
       ['"../loop/run-context.mjs"', '"./_run-context.mjs"'],
       ['"../loop/bash-command-classify.mjs"', '"./_bash-command-classify.mjs"'],
+      ['"../loop/worktree-guard.mjs"', '"./_worktree-guard.mjs"'],
     ],
   },
   // #1596: main-checkout fast-forward support shared by the Pi and Claude post-merge hooks.
