@@ -272,7 +272,7 @@ test("conductor-monitor --auto-resume bails with a near-zero-cost status check w
 
   try {
     const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
-    const { runChild } = makeGhMock(buildGhEntries({
+    const { runChild, calls } = makeGhMock(buildGhEntries({
       prs: [{ number: 17, requestCopilot: true }],
     }));
 
@@ -294,6 +294,8 @@ test("conductor-monitor --auto-resume bails with a near-zero-cost status check w
     assert.equal(result.resumePlanCount, 0);
     assert.deepEqual(result.resumePlans, []);
     assert.deepEqual(result.needsManualAttention, []);
+    // AC1: bails BEFORE listing PRs — no gh API call must have been made.
+    assert.equal(calls.length, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -446,7 +448,7 @@ test("fetchGithubStatus fail-opens (proceed) when the status endpoint hangs past
   assert.match(result.detail, /aborted/i);
 });
 
-test("conductor-monitor --auto-resume honors DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
+test("conductor-monitor --auto-resume honors DEVLOOPS_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-env-skip-"));
 
   try {
@@ -474,6 +476,37 @@ test("conductor-monitor --auto-resume honors DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1
     assert.equal(called, false);
     assert.equal(result.githubDegraded ?? false, false);
     assert.equal(result.prCount, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("conductor-monitor --auto-resume honors DEVLOOPS_GITHUB_STATUS_URL override (#1633)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-url-override-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    const { runChild } = makeGhMock(buildGhEntries({
+      prs: [{ number: 17, requestCopilot: true }],
+    }));
+    const overriddenUrl = "https://status.example.test/api";
+    const fetchImpl = githubStatusFetch("good");
+
+    await runConductorMonitor(
+      { repo: "owner/repo", autoResume: true },
+      {
+        runChild,
+        repoRoot,
+        sessionRoots: [sessionsRoot],
+        asyncRunRoots: [asyncRunsRoot],
+        asyncResultRoots: [asyncResultsRoot],
+        fetchImpl,
+        env: { ...process.env, DEVLOOPS_GITHUB_STATUS_URL: overriddenUrl },
+      },
+    );
+
+    assert.equal(fetchImpl.calls.length, 1);
+    assert.equal(fetchImpl.calls[0].url, overriddenUrl);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

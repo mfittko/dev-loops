@@ -425,7 +425,8 @@ Contract:
 - matches exited runs to open PRs only by PR number parsed from artifact text; branch names, issue numbers, or worktree paths alone are never sufficient identity
 - fail-closes to `needsManualAttention` when PR identity, artifact state, or resume inputs are missing, contradictory, or ambiguous
 - `--auto-resume` remains single-shot only; it does not poll, sleep, watch, or execute the resume itself
-- when `--auto-resume` is present and the status check is not skipped, a degraded GitHub status (anything other than `good`) bails with `queueStatus: "github_degraded"` and zero resume plans, so the auto-resume schedule never dispatches a dev-loop run during an outage (#1633); a status-endpoint fetch error is fail-open (the normal `listOpenPrs` flow is the backstop)
+- when `--auto-resume` is present and the status check is not skipped, a degraded GitHub status (anything other than `good`) bails with `queueStatus: "github_degraded"`, `githubDegraded: true`, a `githubStatus: { status, detail }` field, and zero resume plans, so the auto-resume schedule never dispatches a dev-loop run during an outage (#1633); a status-endpoint fetch error is fail-open (the normal `listOpenPrs` flow is the backstop)
+- `DEVLOOPS_GITHUB_STATUS_URL` overrides the GitHub status endpoint (default `https://api.github.com/status`); `DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1` skips the pre-flight entirely
 
 Success output shape:
 - default:
