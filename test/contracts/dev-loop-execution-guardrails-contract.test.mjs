@@ -47,7 +47,7 @@ test("dev-loop SKILL enforces bounded Copilot/CI watch (#1660)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /dev-loops gate probe-copilot-review --timeout-ms 300000/,
+    /dev-loops gate probe-copilot --timeout-ms 300000/,
     "the bounded-watch guardrail should name the bounded probe invocation",
   );
   assert.match(
