@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
@@ -212,10 +212,9 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     // A present-but-valueless --issue (bare trailing token, or `--issue=`)
     // MUST refuse rather than silently skip enforcement — silently dropping
     // the MUST on a malformed invocation is the exact gap this PR closes.
-    if (issueRaw === null || !/^\d+$/.test(issueRaw) || Number(issueRaw) <= 0) {
-      throw parseError(`--issue must be a positive integer (got ${JSON.stringify(issueRaw ?? "<no value>")})`);
-    }
-    issue = Number(issueRaw);
+    // #1645: route through the shared parseIssueNumber primitive so the
+    // positive-integer rule lives in one place (@dev-loops/core/cli/primitives).
+    issue = parseIssueNumber(issueRaw, parseError);
   }
   // Strip --lightweight and --issue (with its value in the space form) so
   // neither is forwarded to `gh pr create` (which rejects unknown flags).

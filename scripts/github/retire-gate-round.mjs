@@ -2,6 +2,7 @@
 import { lstat, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
+import { parsePrNumber } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
@@ -133,11 +134,9 @@ export function parseRetireGateRoundArgs(argv) {
   }
   let pr = null;
   if (prRaw !== null) {
-    const prNum = Number(prRaw);
-    if (!/^\d+$/.test(prRaw) || !Number.isInteger(prNum) || prNum <= 0) {
-      throw parseError(`--pr must be a positive integer (got ${JSON.stringify(prRaw)})`);
-    }
-    pr = prNum;
+    // #1645: route through the shared parsePrNumber primitive so the
+    // positive-integer rule lives in one place (@dev-loops/core/cli/primitives).
+    pr = parsePrNumber(prRaw, parseError);
   }
   const noFindingsArtifacts = argv.includes("--no-findings-artifacts");
   const tmpRoot = resolveFlagValue(argv, "--tmp-root");
