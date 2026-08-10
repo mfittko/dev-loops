@@ -215,9 +215,9 @@ Usage:
 
 Contract:
 - runs four deterministic checkers:
-  - `prose-linkage-detector` (forbidden prose parent/child/dependency markers + missing API links)
+  - `prose-linkage-detector` (forbidden prose parent/child/dependency markers + missing API links + duplicate child checklists)
   - `scope-boundary-cross-checker` (mutual-exclusion gaps + duplicate sibling ownership)
-  - `refinement-completeness-checker` (AC/DoD/non-goals/matrix presence)
+  - `refinement-completeness-checker` (AC/DoD/non-goals/matrix presence + explicit scope boundary)
   - `tree-integrity-validator` (parent links, orphan detection, cycles, max depth 3)
 - online mode (`--issue`) walks GitHub sub-issues API from the root issue
 - offline mode (`--input`) validates a local refinement tree JSON snapshot

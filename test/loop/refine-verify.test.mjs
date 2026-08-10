@@ -271,6 +271,21 @@ test("duplicate_child_checklist does not fire on a boundary bullet with mixed pa
   assert.ok(!result.errors.some((entry) => entry.code === "duplicate_child_checklist"), result.errors.map((e) => e.message).join("\n"));
 });
 
+test("duplicate_child_checklist fires on parenthesized-form child checklist items", () => {
+  const body = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2) or ui (#3).",
+    "",
+    "## Acceptance criteria",
+    "- [ ] implement api (#2)",
+    "- [ ] implement ui (#3)",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [2, 3], body }] });
+  const result = runProseLinkageDetector(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "duplicate_child_checklist"));
+});
+
 test("each refusal names the rule it upholds (AC5)", () => {
   const noBoundaryTree = normalizeTreePayload({
     root: 1,
