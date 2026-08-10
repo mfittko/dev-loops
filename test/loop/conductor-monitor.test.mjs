@@ -448,7 +448,7 @@ test("fetchGithubStatus fail-opens (proceed) when the status endpoint hangs past
   assert.match(result.detail, /aborted/i);
 });
 
-test("conductor-monitor --auto-resume honors DEVLOOPS_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
+test("conductor-monitor --auto-resume honors DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1 in-core (#1633)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-status-env-skip-"));
 
   try {
