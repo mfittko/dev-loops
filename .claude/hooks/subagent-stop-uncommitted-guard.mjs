@@ -32,9 +32,12 @@ const pendingCommitAuthorization = process.env[DEVLOOPS_COMMIT_AUTH_PENDING_VAR]
 
 let porcelain = "";
 try {
-  porcelain = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+  // Bounded: a stalled `git status` (slow/networked FS, held index lock) must not hang the
+  // subagent stop. On timeout git is killed and execFileSync throws → caught → porcelain=""
+  // → fail-safe allow (better than blocking the exit with no message). #1619 review finding.
+  porcelain = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", timeout: 5000 });
 } catch {
-  // Not a git repo / git unavailable — nothing to guard, allow the stop.
+  // Not a git repo / git unavailable / status timed out — nothing to guard, allow the stop.
   porcelain = "";
 }
 
