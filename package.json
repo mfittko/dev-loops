@@ -38,7 +38,7 @@
     "test:playwright:deep-dive-article": "PW_UI_SLICE=deep-dive-article playwright test --project=deep-dive-article",
     "test:playwright:how-decided-article": "PW_UI_SLICE=how-decided-article playwright test --project=how-decided-article",
     "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
-    "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-rule-ownership.mjs",
+    "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-rule-ownership.mjs && node scripts/docs/validate-decision-records.mjs",
     "test:workflows": "node scripts/github/lint-workflows.mjs",
     "test:pack": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/packaged-install-smoke.test.mjs",
     "schema:generate": "node scripts/generate-config-schema.mjs",
