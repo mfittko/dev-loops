@@ -1874,9 +1874,16 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     try {
       await readFile(resolvedDerivedValidationResultsPath);
       options.validationResultsPath = derivedValidationResultsPath;
-    } catch {
-      // No derived artifact at the canonical path — leave validationResultsPath
-      // unset so no validation section renders (byte-identical to before).
+    } catch (err) {
+      // ENOENT (no derived artifact at the canonical path) is the expected miss:
+      // leave validationResultsPath unset so no validation section renders
+      // (byte-identical to the pre-derive behavior). Any OTHER read failure
+      // (e.g. EACCES/EISDIR — the artifact exists but is unreadable) must fail
+      // closed exactly like the explicit --validation-results path, never
+      // silently strip the validation evidence a reviewer depends on.
+      if (err?.code !== "ENOENT") {
+        throw new Error(`derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
+      }
     }
   }
 

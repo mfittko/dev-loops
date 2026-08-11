@@ -2819,6 +2819,34 @@ test("writeGateContext: omitted --validation-results with no derived artifact re
   }
 });
 
+test("writeGateContext: derived --validation-results probe fails closed (throws) when the artifact exists but is unreadable (non-ENOENT)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-derived-validation-unreadable-"));
+  try {
+    // Create a DIRECTORY at the canonical derived path: the artifact "exists"
+    // by path but readFile fails with EISDIR (a non-ENOENT read error). The
+    // derived probe must fail closed exactly like the explicit
+    // --validation-results path, not silently skip the validation section.
+    const derivedValidationResultsFile = buildValidationResultsPath({
+      repo: "owner/repo", pr: 89, gate: "draft_gate", headSha: "abc1234567890",
+    });
+    const absDerived = path.join(repoRoot, derivedValidationResultsFile);
+    await mkdir(absDerived, { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "89", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      // NOTE: --validation-results deliberately omitted (derived probe path).
+    ]);
+    await assert.rejects(
+      () => writeGateContext(options, { repoRoot }),
+      /derived validation-results.*(EISDIR|unreadable)/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext: --validation-results fails closed (throws) on a missing file, no artifact written", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-validation-results-missing-"));
   try {
