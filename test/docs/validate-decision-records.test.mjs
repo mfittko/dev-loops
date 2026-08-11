@@ -9,6 +9,7 @@ import {
   detectIndexErrors,
   firstMeaningfulLine,
   isAcceptedOrSuperseded,
+  run,
   splitStatus,
   validateDecisionRecords,
 } from "../../scripts/docs/validate-decision-records.mjs";
@@ -328,6 +329,62 @@ test("a missing docs/decisions directory fails closed instead of passing with 0 
       () => validateDecisionRecords({ root, git }),
       /unable to read docs\/decisions/,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- pathExistsIn: exit 1 = absent (false), any other git failure fails closed ---
+test("pathExistsIn: exit 1 means path absent (false), real git failure fails closed", async () => {
+  const absent = new Error("exit 1: path does not exist");
+  absent.code = 1;
+  const corrupt = new Error("fatal: object corrupt");
+  corrupt.code = 128;
+  let calls = 0;
+  const exec = async () => {
+    calls += 1;
+    if (calls === 1) throw absent;
+    throw corrupt;
+  };
+  const git = createGitClient("/tmp", exec);
+  // First call: exit 1 (absent) -> false, so the rule-3 loop safely `continue`s.
+  assert.equal(await git.pathExistsIn("base-sha", "docs/decisions/0048-new.md"), false);
+  // Second call: a real git failure (128-class) must surface, not be swallowed.
+  await assert.rejects(() => git.pathExistsIn("base-sha", "docs/decisions/0047.md"), /corrupt/);
+});
+
+// --- main()/run(): the CI-degrade fail-closed guard is mutation-anchored ---
+test("run(): degraded rule 3 exits 1 in CI (fail closed), 0 outside CI", async () => {
+  const { root } = await fixture({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+  });
+  const degradeGit = {
+    async symbolicRef() {
+      throw new Error("no origin/HEAD");
+    },
+    async mergeBase() {
+      throw new Error("fatal: Not a valid object name");
+    },
+  };
+  const silent = { write() {} };
+  try {
+    const ciCode = await run({ root, git: degradeGit, env: { CI: "1" }, out: silent });
+    assert.equal(ciCode, 1, "CI with a degraded rule 3 must fail closed (exit 1)");
+    const localCode = await run({ root, git: degradeGit, env: {}, out: silent });
+    assert.equal(localCode, 0, "a degraded rule 3 outside CI must pass gracefully (exit 0)");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run(): a clean non-degraded result exits 0 even in CI", async () => {
+  const { root } = await fixture({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }));
+  const silent = { write() {} };
+  try {
+    const code = await run({ root, git: makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }), env: { CI: "1" }, out: silent });
+    assert.equal(code, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

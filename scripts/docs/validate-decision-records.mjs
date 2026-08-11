@@ -108,14 +108,17 @@ export function createGitClient(root, exec = promisify(execFile)) {
       return stdout;
     },
     async pathExistsIn(rev, rel) {
-      // exit 0 iff <rev>:<rel> resolves. Given a base already validated by
-      // mergeBase, a non-zero exit here means the path is genuinely absent from
-      // the base — a newly added record, the only legitimate 'not in base' case.
+      // exit 0 iff <rev>:<rel> resolves. `git cat-file -e` exits 1 only for a
+      // genuinely absent object/path — a newly added record, the only legitimate
+      // 'not in base' case. Any OTHER non-zero exit (128-class: corrupt object,
+      // invalid rev) is a real git failure and must fail closed rather than
+      // silently disable rule 3 for the record.
       try {
         await run(["cat-file", "-e", `${rev}:${rel}`]);
         return true;
-      } catch {
-        return false;
+      } catch (err) {
+        if (err.code === 1) return false; // genuinely absent from base
+        throw err; // real git failure surfaces (fail closed)
       }
     },
   };
@@ -248,23 +251,32 @@ function renderError(error) {
   return `${error.rule}: ${error.file} - ${error.message}`;
 }
 
-async function main() {
-  const root = resolveDefaultRepoRoot();
-  const result = await validateDecisionRecords({ root });
-  if (result.rule3.notice) process.stdout.write(`${result.rule3.notice}\n`);
+/**
+ * Run the validator end to end, returning the process exit code. Injectable
+ * `root`/`git`/`env`/`out` keep the CLI path unit-testable (so the CI-degrade
+ * fail-closed guard is mutation-anchored rather than only reachable through a
+ * real CI run).
+ */
+export async function run({ root = resolveDefaultRepoRoot(), git = createGitClient(root), env = process.env, out = process.stdout } = {}) {
+  const result = await validateDecisionRecords({ root, git });
+  if (result.rule3.notice) out.write(`${result.rule3.notice}\n`);
   if (result.ok) {
     // In CI, rule 3 must actually have run: a silent degrade must not report
     // green without the post-acceptance-edit guard executing (ci-guard).
-    if (result.rule3.state === "degraded" && process.env.CI) {
-      process.stdout.write("Decision record validation failed: rule 3 degraded in CI (base ref unavailable); it must run to enforce ADR-SUPERSEDE-NOT-REWRITE.\n");
+    if (result.rule3.state === "degraded" && env.CI) {
+      out.write("Decision record validation failed: rule 3 degraded in CI (base ref unavailable); it must run to enforce ADR-SUPERSEDE-NOT-REWRITE.\n");
       return 1;
     }
-    process.stdout.write(`Decision record validation passed: ${result.filesScanned} records; rule 3 ${result.rule3.state}.\n`);
+    out.write(`Decision record validation passed: ${result.filesScanned} records; rule 3 ${result.rule3.state}.\n`);
     return 0;
   }
-  process.stdout.write(`Decision record validation failed (${result.errors.length}):\n`);
-  for (const error of result.errors) process.stdout.write(`- ${renderError(error)}\n`);
+  out.write(`Decision record validation failed (${result.errors.length}):\n`);
+  for (const error of result.errors) out.write(`- ${renderError(error)}\n`);
   return 1;
+}
+
+async function main() {
+  return run();
 }
 
 if (isDirectCliRun(import.meta.url)) {
