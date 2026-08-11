@@ -14,6 +14,45 @@ const USAGE = `Usage:
 Fail when issue bodies use prose linkage (` + "`Child of #`, `Parent: #`, `Depends on: #`, `sub-issue of #`" + `)
 instead of GitHub sub-issue API links.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
+function hasDuplicateChildChecklist(issue) {
+  const childSet = new Set(issue.children);
+  if (childSet.size === 0) {
+    return false;
+  }
+
+  const referencedChildren = new Set();
+  let hasCheckedChildItem = false;
+
+  for (const line of issue.body.split(/\r?\n/gu)) {
+    const listItemMatch = /^\s*[-*]\s+(.*)$/u.exec(line);
+    if (!listItemMatch) {
+      continue;
+    }
+    const content = listItemMatch[1];
+
+    // Skip scope-boundary prose — it states ownership boundaries ("does NOT own
+    // Y (#NNN)"), not a duplicated child checklist. Without this, a conforming
+    // boundary bullet referencing its children would false-positive.
+    if (/\bdoes\s+not\s+own\b/iu.test(content)) {
+      continue;
+    }
+
+    const checkedMatch = /^\[[xX]\]\s*#(\d+)/u.exec(content);
+    if (checkedMatch && childSet.has(Number(checkedMatch[1]))) {
+      hasCheckedChildItem = true;
+    }
+
+    for (const ref of content.matchAll(/#(\d+)/gu)) {
+      const num = Number(ref[1]);
+      if (childSet.has(num)) {
+        referencedChildren.add(num);
+      }
+    }
+  }
+
+  return hasCheckedChildItem || referencedChildren.size >= 2;
+}
+
 export function runProseLinkageDetector(tree) {
   const errors = [];
   const parentByChild = new Map();
@@ -34,6 +73,14 @@ export function runProseLinkageDetector(tree) {
           message: `Issue body contains forbidden prose linkage pattern: ${pattern.source}`,
         });
       }
+    }
+
+    if (hasDuplicateChildChecklist(issue)) {
+      errors.push({
+        code: "duplicate_child_checklist",
+        issue: issue.number,
+        message: `Parent body #${issue.number} duplicates the child checklist (list items reference two or more of its own sub-issues, or carry a checked child item). Forbidden by SUBISSUE-LEAN-BODY-NO-DUPLICATE.`,
+      });
     }
 
     for (const child of issue.children) {
