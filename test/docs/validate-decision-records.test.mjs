@@ -185,6 +185,22 @@ test("a new record added at the next free number passes", async () => {
   }
 });
 
+test("deleting an accepted record fails, naming ADR-SUPERSEDE-NOT-REWRITE", async () => {
+  const { root, git } = await fixture({
+    "docs/decisions/0048-new-record.md": "# 0048. New\n",
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false);
+    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
+    assert.ok(error);
+    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
+    assert.match(error.message, /deleted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an already-Superseded record is also protected from non-status edits", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0047-something.md": ACCEPTED_4047_EDITED,

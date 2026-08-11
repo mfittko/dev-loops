@@ -142,7 +142,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
   let names;
   try {
     const entries = await readdir(dir);
-    names = entries.filter((e) => e.endsWith(".md"));
+    names = entries.filter((e) => e.endsWith(".md")).sort();
   } catch {
     names = [];
   }
@@ -150,37 +150,58 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
   errors.push(...detectIndexErrors(names));
 
   let rule3 = { state: "not_run", notice: null };
+  // Only base-resolution failures degrade rule 3 (the legitimate no-history case).
+  // Any error inside the per-record loop is a real failure and must surface
+  // (fail closed) rather than silently disabling the guard.
+  let base = null;
   try {
-    const base = await resolveBaseRef(git);
-    if (!base) {
-      rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
-    } else {
-      const changed = await git.diffNameOnly(base, "HEAD", DECISIONS_DIR);
-      for (const rel of changed) {
-        const baseName = path.posix.basename(rel);
-        if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
-        let baseText;
-        try {
-          baseText = await git.show(`${base}:${rel}`);
-        } catch {
-          continue; // newly added record: no base Status, not blocked
-        }
-        const { status: baseStatus, rest: baseRest } = splitStatus(baseText);
-        if (!isAcceptedOrSuperseded(baseStatus)) continue; // Proposed records may still change
-        const currentText = await readFile(path.join(root, rel), "utf8");
-        if (splitStatus(currentText).rest !== baseRest) {
+    base = await resolveBaseRef(git);
+  } catch {
+    base = null;
+  }
+  if (!base) {
+    rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
+  } else {
+    const changed = await git.diffNameOnly(base, "HEAD", DECISIONS_DIR);
+    for (const rel of changed) {
+      const baseName = path.posix.basename(rel);
+      if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
+      let baseText;
+      try {
+        baseText = await git.show(`${base}:${rel}`);
+      } catch {
+        continue; // path absent from base: newly added record, not blocked
+      }
+      const { status: baseStatus, rest: baseRest } = splitStatus(baseText);
+      if (!isAcceptedOrSuperseded(baseStatus)) continue; // Proposed records may still change
+      let currentText;
+      try {
+        currentText = await readFile(path.join(root, rel), "utf8");
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          // Deleting an Accepted/Superseded record is itself a post-acceptance
+          // rewrite; refuse it instead of passing silently.
           errors.push({
             kind: "adr_post_acceptance_rewrite",
             rule: "ADR-SUPERSEDE-NOT-REWRITE",
             file: rel,
-            message: `accepted/superseded record '${rel}' was edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
+            message: `accepted/superseded record '${rel}' was deleted (ADR-SUPERSEDE-NOT-REWRITE)`,
           });
+        } else {
+          throw err; // real read error surfaces (fail closed)
         }
+        continue;
       }
-      rule3 = { state: "ran" };
+      if (splitStatus(currentText).rest !== baseRest) {
+        errors.push({
+          kind: "adr_post_acceptance_rewrite",
+          rule: "ADR-SUPERSEDE-NOT-REWRITE",
+          file: rel,
+          message: `accepted/superseded record '${rel}' was edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
+        });
+      }
     }
-  } catch {
-    rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
+    rule3 = { state: "ran" };
   }
 
   return { ok: errors.length === 0, errors, filesScanned: names.length, rule3 };
