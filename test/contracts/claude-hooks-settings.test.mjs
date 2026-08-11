@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
@@ -19,6 +20,10 @@ function runHook(script, payload, env = {}) {
   // the cli-harness-agnostic contract confines those literals to the adapter boundary.
   const childEnv = { ...process.env };
   for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
+  // Strip the SubagentStop exemption signal so non-exempt tests are deterministic regardless of
+  // host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently exempt the dirty case).
+  // The exempt test explicitly sets it to "1" below, which overrides this. #1619 review finding.
+  delete childEnv["DEVLOOPS_COMMIT_AUTH_PENDING"];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
@@ -30,10 +35,18 @@ function runHook(script, payload, env = {}) {
   } catch {
     json = null;
   }
-  return { code: res.status, stdout: res.stdout, json };
+  // SubagentStop blocks via exit code 2 + stderr JSON (unlike PreToolUse's stdout JSON), so
+  // surface stderr for those assertions.
+  let stderrJson = null;
+  try {
+    stderrJson = res.stderr.trim() ? JSON.parse(res.stderr) : null;
+  } catch {
+    stderrJson = null;
+  }
+  return { code: res.status, stdout: res.stdout, stderr: res.stderr, json, stderrJson };
 }
 
-test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", () => {
+test(".claude/settings.json is valid JSON and wires the four dev-loop hook registrations", () => {
   const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
   const settings = JSON.parse(raw);
   const pre = settings.hooks.PreToolUse;
@@ -42,11 +55,14 @@ test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", (
   const bashGate = pre.find((h) => h.matcher === "Bash");
   const writeGuard = pre.find((h) => h.matcher === "Edit|Write");
   const postMerge = post.find((h) => h.matcher === "Bash");
+  const subagentStop = settings.hooks.SubagentStop?.find((h) => h.matcher === "*");
 
   // Project hooks reference the scripts under .claude/hooks via ${CLAUDE_PROJECT_DIR} (#824).
   assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-bash-gate\.mjs/);
   assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-write-guard\.mjs/);
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/post-tool-use-merge\.mjs/);
+  assert.ok(subagentStop, "SubagentStop matcher must be registered");
+  assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
 });
 
 test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} (#824)", () => {
@@ -54,15 +70,22 @@ test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} 
   const bashGate = hooks.PreToolUse.find((h) => h.matcher === "Bash");
   const writeGuard = hooks.PreToolUse.find((h) => h.matcher === "Edit|Write");
   const postMerge = hooks.PostToolUse.find((h) => h.matcher === "Bash");
+  const subagentStop = hooks.SubagentStop?.find((h) => h.matcher === "*");
   assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-bash-gate\.mjs/);
   assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-write-guard\.mjs/);
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-merge\.mjs/);
+  assert.ok(subagentStop, "SubagentStop matcher must be registered in hooks.json");
+  assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
 });
 
 test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
   for (const script of ["_hook-io.mjs", "pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
     assert.ok(fs.existsSync(path.join(hooksDir, script)), `missing hook script ${script}`);
   }
+});
+
+test("the SubagentStop uncommitted-work guard hook exists under the plugin root (#1619)", () => {
+  assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-uncommitted-guard.mjs")), "missing subagent-stop-uncommitted-guard.mjs");
 });
 
 test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {
@@ -211,4 +234,81 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
   );
   assert.equal(code, 0);
   assert.equal(json, null, "gitignored tmp/ path must be allowed");
+});
+
+// ---------------------------------------------------------------------------
+// SubagentStop uncommitted-work guard (#1619) — e2e hook script behavior
+// ---------------------------------------------------------------------------
+// The guard fires only under tmp/worktrees/. Build a throwaway git repo there so the hook's
+// real `git status --porcelain` + decider path is exercised end to end (not just the pure
+// decider, which is covered in packages/core/test/claude-hook-decisions.test.mjs). Mutation
+// anchor: revert the guard's block branch and the dirty case stops blocking.
+
+function makeWorktree(slug, dirty) {
+  const dir = path.join(repoRoot, "tmp", "worktrees", `subagent-stop-test-${slug}-${process.pid}`);
+  fs.mkdirSync(dir, { recursive: true });
+  // A fresh `git init` is already a clean worktree (empty `git status --porcelain`). git commit
+  // is intentionally avoided so the test does not depend on a configured git user identity —
+  // CI runners may omit user.name/user.email, which left `committed.txt` staged and made the
+  // "clean" case dirty (the #1619 CI regression). An untracked file is enough to be dirty.
+  spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
+  if (dirty) {
+    fs.writeFileSync(path.join(dir, "uncommitted.txt"), "dirty\n", "utf8");
+  }
+  return dir;
+}
+
+test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/worktrees/ (#1619)", () => {
+  const dir = makeWorktree("dirty", true);
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 2, "dirty worktree must be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    assert.match(stderrJson.reason, /uncommitted\.txt/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook allows a clean worktree under tmp/worktrees/ (#1619)", () => {
+  const dir = makeWorktree("clean", false);
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 0, "clean worktree must stop normally");
+    assert.equal(stderrJson, null, "no block output for a clean worktree");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook is unaffected by a cwd outside tmp/worktrees/ (#1619)", () => {
+  // A cwd that is genuinely NOT under tmp/worktrees/ (os.tmpdir() is outside the repo tree).
+  // The guard short-circuits on isUnderWorktreePath before git even runs, so the stop is allowed
+  // regardless of git state. (repoRoot itself is under tmp/worktrees/ when tests run from a
+  // worktree, so it cannot stand in for the outside case here.)
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-stop-outside-"));
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: outside });
+    assert.equal(code, 0, "cwd outside tmp/worktrees/ must be unaffected");
+    assert.equal(stderrJson, null);
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook exempts an interactive session awaiting commit authorization (#1619)", () => {
+  const dir = makeWorktree("exempt", true);
+  try {
+    const { code, stderrJson } = runHook(
+      "subagent-stop-uncommitted-guard.mjs",
+      { cwd: dir },
+      { DEVLOOPS_COMMIT_AUTH_PENDING: "1" },
+    );
+    assert.equal(code, 0, "pending-commit-authorization session must be exempt");
+    assert.equal(stderrJson, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
