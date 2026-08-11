@@ -1855,6 +1855,31 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // scope.validationResultsPath and, in self-rendered mode below, the trailing
   // briefing-prefix section) so the artifact and prefix always agree with
   // whatever CWD produced them, regardless of a later reader's own CWD.
+  // GATE-EXEC-VALIDATION-ARTIFACT (pointer half): when --validation-results is
+  // omitted, derive the canonical path the producer (run-gate-validation.mjs via
+  // buildValidationResultsPath) would have written and use it IF the artifact
+  // exists. The export exists precisely so producer and consumer agree on the
+  // path; the consumer just never called it. Omitting the flag with NO derived
+  // artifact present stays byte-identical to the pre-flag behavior (no
+  // validation section).
+  if (typeof options.validationResultsPath !== "string" || options.validationResultsPath.length === 0) {
+    const derivedValidationResultsPath = buildValidationResultsPath({
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: options.headSha,
+      tmpRoot: options.tmpRoot || "tmp",
+    });
+    const resolvedDerivedValidationResultsPath = path.resolve(repoRoot, derivedValidationResultsPath);
+    try {
+      await readFile(resolvedDerivedValidationResultsPath);
+      options.validationResultsPath = derivedValidationResultsPath;
+    } catch {
+      // No derived artifact at the canonical path — leave validationResultsPath
+      // unset so no validation section renders (byte-identical to before).
+    }
+  }
+
   if (typeof options.validationResultsPath === "string" && options.validationResultsPath.length > 0) {
     const resolvedValidationResultsPath = path.resolve(repoRoot, options.validationResultsPath);
     try {

@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { main } from "../../scripts/projects/move-queue-item.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -685,6 +688,118 @@ describe("move-queue-item", () => {
       assert.equal(mutationCall.variables.itemId, "PVTI_target");
       assert.equal(mutationCall.variables.fieldId, "PVTSSF_status");
       assert.equal(mutationCall.variables.optionId, "opt2");
+    });
+  });
+
+  describe("QUEUE-ENQUEUE-REFINEMENT-GATE (pickup-column move #1625)", () => {
+    function issueBodyResponse(body) {
+      return { body };
+    }
+
+    async function withTempCwd(fn) {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "move-queue-gate-"));
+      try {
+        return await fn(dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    // GH call sequence for a move from Backlog -> Next Up (pickup): owner,
+    // projects, fields, items, then (gate) issue view body, then the update.
+    function moveResponses(itemBodyResponse, refined) {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: issueBodyResponse(itemBodyResponse) },
+      ];
+      if (refined) responses.push({ payload: updateItemFieldResponse() });
+      return responses;
+    }
+
+    it("refuses to move an un-refined issue into the pickup column (throws MISSING_REFINEMENT_ARTIFACT, no mutation)", async () => {
+      await withTempCwd(async (cwd) => {
+        const call = recordingRunChild(
+          moveResponses("Just a raw idea with no acceptance criteria or DoD.", false),
+          [],
+        );
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: call, cwd },
+          ),
+          (err) => err.code === "MISSING_REFINEMENT_ARTIFACT",
+        );
+      });
+    });
+
+    it("allows moving a refined issue into the pickup column", async () => {
+      await withTempCwd(async (cwd) => {
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(moveResponses("## Acceptance criteria\n- [ ] do it", true)),
+            cwd,
+          },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.refinement.refined, true);
+        assert.equal(result.item.newColumn, "Next Up");
+      });
+    });
+
+    it("does not gate a PR moved into the pickup column", async () => {
+      await withTempCwd(async (cwd) => {
+        // PR item -> Next Up: no issue-body fetch, no gate, straight to update.
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_20", makeContent("PR", 20), "Backlog"),
+            ]),
+          },
+          { payload: updateItemFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "20", toColumn: "Next Up" },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.newColumn, "Next Up");
+        assert.equal("refinement" in result, false);
+      });
+    });
+
+    it("skips the gate entirely when cwd is not supplied (headless callers like reconcile stay unaffected)", async () => {
+      // No cwd -> pickup column is never derived -> un-refined issue move sails
+      // through exactly as before (no issue-body fetch; straight to update).
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.newColumn, "Next Up");
+      assert.equal("refinement" in result, false);
     });
   });
 

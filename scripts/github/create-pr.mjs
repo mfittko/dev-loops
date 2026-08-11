@@ -109,15 +109,21 @@ function parsePrNumberFromOutput(stdout) {
   const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
   return match ? Number(match[1]) : null;
 }
-// Auto-enqueue an issue-less lightweight PR as a board PR item in the configured
-// In Progress column. Reuses the same .devloops queue.board.number /
+// Auto-enqueue ANY board item (issue or PR) into the given Status column — a
+// generic, idempotent, fail-open board add shared by create-pr (lightweight
+// PRs -> In Progress) and create-issue (new issues -> Backlog). This is the
+// "one guard where all callers route" fix for QUEUE-BOARD-LINKED: a guard that
+// only lives at one entry point. Reuses the same .devloops queue.board.number /
 // queue.board.title resolution and add-queue-item's idempotent add — never
-// reimplements the board API calls. Never throws: an unconfigured board, a
-// missing --repo, an unparsed PR number, or an enqueue failure are all
-// non-fatal no-ops reported in the returned shape.
-export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, runChild }) {
+// reimplements the board API calls. An ADD (not a status transition) — board
+// status transitions stay orchestrator-owned per sanctioned-commands.mjs.
+// Never throws: an unconfigured board, a missing --repo, an unparsed item
+// number, or an enqueue failure are all non-fatal no-ops reported in the
+// returned shape. `column` defaults to the configured In Progress column (the
+// historical lightweight-PR behavior).
+export async function enqueueBoardItem({ repo, itemNumber, column, cwd, env, runChild }) {
   if (!repo) return { enqueued: false, reason: "repo-not-specified" };
-  if (!Number.isInteger(prNumber) || prNumber < 1) return { enqueued: false, reason: "pr-number-not-parsed" };
+  if (!Number.isInteger(itemNumber) || itemNumber < 1) return { enqueued: false, reason: "item-number-not-parsed" };
   const settings = resolveSettings(cwd);
   if (!settings?.project && !settings?.title) {
     return { enqueued: false, reason: "no-board-configured" };
@@ -126,16 +132,30 @@ export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, 
   if (columnError) {
     return { enqueued: false, reason: `config-error: ${columnError}` };
   }
-  const args = { repo, item: prNumber };
+  const args = { repo, item: itemNumber };
   applyDevloopsBoard(args, cwd);
-  args.column = columnNames[LOGICAL_COLUMN.IN_PROGRESS];
+  args.column = column ?? columnNames[LOGICAL_COLUMN.IN_PROGRESS];
   try {
     const result = await addQueueItemMain(args, { env, runChild, cwd });
-    const { itemId, prNumber: itemPrNumber, status, alreadyPresent } = result.item;
-    return { enqueued: true, itemId, prNumber: itemPrNumber, status, alreadyPresent };
+    const { itemId, issueNumber, prNumber, status, alreadyPresent } = result.item;
+    return { enqueued: true, itemId, issueNumber, prNumber, status, alreadyPresent };
   } catch (err) {
     return { enqueued: false, reason: `enqueue-error: ${err instanceof Error ? err.message : String(err)}` };
   }
+}
+
+// Back-compat alias: issue-less lightweight PRs enqueue into In Progress. Keeps
+// the historical return contract (prNumber + no issueNumber) so existing
+// consumers of the lightweight-PR board note stay unchanged.
+export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, runChild }) {
+  if (!Number.isInteger(prNumber) || prNumber < 1) return { enqueued: false, reason: "pr-number-not-parsed" };
+  const board = await enqueueBoardItem({ repo, itemNumber: prNumber, cwd, env, runChild });
+  if (board.reason === "item-number-not-parsed") board.reason = "pr-number-not-parsed";
+  if (board.enqueued) {
+    const { itemId, prNumber: n, status, alreadyPresent } = board;
+    return { enqueued: true, itemId, prNumber: n, status, alreadyPresent };
+  }
+  return board;
 }
 export function buildCreatePrArgs(argv) {
   const args = [...argv];
