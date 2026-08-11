@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  createGitClient,
   detectIndexErrors,
   firstMeaningfulLine,
   isAcceptedOrSuperseded,
@@ -76,6 +77,9 @@ function makeGit(baseFiles = {}) {
         throw err;
       }
       return content;
+    },
+    async pathExistsIn(_rev, rel) {
+      return Object.prototype.hasOwnProperty.call(baseFiles, rel);
     },
   };
 }
@@ -260,6 +264,70 @@ test("a malformed filename in an unavailable-base repo still fails the index rul
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, false); // index check still enforced
     assert.ok(result.errors.some((e) => e.rule === "ADR-PATH-NUMBERING"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- splitStatus: benign heading drift must not fail open ---
+test("splitStatus tolerates benign trailing punctuation on the Status heading", () => {
+  const text = `# 0047. Something\n\n## Status:\n\nAccepted — 2026-08-04\n\n## Context\n\nContext text.\n`;
+  const { status, rest } = splitStatus(text);
+  assert.match(status, /Accepted — 2026-08-04/);
+  assert.doesNotMatch(rest, /Accepted — 2026-08-04/);
+  assert.equal(isAcceptedOrSuperseded(splitStatus(text).status), true);
+});
+
+// --- Rule 3: a real git failure fails closed (path absent from base still skips) ---
+test("a real git.show failure fails closed instead of silently skipping rule 3", async () => {
+  const base = makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 });
+  const git = {
+    ...base,
+    async show(_spec) {
+      throw new Error("fatal: object corrupt");
+    },
+  };
+  const { root } = await fixture({
+    "docs/decisions/0047-something.md": ACCEPTED_4047_EDITED,
+  }, git);
+  try {
+    // The record exists in base (pathExistsIn true), so a git.show failure is a
+    // real error and must propagate — not "continue" past the guard.
+    await assert.rejects(
+      () => validateDecisionRecords({ root, git }),
+      /corrupt/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- Rule 3 rename-protection: mutation-anchored on the --no-renames flag ---
+test("rename-protection is mutation-anchored: diffNameOnly passes --no-renames", async () => {
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    return { stdout: "docs/decisions/0047-something.md\n" };
+  };
+  const git = createGitClient("/tmp", exec);
+  const out = await git.diffNameOnly("base-sha", "HEAD", "docs/decisions");
+  assert.deepEqual(out, ["docs/decisions/0047-something.md"]);
+  const diffCall = calls.find((a) => a.includes("--name-only"));
+  assert.ok(diffCall, "expected a git diff invocation");
+  assert.ok(
+    diffCall.includes("--no-renames"),
+    "--no-renames must be passed so a git mv (rename) cannot collapse to the destination path and evade rule 3",
+  );
+});
+
+// --- readdir: fail closed when docs/decisions is unreadable/missing ---
+test("a missing docs/decisions directory fails closed instead of passing with 0 records", async () => {
+  const { root, git } = await fixture({}, makeGit());
+  try {
+    await assert.rejects(
+      () => validateDecisionRecords({ root, git }),
+      /unable to read docs\/decisions/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

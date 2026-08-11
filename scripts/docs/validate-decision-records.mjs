@@ -22,7 +22,9 @@ export function splitStatus(text) {
   const statusLines = [];
   let inStatus = false;
   for (const line of lines) {
-    if (/^##\s+Status\s*$/.test(line)) {
+    // Tolerate benign trailing punctuation (e.g. `## Status:`); a deviating
+    // heading must not silently fail open and disable rule 3 for the record.
+    if (/^##\s+Status\s*[:;]?\s*$/.test(line)) {
       inStatus = true;
       rest.push(line);
       continue;
@@ -83,7 +85,7 @@ export function detectIndexErrors(names) {
   return errors;
 }
 
-function createGitClient(root, exec = promisify(execFile)) {
+export function createGitClient(root, exec = promisify(execFile)) {
   const run = (args) => exec("git", args, { cwd: root });
   return {
     async symbolicRef(ref) {
@@ -105,10 +107,21 @@ function createGitClient(root, exec = promisify(execFile)) {
       const { stdout } = await run(["show", spec]);
       return stdout;
     },
+    async pathExistsIn(rev, rel) {
+      // exit 0 iff <rev>:<rel> resolves. Given a base already validated by
+      // mergeBase, a non-zero exit here means the path is genuinely absent from
+      // the base — a newly added record, the only legitimate 'not in base' case.
+      try {
+        await run(["cat-file", "-e", `${rev}:${rel}`]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 
-async function resolveBaseRef(git) {
+async function resolveBaseRef(git, env = process.env) {
   let defaultBranch = null;
   try {
     defaultBranch = (await git.symbolicRef("refs/remotes/origin/HEAD")).replace(/^refs\/remotes\/origin\//, "");
@@ -116,9 +129,16 @@ async function resolveBaseRef(git) {
     defaultBranch = null;
   }
   if (defaultBranch) return git.mergeBase(`origin/${defaultBranch}`, "HEAD");
-  for (const branch of ["main", "master"]) {
+  // No origin/HEAD. Try an env-provided base first (CI sets GITHUB_BASE_REF and
+  // fetches it into origin/<base>, so a non-main/master default branch still
+  // resolves), then conventional default names.
+  const candidates = [
+    ...(env.GITHUB_BASE_REF ? [`origin/${env.GITHUB_BASE_REF}`] : []),
+    ...["main", "master"].map((b) => `origin/${b}`),
+  ];
+  for (const branch of candidates) {
     try {
-      const base = await git.mergeBase(`origin/${branch}`, "HEAD");
+      const base = await git.mergeBase(branch, "HEAD");
       if (base) return base;
     } catch {
       // try next candidate
@@ -153,8 +173,11 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
   try {
     const entries = await readdir(dir);
     names = entries.filter((e) => e.endsWith(".md")).sort();
-  } catch {
-    names = [];
+  } catch (err) {
+    // docs/decisions is an internal path that is always expected to exist;
+    // a genuine readdir failure must fail closed, not silently skip ALL index
+    // checks while reporting a successful '0 records scanned'.
+    throw new Error(`unable to read ${DECISIONS_DIR}: ${err.message}`);
   }
 
   errors.push(...detectIndexErrors(names));
@@ -176,12 +199,12 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
     for (const rel of changed) {
       const baseName = path.posix.basename(rel);
       if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
-      let baseText;
-      try {
-        baseText = await git.show(`${base}:${rel}`);
-      } catch {
-        continue; // path absent from base: newly added record, not blocked
-      }
+      // Only a genuinely absent base path (a newly added record) skips rule 3.
+      // Any other git failure (corrupt object, invalid rev) must surface (fail
+      // closed) rather than silently disabling the guard for the record — see
+      // the fail-closed invariant above.
+      if (!(await git.pathExistsIn(base, rel))) continue;
+      const baseText = await git.show(`${base}:${rel}`);
       const { status: baseStatus, rest: baseRest } = splitStatus(baseText);
       if (!isAcceptedOrSuperseded(baseStatus)) continue; // Proposed records may still change
       let currentText;
@@ -230,6 +253,12 @@ async function main() {
   const result = await validateDecisionRecords({ root });
   if (result.rule3.notice) process.stdout.write(`${result.rule3.notice}\n`);
   if (result.ok) {
+    // In CI, rule 3 must actually have run: a silent degrade must not report
+    // green without the post-acceptance-edit guard executing (ci-guard).
+    if (result.rule3.state === "degraded" && process.env.CI) {
+      process.stdout.write("Decision record validation failed: rule 3 degraded in CI (base ref unavailable); it must run to enforce ADR-SUPERSEDE-NOT-REWRITE.\n");
+      return 1;
+    }
     process.stdout.write(`Decision record validation passed: ${result.filesScanned} records; rule 3 ${result.rule3.state}.\n`);
     return 0;
   }
