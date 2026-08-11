@@ -380,30 +380,38 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
   let refinement = null;
   if (issueNumber !== null && typeof cwd === "string" && cwd.length > 0) {
     const { columnNames, error: columnError } = loadStateColumnMap(cwd);
-    if (!columnError) {
-      const pickupColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
-      if (pickupColumn && toColumn === pickupColumn) {
-        const bodyResult = await child(
-          "gh",
-          ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-          env,
-        );
-        if (bodyResult.code !== 0) {
-          const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
-          throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-        }
-        const bodyPayload = parseJsonText(bodyResult.stdout);
-        const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
-        const artifact = detectIssueRefinementArtifact({ body, issueNumber });
-        const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-        if (decision.action === "block") {
-          throw Object.assign(new Error(decision.reason), {
-            code: "MISSING_REFINEMENT_ARTIFACT",
-            missing: decision.missing,
-          });
-        }
-        refinement = { refined: decision.action === "enqueue" };
+    // Mirror queue add's fail-closed posture on a malformed `.devloops` when the
+    // interactive path supplied cwd: a config parse failure must never silently
+    // bypass the just-moved pickup refinement gate (the exact sibling asymmetry
+    // this issue closes).
+    if (columnError) {
+      throw Object.assign(
+        new Error(`could not resolve the pickup column (config read/parse error: ${columnError})`),
+        { code: "CONFIG_ERROR" },
+      );
+    }
+    const pickupColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
+    if (pickupColumn && toColumn === pickupColumn) {
+      const bodyResult = await child(
+        "gh",
+        ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
+        env,
+      );
+      if (bodyResult.code !== 0) {
+        const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
+        throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
       }
+      const bodyPayload = parseJsonText(bodyResult.stdout);
+      const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
+      const artifact = detectIssueRefinementArtifact({ body, issueNumber });
+      const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+      if (decision.action === "block") {
+        throw Object.assign(new Error(decision.reason), {
+          code: "MISSING_REFINEMENT_ARTIFACT",
+          missing: decision.missing,
+        });
+      }
+      refinement = { refined: decision.action === "enqueue" };
     }
   }
 

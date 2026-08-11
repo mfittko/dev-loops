@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main } from "../../scripts/projects/move-queue-item.mjs";
@@ -705,6 +705,13 @@ describe("move-queue-item", () => {
       }
     }
 
+    // Writes a malformed .devloops so loadStateColumnMap returns a non-ENOENT
+    // parse error (fail-closed CONFIG_ERROR path) and returns the cwd.
+    function writeMalformedDevloops(dir) {
+      writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  board: [unclosed\n", "utf-8");
+      return dir;
+    }
+
     // GH call sequence for a move from Backlog -> Next Up (pickup): owner,
     // projects, fields, items, then (gate) issue view body, then the update.
     function moveResponses(itemBodyResponse, refined) {
@@ -776,6 +783,30 @@ describe("move-queue-item", () => {
         assert.equal(result.ok, true);
         assert.equal(result.item.newColumn, "Next Up");
         assert.equal("refinement" in result, false);
+      });
+    });
+
+    it("fails closed with CONFIG_ERROR on a malformed .devloops when cwd is supplied (mirrors queue add)", async () => {
+      await withTempCwd(async (cwd) => {
+        // A malformed .devloops must not silently bypass the pickup-column gate.
+        // The config error surfaces (CONFIG_ERROR) before any mutation when cwd is
+        // supplied, exactly mirroring queue add's fail-closed posture.
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: mockRunChild([
+              { payload: userPayload() },
+              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+              { payload: getFieldsResponse([STATUS_FIELD]) },
+              {
+                payload: getItemsByContentResponse([
+                  makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+                ]),
+              },
+            ]), cwd: writeMalformedDevloops(cwd) },
+          ),
+          (err) => err.code === "CONFIG_ERROR",
+        );
       });
     });
 
