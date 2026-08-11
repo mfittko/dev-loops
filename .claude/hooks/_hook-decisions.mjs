@@ -298,8 +298,10 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * hook (the SubagentStop contract differs from PreToolUse's `permissionDecision` form).
  *
  * @param {Object} params
- * @param {string} params.cwd - Current working directory.
- * @param {string} params.porcelain - Raw `git status --porcelain` output ("" when clean).
+ * @param {string|undefined} params.cwd - Current working directory; a non-string value is
+ *   treated as out of scope (allow) — the decider is fail-safe.
+ * @param {string|undefined} params.porcelain - Raw `git status --porcelain` output; a non-string
+ *   or empty value is treated as clean (allow) — the decider is fail-safe.
  * @param {boolean} [params.pendingCommitAuthorization] - True when the interactive session is
  *   awaiting commit authorization (exempt) — derived by the hook script from the
  *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.

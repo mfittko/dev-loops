@@ -46,7 +46,7 @@ function runHook(script, payload, env = {}) {
   return { code: res.status, stdout: res.stdout, stderr: res.stderr, json, stderrJson };
 }
 
-test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", () => {
+test(".claude/settings.json is valid JSON and wires the four dev-loop hook registrations", () => {
   const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
   const settings = JSON.parse(raw);
   const pre = settings.hooks.PreToolUse;
