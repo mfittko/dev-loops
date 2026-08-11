@@ -334,23 +334,24 @@ test("a missing docs/decisions directory fails closed instead of passing with 0 
   }
 });
 
-// --- pathExistsIn: exit 1 = absent (false), any other git failure fails closed ---
-test("pathExistsIn: exit 1 means path absent (false), real git failure fails closed", async () => {
-  const absent = new Error("exit 1: path does not exist");
-  absent.code = 1;
-  const corrupt = new Error("fatal: object corrupt");
+// --- pathExistsIn: absent path -> false, real git failure fails closed ---
+test("pathExistsIn: absent path -> false (new record), real git failure fails closed", async () => {
+  const corrupt = new Error("fatal: not a tree object");
   corrupt.code = 128;
   let calls = 0;
   const exec = async () => {
     calls += 1;
-    if (calls === 1) throw absent;
-    throw corrupt;
+    if (calls === 1) return { stdout: "" }; // absent from base (new record) -> false
+    if (calls === 2) return { stdout: "100644 blob abcd\tdocs/decisions/0047-something.md" }; // exists -> true
+    throw corrupt; // real git failure -> fail closed
   };
   const git = createGitClient("/tmp", exec);
-  // First call: exit 1 (absent) -> false, so the rule-3 loop safely `continue`s.
+  // Absent from base (a newly added record): rule 3 safely skips it.
   assert.equal(await git.pathExistsIn("base-sha", "docs/decisions/0048-new.md"), false);
-  // Second call: a real git failure (128-class) must surface, not be swallowed.
-  await assert.rejects(() => git.pathExistsIn("base-sha", "docs/decisions/0047.md"), /corrupt/);
+  // Present in base.
+  assert.equal(await git.pathExistsIn("base-sha", "docs/decisions/0047-something.md"), true);
+  // A genuine git failure (corrupt object / invalid rev) must surface, not be swallowed.
+  await assert.rejects(() => git.pathExistsIn("base-sha", "docs/decisions/0047.md"), /tree object/);
 });
 
 // --- main()/run(): the CI-degrade fail-closed guard is mutation-anchored ---

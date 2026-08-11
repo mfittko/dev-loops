@@ -108,18 +108,15 @@ export function createGitClient(root, exec = promisify(execFile)) {
       return stdout;
     },
     async pathExistsIn(rev, rel) {
-      // exit 0 iff <rev>:<rel> resolves. `git cat-file -e` exits 1 only for a
-      // genuinely absent object/path — a newly added record, the only legitimate
-      // 'not in base' case. Any OTHER non-zero exit (128-class: corrupt object,
-      // invalid rev) is a real git failure and must fail closed rather than
-      // silently disable rule 3 for the record.
-      try {
-        await run(["cat-file", "-e", `${rev}:${rel}`]);
-        return true;
-      } catch (err) {
-        if (err.code === 1) return false; // genuinely absent from base
-        throw err; // real git failure surfaces (fail closed)
-      }
+      // `git cat-file -e` exits 128 for BOTH a path absent from a valid rev and
+      // a real repository failure (corrupt object, invalid rev), so its exit
+      // code cannot distinguish them. `git ls-tree <rev> -- <path>` prints the
+      // path iff it exists in <rev> and exits 0 whether or not it does, so an
+      // empty output is a cleanly-positive "not in base" (a newly added record —
+      // the only legitimate skip case) while a real git failure still rejects
+      // and fails closed. A base resolved via mergeBase is always a valid rev.
+      const { stdout } = await run(["ls-tree", "-z", rev, "--", rel]);
+      return stdout.length > 0;
     },
   };
 }
