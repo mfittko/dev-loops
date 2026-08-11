@@ -108,6 +108,16 @@ jobs:
       # Only this matrix leg needs the binary; putting it on PATH via
       # GITHUB_PATH lets test:workflows find the plain `actionlint` command
       # exactly like a local install would.
+      # The decision-record validator's rule 3 resolves the base via
+      # `git merge-base origin/<default> HEAD`. actions/checkout with fetch-depth: 0
+      # for a pull_request checks out the PR merge ref but does NOT fetch
+      # remote-tracking refs like origin/main, so without this the guard silently
+      # degrades to skipped instead of enforcing in PR CI.
+      - name: Fetch base branch (decision-record merge-base)
+        if: matrix.suite == 'test:docs'
+        run: |
+          git fetch origin "+refs/heads/${GITHUB_BASE_REF:-main}:refs/remotes/origin/${GITHUB_BASE_REF:-main}"
+
       - name: Install actionlint
         if: matrix.suite == 'test:workflows'
         env:

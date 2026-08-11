@@ -65,10 +65,7 @@ function makeGit(baseFiles = {}) {
       return "base-sha";
     },
     async diffNameOnly(_base, _head, dir) {
-      const changed = new Set(Object.keys(baseFiles).filter((f) => f.startsWith(dir)));
-      const all = new Set(["docs/decisions/0047-something.md"]);
-      for (const f of all) if (baseFiles[f] !== undefined) changed.add(f);
-      return [...changed];
+      return Object.keys(baseFiles).filter((f) => f.startsWith(dir));
     },
     async show(spec) {
       const rel = spec.replace(/^base-sha:/, "");
@@ -177,6 +174,20 @@ test("a new record added at the next free number passes", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0048-new-record.md": "# 0048. New\n",
   }, makeGit());
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a still-Proposed record may be edited outside its Status section (passes)", async () => {
+  const PROPOSED_BASE = `# 0047. Something\n\n## Status\n\nProposed — 2026-07-01\n\n## Context\n\nOriginal.\n`;
+  const PROPOSED_EDITED = `# 0047. Something\n\n## Status\n\nProposed — 2026-07-01\n\n## Context\n\nEdited.\n`;
+  const { root, git } = await fixture({
+    "docs/decisions/0047-something.md": PROPOSED_EDITED,
+  }, makeGit({ "docs/decisions/0047-something.md": PROPOSED_BASE }));
   try {
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, true);

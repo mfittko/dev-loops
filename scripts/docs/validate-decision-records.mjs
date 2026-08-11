@@ -95,7 +95,10 @@ function createGitClient(root, exec = promisify(execFile)) {
       return stdout.trim();
     },
     async diffNameOnly(a, b, dir) {
-      const { stdout } = await run(["diff", "--name-only", a, b, "--", dir]);
+      // --no-renames so a git mv (rename) of a record surfaces as BOTH a deleted
+      // old path (-> deletion guard fires) and an added new path (not blocked),
+      // instead of collapsing to just the destination path and evading rule 3.
+      const { stdout } = await run(["diff", "--no-renames", "--name-only", a, b, "--", dir]);
       return stdout.split(/\r?\n/).filter(Boolean);
     },
     async show(spec) {
@@ -135,6 +138,13 @@ async function resolveBaseRef(git) {
  * Rule 3 is base-ref dependent (git merge-base origin/<default> HEAD). When the base ref
  * cannot be resolved (shallow checkout, no origin), it degrades gracefully: rule 3 is
  * skipped with a notice instead of failing every local run.
+ *
+ * Scope boundary (issue #1624): rule 3 deliberately guards only edits OUTSIDE a record's
+ * Status section. Edits INSIDE the Status section of an accepted record (e.g. an appended
+ * annotation beyond the sanctioned Accepted -> Superseded flip) are NOT auto-enforced here:
+ * judging whether a record's Status content is correct is a declared non-goal, and the
+ * pre-existing 0047 incident of that class was resolved by reverting the record, not by
+ * retro-validation.
  */
 export async function validateDecisionRecords({ root, git = createGitClient(root) }) {
   const dir = path.join(root, DECISIONS_DIR);
