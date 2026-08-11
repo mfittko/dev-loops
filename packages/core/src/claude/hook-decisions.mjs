@@ -32,7 +32,6 @@ import {
  *   (exit 2 + stderr JSON), used by `decideSubagentStopGuard`; `allow`/`deny` are the PreToolUse
  *   vocabulary used by `decideBashGate`/`decideWriteGuard`.
  * @property {string} [reason] - Human-readable reason (shown to the agent on deny/block).
- * @property {string} [reason] - Human-readable reason (shown to Claude on deny).
  */
 
 const ALLOW = Object.freeze({ decision: "allow" });
