@@ -746,6 +746,41 @@ describe("move-queue-item", () => {
       });
     });
 
+    it("throws GH_API_ERROR when the pickup-gate issue-body fetch fails (no mutation)", async () => {
+      await withTempCwd(async (cwd) => {
+        const calls = [];
+        // Same move sequence as "refuses to move an un-refined issue", but the
+        // gate's `gh issue view` (5th call) fails instead of returning a body.
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+            ]),
+          },
+          { error: "gh: not authenticated" },
+        ];
+        const call = recordingRunChild(responses, calls);
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: call, cwd },
+          ),
+          (err) => err.code === "GH_API_ERROR",
+        );
+        const mutationCall = calls.find(
+          (c) => c.query && c.query.includes("updateProjectV2ItemFieldValue"),
+        );
+        assert.equal(
+          mutationCall,
+          undefined,
+          "no update mutation should run when the pickup-gate issue-body fetch fails",
+        );
+      });
+    });
+
     it("allows moving a refined issue into the pickup column", async () => {
       await withTempCwd(async (cwd) => {
         const result = await main(
@@ -807,6 +842,37 @@ describe("move-queue-item", () => {
           ),
           (err) => err.code === "CONFIG_ERROR",
         );
+      });
+    });
+
+    it("does NOT fail on a malformed .devloops for a non-pickup column move (CONFIG_ERROR scoped to the pickup gate)", async () => {
+      await withTempCwd(async (cwd) => {
+        // A malformed .devloops must only hard-fail (CONFIG_ERROR) when the move
+        // actually targets the pickup column and needs the refinement gate. An
+        // unrelated column move must not be over-broadened into a hard failure.
+        const calls = [];
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+            ]),
+          },
+          { payload: updateItemFieldResponse() },
+        ];
+        const call = recordingRunChild(responses, calls);
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "In Progress" },
+          { env: {}, runChild: call, cwd: writeMalformedDevloops(cwd) },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.newColumn, "In Progress");
+        const mutationCall = calls.find(
+          (c) => c.query && c.query.includes("updateProjectV2ItemFieldValue"),
+        );
+        assert.ok(mutationCall, "the non-pickup move should still run its update mutation");
       });
     });
 

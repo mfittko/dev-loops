@@ -380,18 +380,20 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
   let refinement = null;
   if (issueNumber !== null && typeof cwd === "string" && cwd.length > 0) {
     const { columnNames, error: columnError } = loadStateColumnMap(cwd);
-    // Mirror queue add's fail-closed posture on a malformed `.devloops` when the
-    // interactive path supplied cwd: a config parse failure must never silently
-    // bypass the just-moved pickup refinement gate (the exact sibling asymmetry
-    // this issue closes).
-    if (columnError) {
-      throw Object.assign(
-        new Error(`could not resolve the pickup column (config read/parse error: ${columnError})`),
-        { code: "CONFIG_ERROR" },
-      );
-    }
     const pickupColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
     if (pickupColumn && toColumn === pickupColumn) {
+      // Mirror queue add's fail-closed posture on a malformed `.devloops` when the
+      // interactive path supplied cwd AND the target is actually the pickup
+      // column: a config parse failure must never silently bypass the just-moved
+      // pickup refinement gate (the exact sibling asymmetry this issue closes).
+      // Scoped here (after the pickup-column guard) so an unrelated column move
+      // is not over-broadened into a hard CONFIG_ERROR failure.
+      if (columnError) {
+        throw Object.assign(
+          new Error(`could not resolve the pickup column (config read/parse error: ${columnError})`),
+          { code: "CONFIG_ERROR" },
+        );
+      }
       const bodyResult = await child(
         "gh",
         ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
