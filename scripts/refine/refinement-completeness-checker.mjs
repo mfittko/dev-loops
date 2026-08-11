@@ -13,6 +13,19 @@ const USAGE = `Usage:
   refinement-completeness-checker.mjs --input <path> [--json]
 Validate required refinement sections: Acceptance criteria, Definition of done, Non-goals, and AC / DoD matrix.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
+// ponytail: distance caps ({0,200}? and {0,120}?) bound the gap between
+// "owns"/"does not own"/(#N) so a single match cannot span the whole body.
+// A boundary sentence exceeding these generous limits would false-negative;
+// raise the caps if a real conforming boundary ever exceeds them.
+const SCOPE_BOUNDARY_PATTERN = /\bowns?\b[\s\S]{0,200}?\bdoes\s+not\s+own\b[\s\S]{0,120}?\(\s*#\s*\d+\s*\)/iu;
+
+function hasScopeBoundary(body) {
+  if (typeof body !== "string" || body.length === 0) {
+    return false;
+  }
+  return SCOPE_BOUNDARY_PATTERN.test(body);
+}
+
 function hasCheckbox(sectionText) {
   if (typeof sectionText !== "string") {
     return false;
@@ -58,6 +71,10 @@ export function runRefinementCompletenessChecker(tree) {
       errors.push({ code: "missing_ac_dod_matrix", issue: issue.number, message: "Missing ## AC / DoD matrix section." });
     } else if (!hasMatrixTable(acDodMatrix)) {
       errors.push({ code: "invalid_ac_dod_matrix", issue: issue.number, message: "AC / DoD matrix section must contain a markdown table." });
+    }
+
+    if (!hasScopeBoundary(issue.body)) {
+      errors.push({ code: "missing_scope_boundary", issue: issue.number, message: "Issue body is missing an explicit scope boundary sentence (\"This issue owns X. It does NOT own Y (#NNN).\"). Required by EPIC-REFINEMENT-REQUIRED-CONTRACTS." });
     }
   }
 
