@@ -16,6 +16,7 @@ import {
   extractTermDefinitions,
   extractTermUses,
   isImperativeSentence,
+  isRefusalPathCitation,
   isRuntimeSourceFile,
   normalizeRuleEntry,
   validateRuleOwnership,
@@ -397,7 +398,7 @@ test("validateRuleOwnership fails a phantom rule citation in runtime source", as
 test("runtime citations with 3-letter prefixes (OPS-/ADR-) are detected and credited", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: OPS-DRAFT-FIRST-PR --> `OPS-DRAFT-FIRST-PR` | The tool MUST ensure. |",
-    "scripts/tool.mjs": "refuse(OPS-DRAFT-FIRST-PR)",
+    "scripts/tool.mjs": "throw new Error('refusing: OPS-DRAFT-FIRST-PR')",
   }, ["OPS-DRAFT-FIRST-PR"]);
   try {
     const result = await validateRuleOwnership(dir);
@@ -421,11 +422,11 @@ test("validateRuleOwnership does not flag allowlisted non-rule tokens in runtime
 });
 
 test("validateRuleOwnership reports runtime enforcement counts", async () => {
-  // One runtime rule cited in source (enforced), one runtime rule not cited (unenforced).
+  // One runtime rule cited in a refusal/error string (enforced), one runtime rule not cited (unenforced).
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
     "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> `TEST-RULE-002` | The tool MUST report. |",
-    "scripts/tool.mjs": "TEST-RULE-001",
+    "scripts/tool.mjs": "throw new Error('refusing TEST-RULE-001')",
   }, ["TEST-RULE-001", "TEST-RULE-002"]);
   try {
     const result = await validateRuleOwnership(dir);
@@ -448,6 +449,28 @@ test("known existing enforcement is credited (WORKTREE-DEFAULT-BRANCH-GUARD and 
   assert.ok(ids.has("BASE-JQ-OUTPUT-GUARANTEE"), "jq-output shared emit path must cite the rule ID");
 });
 
+test("enforcement credit is refusal-path-based: a data/log string does NOT credit a runtime rule", async () => {
+  // An ID inside a non-enforcing string (here a log/data string) must not grant
+  // enforcement credit — #1617: presence in source does not mean behavior is checked.
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
+    "scripts/tool.mjs": "const isActive = /TEST-RULE-001/.test(request.id); // a mere string, no enforcement",
+  }, ["TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 1, runtimeEnforced: 0, runtimeUnenforced: 1 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isRefusalPathCitation distinguishes refusal strings from bare presence and data strings", async () => {
+  assert.equal(isRefusalPathCitation('throw new Error("refusing TEST-RULE-001")', 25), true, "error-string citation credits");
+  assert.equal(isRefusalPathCitation('const isActive = "mode TEST-RULE-001"', 23), false, "data-string occurrence does not credit");
+  assert.equal(isRefusalPathCitation("TEST-RULE-001", 0), false, "bare identifier does not credit");
+  assert.equal(isRefusalPathCitation("validate(TEST-RULE-002)", 9), false, "bare argument does not credit");
+});
+
 test("normalizeRuleEntry guards malformed manifest entries (no crash, no silent undefined)", () => {
   assert.equal(normalizeRuleEntry(null).invalid, true, "null entry must be flagged, not crash");
   assert.equal(normalizeRuleEntry(42).invalid, true, "numeric entry must be flagged, not yield id=undefined");
@@ -467,12 +490,12 @@ test("isRuntimeSourceFile classifies runtime files and its exclusions", () => {
   assert.equal(isRuntimeSourceFile("README.md", "scripts/README.md"), false, "non-runtime extension excluded");
 });
 
-test("collectRuntimeCitations strips comments and .json so only real code citations credit enforcement", async () => {
+test("collectRuntimeCitations strips comments and .json so only real refusal-string citations credit enforcement", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
     "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> `TEST-RULE-002` | The tool MUST report. |",
     "scripts/comment.mjs": "// TEST-RULE-001  (comment-only: must NOT credit)",
-    "scripts/code.mjs": "refuse(TEST-RULE-002)",
+    "scripts/code.mjs": "throw new Error('refusing TEST-RULE-002')",
     "scripts/data.json": "{\"hint\": \"TEST-RULE-002\"}",
   }, ["TEST-RULE-001", "TEST-RULE-002"]);
   try {

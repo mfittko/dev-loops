@@ -49,6 +49,71 @@ const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
 // detectable, consistent with the canonical MARKER_RE grammar below.
 const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
 
+// Refusal/error emission construct carried by the same line as an enforcement
+// citation. Enforcement credit is refusal-path-based (#1617): a runtime rule is
+// only counted as enforced when its ID appears in an *enforcement error/refusal
+// string* — a string literal emitted because the rule forbids an operation —
+// not mere presence in source. An ID in a docstring, usage text, data/log
+// string, or bare identifier performs no enforcement and must not be credited.
+// This is a line-level lexical heuristic (this validator is deliberately
+// lexical): a citation line is a refusal path when it carries one of these
+// refusal/error emission constructs.
+const REFUSAL_SIGNAL_RE = /\b(?:refus|throw|new Error|errors\.push|process\.exit|stderr\.write|console\.error|violat|invalid|forbid|denied|blocked|cannot|must not|must fail|required by|>&2|exit\s*\()/i;
+
+// Line-level string-literal membership: returns true when `index` falls inside
+// the literal text of a '...', "...", or `...` string on `line`. Handles
+// template-literal `${...}` interpolation nesting (including a nested backtick
+// string inside an interpolation), which naive quote-parity cannot (that is why
+// a backtick-string nesting like the jq-output refusal breaks simple parity).
+export function indexInsideStringLiteral(line, index) {
+  const n = line.length;
+  const stack = []; // 'sq' | 'dq' | 'tick' | 'interp'
+  let i = 0;
+  while (i < n) {
+    const top = stack[stack.length - 1];
+    if (i === index) return top === "sq" || top === "dq" || top === "tick";
+    const c = line[i];
+    if (top === "sq") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "'") stack.pop();
+      i += 1; continue;
+    }
+    if (top === "dq") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === '"') stack.pop();
+      i += 1; continue;
+    }
+    if (top === "tick") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "`") { stack.pop(); i += 1; continue; }
+      if (c === "$" && line[i + 1] === "{") { stack.push("interp"); i += 2; continue; }
+      i += 1; continue;
+    }
+    if (top === "interp") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "'") { stack.push("sq"); i += 1; continue; }
+      if (c === '"') { stack.push("dq"); i += 1; continue; }
+      if (c === "`") { stack.push("tick"); i += 1; continue; }
+      if (c === "{") { stack.push("interp"); i += 1; continue; }
+      if (c === "}") { stack.pop(); i += 1; continue; }
+      i += 1; continue;
+    }
+    // code context (no open string)
+    if (c === "'") { stack.push("sq"); i += 1; continue; }
+    if (c === '"') { stack.push("dq"); i += 1; continue; }
+    if (c === "`") { stack.push("tick"); i += 1; continue; }
+    i += 1;
+  }
+  return false;
+}
+
+// A citation occurrence counts as an enforcement (refusal-path) site only when
+// the rule ID sits inside a string literal that is part of a refusal/error
+// emission on that line. `tokenIndex` is the 0-based column of the token in `line`.
+export function isRefusalPathCitation(line, tokenIndex) {
+  return indexInsideStringLiteral(line, tokenIndex) && REFUSAL_SIGNAL_RE.test(line);
+}
+
 // Registry-ID-shaped tokens that appear in runtime source but are ordinary
 // English/technical/placeholder tokens, not rule citations. Mirrors the
 // KNOWN_INTENTIONAL_DUPLICATE_SENTENCES allowlist pattern: without this, a raw
@@ -166,8 +231,10 @@ async function* walkRuntime(dir) {
 }
 
 // Registry-ID-shaped tokens found in non-test runtime source (scripts/,
-// packages/), tagged with the relative file they appear in. These are the
-// enforcement-citation candidates for the `runtime` classification.
+// packages/), tagged with the relative file they appear in and whether the
+// occurrence is a refusal-path (enforcement error/refusal string) citation.
+// Phantom detection (unknown IDs) scans all presence; enforcement credit uses
+// `refusalPath` only (see validateRuleOwnership).
 export async function collectRuntimeCitations(repoRoot = REPO_ROOT) {
   const tokens = [];
   for (const root of RUNTIME_ROOTS) {
@@ -176,8 +243,11 @@ export async function collectRuntimeCitations(repoRoot = REPO_ROOT) {
       if (!isRuntimeSourceFile(path.basename(file), rel)) continue;
       const content = await readFile(file, "utf8");
       const scanned = stripSourceComments(content, path.extname(file));
-      for (const match of scanned.matchAll(RULE_ID_SHAPE_RE)) {
-        tokens.push({ id: match[0], file: rel });
+      const lines = scanned.split("\n");
+      for (const line of lines) {
+        for (const match of line.matchAll(RULE_ID_SHAPE_RE)) {
+          tokens.push({ id: match[0], file: rel, refusalPath: isRefusalPathCitation(line, match.index) });
+        }
       }
     }
   }
@@ -605,7 +675,10 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   const citedRuntimeIds = new Set();
   for (const token of runtimeCitations) {
     if (byId.has(token.id)) {
-      if (requiredSet.has(token.id)) citedRuntimeIds.add(token.id);
+      // Enforcement credit is refusal-path-based (#1617): only a citation in an
+      // enforcement error/refusal string marks the rule as enforced, not mere
+      // presence in source. Phantom detection below still scans all presence.
+      if (requiredSet.has(token.id) && token.refusalPath) citedRuntimeIds.add(token.id);
     } else if (!NON_RULE_TOKENS.has(token.id)) {
       const prev = unknownById.get(token.id);
       unknownById.set(token.id, prev ? { count: prev.count + 1, file: prev.file } : { count: 1, file: token.file });

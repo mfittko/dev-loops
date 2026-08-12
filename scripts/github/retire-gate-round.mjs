@@ -118,7 +118,7 @@ export function parseRetireGateRoundArgs(argv) {
   }
   const reason = resolveFlagValue(argv, "--reason");
   if (reason === null || reason.trim().length === 0) {
-    throw parseError("Missing required argument: --reason <text> — retirement is explicit and audited");
+    throw parseError("Missing required argument: --reason <text> — retirement is explicit and audited (GATE-EXEC-ROUND-RETIREMENT)");
   }
   const findingsDir = resolveFlagValue(argv, "--findings-dir");
   if (findingsDir === "") {
