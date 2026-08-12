@@ -229,15 +229,29 @@ export function fingerprintRequestPrefix(input) {
   if (typeof input.model !== "string" || input.model.trim().length === 0) {
     throw new Error("fingerprintRequestPrefix requires a non-empty concrete model");
   }
+  // Fail closed on invalid shapes (AC-2: the fingerprint covers the COMPLETE
+  // observable prefix). A silently-coerced non-array tools/contentBlocks would
+  // collapse two genuinely different request prefixes into one fingerprint, so
+  // reject rather than quietly omit.
+  if (input.tools != null && !Array.isArray(input.tools)) {
+    throw new Error("fingerprintRequestPrefix tools must be an array of tool definitions");
+  }
+  if (input.contentBlocks != null && !Array.isArray(input.contentBlocks)) {
+    throw new Error("fingerprintRequestPrefix contentBlocks must be an array");
+  }
   const canonical = {
     model: input.model.trim(),
-    tools: Array.isArray(input.tools) ? input.tools : [],
+    tools: input.tools ?? [],
     systemInstructions: input.systemInstructions ?? null,
     settings: input.settings ?? null,
-    contentBlocks: Array.isArray(input.contentBlocks) ? input.contentBlocks : null,
+    contentBlocks: input.contentBlocks ?? null,
     sharedArtifact: input.sharedArtifact ?? null,
     cacheBoundary: input.cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
     ttlIntent: input.ttlIntent ?? "harness_managed",
+    // angleSuffix is excluded from the STABLE prefix fingerprint but, when the
+    // caller marks it invasive, it IS folded into this full request-prefix
+    // fingerprint so the claimed difference stays assertable.
+    ...(input.angleSuffix != null ? { angleSuffix: input.angleSuffix } : {}),
   };
   return { fingerprint: sha256Hex(canonical), canonical };
 }
@@ -480,24 +494,35 @@ export function partitionPrimerGroups(requestGroups, capabilities = {}) {
   if (!Array.isArray(requestGroups)) throw new Error("partitionPrimerGroups requires an array");
   // One primer group per distinct (model, request-prefix) — a primer warms ONE
   // concrete model's provider cache under a specific request prefix, so two
-  // groups cannot share a primer even when their fingerprints coincide.
-  const byKey = new Map();
+  // groups cannot share a primer even when their fingerprints coincide. Use a
+  // nested Map keyed by model then by fingerprint (never a single delimiter-joined
+  // string), so a model id that itself contains "::" stays intact and two distinct
+  // (model, fp) pairs can never collide onto one bucket (dedup/identity safety).
+  const byModel = new Map();
   for (const g of requestGroups) {
+    if (!byModel.has(g.model)) byModel.set(g.model, new Map());
+    const fpMap = byModel.get(g.model);
     const fp = g.requestPrefixFingerprint ?? opaqueMarker(`model:${g.model}`);
-    const key = `${g.model}::${fp}`;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(g);
+    if (!fpMap.has(fp)) fpMap.set(fp, []);
+    fpMap.get(fp).push(g);
   }
   const out = [];
-  for (const [key, groups] of byKey.entries()) {
-    const model = key.split("::")[0];
-    const fp = key.slice(model.length + 2);
-    out.push({
-      model,
-      requestPrefixFingerprint: fp.startsWith("sha256:") ? fp : null,
-      primerForm: resolvePrimerForm({ capabilities, ttlIntent: groups[0].ttlIntent }).primerForm,
-      groups: groups.map((g) => ({ model: g.model, angles: g.angles, ttlIntent: g.ttlIntent })),
-    });
+  for (const [model, fpMap] of byModel.entries()) {
+    for (const [fp, groups] of fpMap.entries()) {
+      // Resolve the primer form CONSERVATIVELY across every collapsed group's TTL
+      // intent: a partition primes with a lead reviewer only when ALL its groups
+      // would; any group that needs a dedicated primer forces the whole partition
+      // down, so a mixed-TTL collapse is never decided by the first group alone.
+      const allLead = groups.every(
+        (g) => resolvePrimerForm({ capabilities, ttlIntent: g.ttlIntent }).primerForm === PRIMER_FORM_LEAD_REVIEWER,
+      );
+      out.push({
+        model,
+        requestPrefixFingerprint: fp.startsWith("sha256:") ? fp : null,
+        primerForm: allLead ? PRIMER_FORM_LEAD_REVIEWER : PRIMER_FORM_DEDICATED,
+        groups: groups.map((g) => ({ model: g.model, angles: g.angles, ttlIntent: g.ttlIntent })),
+      });
+    }
   }
   return out;
 }
