@@ -97,7 +97,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
-          fetch_depth: ${{ matrix.fetch_depth }}
+          fetch-depth: ${{ matrix.fetch_depth }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
