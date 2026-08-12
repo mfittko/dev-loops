@@ -111,6 +111,14 @@ export function indexInsideStringLiteral(line, index) {
 // the rule ID sits inside a string literal that is part of a refusal/error
 // emission on that line. `tokenIndex` is the 0-based column of the token in `line`.
 export function isRefusalPathCitation(line, tokenIndex) {
+  // A string literal that is simply the right-hand side of a data assignment
+  // (`x = "..."`) is data, not an enforcement message, whatever keyword the
+  // string happens to contain (#1617 finding 2): `const isActive =
+  // "TEST-RULE-001 cannot be nil"` must not grant credit. Refusal/error
+  // strings live inline in emission/refusal constructs (throw / errors.push /
+  // stderr.write / refusal echo / reason/message fields), which do not sit on
+  // an `= "..."` RHS.
+  if (/\=\s*(['"`])/.test(line)) return false;
   return indexInsideStringLiteral(line, tokenIndex) && REFUSAL_SIGNAL_RE.test(line);
 }
 

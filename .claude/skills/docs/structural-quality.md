@@ -33,7 +33,7 @@ Apply these during implementation (not just at review time):
 
 Code comments describe behavior and never cite PR or issue numbers (those are ephemeral tracker references that rot).
 
-A rule ID (e.g. `WORKTREE-DEFAULT-BRANCH-GUARD`, `GATE-EXEC-PRIME`) is a **different kind of thing**: a stable contract identifier, not an ephemeral tracker reference. Where a script refuses an operation because a rule forbids it, name the rule ID in the **enforcement error message** (asserted by a test, so it cannot rot) rather than only in a comment; the rule-registry validator (`validate-rule-ownership.mjs`) counts `runtime`-classified rules as enforced only when that ID appears in runtime source. See `required-rules.json` `enforcement` classification.
+A rule ID (e.g. `WORKTREE-DEFAULT-BRANCH-GUARD`, `GATE-EXEC-PRIME`) is a **different kind of thing**: a stable contract identifier, not an ephemeral tracker reference. Where a script refuses an operation because a rule forbids it, name the rule ID in the **enforcement error message** (asserted by a test, so it cannot rot) rather than only in a comment; the rule-registry validator (`validate-rule-ownership.mjs`) counts a `runtime`-classified rule as enforced only when that ID appears in a **refusal/error string** in runtime source — not mere presence. A rule ID that appears only in a comment, docstring, usage text, or data/log string is not an enforcement site and does not count as enforced. See `required-rules.json` `enforcement` classification.
 
 ## Anti-patterns to avoid
 

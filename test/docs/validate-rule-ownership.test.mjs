@@ -471,6 +471,15 @@ test("isRefusalPathCitation distinguishes refusal strings from bare presence and
   assert.equal(isRefusalPathCitation("validate(TEST-RULE-002)", 9), false, "bare argument does not credit");
 });
 
+test("isRefusalPathCitation does not credit a data string even when it contains a refusal prose keyword", async () => {
+  // #1617 finding 2: an ID in a data/log string earns no credit even if the
+  // string happens to contain a prose keyword (e.g. 'cannot', 'invalid').
+  assert.equal(isRefusalPathCitation('const isActive = "TEST-RULE-001 cannot be nil"', 18), false, "keyword-bearing data assignment does not credit");
+  assert.equal(isRefusalPathCitation('const isActive = "TEST-RULE-001 invalid mode"', 18), false, "keyword-bearing data assignment does not credit");
+  assert.equal(isRefusalPathCitation('const isActive = "mode is \"TEST-RULE-001\""', 27), false, "nested-quoted data does not credit");
+});
+
+
 test("normalizeRuleEntry guards malformed manifest entries (no crash, no silent undefined)", () => {
   assert.equal(normalizeRuleEntry(null).invalid, true, "null entry must be flagged, not crash");
   assert.equal(normalizeRuleEntry(42).invalid, true, "numeric entry must be flagged, not yield id=undefined");
