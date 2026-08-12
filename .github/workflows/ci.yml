@@ -91,13 +91,13 @@ jobs:
           # Only the test:docs leg needs full history for the decision-record
           # merge-base comparison; every other leg checks out the default (depth 1).
           - suite: test:docs
-            fetch-depth: 0
+            fetch_depth: 0
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: ${{ matrix.fetch-depth }}
+          fetch_depth: ${{ matrix.fetch_depth }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
