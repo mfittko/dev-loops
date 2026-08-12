@@ -105,6 +105,20 @@ test("firstMeaningfulLine ignores the template's HTML comment", () => {
   );
 });
 
+test("firstMeaningfulLine skips a multi-line HTML comment block", () => {
+  assert.equal(
+    firstMeaningfulLine(
+      "<!-- exactly one of: ...\n     Accepted and Superseded carry dated evidence: ... -->\nProposed",
+    ),
+    "Proposed",
+  );
+  assert.equal(
+    firstMeaningfulLine("<!-- only a comment, no status -->"),
+    "",
+  );
+  assert.equal(firstMeaningfulLine(""), "");
+});
+
 // --- Rule 1: malformed filename (ADR-PATH-NUMBERING) ---
 test("a malformed decision-record filename fails, naming ADR-PATH-NUMBERING", async () => {
   const { root, git } = await fixture({

@@ -14,7 +14,9 @@ const DECISIONS_DIR = "docs/decisions";
 /**
  * Split a decision record into its Status section (lines under `## Status` up to
  * the next `## ` heading) and everything else. The Status heading stays in `rest`
- * (it is identical in both versions, so equality is unaffected).
+ * (the heading's own text is identical in both versions, so it never affects the
+ * rest-equality comparison). A benign deviating heading (e.g. trailing punctuation
+ * like `## Status:`) is still recognized as the section boundary.
  */
 export function splitStatus(text) {
   const lines = text.split(/\r?\n/);
@@ -36,13 +38,24 @@ export function splitStatus(text) {
   return { status: statusLines.join("\n"), rest: rest.join("\n") };
 }
 
-/** First non-empty, non-HTML-comment line of the Status section. */
+/** First non-empty line of the Status section, skipping any leading HTML comment
+ * block (single- or multi-line, e.g. the `0000-template.md` instructional comment). */
 export function firstMeaningfulLine(text) {
-  const line = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .find((l) => l.length > 0 && !l.startsWith("<!--"));
-  return line || "";
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  let inComment = false;
+  for (const line of lines) {
+    if (line.length === 0) continue;
+    if (inComment) {
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    if (line.startsWith("<!--")) {
+      if (!line.includes("-->")) inComment = true;
+      continue;
+    }
+    return line;
+  }
+  return "";
 }
 
 /** A record whose base Status is Accepted or Superseded must not be edited in place (ADR-SUPERSEDE-NOT-REWRITE). */
@@ -76,7 +89,7 @@ export function detectIndexErrors(names) {
         rule: "ADR-PATH-NUMBERING",
         file: name,
         prefix,
-        message: `duplicate record number ${prefix} also used by ${seen.get(prefix)} (ADR-PATH-NUMBERING)`,
+        message: `duplicate record number ${prefix} in '${name}' also used by ${seen.get(prefix)} (ADR-PATH-NUMBERING)`,
       });
     } else {
       seen.set(prefix, name);
@@ -245,7 +258,9 @@ function resolveDefaultRepoRoot() {
 }
 
 function renderError(error) {
-  return `${error.rule}: ${error.file} - ${error.message}`;
+  // error.message already embeds the rule (and, where relevant, the file); the
+  // `file` field is a structured convenience for tests, not a second prefix.
+  return error.message;
 }
 
 /**
