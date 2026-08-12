@@ -77,18 +77,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        fail-fast: false
+        suite:
+          - test:assets
+          - test:extension
+          - test:scripts
+          - test:core
+          - test:docs
+          - test:pack
+          - test:dev-loop
+          - test:workflows
         include:
-          - suite: test:assets
-          - suite: test:extension
-          - suite: test:scripts
-          - suite: test:core
           # Only the test:docs leg needs full history for the decision-record
           # merge-base comparison; every other leg checks out the default (depth 1).
           - suite: test:docs
             fetch-depth: 0
-          - suite: test:pack
-          - suite: test:dev-loop
-          - suite: test:workflows
 
     steps:
       - name: Check out repository
