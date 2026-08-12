@@ -1882,7 +1882,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // closed exactly like the explicit --validation-results path, never
       // silently strip the validation evidence a reviewer depends on.
       if (err?.code !== "ENOENT") {
-        throw new Error(`derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
+        throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
       }
     }
   }
@@ -1892,7 +1892,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     try {
       await readFile(resolvedValidationResultsPath);
     } catch (err) {
-      throw new Error(`--validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
+      throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
     }
     options.validationResultsPath = resolvedValidationResultsPath;
   }
