@@ -386,7 +386,22 @@ test("validateRuleOwnership fails a phantom rule citation in runtime source", as
   try {
     const result = await validateRuleOwnership(dir);
     assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.kind === "phantom_rule_citation" && e.id === "PHANTOM-RULE-999"));
+    const err = result.errors.find((e) => e.kind === "phantom_rule_citation" && e.id === "PHANTOM-RULE-999");
+    assert.ok(err, "phantom_rule_citation must be reported");
+    assert.ok(err.location.includes("scripts/tool.mjs"), `phantom location should name an example file: ${err.location}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runtime citations with 3-letter prefixes (OPS-/ADR-) are detected and credited", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: OPS-DRAFT-FIRST-PR --> `OPS-DRAFT-FIRST-PR` | The tool MUST ensure. |",
+    "scripts/tool.mjs": "refuse(OPS-DRAFT-FIRST-PR)",
+  }, ["OPS-DRAFT-FIRST-PR"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 1, runtimeEnforced: 1, runtimeUnenforced: 0 });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -45,7 +45,9 @@ const ENFORCEMENT_VALUES = new Set(["doc", "runtime", "agent"]);
 const RUNTIME_ROOTS = ["scripts", "packages"];
 const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
 // Registry-ID shape used to spot enforcement citations in runtime source.
-const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{3,}(?:-[A-Z0-9]{2,})+\b/g;
+// First segment is 3+ uppercase chars so 3-letter prefixes (OPS-, ADR-) are
+// detectable, consistent with the canonical MARKER_RE grammar below.
+const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
 
 // Registry-ID-shaped tokens that appear in runtime source but are ordinary
 // English/technical/placeholder tokens, not rule citations. Mirrors the
@@ -73,12 +75,16 @@ const NON_RULE_TOKENS = new Set([
   "MANY-TO-ONE",
   "MARKER-ONLY",
   "MUST-RE-RUN",
+  "NON-FATAL",
+  "OWN-AUTHORED",
   "PATH-NUMBERING",
   "POST-CAP",
   "PREFIX-ONLY",
   "PROJ-123",
   "PURE-DETERMINISTIC",
+  "SHA-256",
   "SUPERSEDE-NOT-REWRITE",
+  "TOP-LEVEL",
   "VERDICT-ONLY",
   "WORK-DEDUP",
   "YYYY-MM-DD",
@@ -601,18 +607,19 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     if (byId.has(token.id)) {
       if (requiredSet.has(token.id)) citedRuntimeIds.add(token.id);
     } else if (!NON_RULE_TOKENS.has(token.id)) {
-      unknownById.set(token.id, (unknownById.get(token.id) || 0) + 1);
+      const prev = unknownById.get(token.id);
+      unknownById.set(token.id, prev ? { count: prev.count + 1, file: prev.file } : { count: 1, file: token.file });
     }
   }
-  for (const [id, count] of unknownById) {
-    errors.push({ kind: "phantom_rule_citation", id, location: `cited ${count}x in runtime source` });
+  for (const [id, { count, file }] of unknownById) {
+    errors.push({ kind: "phantom_rule_citation", id, location: `cited ${count}x in runtime source (e.g. ${file})` });
   }
-  const runtimeIds = validRequiredRules.filter((entry) => entry.enforcement === "runtime").map((entry) => entry.id);
-  const runtimeEnforced = [...citedRuntimeIds].filter((id) => runtimeIds.includes(id)).length;
+  const runtimeIds = new Set(validRequiredRules.filter((entry) => entry.enforcement === "runtime").map((entry) => entry.id));
+  const runtimeEnforced = [...citedRuntimeIds].filter((id) => runtimeIds.has(id)).length;
   const enforcement = {
-    runtimeTotal: runtimeIds.length,
+    runtimeTotal: runtimeIds.size,
     runtimeEnforced,
-    runtimeUnenforced: runtimeIds.length - runtimeEnforced,
+    runtimeUnenforced: runtimeIds.size - runtimeEnforced,
   };
 
   return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors, enforcement };
