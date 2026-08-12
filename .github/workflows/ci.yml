@@ -77,7 +77,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fail-fast: false
         suite:
           - test:assets
           - test:extension
