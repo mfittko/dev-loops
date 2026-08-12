@@ -1,6 +1,6 @@
 import { runChild as _runChild } from "../cli/primitives.mjs";
 import { parseJsonText } from "../github/review-threads.mjs";
-import { decideEnqueueRefinementGate, detectIssueRefinementArtifact } from "../loop/issue-refinement-artifact.mjs";
+import { runPickupRefinementGate } from "../loop/issue-refinement-artifact.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "../loop/queue-board-sync.mjs";
 import { resolveProjectSelector, findProject, parseItemRef } from "./resolve-project.mjs";
 
@@ -371,12 +371,13 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
   // 5b. QUEUE-ENQUEUE-REFINEMENT-GATE: moving an ISSUE into the pickup column
   // must pass the same refinement gate `queue add` applies — a guard at one
   // entry point but not its sibling is exactly the asymmetry this closes. Put
-  // here (in core, not the script wrapper) so every caller routing through
-  // core — including reconcile-queue.mjs — shares the guard. The column name is
+  // here (in core, not the script wrapper) so every caller routing through core
+  // is covered — reconcile-queue.mjs included. reconcile is unaffected because
+  // it passes no cwd and never derives the pickup column. The column name is
   // only derivable when cwd/config is supplied: an interactive `queue move` from
   // a worktree passes cwd (gate fires), while headless callers (e.g.
-  // reconcile-queue.mjs, which never moves to the pickup column anyway) omit it
-  // and are unaffected — we simply never derive the column.
+  // reconcile-queue.mjs) omit it and are unaffected — we simply never derive
+  // the column.
   let refinement = null;
   if (issueNumber !== null && typeof cwd === "string" && cwd.length > 0) {
     const { columnNames, error: columnError } = loadStateColumnMap(cwd);
@@ -394,25 +395,7 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
           { code: "CONFIG_ERROR" },
         );
       }
-      const bodyResult = await child(
-        "gh",
-        ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-        env,
-      );
-      if (bodyResult.code !== 0) {
-        const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
-        throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-      }
-      const bodyPayload = parseJsonText(bodyResult.stdout);
-      const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
-      const artifact = detectIssueRefinementArtifact({ body, issueNumber });
-      const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-      if (decision.action === "block") {
-        throw Object.assign(new Error(decision.reason), {
-          code: "MISSING_REFINEMENT_ARTIFACT",
-          missing: decision.missing,
-        });
-      }
+      const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: false });
       refinement = { refined: decision.action === "enqueue" };
     }
   }
