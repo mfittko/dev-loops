@@ -1,6 +1,9 @@
 // Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts
 // (issue #981, subsumes #963). One helper applied uniformly so the loop never
 // falls back to `gh api | python3` or inline `node -e` to read tool JSON.
+// BASE-JQ-OUTPUT-GUARANTEE: emitResult is the single shared emit path every
+// JSON-emitting command routes through (enforced by the jq-output-base-guarantee
+// contract test).
 //
 // Convention (also documented in skills/dev-loop/SKILL.md):
 //   prefer the dev-loops subcommand

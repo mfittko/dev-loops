@@ -22,7 +22,7 @@ export const GUARD_OVERRIDE_ENV = "DEVLOOPS_ALLOW_MAIN";
 // guarded branch land while a plain commit on the same branch was refused.
 export const GUARDED_HOOKS = Object.freeze(["pre-commit", "pre-merge-commit", "pre-push"]);
 
-const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: refusing to ${what} ($${branchExpr}) from this checkout." >&2
+const REFUSAL_BODY = (what, branchExpr) => `  echo "dev-loops: WORKTREE-DEFAULT-BRANCH-GUARD refusing to ${what} ($${branchExpr}) from this checkout." >&2
   echo "  The dev-loop works in a linked worktree; a cwd that silently reset to the" >&2
   echo "  primary checkout is the usual cause. Re-run from the worktree, addressing it" >&2
   echo "  explicitly (git -C <absolute-worktree-path> ...)." >&2

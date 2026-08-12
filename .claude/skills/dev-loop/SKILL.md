@@ -108,6 +108,9 @@ Info/handoff requests can be served directly via `npx dev-loops@1.0.0-rc.5 loop 
 
 ## Reading tool output (token-economical convention)
 
+<!-- rule: BASE-JQ-OUTPUT-GUARANTEE -->
+`BASE-JQ-OUTPUT-GUARANTEE`: every operator-facing JSON-result dev-loops command MUST accept `--jq`/`--silent` through the single shared emit path (`scripts/lib/jq-output.mjs`), enforced by the `jq-output-base-guarantee` contract test.
+
 When you need a fact from a dev-loops JSON-emitting script, climb this ladder and stop at the first rung that answers the question — never read more output than you need:
 
 1. **Prefer the dev-loops subcommand / concise mode.** Use `loop info` or a script's `--concise`/`--summary` mode (e.g. `run-watch-cycle.mjs --concise`, `probe-copilot-review.mjs --concise`) for a human-readable digest. The concise modes surface loop state, Copilot round count, unresolved/actionable thread counts, round-cap-clean eligibility, CI status, next action, and the current round's new Copilot comment bodies.

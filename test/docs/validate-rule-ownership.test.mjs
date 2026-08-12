@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  collectRuntimeCitations,
   detectDeadAllowlistEntries,
   detectDuplicateImperativeSentences,
   detectModalityConflicts,
@@ -15,6 +16,7 @@ import {
   extractTermDefinitions,
   extractTermUses,
   isImperativeSentence,
+  normalizeRuleEntry,
   validateRuleOwnership,
 } from "../../scripts/docs/validate-rule-ownership.mjs";
 
@@ -313,4 +315,113 @@ test("detectDeadAllowlistEntries does not flag a sentence duplicated across two 
 test("repository rule ownership fixture is valid", async () => {
   const result = await validateRuleOwnership();
   assert.equal(result.ok, true, JSON.stringify(result.errors, null, 2));
+});
+
+// --- #1617: enforcement classification + runtime-source traceability ---
+
+// Current repo ratchet baseline: runtime-classed rules with no enforcement
+// citation. Declaring a NEW runtime rule without enforcement raises this, so it
+// must stay non-increasing and is pinned by this test.
+const UNENFORCED_RUNTIME_CEILING = 143;
+
+test("normalizeRuleEntry defaults a legacy flat-string entry to runtime", () => {
+  const flat = normalizeRuleEntry("TEST-RULE-001");
+  assert.equal(flat.id, "TEST-RULE-001");
+  assert.equal(flat.enforcement, "runtime");
+  const obj = normalizeRuleEntry({ id: "TEST-RULE-001" });
+  assert.equal(obj.id, "TEST-RULE-001");
+  assert.equal(obj.enforcement, "runtime");
+  assert.equal(normalizeRuleEntry({ id: "TEST-RULE-001", enforcement: "doc" }).enforcement, "doc");
+  assert.equal(normalizeRuleEntry({ id: "TEST-RULE-001", enforcement: "agent", enforcementNote: "behavioral" }).enforcementNote, "behavioral");
+});
+
+test("validateRuleOwnership fails an invalid enforcement classification", async () => {
+  const dir = await fixture({}, [{ id: "TEST-RULE-001", enforcement: "banana" }]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "invalid_enforcement_classification" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership fails an agent rule with no justification", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST defer. |",
+  }, [{ id: "TEST-RULE-001", enforcement: "agent" }]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "agent_enforcement_missing_justification" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership accepts an agent rule with a justification", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST defer. |",
+  }, [{ id: "TEST-RULE-001", enforcement: "agent", enforcementNote: "purely behavioral guidance" }]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.ok(!result.errors.some((e) => e.kind === "agent_enforcement_missing_justification"));
+    assert.ok(!result.errors.some((e) => e.kind === "invalid_enforcement_classification"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership fails a phantom rule citation in runtime source", async () => {
+  const dir = await fixture({
+    "scripts/tool.mjs": "const SIGNAL = 'PHANTOM-RULE-999';",
+  });
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "phantom_rule_citation" && e.id === "PHANTOM-RULE-999"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership does not flag allowlisted non-rule tokens in runtime source", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
+    "scripts/tool.mjs": "const mode = 'FAIL-CLOSED';",
+  }, ["TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.ok(!result.errors.some((e) => e.kind === "phantom_rule_citation"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership reports runtime enforcement counts", async () => {
+  // One runtime rule cited in source (enforced), one runtime rule not cited (unenforced).
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
+    "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> `TEST-RULE-002` | The tool MUST report. |",
+    "scripts/tool.mjs": "TEST-RULE-001",
+  }, ["TEST-RULE-001", "TEST-RULE-002"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 2, runtimeEnforced: 1, runtimeUnenforced: 1 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the unenforced runtime count is a non-increasing ratchet pinned by test", async () => {
+  const result = await validateRuleOwnership();
+  assert.ok(result.enforcement.runtimeUnenforced <= UNENFORCED_RUNTIME_CEILING,
+    `runtime unenforced rose above ceiling ${UNENFORCED_RUNTIME_CEILING}: ${result.enforcement.runtimeUnenforced}`);
+});
+
+test("known existing enforcement is credited (WORKTREE-DEFAULT-BRANCH-GUARD and BASE-JQ-OUTPUT-GUARANTEE)", async () => {
+  const citations = await collectRuntimeCitations();
+  const ids = new Set(citations.map((c) => c.id));
+  assert.ok(ids.has("WORKTREE-DEFAULT-BRANCH-GUARD"), "default-branch-guard refusal must cite the rule ID");
+  assert.ok(ids.has("BASE-JQ-OUTPUT-GUARANTEE"), "jq-output shared emit path must cite the rule ID");
 });
