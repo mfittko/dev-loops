@@ -86,10 +86,17 @@ jobs:
           - test:pack
           - test:dev-loop
           - test:workflows
+        include:
+          # Only the test:docs leg needs full history for the decision-record
+          # merge-base comparison; every other leg checks out the default (depth 1).
+          - suite: test:docs
+            fetch_depth: 0
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: ${{ matrix.fetch_depth }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -119,6 +126,16 @@ jobs:
           echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # The decision-record validator's rule 3 resolves the base via
+      # `git merge-base origin/<default> HEAD`. actions/checkout with fetch-depth: 0
+      # for a pull_request checks out the PR merge ref but does NOT fetch
+      # remote-tracking refs like origin/main, so without this the guard silently
+      # degrades to skipped instead of enforcing in PR CI.
+      - name: Fetch base branch (decision-record merge-base)
+        if: matrix.suite == 'test:docs'
+        run: |
+          git fetch origin "+refs/heads/${GITHUB_BASE_REF:-main}:refs/remotes/origin/${GITHUB_BASE_REF:-main}"
 
       - name: Run ${{ matrix.suite }}
         run: npm run ${{ matrix.suite }}
