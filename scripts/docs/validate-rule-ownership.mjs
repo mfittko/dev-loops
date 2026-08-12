@@ -37,7 +37,7 @@ const TERM_RE = /<!--\s*term:\s*(state|reason|gate):([a-zA-Z0-9_.:-]+)\s*-->/g;
 const CODE_TOKEN_RE = /`([a-z][a-z0-9_:-]+)`/g;
 const MODAL_RE = /\b(MUST NOT|SHALL NOT|SHOULD NOT|MAY NOT|MUST|SHALL|SHOULD|MAY)\b/g;
 
-// Enforcement classification surface (#1617): every registry rule carries a
+// Enforcement classification surface: every registry rule carries a
 // `doc` | `runtime` | `agent` classification; `agent` requires a one-line
 // `enforcementNote` justification. `runtime` is the default for an unspecified
 // classification, so a rule can never quietly escape the enforcement ratchet.
@@ -109,7 +109,7 @@ async function* walkRuntime(dir) {
     if (err?.code === "ENOENT") return;
     throw err;
   }
-  for (const entry of entries) {
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     if (entry.name === "node_modules" || entry.name === "tmp" || entry.name === "site" || entry.name === ".claude") continue;
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) continue;
@@ -420,7 +420,7 @@ async function readRequiredRules(repoRoot) {
   }
   return {
     // Entries may be legacy flat ID strings (default `runtime`) or objects with an
-    // `enforcement` classification (#1617).
+    // `enforcement` classification.
     requiredRules: Array.isArray(parsed.requiredRules) ? parsed.requiredRules.map(normalizeRuleEntry) : [],
     // Explicit opt-out for a defined rule that is intentionally NOT deletion-protected. Empty by default.
     optOutRules: Array.isArray(parsed.optOutRules) ? parsed.optOutRules : [],
@@ -482,13 +482,13 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   for (const id of requiredRules.map((entry) => entry.id)) {
     if (!byId.has(id)) errors.push({ kind: "required_rule_missing", id });
   }
-  // Enforcement classification validation (#1617): classification must be one of
+  // Enforcement classification validation: classification must be one of
   // doc/runtime/agent, and an `agent` rule must carry a one-line justification so
   // it cannot become a quiet escape hatch from the runtime enforcement ratchet.
   for (const entry of requiredRules) {
     if (!ENFORCEMENT_VALUES.has(entry.enforcement)) {
       errors.push({ kind: "invalid_enforcement_classification", id: entry.id, location: `enforcement="${entry.enforcement}"` });
-    } else if (entry.enforcement === "agent" && !(entry.enforcementNote && entry.enforcementNote.trim())) {
+    } else if (entry.enforcement === "agent" && !(typeof entry.enforcementNote === "string" && entry.enforcementNote.trim())) {
       errors.push({ kind: "agent_enforcement_missing_justification", id: entry.id });
     }
   }
@@ -534,7 +534,7 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     errors.push({ kind: "dead_allowlist_entry", id: text });
   }
 
-  // Runtime-source enforcement cross-check (#1617):
+  // Runtime-source enforcement cross-check:
   //   - phantom_rule_citation (gating): a registry-ID-shaped token in runtime
   //     source that is neither a real registry ID nor on the NON_RULE_TOKENS
   //     allowlist is a bogus citation — fail the build.

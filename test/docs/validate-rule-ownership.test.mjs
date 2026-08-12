@@ -317,7 +317,7 @@ test("repository rule ownership fixture is valid", async () => {
   assert.equal(result.ok, true, JSON.stringify(result.errors, null, 2));
 });
 
-// --- #1617: enforcement classification + runtime-source traceability ---
+// --- enforcement classification + runtime-source traceability ---
 
 // Current repo ratchet baseline: runtime-classed rules with no enforcement
 // citation. Declaring a NEW runtime rule without enforcement raises this, so it
