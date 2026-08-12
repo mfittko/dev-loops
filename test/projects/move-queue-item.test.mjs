@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { main } from "../../scripts/projects/move-queue-item.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -685,6 +688,215 @@ describe("move-queue-item", () => {
       assert.equal(mutationCall.variables.itemId, "PVTI_target");
       assert.equal(mutationCall.variables.fieldId, "PVTSSF_status");
       assert.equal(mutationCall.variables.optionId, "opt2");
+    });
+  });
+
+  describe("QUEUE-ENQUEUE-REFINEMENT-GATE (pickup-column move #1625)", () => {
+    function issueBodyResponse(body) {
+      return { body };
+    }
+
+    async function withTempCwd(fn) {
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "move-queue-gate-"));
+      try {
+        return await fn(dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    // Writes a malformed .devloops so loadStateColumnMap returns a non-ENOENT
+    // parse error (fail-closed CONFIG_ERROR path) and returns the cwd.
+    function writeMalformedDevloops(dir) {
+      writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  board: [unclosed\n", "utf-8");
+      return dir;
+    }
+
+    // GH call sequence for a move from Backlog -> Next Up (pickup): owner,
+    // projects, fields, items, then (gate) issue view body, then the update.
+    function moveResponses(itemBodyResponse, refined) {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: issueBodyResponse(itemBodyResponse) },
+      ];
+      if (refined) responses.push({ payload: updateItemFieldResponse() });
+      return responses;
+    }
+
+    it("refuses to move an un-refined issue into the pickup column (throws MISSING_REFINEMENT_ARTIFACT, no mutation)", async () => {
+      await withTempCwd(async (cwd) => {
+        const call = recordingRunChild(
+          moveResponses("Just a raw idea with no acceptance criteria or DoD.", false),
+          [],
+        );
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: call, cwd },
+          ),
+          (err) => err.code === "MISSING_REFINEMENT_ARTIFACT",
+        );
+      });
+    });
+
+    it("throws GH_API_ERROR when the pickup-gate issue-body fetch fails (no mutation)", async () => {
+      await withTempCwd(async (cwd) => {
+        const calls = [];
+        // Same move sequence as "refuses to move an un-refined issue", but the
+        // gate's `gh issue view` (5th call) fails instead of returning a body.
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+            ]),
+          },
+          { error: "gh: not authenticated" },
+        ];
+        const call = recordingRunChild(responses, calls);
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: call, cwd },
+          ),
+          (err) => err.code === "GH_API_ERROR",
+        );
+        const mutationCall = calls.find(
+          (c) => c.query && c.query.includes("updateProjectV2ItemFieldValue"),
+        );
+        assert.equal(
+          mutationCall,
+          undefined,
+          "no update mutation should run when the pickup-gate issue-body fetch fails",
+        );
+      });
+    });
+
+    it("allows moving a refined issue into the pickup column", async () => {
+      await withTempCwd(async (cwd) => {
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(moveResponses("## Acceptance criteria\n- [ ] do it", true)),
+            cwd,
+          },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.refinement.refined, true);
+        assert.equal(result.item.newColumn, "Next Up");
+      });
+    });
+
+    it("does not gate a PR moved into the pickup column", async () => {
+      await withTempCwd(async (cwd) => {
+        // PR item -> Next Up: no issue-body fetch, no gate, straight to update.
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_20", makeContent("PR", 20), "Backlog"),
+            ]),
+          },
+          { payload: updateItemFieldResponse() },
+        ];
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "20", toColumn: "Next Up" },
+          { env: {}, runChild: mockRunChild(responses), cwd },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.newColumn, "Next Up");
+        assert.equal("refinement" in result, false);
+      });
+    });
+
+    it("fails closed with CONFIG_ERROR on a malformed .devloops when cwd is supplied (mirrors queue add)", async () => {
+      await withTempCwd(async (cwd) => {
+        // A malformed .devloops must not silently bypass the pickup-column gate.
+        // The config error surfaces (CONFIG_ERROR) before any mutation when cwd is
+        // supplied, exactly mirroring queue add's fail-closed posture.
+        await assert.rejects(
+          () => main(
+            { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+            { env: {}, runChild: mockRunChild([
+              { payload: userPayload() },
+              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+              { payload: getFieldsResponse([STATUS_FIELD]) },
+              {
+                payload: getItemsByContentResponse([
+                  makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+                ]),
+              },
+            ]), cwd: writeMalformedDevloops(cwd) },
+          ),
+          (err) => err.code === "CONFIG_ERROR",
+        );
+      });
+    });
+
+    it("does NOT fail on a malformed .devloops for a non-pickup column move (CONFIG_ERROR scoped to the pickup gate)", async () => {
+      await withTempCwd(async (cwd) => {
+        // A malformed .devloops must only hard-fail (CONFIG_ERROR) when the move
+        // actually targets the pickup column and needs the refinement gate. An
+        // unrelated column move must not be over-broadened into a hard failure.
+        const calls = [];
+        const responses = [
+          { payload: userPayload() },
+          { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+          { payload: getFieldsResponse([STATUS_FIELD]) },
+          {
+            payload: getItemsByContentResponse([
+              makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+            ]),
+          },
+          { payload: updateItemFieldResponse() },
+        ];
+        const call = recordingRunChild(responses, calls);
+        const result = await main(
+          { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "In Progress" },
+          { env: {}, runChild: call, cwd: writeMalformedDevloops(cwd) },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.item.newColumn, "In Progress");
+        const mutationCall = calls.find(
+          (c) => c.query && c.query.includes("updateProjectV2ItemFieldValue"),
+        );
+        assert.ok(mutationCall, "the non-pickup move should still run its update mutation");
+      });
+    });
+
+    it("skips the gate entirely when cwd is not supplied (headless callers like reconcile stay unaffected)", async () => {
+      // No cwd -> pickup column is never derived -> un-refined issue move sails
+      // through exactly as before (no issue-body fetch; straight to update).
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        {
+          payload: getItemsByContentResponse([
+            makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
+          ]),
+        },
+        { payload: updateItemFieldResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.newColumn, "Next Up");
+      assert.equal("refinement" in result, false);
     });
   });
 

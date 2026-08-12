@@ -17,6 +17,7 @@ import {
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
+  buildValidationResultsPath,
   captureDiffFromBase,
   collapsePureSubstitutionRuns,
   ISSUE_BODY_ABSENT_SENTINEL,
@@ -2766,6 +2767,81 @@ test("writeGateContext: --validation-results records the absolute path at scope.
       repo: "owner/repo", pr: 84, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
     assert.equal(reread.scope.validationResultsPath, validationResultsFile);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: derives the canonical validation-results path when --validation-results is omitted and the artifact exists", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-derived-validation-"));
+  try {
+    // Write the artifact at buildValidationResultsPath's canonical location so
+    // the omitted-flag consumer derives the SAME path (GATE-EXEC-VALIDATION-ARTIFACT).
+    const derivedValidationResultsFile = buildValidationResultsPath({
+      repo: "owner/repo", pr: 87, gate: "draft_gate", headSha: "abc1234567890",
+    });
+    const absDerived = path.join(repoRoot, derivedValidationResultsFile);
+    await mkdir(path.dirname(absDerived), { recursive: true });
+    await writeFile(absDerived, JSON.stringify({ ok: true, allPassed: true }), "utf8");
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      // NOTE: --validation-results deliberately omitted.
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.equal(result.artifact.scope.validationResultsPath, absDerived);
+    assert.ok(path.isAbsolute(result.artifact.scope.validationResultsPath));
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.match(onDisk, /## Validation results at this head/);
+    assert.ok(onDisk.includes(`  ${absDerived}`));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: omitted --validation-results with no derived artifact renders no validation section (byte-identical)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-no-derived-validation-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "88", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+    assert.equal(result.artifact.scope.validationResultsPath, null);
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(!onDisk.includes("## Validation results at this head"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: derived --validation-results probe fails closed (throws) when the artifact exists but is unreadable (non-ENOENT)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-derived-validation-unreadable-"));
+  try {
+    // Create a DIRECTORY at the canonical derived path: the artifact "exists"
+    // by path but readFile fails with EISDIR (a non-ENOENT read error). The
+    // derived probe must fail closed exactly like the explicit
+    // --validation-results path, not silently skip the validation section.
+    const derivedValidationResultsFile = buildValidationResultsPath({
+      repo: "owner/repo", pr: 89, gate: "draft_gate", headSha: "abc1234567890",
+    });
+    const absDerived = path.join(repoRoot, derivedValidationResultsFile);
+    await mkdir(absDerived, { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "89", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+      // NOTE: --validation-results deliberately omitted (derived probe path).
+    ]);
+    await assert.rejects(
+      () => writeGateContext(options, { repoRoot }),
+      /derived validation-results.*(EISDIR|unreadable)/,
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

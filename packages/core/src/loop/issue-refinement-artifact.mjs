@@ -584,6 +584,46 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
 }
 
 /**
+ * Apply the pickup-column refinement gate to one issue: fetch the issue body,
+ * run `decideEnqueueRefinementGate`, and throw the canonical `GH_API_ERROR` /
+ * `MISSING_REFINEMENT_ARTIFACT` on failure. This is the single
+ * gate-application orchestration shared by `queue add` (enqueue-time) and
+ * `queue move` (move-time) — never a second copy. It returns the gate decision
+ * so add-only (divert/park) and move-only (refined-flag) handling stays with
+ * each caller.
+ *
+ * @param {{ issueNumber: number, repo: string, env: object, runChild: Function, auto?: boolean }} input
+ * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
+ */
+export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false }) {
+  const bodyResult = await runChild(
+    "gh",
+    ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
+    env,
+  );
+  if (bodyResult.code !== 0) {
+    const detail = bodyResult.stderr?.trim() || `exit code ${bodyResult.code}`;
+    throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
+  }
+  let bodyPayload;
+  try {
+    bodyPayload = JSON.parse(bodyResult.stdout);
+  } catch {
+    throw new Error("Invalid JSON input");
+  }
+  const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
+  const artifact = detectIssueRefinementArtifact({ body, issueNumber });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto });
+  if (decision.action === "block") {
+    throw Object.assign(new Error(decision.reason), {
+      code: "MISSING_REFINEMENT_ARTIFACT",
+      missing: decision.missing,
+    });
+  }
+  return decision;
+}
+
+/**
  * Map a draft-gate refinement check to the result surface consumed by
  * `evaluatePrGateCoordination`. The mapping keeps the contract
  * deterministic: the draft gate must not produce a `clean` verdict

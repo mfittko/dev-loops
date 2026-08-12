@@ -632,7 +632,11 @@ async function main(args, { env = process.env, runChild } = {}) {
   const repo = validateRepo(args.repo);
   const [owner] = repo.split("/");
   const title = args.title || "Dev Loop Queue"; // explicit default after settings fallback in runCli
-  const linkRepo = args.linkRepo || null;
+  // QUEUE-BOARD-LINKED: default linkRepo to the given repo so every board
+  // created/ensured through this wrapper is linked to its repo (a guard present
+  // at one entry point but not its siblings). `repo` is already validated above
+  // and has exactly owner/name form, so it is safe to reuse here.
+  const linkRepo = args.linkRepo || repo;
   if (linkRepo) validateRepo(linkRepo); // validate format early
 
   // 1. Resolve owner (user or org)

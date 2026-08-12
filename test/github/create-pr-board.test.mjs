@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { main, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
+import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
 import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
@@ -49,6 +49,9 @@ function itemsByContentResponse(items) {
 }
 function resolvePrResponse(id) {
   return { data: { repository: { issueOrPullRequest: { id, __typename: "PullRequest" } } } };
+}
+function resolveIssueResponse(id) {
+  return { data: { repository: { issueOrPullRequest: { id, __typename: "Issue" } } } };
 }
 function addItemResponse(itemId) {
   return { data: { addProjectV2ItemById: { item: { id: itemId } } } };
@@ -170,6 +173,77 @@ test("enqueueIssuelessLightweightPr: unparsed PR number is a no-op, never calls 
       runChild: mockRunChild([]),
     });
     assert.deepEqual(board, { enqueued: false, reason: "pr-number-not-parsed" });
+  });
+});
+
+// --- enqueueBoardItem tests (QUEUE-BOARD-LINKED; generic board add, #1625) ---
+
+test("enqueueBoardItem: adds a new ISSUE item into the requested Backlog column", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const responses = [
+      userPayload(),
+      listUserProjectsResponse([PROJECT]),
+      getFieldsResponse([STATUS_FIELD]),
+      itemsByContentResponse([]),
+      resolveIssueResponse("I_kwDO_10"),
+      addItemResponse("PVTI_new"),
+      updateFieldResponse(),
+    ];
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 10,
+      column: "Backlog",
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild(responses),
+    });
+    assert.deepEqual(board, {
+      enqueued: true,
+      itemId: "PVTI_new",
+      issueNumber: 10,
+      prNumber: null,
+      status: "Backlog",
+      alreadyPresent: false,
+    });
+  });
+});
+
+test("enqueueBoardItem: default column is In Progress (issue-less lightweight-PR back-compat)", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const responses = [
+      userPayload(),
+      listUserProjectsResponse([PROJECT]),
+      getFieldsResponse([STATUS_FIELD]),
+      itemsByContentResponse([]),
+      resolvePrResponse("PR_kwDO_42"),
+      addItemResponse("PVTI_new"),
+      updateFieldResponse(),
+    ];
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 42,
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild(responses),
+    });
+    assert.equal(board.enqueued, true);
+    assert.equal(board.status, "In Progress");
+  });
+});
+
+test("enqueueBoardItem: an unconfigured board is a silent, fail-open no-op", async () => {
+  await withTempDir(async (tempDir) => {
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 10,
+      column: "Backlog",
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild([]),
+    });
+    assert.deepEqual(board, { enqueued: false, reason: "no-board-configured" });
   });
 });
 

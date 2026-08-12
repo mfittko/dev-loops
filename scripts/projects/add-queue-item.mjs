@@ -5,7 +5,7 @@ import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_reso
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { decideEnqueueRefinementGate, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { runPickupRefinementGate } from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -542,25 +542,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   let effectiveTargetOption = targetOption;
   let effectiveTargetStatus = targetStatus;
   if (issueNumber !== null && targetStatus === nextUpColumn) {
-    const bodyResult = await child(
-      "gh",
-      ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-      env,
-    );
-    if (bodyResult.code !== 0) {
-      const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
-      throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-    }
-    const bodyPayload = parseJsonText(bodyResult.stdout, { label: "gh issue view" });
-    const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
-    const artifact = detectIssueRefinementArtifact({ body, issueNumber });
-    const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: !!args.auto });
-    if (decision.action === "block") {
-      throw Object.assign(new Error(decision.reason), {
-        code: "MISSING_REFINEMENT_ARTIFACT",
-        missing: decision.missing,
-      });
-    }
+    const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: !!args.auto });
     if (decision.action === "divert") {
       const parkedColumn = nonSuccessBoardColumn(cwd);
       if (parkedColumn === nextUpColumn) {
