@@ -16,6 +16,7 @@ import {
   extractTermDefinitions,
   extractTermUses,
   isImperativeSentence,
+  isRuntimeSourceFile,
   normalizeRuleEntry,
   validateRuleOwnership,
 } from "../../scripts/docs/validate-rule-ownership.mjs";
@@ -322,7 +323,13 @@ test("repository rule ownership fixture is valid", async () => {
 // Current repo ratchet baseline: runtime-classed rules with no enforcement
 // citation. Declaring a NEW runtime rule without enforcement raises this, so it
 // must stay non-increasing and is pinned by this test.
-const UNENFORCED_RUNTIME_CEILING = 143;
+//
+// Enforcement credit now requires the rule ID in executable code (comments and
+// .json string values are excluded) per the structural-quality.md code-comment
+// convention, so the baseline reflects honest enforcement only — the round-2
+// draft-gate findings (2502f95c contract-surface, 70dd2edd correctness) removed
+// the previous comment-only false credits.
+const UNENFORCED_RUNTIME_CEILING = 157;
 
 test("normalizeRuleEntry defaults a legacy flat-string entry to runtime", () => {
   const flat = normalizeRuleEntry("TEST-RULE-001");
@@ -424,4 +431,78 @@ test("known existing enforcement is credited (WORKTREE-DEFAULT-BRANCH-GUARD and 
   const ids = new Set(citations.map((c) => c.id));
   assert.ok(ids.has("WORKTREE-DEFAULT-BRANCH-GUARD"), "default-branch-guard refusal must cite the rule ID");
   assert.ok(ids.has("BASE-JQ-OUTPUT-GUARANTEE"), "jq-output shared emit path must cite the rule ID");
+});
+
+test("normalizeRuleEntry guards malformed manifest entries (no crash, no silent undefined)", () => {
+  assert.equal(normalizeRuleEntry(null).invalid, true, "null entry must be flagged, not crash");
+  assert.equal(normalizeRuleEntry(42).invalid, true, "numeric entry must be flagged, not yield id=undefined");
+  assert.equal(normalizeRuleEntry({ id: 123 }).invalid, true, "non-string id must be flagged");
+  assert.equal(normalizeRuleEntry("TEST-RULE-001").invalid, undefined, "valid flat entry is not flagged");
+});
+
+test("isRuntimeSourceFile classifies runtime files and its exclusions", () => {
+  assert.equal(isRuntimeSourceFile("tool.mjs", "scripts/tool.mjs"), true);
+  assert.equal(isRuntimeSourceFile("tool.ts", "packages/core/src/tool.ts"), true);
+  assert.equal(isRuntimeSourceFile("tool.sh", "scripts/tool.sh"), true);
+  assert.equal(isRuntimeSourceFile("tool.json", "scripts/tool.json"), true);
+  assert.equal(isRuntimeSourceFile("tool.mjs", "scripts/test/tool.mjs"), false, "test/ dir excluded");
+  assert.equal(isRuntimeSourceFile("tool.test.mjs", "scripts/tool.test.mjs"), false, ".test. basename excluded");
+  assert.equal(isRuntimeSourceFile("tool.mjs", "scripts/node_modules/x/tool.mjs"), false, "node_modules excluded");
+  assert.equal(isRuntimeSourceFile("tool.mjs", "scripts/tmp/tool.mjs"), false, "tmp excluded");
+  assert.equal(isRuntimeSourceFile("README.md", "scripts/README.md"), false, "non-runtime extension excluded");
+});
+
+test("collectRuntimeCitations strips comments and .json so only real code citations credit enforcement", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",
+    "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> `TEST-RULE-002` | The tool MUST report. |",
+    "scripts/comment.mjs": "// TEST-RULE-001  (comment-only: must NOT credit)",
+    "scripts/code.mjs": "refuse(TEST-RULE-002)",
+    "scripts/data.json": "{\"hint\": \"TEST-RULE-002\"}",
+  }, ["TEST-RULE-001", "TEST-RULE-002"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 2, runtimeEnforced: 1, runtimeUnenforced: 1 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("agent enforcementNote that is a non-string value is a clean gating error (defensive typeof guard)", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST behave. |",
+  }, [{ id: "TEST-RULE-001", enforcement: "agent", enforcementNote: true }]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "agent_enforcement_missing_justification" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("agent enforcementNote must be one line (multiline is a gating contract-drift error)", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The agent MUST behave. |",
+  }, [{ id: "TEST-RULE-001", enforcement: "agent", enforcementNote: "first line\nsecond line" }]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "agent_enforcement_multiline_justification" && e.id === "TEST-RULE-001"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a null required-rules.json entry is a clean invalid_manifest_entry, not a crash", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST pass. |",
+  }, [null, "TEST-RULE-001"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "invalid_manifest_entry"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

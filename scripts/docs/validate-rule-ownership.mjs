@@ -87,6 +87,14 @@ const NON_RULE_TOKENS = new Set([
 
 export function normalizeRuleEntry(entry) {
   if (typeof entry === "string") return { id: entry, enforcement: "runtime" };
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry) || typeof entry.id !== "string" || entry.id.trim() === "") {
+    return {
+      id: undefined,
+      enforcement: "runtime",
+      invalid: true,
+      reason: entry === null ? "null entry" : Array.isArray(entry) ? `array entry` : typeof entry.id !== "string" ? `expected a string "id", got ${typeof entry.id}` : `empty "id"`,
+    };
+  }
   return {
     id: entry.id,
     enforcement: entry.enforcement || "runtime",
@@ -99,6 +107,36 @@ export function isRuntimeSourceFile(basename, relPath) {
   if (parts.includes("test") || parts.includes("node_modules") || parts.includes("tmp") || parts.includes("site")) return false;
   if (/\.test\./.test(basename)) return false;
   return RUNTIME_FILE_RE.test(basename);
+}
+
+// Strip comments before scanning so a rule ID named only in a code comment is not
+// credited as enforcement: the structural-quality.md convention requires the rule ID
+// in an actual enforcement error message/check, not just a comment. .json has no
+// comments and its string values are data, not enforcement sites, so it is excluded.
+function stripSourceComments(content, ext) {
+  if (ext === ".json") return ""; // json values are data, never enforcement citations
+  if (ext === ".sh") {
+    return content.replace(/^[ \t]*#.*$/gm, "");
+  }
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const c = content[i];
+    if (c === "/" && content[i + 1] === "*") {
+      const end = content.indexOf("*/", i + 2);
+      i = end === -1 ? n : end + 2;
+      out += " ";
+    } else if (c === "/" && content[i + 1] === "/") {
+      const end = content.indexOf("\n", i);
+      i = end === -1 ? n : end + 1;
+      out += "\n";
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
 }
 
 async function* walkRuntime(dir) {
@@ -128,7 +166,8 @@ export async function collectRuntimeCitations(repoRoot = REPO_ROOT) {
       const rel = toPosix(path.relative(repoRoot, file));
       if (!isRuntimeSourceFile(path.basename(file), rel)) continue;
       const content = await readFile(file, "utf8");
-      for (const match of content.matchAll(RULE_ID_SHAPE_RE)) {
+      const scanned = stripSourceComments(content, path.extname(file));
+      for (const match of scanned.matchAll(RULE_ID_SHAPE_RE)) {
         tokens.push({ id: match[0], file: rel });
       }
     }
@@ -477,19 +516,30 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   }
 
   const { requiredRules, optOutRules } = await readRequiredRules(repoRoot);
-  const requiredSet = new Set(requiredRules.map((entry) => entry.id));
+  // Malformed manifest entries are a clean gating error, never a crash or a silently
+  // inserted `undefined`, so they are reported and excluded from further processing.
+  for (const entry of requiredRules) {
+    if (entry.invalid) errors.push({ kind: "invalid_manifest_entry", id: entry.id, location: `required-rules.json: ${entry.reason}` });
+  }
+  const validRequiredRules = requiredRules.filter((entry) => !entry.invalid);
+  const requiredSet = new Set(validRequiredRules.map((entry) => entry.id));
   const optOutSet = new Set(optOutRules);
-  for (const id of requiredRules.map((entry) => entry.id)) {
+  for (const id of validRequiredRules.map((entry) => entry.id)) {
     if (!byId.has(id)) errors.push({ kind: "required_rule_missing", id });
   }
   // Enforcement classification validation: classification must be one of
   // doc/runtime/agent, and an `agent` rule must carry a one-line justification so
   // it cannot become a quiet escape hatch from the runtime enforcement ratchet.
-  for (const entry of requiredRules) {
+  for (const entry of validRequiredRules) {
     if (!ENFORCEMENT_VALUES.has(entry.enforcement)) {
       errors.push({ kind: "invalid_enforcement_classification", id: entry.id, location: `enforcement="${entry.enforcement}"` });
-    } else if (entry.enforcement === "agent" && !(typeof entry.enforcementNote === "string" && entry.enforcementNote.trim())) {
-      errors.push({ kind: "agent_enforcement_missing_justification", id: entry.id });
+    } else if (entry.enforcement === "agent") {
+      const note = entry.enforcementNote;
+      if (!(typeof note === "string" && note.trim())) {
+        errors.push({ kind: "agent_enforcement_missing_justification", id: entry.id });
+      } else if (note.includes("\n")) {
+        errors.push({ kind: "agent_enforcement_multiline_justification", id: entry.id, location: "enforcementNote must be one line" });
+      }
     }
   }
   // corpus→manifest completeness: every defined rule must be registered in the manifest or explicitly opted out.
@@ -554,7 +604,7 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   for (const [id, count] of unknownById) {
     errors.push({ kind: "phantom_rule_citation", id, location: `cited ${count}x in runtime source` });
   }
-  const runtimeIds = requiredRules.filter((entry) => entry.enforcement === "runtime").map((entry) => entry.id);
+  const runtimeIds = validRequiredRules.filter((entry) => entry.enforcement === "runtime").map((entry) => entry.id);
   const runtimeEnforced = [...citedRuntimeIds].filter((id) => runtimeIds.includes(id)).length;
   const enforcement = {
     runtimeTotal: runtimeIds.length,

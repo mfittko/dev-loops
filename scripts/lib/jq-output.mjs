@@ -299,7 +299,7 @@ export function emitResult(
     } catch (error) {
       if (error instanceof JqFilterError) {
         // Fail closed, distinct from a clean "predicate false". Exit 2.
-        stderr.write(`${JSON.stringify({ ok: false, error: `--jq: ${error.message}` })}\n`);
+        stderr.write(`${JSON.stringify({ ok: false, error: `--jq (BASE-JQ-OUTPUT-GUARANTEE): ${error.message}` })}\n`);
         return 2;
       }
       throw error;
