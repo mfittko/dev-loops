@@ -399,8 +399,10 @@ export function buildReviewDispatchPlan({ gate, headSha, sharedPrefixPath, share
     requestGroups: groups,
     ...(caps != null ? { capabilities: caps } : {}),
   };
-  // Deterministic plan hash over the folded canonical object.
-  const planHash = sha256Hex({ ...plan, ...(extra ?? {}) }).replace(/^sha256:/, "");
+  // Deterministic plan hash over the canonical plan, with opaque `extra` folded
+  // under its own namespace so an `extra` key can never shadow a real plan
+  // field (the fingerprint must always pin the plan's actual values).
+  const planHash = sha256Hex({ ...plan, extra: extra ?? {} }).replace(/^sha256:/, "");
   return Object.freeze({ ...plan, planHash: `sha256:${planHash}` });
 }
 

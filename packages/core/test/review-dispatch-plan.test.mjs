@@ -236,6 +236,49 @@ describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact"
     assert.equal(b.planHash, plan.planHash);
   });
 
+  test("extra shadowing a plan key cannot mask a real pinned-field change", () => {
+    const base = {
+      gate: "pre_approval_gate",
+      sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+        { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+      ],
+      capabilities: { harness: "claude" },
+    };
+    // Two plans that differ in their REAL headSha but carry the SAME opacity
+    // shadowing extra. Under the old {...plan, ...extra} fold, the extra's
+    // shadowed headSha would mask the real difference and both would hash
+    // identically; the fingerprint must pin the plan's actual values instead.
+    const a = buildReviewDispatchPlan({ ...base, headSha: "aaaa1111111111111111111111111111111111", extra: { headSha: "bbbb2222222222222222222222222222222222", gate: "draft_gate" } });
+    const b = buildReviewDispatchPlan({ ...base, headSha: "bbbb2222222222222222222222222222222222", extra: { headSha: "bbbb2222222222222222222222222222222222", gate: "draft_gate" } });
+    assert.notEqual(a.planHash, b.planHash, "extra shadowing must not mask a real headSha change");
+    // The returned plan still carries the REAL values, not the extra's.
+    assert.equal(a.headSha, "aaaa1111111111111111111111111111111111");
+    assert.equal(b.headSha, "bbbb2222222222222222222222222222222222");
+    assert.equal(a.gate, "pre_approval_gate");
+    assert.equal(b.gate, "pre_approval_gate");
+  });
+
+  test("distinct opaque extra still diverges the fingerprint", () => {
+    const base = {
+      gate: "pre_approval_gate",
+      headSha: "abcdef1234567890",
+      sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+        { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+      ],
+      capabilities: { harness: "claude" },
+    };
+    const a = buildReviewDispatchPlan({ ...base, extra: { reportParseCue: "alpha" } });
+    const b = buildReviewDispatchPlan({ ...base, extra: { reportParseCue: "beta" } });
+    assert.notEqual(a.planHash, b.planHash);
+    assert.notEqual(a.planHash, plan.planHash);
+  });
+
   test("usages fail closed on bad input", () => {
     assert.throws(() => buildReviewDispatchPlan({ gate: "", headSha: "abc" }));
     assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "not-a-sha" }));
