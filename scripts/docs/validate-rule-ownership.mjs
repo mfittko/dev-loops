@@ -148,7 +148,10 @@ async function* walkRuntime(dir) {
     throw err;
   }
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-    if (entry.name === "node_modules" || entry.name === "tmp" || entry.name === "site" || entry.name === ".claude") continue;
+    // vendor/ (and analogous vendored dirs) is never an enforcement site: it
+    // holds third-party/minified files whose rule-ID-shaped tokens must not be
+    // citation or phantom signals (c.f. the node_modules/tmp/site exclusions).
+    if (entry.name === "node_modules" || entry.name === "tmp" || entry.name === "site" || entry.name === "vendor" || entry.name === ".claude") continue;
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) yield* walkRuntime(full);

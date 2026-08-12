@@ -264,6 +264,8 @@ test("loop/checkpoint-contract.mjs: --jq filters the result and --silent maps to
     const invalidResult = await runNode(scriptPath, ["--state", "none", "--jq", "bogus!!"], { cwd: tempDir });
     assert.equal(invalidResult.code, 2);
     assert.match(invalidResult.stderr, /--jq/);
+    // The --jq error names the rule ID so operators can trace it to the registry.
+    assert.match(invalidResult.stderr, /BASE-JQ-OUTPUT-GUARANTEE/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

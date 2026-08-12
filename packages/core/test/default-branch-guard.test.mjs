@@ -74,6 +74,8 @@ test("blocks a commit on the default branch in the primary checkout", async () =
     const result = commitAttempt(dir, "on-main.txt");
     assert.equal(result.blocked, true, "expected the commit to be refused");
     assert.match(result.stderr, /refusing to commit on the default branch/);
+    // The refusal names the rule ID so operators can trace it to the registry.
+    assert.match(result.stderr, /WORKTREE-DEFAULT-BRANCH-GUARD/);
     assert.match(result.stderr, new RegExp(GUARD_OVERRIDE_ENV));
     // The refusal must be the ONLY effect: nothing may have been recorded.
     assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "1");
