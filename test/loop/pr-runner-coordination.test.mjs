@@ -624,6 +624,44 @@ test("releaseRunClaimsOnExit records parse_failed on a corrupt claim file and co
   }
 });
 
+test("releaseRunClaimsOnExit records release_failed when the release fn throws and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-releasefail-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 51, runId: "run-x", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 52, runId: "run-x", cwd: tempDir });
+    const throwingReleaseFn = async () => {
+      throw new Error("release boom");
+    };
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, releaseFn: throwingReleaseFn });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 0);
+    assert.equal(result.failed.length, 2);
+    assert.ok(result.failed.every((f) => f.reason === "release_failed"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit records read_failed when a claim file is unreadable and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-readfail-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 61, runId: "run-x", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 62, runId: "run-x", cwd: tempDir });
+    const throwingReadFile = async () => {
+      throw new Error("read boom");
+    };
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, readFile: throwingReadFile });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 0);
+    assert.equal(result.failed.length, 2);
+    assert.ok(result.failed.every((f) => f.reason === "read_failed"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // End-to-end CLI proof of the shared --jq/--silent output helper (issue #981).
 // `status` needs no run-id and no gh, so it is a clean read-script vehicle.
 const cliScript = path.resolve("scripts/loop/pr-runner-coordination.mjs");
