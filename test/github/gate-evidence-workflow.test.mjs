@@ -7,8 +7,10 @@ import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-sta
 // gate verdict is posted or corrected in place — verdicts are PR reviews, with
 // legacy/fallback verdicts still arriving as issue comments, so without those
 // triggers a clean current-head verdict leaves the required status
-// stale-pending forever. Head-staleness (synchronize) and the draft no-op
-// guard must survive unchanged. NOTE: GitHub Actions has NO
+// stale-pending forever. The draft no-op guard must survive unchanged, and
+// head-staleness via `synchronize` is now intentionally NOT re-fired
+// (pre-merge-only, #1702): development pushes must not start/leave a
+// gate-evidence run; the check materializes at the verdict points. NOTE: GitHub Actions has NO
 // `pull_request_review_thread` workflow trigger (thread resolve/unresolve is a
 // webhook but not an `on:` event); using it makes the whole workflow file
 // server-side-invalid, so it must never be added.
@@ -21,7 +23,15 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   const workflow = parseYaml(content);
   const triggers = workflow.on;
 
-  assert.deepEqual(triggers.pull_request.types, ["opened", "synchronize", "reopened", "ready_for_review"]);
+  // #1702: `synchronize` (development push) is deliberately NOT a trigger — the
+  // check is pre-merge-only. Development pushes must not start/leave a blocking
+  // gate-evidence run; the check materializes only at ready_for_review / a
+  // verdict-post / a verdict-shaped issue comment.
+  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review"]);
+  assert.ok(
+    !Array.isArray(triggers.pull_request.types) || !triggers.pull_request.types.includes("synchronize"),
+    "synchronize must not be a trigger — the check is pre-merge-only",
+  );
   // The verdict surface is a PR review: `submitted` fires for each verdict on a
   // NEW head, `edited` for the same-head in-place correction (PUT
   // pulls/{pr}/reviews/{id}) and for the manual lost-run recovery. BOTH types
@@ -86,6 +96,33 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
       "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
   );
   assert.equal(workflow.permissions.statuses, "write");
+});
+
+// Pin #1702's stale-PENDING regression: the status report step must ALWAYS post
+// a definitive success/failure on the current head SHA — never `pending`. The
+// check only fires at pre-merge/verdict points, so `not_established` (no clean
+// verdict for the current head yet) is a fail-closed `failure` flipped to
+// `success` by the next verdict-post re-fire, never a dangling pending.
+test("gate-evidence always posts a definitive success/failure, never a stale pending (#1702)", async () => {
+  const content = await readRepo(".github/workflows/gate-evidence.yml");
+  const workflow = parseYaml(content);
+  const statusStep = workflow.jobs["gate-evidence-runner"].steps.find(
+    (step) => typeof step.run === "string" && step.run.includes("gh api --method POST"),
+  );
+  assert.ok(statusStep, "expected the explicit status-posting step");
+
+  // The case statement must never emit `pending`: satisfied is the only
+  // success, everything else fails closed to failure.
+  assert.ok(!/state="pending"/.test(statusStep.run), "status step must never post a pending state");
+  assert.match(statusStep.run, /satisfied\) state="success"/);
+  assert.match(statusStep.run, /\*\) state="failure"/);
+  assert.ok(!/not_established\) state="pending"/.test(statusStep.run), "not_established must not map to pending");
+
+  // Definitive status targets the RESOLVED PR head SHA (fork-forging guard
+  // preserved) under the gate-evidence context.
+  assert.match(statusStep.run, /state=\$\{state\}/);
+  assert.match(statusStep.run, /statuses\/\$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
+  assert.match(statusStep.run, /context=gate-evidence/);
 });
 
 // Pins the #1385 gate-review must-fix (as evolved by #1464): review/comment
