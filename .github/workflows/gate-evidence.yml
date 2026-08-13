@@ -68,7 +68,7 @@ name: Gate evidence
 # used; the review events above cover a newly-appearing unresolved thread. Narrow
 # residual: a bare "Unresolve conversation" UI action on an already-resolved
 # thread with no accompanying review/comment fires only that non-triggerable
-# event and is not re-caught until the next push/review/comment — bounded by the
+# event and is not re-caught until the next review or comment — bounded by the
 # maintainer-gated merge.) All the added
 # events are triggered by base-repo actions and run in the base-repo context,
 # so they get this workflow's declared permissions (including `statuses:

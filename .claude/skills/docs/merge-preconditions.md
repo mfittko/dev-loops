@@ -105,7 +105,7 @@ practice:
   "Unresolve conversation" UI action on an already-resolved thread, with no
   accompanying review or comment, fires only that non-triggerable event and so
   does not re-fire the check — bounded by the maintainer-gated merge, and
-  re-caught on the next push, review, or comment.) The `gate-evidence`
+  re-caught on the next review or comment.) The `gate-evidence`
   context itself is always an explicit commit status posted to the resolved PR
   head SHA (not the triggering job's own check-run, which for
   review and comment event types would land on the wrong commit — the base
