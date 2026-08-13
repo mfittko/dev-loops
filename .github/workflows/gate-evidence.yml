@@ -33,10 +33,17 @@ name: Gate evidence
 # unresolved thread appears, which is the stale-green direction that matters
 # here.
 #
-# The stale-PENDING direction was the remaining gap: a clean current-head
-# gate verdict never re-fired this workflow and the required status stayed at
-# whatever the pre-verdict run computed — an unmergeable PR with satisfied
-# evidence. Gate verdicts are posted as a PR REVIEW
+# The stale-PENDING direction (#1702) is closed two ways. First, the check is
+# now PRE-MERGE-ONLY: `synchronize` is NOT a trigger, so development pushes do
+# not start/leave a gate-evidence run and the check materializes only at a
+# pre-merge/verdict point (ready_for_review / reopened / a posted-or-edited
+# verdict review / a verdict-shaped issue comment). Second, a run NEVER posts a
+# `pending` status: it always posts a definitive success/failure for the
+# current head. Because the workflow only fires at a merge-decision moment, the
+# previous "in-progress -> pending" case (evidence not yet established for the
+# current head) is now a fail-closed `failure` rather than a dangling pending —
+# the next verdict-post re-fires the check and flips it to `success`. Gate
+# verdicts are posted as a PR REVIEW
 # (upsert-checkpoint-verdict.mjs, the round's single visible surface), so a
 # NEW verdict re-fires via pull_request_review [submitted], and a same-head
 # in-place correction (PUT pulls/{pr}/reviews/{id}) re-fires via
@@ -82,9 +89,17 @@ name: Gate evidence
 # `gate-evidence` context — which GitHub's docs warn is ambiguous — the job
 # itself is named something else; the explicit status below is the ONLY
 # thing that ever reports context `gate-evidence`.
+# Pre-merge-only trigger set (#1702): `synchronize` is deliberately absent so
+# development pushes never start a blocking gate-evidence run. The remaining
+# events are all pre-merge/verdict points: PR opened/reopened, ready_for_review
+# (the draft->non-draft merge-review transition), a posted or edited verdict
+# review, a new unresolved-thread review comment, and a verdict-shaped issue
+# comment. A clean verdict on the current head is guaranteed to re-fire via
+# pull_request_review [submitted]/[edited], so a satisfied PR flips straight to
+# `success` at the pre-merge point instead of dangling on a stale pending.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, edited]
   pull_request_review_comment:
@@ -201,18 +216,20 @@ jobs:
           cat gate_check_stderr.json >&2
 
       # evidenceState (satisfied|not_established|violation, from
-      # detect-checkpoint-evidence.mjs) drives the posted commit-status state:
-      # not_established (evidence for the current head simply doesn't exist yet
-      # — draft, mid-Copilot-loop, pre-approval not yet re-run after a fix
-      # commit) is the NORMAL in-progress gap and reads as `pending`, not
-      # `failure` — the loop's own CI-status reading already excludes this
-      # context (LOOP_DERIVED_CI_CHECK_NAME) so a pending gate-evidence never
-      # blocks the loop's convergence, only the actual merge. `violation` (a
-      # visible current-head comment carries a bad verdict, or another
-      # pre-merge check failed) reads as `failure` — the bypass signal this
-      # check exists to catch. A missing/unparseable evidenceState (e.g. an
-      # earlier checkout/npm-ci failure that skipped the detector step
-      # entirely) fails CLOSED to `failure`, never "no status".
+      # detect-checkpoint-evidence.mjs) drives the posted commit-status state.
+      # #1702 makes the status ALWAYS DEFINITIVE — never `pending`, so a
+      # completed run can never leave the required check dangling in a
+      # stale-PENDING-BLOCKED state. The check only fires at a pre-merge/verdict
+      # point, so `not_established` (no clean verdict for the current head yet)
+      # is a fail-closed `failure` until the next verdict-post re-fires and
+      # flips it to `success` — the merge gate stays decisive, never hung.
+      # `violation` (a visible current-head comment carries a bad verdict, or
+      # another pre-merge check failed) too. A missing/unparseable
+      # evidenceState (e.g. an earlier checkout/npm-ci failure that skipped the
+      # detector step entirely) fails CLOSED to `failure`, never "no status".
+      # The loop's own CI-status reading excludes this context
+      # (LOOP_DERIVED_CI_CHECK_NAME), so a definitive gate-evidence state never
+      # deadlocks the loop's convergence.
       # !cancelled() (not always()): a run superseded via cancel-in-progress
       # has no evidenceState and must NOT post — always() would fire on
       # cancellation and race the newer run with a spurious `failure`. A
@@ -226,12 +243,15 @@ jobs:
           # set +e: nothing here may abort before the gh api POST below. Under
           # the Actions default shell (bash -eo pipefail) a non-zero jq/head in
           # the pipeline would otherwise exit the step with no status posted,
-          # leaving the required check pending forever instead of failing closed.
+          # leaving the required check stuck (stale) instead of failing closed.
           set +e
           evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          # #1702: definitive-only. `satisfied` is the only success; anything
+          # else (not_established, violation, missing/parse error) fails closed
+          # to `failure` so a completed run always leaves a pass/fail on the
+          # current head, never a dangling stuck state.
           case "$evidence_state" in
             satisfied) state="success" ;;
-            not_established) state="pending" ;;
             *) state="failure" ;;
           esac
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \

@@ -71,14 +71,20 @@ practice:
   dev-loop tooling calls before merging.
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
-  GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted or edited review, a standalone review comment, and a
-  created/edited PR issue comment that starts with the gate-comment marker
-  (`### Gate review:`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`)
-  — so a newly-opened unresolved thread re-evaluates the check instead of
-  leaving a SHA-pinned green stale on the thread axis, and posting a gate
-  verdict itself re-evaluates the check instead of leaving a stale
-  pre-verdict `pending`/`failure` blocking a satisfied PR. The verdict is a PR
+  GitHub's own token for every non-draft PR. It is **pre-merge-only** (#1702):
+  `synchronize` (a development push) is NOT a trigger, so a dev push never
+  starts/leaves a blocking gate-evidence run — the check materializes only at a
+  pre-merge/verdict point: PR opened/reopened, `ready_for_review`, a submitted
+  or edited review, a standalone review comment, and a created/edited PR issue
+  comment that starts with the gate-comment marker (`### Gate review:`) from a
+  trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A run always posts a
+  **definitive** status (success/failure, never `pending`) to the current head's
+  resolved SHA, for two reasons: a newly-opened unresolved thread re-evaluates
+  the check instead of leaving a SHA-pinned green stale on the thread axis, and
+  a clean verdict cannot leave a stale pre-verdict `pending` blocking a
+  satisfied PR (#1702) — `not_established` (no clean verdict for the current
+  head yet) is a fail-closed `failure` that the next verdict-post re-fires to
+  `success`. The verdict is a PR
   REVIEW (`GATE-COMMENT-SINGLE-SURFACE`): a new round's review fires
   `pull_request_review [submitted]`, and a same-head verdict correction (the
   upsert's in-place `PUT`) fires `pull_request_review [edited]`; the
@@ -107,9 +113,9 @@ practice:
   a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
   hook) skips the client-side path entirely but still cannot merge without a
   green `gate-evidence` check **once branch protection on `main` requires it**.
-  Until an operator adds it to branch protection, the check runs and reports on
-  every non-draft PR but does **not** yet block merge — it is reporting-only in
-  that window.
+  Until an operator adds it to branch protection, the check runs and reports at
+  pre-merge/verdict points on every non-draft PR but does **not** yet block
+  merge — it is reporting-only in that window.
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
