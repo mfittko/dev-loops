@@ -7,8 +7,10 @@ import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-sta
 // gate verdict is posted or corrected in place — verdicts are PR reviews, with
 // legacy/fallback verdicts still arriving as issue comments, so without those
 // triggers a clean current-head verdict leaves the required status
-// stale-pending forever. Head-staleness (synchronize) and the draft no-op
-// guard must survive unchanged. NOTE: GitHub Actions has NO
+// stale-pending forever. The draft no-op guard must survive unchanged, and
+// head-staleness via `synchronize` is now intentionally NOT re-fired
+// (pre-merge-only, #1702): development pushes must not start/leave a
+// gate-evidence run; the check materializes at the verdict points. NOTE: GitHub Actions has NO
 // `pull_request_review_thread` workflow trigger (thread resolve/unresolve is a
 // webhook but not an `on:` event); using it makes the whole workflow file
 // server-side-invalid, so it must never be added.
