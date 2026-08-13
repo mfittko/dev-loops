@@ -137,6 +137,17 @@ describe("fingerprintRequestPrefix — complete observable prefix (Section A/AC-
     assert.throws(() => fingerprintRequestPrefix({ ...base, tools: "read" }));
     assert.throws(() => fingerprintRequestPrefix({ ...base, contentBlocks: "x" }));
   });
+
+  test("invalid cacheBoundary / ttlIntent fail closed instead of folding an un-reproducible value", () => {
+    const base = { model: "m", tools: ["read"] };
+    assert.throws(() => fingerprintRequestPrefix({ ...base, cacheBoundary: "5min" }));
+    assert.throws(() => fingerprintRequestPrefix({ ...base, ttlIntent: "5min" }));
+    // Valid enum values fold in cleanly.
+    assert.match(
+      fingerprintRequestPrefix({ ...base, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h" }).fingerprint,
+      /^sha256:[0-9a-f]{64}$/,
+    );
+  });
 });
 
 describe("fingerprintStablePrefix — AC-1: changing only gateState does not change the shared prefix", () => {
@@ -234,6 +245,27 @@ describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact"
       capabilities: { harness: "claude" },
     });
     assert.equal(b.planHash, plan.planHash);
+  });
+
+  test("sharedPrefixHash is normalized to canonical sha256:<hex> regardless of caller format", () => {
+    const rawHex = "e".repeat(64);
+    const prefixed = `sha256:${rawHex}`;
+    const withRaw = buildReviewDispatchPlan({ gate: "g", headSha: "abc1234", sharedPrefixHash: rawHex, requestGroups: [] });
+    const withPrefixed = buildReviewDispatchPlan({ gate: "g", headSha: "abc1234", sharedPrefixHash: prefixed, requestGroups: [] });
+    assert.equal(withRaw.sharedPrefixHash, prefixed);
+    assert.equal(withPrefixed.sharedPrefixHash, prefixed);
+    // Identical underlying bytes produce an identical plan (no mixed-format drift).
+    assert.equal(withRaw.planHash, withPrefixed.planHash);
+  });
+
+  test("requestPrefixFingerprint is normalized to canonical sha256:<hex>", () => {
+    const rawHex = "f".repeat(64);
+    const plan = buildReviewDispatchPlan({
+      gate: "g",
+      headSha: "abc1234",
+      requestGroups: [{ model: "m", requestPrefixFingerprint: rawHex, angles: ["a"] }],
+    });
+    assert.equal(plan.requestGroups[0].requestPrefixFingerprint, `sha256:${rawHex}`);
   });
 
   test("extra shadowing a plan key cannot mask a real pinned-field change", () => {
@@ -421,16 +453,20 @@ describe("partitionPrimerGroups — one primer group per model/request-prefix (S
     assert.equal(groups[0].primerForm, PRIMER_FORM_LEAD_REVIEWER);
   });
 
-  test("groups lacking a requestPrefixFingerprint partition by an opaque model key", () => {
+  test("groups lacking a requestPrefixFingerprint are NOT collapsed (fail-closed)", () => {
     const groups = partitionPrimerGroups([
       { model: "m", angles: ["a"], ttlIntent: "5m" },
       { model: "m", angles: ["b"], ttlIntent: "5m" },
       { model: "other", angles: ["c"], ttlIntent: "5m" },
     ]);
-    assert.equal(groups.length, 2);
-    const m = groups.find((g) => g.model === "m");
-    assert.equal(m.requestPrefixFingerprint, null);
-    assert.deepEqual([...m.groups.flatMap((g) => g.angles)].sort(), ["a", "b"]);
+    // Each fingerprint-less group forms its own partition — without a proven
+    // prefix, two 'm' groups cannot be shown to share a cache-relevant prefix,
+    // so merging them would let one primer silently cover unknown prefixes.
+    assert.equal(groups.length, 3);
+    const mGroups = groups.filter((g) => g.model === "m");
+    assert.equal(mGroups.length, 2);
+    for (const g of groups) assert.equal(g.requestPrefixFingerprint, null);
+    assert.deepEqual([...mGroups.map((g) => g.groups[0].angles[0])].sort(), ["a", "b"]);
   });
 });
 
@@ -447,5 +483,13 @@ describe("sha256Hex — deterministic hashing + opaque markers", () => {
 
   test("opaqueMarker marks harness-owned values as unverifiable", () => {
     assert.match(opaqueMarker("model"), /^__opaque:/);
+  });
+
+  test("nested Buffers are canonicalized to hex (not Buffer.toJSON data array)", () => {
+    const a = sha256Hex({ bytes: Buffer.from("hello"), label: "x" });
+    // Same bytes reconstructed identically -> identical hash (memory vs disk).
+    assert.equal(a, sha256Hex({ bytes: Buffer.from("hello"), label: "x" }));
+    // A Buffer and an identical hex string must NOT collide (prefix disambiguates).
+    assert.notEqual(a, sha256Hex({ bytes: "hello", label: "x" }));
   });
 });

@@ -193,6 +193,11 @@ const isPlainObject = (v) =>
 /** Recursively sort object keys for a byte-deterministic serialization. */
 function stableStringify(value) {
   if (Array.isArray(value)) return value.map(stableStringify);
+  // Canonicalize nested Buffers to hex (the `__buffer:` prefix keeps a Buffer
+  // distinct from a string that happens to equal its hex, so bytes and text can
+  // never collide). Mirrors sha256Hex's top-level Buffer handling so a push/pull
+  // through memory vs disk yields identical bytes even for nested buffers.
+  if (Buffer.isBuffer(value)) return `__buffer:${value.toString("hex")}`;
   if (isPlainObject(value)) {
     const out = {};
     for (const key of Object.keys(value).sort()) out[key] = stableStringify(value[key]);
@@ -239,6 +244,18 @@ export function fingerprintRequestPrefix(input) {
   if (input.contentBlocks != null && !Array.isArray(input.contentBlocks)) {
     throw new Error("fingerprintRequestPrefix contentBlocks must be an array");
   }
+  // Fail closed on out-of-enum cacheBoundary/ttlIntent: a caller typo would
+  // fold an undefinable value into the fingerprint that no other caller could
+  // ever reproduce/validate, silently undermining the mechanically-checkable
+  // contract (AC-2 parity with validateRequestGroups).
+  const boundary = input.cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX;
+  const ttl = input.ttlIntent ?? "harness_managed";
+  if (!CACHE_BOUNDARY_VALUES.includes(boundary)) {
+    throw new Error(`fingerprintRequestPrefix invalid cacheBoundary ${JSON.stringify(boundary)}`);
+  }
+  if (!TTL_INTENT_VALUES.includes(ttl)) {
+    throw new Error(`fingerprintRequestPrefix invalid ttlIntent ${JSON.stringify(ttl)}`);
+  }
   const canonical = {
     model: input.model.trim(),
     tools: input.tools ?? [],
@@ -246,8 +263,8 @@ export function fingerprintRequestPrefix(input) {
     settings: input.settings ?? null,
     contentBlocks: input.contentBlocks ?? null,
     sharedArtifact: input.sharedArtifact ?? null,
-    cacheBoundary: input.cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
-    ttlIntent: input.ttlIntent ?? "harness_managed",
+    cacheBoundary: boundary,
+    ttlIntent: ttl,
     // angleSuffix is excluded from the STABLE prefix fingerprint but, when the
     // caller marks it invasive, it IS folded into this full request-prefix
     // fingerprint so the claimed difference stays assertable.
@@ -379,6 +396,13 @@ export function buildReviewDispatchPlan({ gate, headSha, sharedPrefixPath, share
   if (sharedPrefixHash != null && !isSha256Hex(String(sharedPrefixHash).replace(/^sha256:/, ""))) {
     throw new Error(`sharedPrefixHash must be sha256:<64 hex> or absent, got ${JSON.stringify(sharedPrefixHash)}`);
   }
+  // Normalize the stored artifact to a single canonical `sha256:<hex>` form so
+  // the plan (and its planHash) never depends on whether the caller passed a
+  // raw 64-hex string or an already-prefixed one for identical bytes (mixed-
+  // format artifacts are byte-non-deterministic across callers).
+  const normalizedSharedPrefixHash = sharedPrefixHash != null
+    ? `sha256:${String(sharedPrefixHash).replace(/^sha256:/, "").trim().toLowerCase()}`
+    : null;
   const groups = validateRequestGroups(requestGroups);
   let caps = capabilities;
   if (caps != null) {
@@ -395,7 +419,7 @@ export function buildReviewDispatchPlan({ gate, headSha, sharedPrefixPath, share
     gate,
     headSha: headSha.trim().toLowerCase(),
     ...(sharedPrefixPath != null ? { sharedPrefixPath } : {}),
-    ...(sharedPrefixHash != null ? { sharedPrefixHash: String(sharedPrefixHash) } : {}),
+    ...(normalizedSharedPrefixHash != null ? { sharedPrefixHash: normalizedSharedPrefixHash } : {}),
     requestGroups: groups,
     ...(caps != null ? { capabilities: caps } : {}),
   };
@@ -414,10 +438,16 @@ function validateRequestGroups(requestGroups) {
     if (typeof g.model !== "string" || g.model.trim().length === 0) {
       throw new Error(`requestGroups[${i}].model must be a non-empty concrete model`);
     }
-    const fp = typeof g.requestPrefixFingerprint === "string" ? g.requestPrefixFingerprint.trim() : null;
-    if (fp != null && !isSha256Hex(fp.replace(/^sha256:/, ""))) {
+    const fpRaw = typeof g.requestPrefixFingerprint === "string" ? g.requestPrefixFingerprint.trim() : null;
+    if (fpRaw != null && !isSha256Hex(fpRaw.replace(/^sha256:/, ""))) {
       throw new Error(`requestGroups[${i}].requestPrefixFingerprint must be sha256:<hex> or absent`);
     }
+    // Normalize to a single canonical `sha256:<hex>` form (same rationale as
+    // sharedPrefixHash) so the grouping/partition logic and the plan artifact
+    // see byte-identical fingerprints regardless of caller format.
+    const fp = fpRaw != null
+      ? `sha256:${fpRaw.replace(/^sha256:/, "").toLowerCase()}`
+      : null;
     const cacheBoundary = g.cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX;
     if (!CACHE_BOUNDARY_VALUES.includes(cacheBoundary)) {
       throw new Error(`requestGroups[${i}] invalid cacheBoundary ${JSON.stringify(cacheBoundary)}`);
@@ -431,7 +461,7 @@ function validateRequestGroups(requestGroups) {
     }
     return Object.freeze({
       model: g.model.trim(),
-      ...(fp != null ? { requestPrefixFingerprint: fp } : {}),
+      ...(fpRaw != null ? { requestPrefixFingerprint: fp } : {}),
       cacheBoundary,
       ttlIntent,
       angles: [...new Set(g.angles.map(String))],
@@ -495,18 +525,28 @@ export function resolvePrimerForm({ capabilities, ttlIntent } = {}) {
 export function partitionPrimerGroups(requestGroups, capabilities = {}) {
   if (!Array.isArray(requestGroups)) throw new Error("partitionPrimerGroups requires an array");
   // One primer group per distinct (model, request-prefix) — a primer warms ONE
-  // concrete model's provider cache under a specific request prefix, so two
-  // groups cannot share a primer even when their fingerprints coincide. Use a
-  // nested Map keyed by model then by fingerprint (never a single delimiter-joined
+  // concrete model's provider cache under a specific request prefix. Groups that
+  // share a model AND a real (`sha256:<hex>`) fingerprint collapse into one
+  // bucket; groups without a proven fingerprint never collapse (see below). Use
+  // a nested Map keyed by model then by fingerprint (never a single delimiter-joined
   // string), so a model id that itself contains "::" stays intact and two distinct
   // (model, fp) pairs can never collide onto one bucket (dedup/identity safety).
   const byModel = new Map();
-  for (const g of requestGroups) {
+  for (let i = 0; i < requestGroups.length; i++) {
+    const g = requestGroups[i];
     if (!byModel.has(g.model)) byModel.set(g.model, new Map());
     const fpMap = byModel.get(g.model);
-    const fp = g.requestPrefixFingerprint ?? opaqueMarker(`model:${g.model}`);
-    if (!fpMap.has(fp)) fpMap.set(fp, []);
-    fpMap.get(fp).push(g);
+    // Fail closed: only groups carrying a REAL (`sha256:<hex>`) fingerprint may
+    // share a primer bucket (that proves a common cache-relevant prefix). A
+    // fingerprint-less group is keyed by its own index so it NEVER collapses
+    // with another — without a fingerprint you cannot prove two groups share the
+    // same prefix, so merging them would let one primer silently cover multiple
+    // unknown prefixes (at best wasted priming, at worst misleading evidence).
+    const hasRealFp = typeof g.requestPrefixFingerprint === "string"
+      && g.requestPrefixFingerprint.startsWith("sha256:");
+    const key = hasRealFp ? g.requestPrefixFingerprint : `__unkeyed:${i}`;
+    if (!fpMap.has(key)) fpMap.set(key, []);
+    fpMap.get(key).push(g);
   }
   const out = [];
   for (const [model, fpMap] of byModel.entries()) {
