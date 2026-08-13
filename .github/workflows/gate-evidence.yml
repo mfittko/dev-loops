@@ -36,7 +36,7 @@ name: Gate evidence
 # The stale-PENDING direction (#1702) is closed two ways. First, the check is
 # now PRE-MERGE-ONLY: `synchronize` is NOT a trigger, so development pushes do
 # not start/leave a gate-evidence run and the check materializes only at a
-# pre-merge/verdict point (ready_for_review / reopened / a posted-or-edited
+# pre-merge/verdict point (opened / reopened / ready_for_review / a posted-or-edited
 # verdict review / a verdict-shaped issue comment). Second, a run NEVER posts a
 # `pending` status: it always posts a definitive success/failure for the
 # current head. Because the workflow only fires at a merge-decision moment, the
