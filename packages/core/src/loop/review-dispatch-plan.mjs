@@ -265,9 +265,9 @@ export function fingerprintRequestPrefix(input) {
     sharedArtifact: input.sharedArtifact ?? null,
     cacheBoundary: boundary,
     ttlIntent: ttl,
-    // angleSuffix is excluded from the STABLE prefix fingerprint but, when the
-    // caller marks it invasive, it IS folded into this full request-prefix
-    // fingerprint so the claimed difference stays assertable.
+    // angleSuffix is excluded from the STABLE prefix fingerprint but is always
+    // folded into this full request-prefix fingerprint when present, so the
+    // claimed volatile difference stays assertable.
     ...(input.angleSuffix != null ? { angleSuffix: input.angleSuffix } : {}),
   };
   return { fingerprint: sha256Hex(canonical), canonical };
@@ -518,9 +518,12 @@ export function resolvePrimerForm({ capabilities, ttlIntent } = {}) {
   const caps = capabilities ?? {};
   const adequateTtl = ttlIntent === "5m" || ttlIntent === "1h";
   if (caps.barrierSignal === "first_output" && (adequateTtl || caps.cacheTtlControl === "5m_1h")) {
+    const reason = adequateTtl
+      ? "barrierSignal=first_output and an adequate TTL is available — a real lead reviewer may prime the group"
+      : "barrierSignal=first_output with cacheTtlControl=5m_1h capability — a real lead reviewer fits the cache control window";
     return {
       primerForm: PRIMER_FORM_LEAD_REVIEWER,
-      reason: "barrierSignal=first_output and an adequate TTL is available — a real lead reviewer may prime the group",
+      reason,
     };
   }
   if (caps.barrierSignal === "completion_only" && caps.cacheTtlControl === "5m_1h" && ttlIntent === "1h") {
