@@ -347,6 +347,11 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     env,
     cwd: resolvedRepoRoot,
     claimIfMissing: true,
+    // #1706: a confirmed-dead or stale competing claim (recorded exit signal or
+    // past the stale-max-age window) is taken over so pre-flight handoff proceeds
+    // instead of returning a blocking stop against a leaked lock. Genuinely live
+    // owners still stand this handoff down (one-runner-per-PR preserved).
+    supersedeStale: true,
   });
   if (!runnerOwnership.ok) {
     return {

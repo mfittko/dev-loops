@@ -533,6 +533,18 @@ Integration notes:
 - `copilot-pr-handoff.mjs` uses this surface for async run ownership checks
 - `detect-checkpoint-evidence.mjs` uses strict ownership assertion before async merge-time gate evaluation
 
+Release-on-death & dead-claim supersession (#1706):
+- A run that ends without an explicit `release` still must not leave a leaky lock that blocks the
+  next legitimately-dispatched run. `_pr-runner-coordination.mjs` exposes an exit-signal record
+  (`recordExitSignalForRunner`) plus a process-exit sweep (`releaseRunClaimsOnExit`) that the
+  headless dev-loop driver invokes after its spawned run terminates (completed/killed/timed out/
+  crashed).
+- `ensureAsyncRunnerOwnership(..., { supersedeStale: true })` — used by `copilot-pr-handoff` — takes
+  over a competing claim whose owning run is **confirmed dead** (exit signal recorded) or past the
+  stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
+  leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
+  only confirmed-dead or stale claims are superseded.
+
 ### `scripts/loop/run-watch-cycle.mjs`
 
 Deterministic handoff → watch helper for one Copilot wait-cycle boundary.

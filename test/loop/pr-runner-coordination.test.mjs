@@ -13,7 +13,9 @@ import {
   defaultRunnerCoordinationFilePathForTarget,
   ensureAsyncRunnerOwnership,
   loadRunnerCoordinationState,
+  recordExitSignalForRunner,
   releaseAsyncRunnerOwnership,
+  releaseRunClaimsOnExit,
   releaseRunnerOwnership,
   RUNNER_COORDINATION_HISTORY_LIMIT,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
@@ -393,6 +395,159 @@ test("ensureAsyncRunnerOwnership auto-claims after release when no active owner 
     });
     assert.equal(strict.ok, false);
     assert.equal(strict.error, "ownership_missing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706: a run that dies without releasing (exit signal recorded) is treated as
+// confirmed-dead immediately; ensureAsyncRunnerOwnership with supersedeStale
+// takes the claim over so the next legitimately-dispatched run proceeds.
+test("ensureAsyncRunnerOwnership supersedes a dead run's claim when supersedeStale (exit signal)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir });
+    // run-dead dies without releasing — record its exit signal (confirmed death)
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    assert.equal(sig.ok, true);
+    assert.equal(sig.status, "exit_signal_recorded");
+
+    // live (default) supersedeStale=false → fail closed against the dead claim
+    const strict = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+    });
+    assert.equal(strict.ok, false);
+    assert.equal(strict.error, "ownership_lost");
+
+    // supersedeStale=true → the confirmed-dead claim is taken over
+    const superseded = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(superseded.ok, true);
+    assert.equal(superseded.status, "taken_over");
+    assert.equal(superseded.activeRun.runId, "run-next");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-next");
+    assert.equal(loaded.state.previousRun.runId, "run-dead");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706: a run whose claim has gone stale (no heartbeat past the max-age window)
+// is treated as dead; supersedeStale takes it over.
+test("ensureAsyncRunnerOwnership supersedes a stale claim when supersedeStale (staleness exceeded)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "60000"; // 1 minute
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 21,
+      runId: "run-stale",
+      cwd: tempDir,
+      now: new Date(Date.now() - 1000 * 60 * 10).toISOString(), // claimed 10 min ago
+    });
+
+    const superseded = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 21,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-fresh" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(superseded.ok, true);
+    assert.equal(superseded.status, "taken_over");
+    assert.equal(superseded.activeRun.runId, "run-fresh");
+  } finally {
+    if (prevMaxAge === undefined) {
+      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    } else {
+      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-3: supersedeStale must NOT supersede a genuinely live owner (no exit
+// signal, fresh claim) — one-runner-per-PR preserved for active work.
+test("ensureAsyncRunnerOwnership keeps a live owner (stand down) even with supersedeStale", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 23, runId: "run-live", cwd: tempDir, now: new Date().toISOString() });
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 23,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-wannabe" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "ownership_lost");
+    assert.equal(result.activeRun.runId, "run-live");
+
+    // Live owner's claim is untouched.
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 23, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-live");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-1: the release-on-process-exit sweep clears every claim owned by a
+// run (completed/killed/timed out/crashed) so no leaky lock blocks the next run.
+test("releaseRunClaimsOnExit clears all claims owned by a run on process exit", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-exit", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "run-exit", cwd: tempDir });
+    // A competing live run's claim must remain untouched.
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 19, runId: "run-other", cwd: tempDir });
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-exit", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 2);
+
+    const pr17 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    const pr18 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 18, cwd: tempDir });
+    const pr19 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 19, cwd: tempDir });
+    assert.equal(pr17.state.activeRun, null);
+    assert.equal(pr18.state.activeRun, null);
+    // Competing live run untouched.
+    assert.equal(pr19.state.activeRun.runId, "run-other");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit no-ops when no run id is present", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-x", cwd: tempDir });
+    const result = await releaseRunClaimsOnExit({ runId: "", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "skipped_no_async_run_id");
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-x");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

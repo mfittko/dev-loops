@@ -9,6 +9,7 @@ import {
   saveStateFile as saveSharedStateFile,
   withStateFileLock as withSharedStateFileLock,
 } from "./_steering-state-file.mjs";
+import { detectStaleRunner } from "./_stale-runner-detection.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
@@ -680,6 +681,7 @@ export async function ensureAsyncRunnerOwnership({
   cwd = process.cwd(),
   claimIfMissing = true,
   requireExisting = false,
+  supersedeStale = false,
 } = {}) {
   const runId = normalizeRunId(resolveRunId(env));
   if (runId === null) {
@@ -705,6 +707,18 @@ export async function ensureAsyncRunnerOwnership({
     return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "claim" });
   }
   if (asserted.error !== RUNNER_OWNERSHIP_ERROR.OWNERSHIP_MISSING) {
+    // A competing run holds the claim. With supersedeStale (handoff), a
+    // confirmed-dead owner — its run has a recorded exit signal, or its claim
+    // has gone stale past the max-age window — is taken over so the next
+    // legitimately-dispatched run proceeds instead of standing down on a
+    // leaked lock (#1706). A genuinely live owner stays fail-closed: the
+    // one-runner-per-PR invariant for active work is preserved.
+    if (supersedeStale) {
+      const stale = await detectStaleRunner({ repo, pr, cwd });
+      if (!stale.ok && stale.status !== "no_owner_record") {
+        return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "takeover" });
+      }
+    }
     return asserted;
   }
   return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "claim" });
@@ -778,4 +792,83 @@ export async function releaseAsyncRunnerOwnership({
       filePath,
     };
   }
+}
+
+/**
+ * Deterministic release-on-process-exit (#1706): best-effort clear of every
+ * runner-coordination claim owned by a run across all PRs under a coordination
+ * root.
+ *
+ * The headless dev-loop driver owns the spawned run's process boundary — when
+ * the spawned run terminates (completed, killed, timed out, or crashed) this
+ * scans the coordination root and releases each PR claim that THIS run still
+ * owns, so a dead run never leaves a leaky claim that blocks the next
+ * legitimately-dispatched run. Fail-closed competitor semantics are preserved:
+ * only claims owned by {@link runId} are cleared; a genuinely live competing
+ * run's claim is left intact.
+ *
+ * Coordination files live at `.pi/runner-coordination/<owner>/<name>/pr-<n>.json`.
+ * Best-effort/non-fatal by contract (mirrors {@link releaseAsyncRunnerOwnership}):
+ * an unreadable/parsing/lock failure is swallowed and reported, never thrown.
+ */
+export async function releaseRunClaimsOnExit({
+  runId,
+  root = process.cwd(),
+  readDir = fs.promises.readdir,
+  readFile = fs.promises.readFile,
+  releaseFn = releaseRunnerOwnership,
+} = {}) {
+  const normalizedRunId = normalizeRunId(runId);
+  if (normalizedRunId === null) {
+    return { ok: true, status: "skipped_no_async_run_id", released: [], failed: [] };
+  }
+  const coordinationRoot = path.join(root, ".pi", "runner-coordination");
+  let entries;
+  try {
+    entries = await readDir(coordinationRoot, { recursive: true });
+  } catch {
+    return { ok: true, status: "no_coordination_dir", released: [], failed: [], root };
+  }
+  const released = [];
+  const failed = [];
+  const prFiles = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => typeof entry === "string" && /pr-\d+\.json$/.test(path.basename(entry)))
+    .map((entry) => path.join(coordinationRoot, entry));
+  for (const filePath of prFiles) {
+    let raw;
+    try {
+      raw = await readFile(filePath, "utf8");
+    } catch {
+      failed.push({ filePath, prNumber: null, reason: "read_failed" });
+      continue;
+    }
+    let state;
+    try {
+      state = JSON.parse(raw);
+    } catch {
+      failed.push({ filePath, prNumber: null, reason: "parse_failed" });
+      continue;
+    }
+    if (state?.activeRun?.runId !== normalizedRunId) {
+      continue;
+    }
+    const relToRoot = path.relative(root, filePath);
+    const prMatch = path.basename(filePath).match(/^pr-(\d+)\.json$/);
+    const prNumber = prMatch ? Number(prMatch[1]) : null;
+    const parts = relToRoot.split(path.sep);
+    const repo = parts.length >= 4 && parts[0] === ".pi" && parts[1] === "runner-coordination"
+      ? `${parts[2]}/${parts[3]}`
+      : null;
+    if (repo === null || prNumber === null) {
+      failed.push({ filePath, prNumber, reason: "bad_path" });
+      continue;
+    }
+    try {
+      const result = await releaseFn({ repo, pr: prNumber, runId: normalizedRunId, cwd: root, filePath });
+      released.push({ filePath, prNumber, status: result?.status ?? "released" });
+    } catch {
+      failed.push({ filePath, prNumber, reason: "release_failed" });
+    }
+  }
+  return { ok: true, status: "released", released, failed, root };
 }

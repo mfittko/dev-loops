@@ -28,6 +28,7 @@ import {
   buildHeadlessClaudeInvocation,
   DEFAULT_CLAUDE_BIN,
 } from "@dev-loops/core/claude/headless-entry";
+import { releaseRunClaimsOnExit } from "../loop/_pr-runner-coordination.mjs";
 
 function parseCliArgs(argv) {
   const opts = { dryRun: false, claudeBin: DEFAULT_CLAUDE_BIN };
@@ -90,7 +91,7 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-function main(argv) {
+async function main(argv) {
   let opts;
   try {
     opts = parseCliArgs(argv);
@@ -123,7 +124,22 @@ function main(argv) {
     );
     return 127;
   }
+  // #1706: the spawned run's process has now terminated (completed, killed,
+  // timed out, or crashed) — deterministically release every coordination claim
+  // this run still owns so a dead run never leaves a leaky lock. Best-effort
+  // and non-fatal; the driver's exit status is never altered by a failed sweep.
+  if (!opts.dryRun) {
+    try {
+      await releaseRunClaimsOnExit({ runId, root: repoRoot });
+    } catch {
+      // swallow; never let a failed sweep change the driver exit status
+    }
+  }
   return res.status ?? 1;
 }
 
-process.exit(main(process.argv.slice(2)));
+main(process.argv.slice(2)).then((code) => {
+  process.exit(code ?? 1);
+}).catch(() => {
+  process.exit(1);
+});
