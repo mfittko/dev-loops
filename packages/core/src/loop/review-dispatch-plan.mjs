@@ -309,7 +309,15 @@ export function fingerprintStablePrefix({ stablePrefix, briefingBlock, cacheBoun
   const stableFingerprint = sha256Hex({ stablePrefix: parts[0], briefingBlock: parts[1] });
   return {
     stableFingerprint,
-    briefedBytes: JSON.stringify({ cacheBoundary: cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: ttlIntent ?? "harness_managed", stableBytes: parts }),
+    // Canonicalize through stableStringify so a Buffer stablePrefix/briefingBlock
+    // becomes `__buffer:<hex>` here too — raw JSON.stringify would expand Buffers
+    // into large {type:"Buffer",data:[…]} decimal arrays (byte-unstable + costly),
+    // reintroducing exactly what sha256Hex avoids.
+    briefedBytes: JSON.stringify(stableStringify({
+      cacheBoundary: cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+      ttlIntent: ttlIntent ?? "harness_managed",
+      stableBytes: parts,
+    })),
   };
 }
 
@@ -338,11 +346,21 @@ export function fingerprintStablePrefix({ stablePrefix, briefingBlock, cacheBoun
  */
 export function composeCacheAwareRequest({ stablePrefix, briefingBlock, volatileState, angleSuffix, cacheBoundary, ttlIntent } = {}) {
   const boundary = cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX;
+  const ttl = ttlIntent ?? "harness_managed";
+  // Fail closed on out-of-enum cacheBoundary/ttlIntent (parity with
+  // fingerprintRequestPrefix / validateRequestGroups) so a caller typo cannot
+  // silently flow into the returned structure and break later parity checks.
+  if (!CACHE_BOUNDARY_VALUES.includes(boundary)) {
+    throw new Error(`composeCacheAwareRequest invalid cacheBoundary ${JSON.stringify(boundary)}`);
+  }
+  if (!TTL_INTENT_VALUES.includes(ttl)) {
+    throw new Error(`composeCacheAwareRequest invalid ttlIntent ${JSON.stringify(ttl)}`);
+  }
   const { stableFingerprint, briefedBytes } = fingerprintStablePrefix({
     stablePrefix,
     briefingBlock,
     cacheBoundary: boundary,
-    ttlIntent: ttlIntent ?? "harness_managed",
+    ttlIntent: ttl,
   });
   const late = (typeof volatileState === "object" && volatileState !== null && !Buffer.isBuffer(volatileState))
     ? JSON.stringify(volatileState)
@@ -351,9 +369,13 @@ export function composeCacheAwareRequest({ stablePrefix, briefingBlock, volatile
     { slot: "stablePrefix", bytes: stablePrefix ?? "" },
     { slot: "briefingBlock", bytes: briefingBlock ?? "" },
   ];
-  // The cache boundary sits AFTER the stable prefix + briefing block.
+  // The cache boundary sits AFTER the stable prefix + briefing block. The marker
+  // segment is a structural pointer, NOT request bytes: it is byte-empty so a
+  // consumer concatenating segment bytes never injects the boundary label into
+  // the provider-visible prompt (the label lives in the separate cacheBoundary
+  // field).
   const boundaryIndex = segments.length;
-  segments.push({ slot: "<cache boundary>", bytes: boundary });
+  segments.push({ slot: "<cache boundary>", bytes: "" });
   if (late.length > 0) segments.push({ slot: "volatileState", bytes: late });
   if (angleSuffix != null && String(angleSuffix).length > 0) {
     segments.push({ slot: "angleSuffix", bytes: String(angleSuffix) });

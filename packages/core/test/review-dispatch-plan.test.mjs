@@ -199,6 +199,31 @@ describe("composeCacheAwareRequest — stable/volatile separation (Section B)", 
     assert.deepEqual(r.segments.map((s) => s.slot), ["stablePrefix", "briefingBlock", "<cache boundary>"]);
   });
 
+  test("cache-boundary marker segment is byte-empty (no label leaked into request bytes)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing });
+    const marker = r.segments[r.boundaryIndex];
+    assert.equal(marker.slot, "<cache boundary>");
+    assert.equal(marker.bytes, "", "boundary label must not be injected into provider-visible prompt bytes");
+    // The label still lives in the separate cacheBoundary field.
+    assert.equal(r.cacheBoundary, CACHE_BOUNDARY_AFTER_SHARED_PREFIX);
+  });
+
+  test("invalid cacheBoundary / ttlIntent fail closed in composeCacheAwareRequest", () => {
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, cacheBoundary: "5min" }));
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, ttlIntent: "forever" }));
+  });
+
+  test("briefedBytes canonicalizes a Buffer stablePrefix (no Buffer.toJSON data array)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing });
+    assert.ok(!r.briefedBytes.includes('"type":"Buffer"'), "nested Buffer must not expand into a decimal data array");
+    assert.ok(r.briefedBytes.includes("__buffer:"), "nested Buffer canonicalized to a hex marker");
+    // Byte-deterministic across identical Buffer bytes.
+    assert.equal(
+      r.briefedBytes,
+      composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing }).briefedBytes,
+    );
+  });
+
   test("stable fingerprint is unchanged by volatile/angle changes (AC-1 + AC-3)", () => {
     const base = { stablePrefix, briefingBlock: briefing };
     const withVolatile = composeCacheAwareRequest({ ...base, volatileState: { tag: "x" } }).stableFingerprint;
