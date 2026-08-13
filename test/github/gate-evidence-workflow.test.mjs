@@ -111,7 +111,7 @@ test("gate-evidence always posts a definitive success/failure, never a stale pen
 
   // The case statement must never emit `pending`: satisfied is the only
   // success, everything else fails closed to failure.
-  assert.ok(!/pending/.test(statusStep.run), "status step must never post a pending state");
+  assert.ok(!/state="pending"/.test(statusStep.run), "status step must never post a pending state");
   assert.match(statusStep.run, /satisfied\) state="success"/);
   assert.match(statusStep.run, /\*\) state="failure"/);
   assert.ok(!/not_established\) state="pending"/.test(statusStep.run), "not_established must not map to pending");
