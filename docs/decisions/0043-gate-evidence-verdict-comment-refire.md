@@ -15,12 +15,3 @@ The workflow also triggers on `issue_comment` (`created`, `edited`), gated at th
 ## Consequences
 
 Posting a gate verdict is now itself the deterministic re-fire, closing the stale-PENDING deadlock without manual review-event nudges. Trusted-base evaluation closes the workflow's previously documented self-reported head-provenance caveat (its header's "a PR could edit this file or the detector to forge a green check on itself") — the detector that computes the verdict can no longer be supplied by the PR under evaluation — at the cost that detector changes take effect for these runs only once merged. Two bounded residuals are accepted: a transient failure of the facts step's single (retried) API call ends the run with no status, leaving the prior status standing until the next verdict post/edit; and a gate-comment on a draft PR can join the concurrency group and cancel an in-flight evaluation while itself posting nothing, re-established by the next verdict event.
-
-## Amendment — 2026 (#1702): pre-merge-only + always-definitive status
-
-A residual stale-PENDING still surfaced: a run that computed `not_established` posted a `pending` status, and if nothing re-fired afterwards the required check dangled pending — a satisfied-but-unmergeable PR (live on PR #1687). #1702 tightened the trigger and the mapping so a completed run can never leave a `pending`:
-
-- `synchronize` (a development push) is removed from the trigger set — the check is pre-merge-only, so it materializes only at `ready_for_review` / a verdict-post / a verdict-shaped issue comment.
-- The status mapping is now definitive-only: `satisfied` → `success`; `not_established`, `violation`, and missing/parse errors all fail closed to `failure`. Because the workflow only fires at a merge-decision moment, `not_established` is a decisive "no clean verdict for this head yet" that the next verdict-post re-fires to `success` — never a dangling pending.
-
-Server-side security (default-branch-pinned trusted detector, explicit head-SHA status target, base-repo `statuses: write` fork-forging guard) is unchanged.
