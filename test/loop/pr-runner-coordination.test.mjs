@@ -553,6 +553,77 @@ test("releaseRunClaimsOnExit no-ops when no run id is present", async () => {
   }
 });
 
+// #1706: the release-on-death sweep must anchor at the git-common-dir root
+// (resolveRepoCoordinationRoot) the claims are actually stored under, NOT a
+// naive path.join(root, ".pi", ...). In a linked worktree the run's claims
+// live in the MAIN repo's .pi (common dir), so a worktree-cwd sweep that scans
+// the worktree's own .pi would miss them and leak the lock.
+test("releaseRunClaimsOnExit anchors at the git-common-dir root (linked worktree)", async () => {
+  const { repoRoot, wtPath } = await makeRepoWithWorktree();
+
+  try {
+    // Claim under the WORKTREE cwd — claims are stored at the common-dir root.
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-wt", cwd: wtPath });
+    const claimPath = defaultRunnerCoordinationFilePathForTarget(
+      { repo: "owner/repo", pr: 31 },
+      wtPath,
+    );
+    assert.ok(
+      claimPath.startsWith(path.join(realpathSync(repoRoot), ".pi")),
+      "claim must live under the main repo's .pi (git-common-dir anchored), not the worktree's",
+    );
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-wt", root: wtPath });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 1);
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 31, cwd: wtPath });
+    assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(wtPath, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit reports no_coordination_dir when the root is absent", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-missing-"));
+  try {
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "no_coordination_dir");
+    assert.deepEqual(result.released, []);
+    assert.deepEqual(result.failed, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit records parse_failed on a corrupt claim file and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-corrupt-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 41, runId: "run-a", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 42, runId: "run-a", cwd: tempDir });
+    // Corrupt one of the two claim files.
+    const corruptPath = defaultRunnerCoordinationFilePathForTarget(
+      { repo: "owner/repo", pr: 42 },
+      tempDir,
+    );
+    await writeFile(corruptPath, "{ not-json", "utf8");
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-a", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    // The healthy claim is released; the corrupt one is recorded as parse_failed,
+    // never thrown, and the sweep keeps going.
+    assert.equal(result.released.length, 1);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].reason, "parse_failed");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // End-to-end CLI proof of the shared --jq/--silent output helper (issue #981).
 // `status` needs no run-id and no gh, so it is a clean read-script vehicle.
 const cliScript = path.resolve("scripts/loop/pr-runner-coordination.mjs");

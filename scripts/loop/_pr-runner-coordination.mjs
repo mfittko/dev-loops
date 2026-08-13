@@ -822,7 +822,14 @@ export async function releaseRunClaimsOnExit({
   if (normalizedRunId === null) {
     return { ok: true, status: "skipped_no_async_run_id", released: [], failed: [] };
   }
-  const coordinationRoot = path.join(root, ".pi", "runner-coordination");
+  // Anchor at the same git-common-dir root the claims are stored under
+  // (#1706): in a linked worktree the coordination dir lives in the MAIN
+  // repo's .pi (git common dir), not under the worktree cwd, so a naive
+  // path.join(root, ".pi", ...) would scan the wrong location and miss the
+  // run's own claims. resolveRepoCoordinationRoot handles the common-dir
+  // anchoring and falls back to the canonicalized cwd for non-git dirs.
+  const repoBase = resolveRepoCoordinationRoot(root);
+  const coordinationRoot = path.join(repoBase, ".pi", "runner-coordination");
   let entries;
   try {
     entries = await readDir(coordinationRoot, { recursive: true });
@@ -852,7 +859,7 @@ export async function releaseRunClaimsOnExit({
     if (state?.activeRun?.runId !== normalizedRunId) {
       continue;
     }
-    const relToRoot = path.relative(root, filePath);
+    const relToRoot = path.relative(repoBase, filePath);
     const prMatch = path.basename(filePath).match(/^pr-(\d+)\.json$/);
     const prNumber = prMatch ? Number(prMatch[1]) : null;
     const parts = relToRoot.split(path.sep);
