@@ -81,6 +81,23 @@ const ORPHAN_ALLOWLIST = new Map([
 ]);
 
 // Curated predicate orphans: `scripts/...` -> { export, disposition }.
+// The predicate ratchet covers named-EXPORT predicate orphans only: an `export
+// (async )function <name>` inside an otherwise-wired script that has no non-test
+// import. This matches AC1's "exported CLI/predicate entry points" scope.
+//
+// The issue's other named orphans that are NOT exported predicates are
+// intentionally NOT ratcheted here, and are documented as acknowledged
+// exclusions rather than silently dropped:
+//   - `localPhaseDocAllowed` (scripts/github/resolve-tracker-local-spec.mjs:188) is
+//     an output FIELD (`false`), not an exported predicate, so the named-export
+//     scan cannot cover it; it is documented-standalone (README + tests) and left
+//     as a field-level acknowledged orphan, consistent with the non-goal of not
+//     extending this check to packages/core/src in this pass.
+//   - `gates.spike` is a config field defined in resolve-dev-loop-startup.mjs and
+//     referenced only by config tests; it is likewise a field, not an exported
+//     predicate, and is acknowledged rather than export-ratcheted.
+// Seeding an exported predicate here requires removing its entry once wired (the
+// STALE direction), exactly like the whole-script allowlist.
 const PREDICATE_ORPHANS = new Map([
   [
     "scripts/loop/check-retro-tooling.mjs",
@@ -220,7 +237,6 @@ test("every CLI entry point under scripts/ either has a non-test caller or is al
 
 test("seeded predicate orphans still exist and still have no non-test code importer (predicate ratchet)", async () => {
   const sources = await nonTestSources();
-  const entryByRel = new Map((await cliEntryPoints()).map((e) => [e.rel, e]));
 
   for (const [rel, { export: exportName, disposition }] of PREDICATE_ORPHANS) {
     assert.ok(disposition && disposition.trim().length > 0, `predicate entry ${rel} needs a one-line disposition`);
@@ -231,13 +247,11 @@ test("seeded predicate orphans still exist and still have no non-test code impor
     let importer = null;
     for (const source of sources) {
       const scode = await read(source);
-      const st = importFromStatements(scode).find((s) => namedImportRe.test(s.statement));
-      if (st) {
-        const target = path.resolve(path.dirname(source), st.spec);
-        if (target === script) {
-          importer = path.relative(REPO_ROOT, source);
-          break;
-        }
+      const namedStmt = importFromStatements(scode).find((s) => namedImportRe.test(s.statement));
+      if (!namedStmt) continue;
+      if (resolveRelativeImportTargets(scode, source).includes(script)) {
+        importer = path.relative(REPO_ROOT, source);
+        break;
       }
     }
     assert.ok(exportStillExists, `predicate orphan ${rel}::${exportName} no longer exists — delete its PREDICATE_ORPHANS entry`);
