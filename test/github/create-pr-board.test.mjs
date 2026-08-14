@@ -9,6 +9,24 @@ import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
+// #1629: linked-PR guard response with NO open linked PR — the happy path a
+// closing-keyword create hits first (detectLinkedIssuePr graphql call) before
+// the `gh pr create` call.
+function graphqlNoLinkedPrPayload() {
+  return `${JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+        },
+      },
+    },
+  })}\n`;
+}
+
 // mockRunChild mirrors test/projects/add-queue-item.test.mjs's fixture style: a
 // sequential list of canned gh-graphql responses, bypassing any real subprocess.
 function mockRunChild(responses) {
@@ -292,7 +310,10 @@ test("create-pr --lightweight on an issue-less body enqueues the new PR board it
 test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-identical: no board call (AC2)", async () => {
   await withTempDir(async (tempDir) => {
     await writeDevloopsProjectNumber(tempDir, 7);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }], { logCalls: true });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/42\n" },
+    ], { logCalls: true });
 
     const result = await runNode(
       ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes #9", "--lightweight"],
@@ -303,7 +324,8 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
-    assert.equal(ghCalls.length, 1); // gh pr create only — no board calls
+    // linked-PR probe + gh pr create — no board calls
+    assert.equal(ghCalls.length, 2);
   });
 });
 

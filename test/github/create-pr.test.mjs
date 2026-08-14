@@ -26,6 +26,52 @@ async function readGhCalls(logPath) {
   return lines.map((line) => JSON.parse(line));
 }
 
+// #1629: linked-PR guard response with NO open linked PR — the happy path a
+// closing-keyword create hits first (detectLinkedIssuePr graphql call) before
+// the `gh pr create` call.
+function graphqlNoLinkedPrPayload() {
+  return `${JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+        },
+      },
+    },
+  })}\n`;
+}
+
+// #1629: linked-PR guard response with ONE open linked PR.
+function graphqlSingleLinkedPrPayload({ number, url, state = "OPEN" }) {
+  return `${JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                __typename: "ConnectedEvent",
+                createdAt: "2026-05-01T10:00:00Z",
+                subject: {
+                  __typename: "PullRequest",
+                  number,
+                  state,
+                  url,
+                  repository: { nameWithOwner: "owner/repo" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  })}\n`;
+}
+
 // --- detectClosingKeyword unit tests ---
 
 test("detectClosingKeyword returns true for Closes #123 in body", () => {
@@ -76,6 +122,7 @@ test("create-pr --issue <n> with a matching Closes #n succeeds and forwards args
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-match-"));
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/1\n" },
     ]);
     const result = await runNode([
@@ -89,9 +136,9 @@ test("create-pr --issue <n> with a matching Closes #n succeeds and forwards args
     ], { env });
     assert.equal(result.code, 0, result.stderr);
     const ghCalls = await readGhCalls(ghLogPath);
-    assert.equal(ghCalls.length, 1);
+    assert.equal(ghCalls.length, 2);
     // --issue is consumed by the wrapper, never forwarded to gh.
-    assert.equal(ghCalls[0].includes("--issue"), false);
+    assert.equal(ghCalls.every((call) => call.includes("--issue") === false), true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -194,6 +241,7 @@ test("create-pr --issue accepts the =inline form", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-inline-"));
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/1\n" },
     ]);
     const result = await runNode([
@@ -206,7 +254,7 @@ test("create-pr --issue accepts the =inline form", async () => {
       "--body", "Fixes #42",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal((await readGhCalls(ghLogPath))[0].includes("--issue"), false);
+    assert.equal((await readGhCalls(ghLogPath)).every((call) => call.includes("--issue") === false), true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -219,6 +267,7 @@ test("create-pr --body with closing keyword emits no stderr warning", async () =
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/1\n" },
     ]);
 
@@ -234,7 +283,7 @@ test("create-pr --body with closing keyword emits no stderr warning", async () =
     assert.equal(result.code, 0);
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
     assert.equal(result.stderr, "");
-    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -273,9 +322,10 @@ test("create-pr --body-file with closing keyword emits no stderr warning", async
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
-    await writeFile(bodyPath, "Fixes #456\n\nSome description here.", "utf8");
+    await writeFile(bodyPath, "Closes #123\n\nSome description here.", "utf8");
 
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/1\n" },
     ]);
 
@@ -291,7 +341,7 @@ test("create-pr --body-file with closing keyword emits no stderr warning", async
     assert.equal(result.code, 0);
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
     assert.equal(result.stderr, "");
-    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -488,6 +538,7 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       {
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
@@ -509,7 +560,9 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
-    assert.deepEqual(await readGhCalls(ghLogPath), [[
+    const ghCalls = await readGhCalls(ghLogPath);
+    assert.equal(ghCalls.length, 2);
+    assert.deepEqual(ghCalls[1], [
       "pr", "create",
       "--repo", "owner/repo",
       "--assignee", "@me",
@@ -519,7 +572,7 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
       "--body-file", bodyPath,
       "positional-token",
       "--draft",
-    ]]);
+    ]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -530,6 +583,7 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/17\n" },
     ]);
 
@@ -546,7 +600,9 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.deepEqual(await readGhCalls(ghLogPath), [[
+    const ghCalls = await readGhCalls(ghLogPath);
+    assert.equal(ghCalls.length, 2);
+    assert.deepEqual(ghCalls[1], [
       "pr", "create",
       "--repo", "owner/repo",
       "--base", "main",
@@ -555,7 +611,7 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
       "--body-file", bodyPath,
       "--assignee", "@me",
       "--draft",
-    ]]);
+    ]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -696,6 +752,201 @@ test("create-pr preserves gh stdout, stderr, and exit code on failure", async ()
     assert.deepEqual(await readGhCalls(ghLogPath), [[
       "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft",
     ]]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// --- #1629: linked-PR duplicate guard (FACADE-LINKED-PR-SINGLE-ARTIFACT) ---
+
+test("create-pr refuses a closing keyword whose issue already has an open linked PR, naming the prior PR (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-linked-refuse-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlSingleLinkedPrPayload({ number: 90, url: "https://github.com/owner/repo/pull/90" }) },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
+    assert.match(stderrPayload.error, /already has an open linked PR #90/);
+    // The create never reached gh: only the one linked-PR probe ran.
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --allow-replacement-pr <prior> matching the open linked PR lets the create through and records intent (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-replacement-allow-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlSingleLinkedPrPayload({ number: 90, url: "https://github.com/owner/repo/pull/90" }) },
+      { stdout: "https://github.com/owner/repo/pull/91\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+      "--allow-replacement-pr", "90",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "https://github.com/owner/repo/pull/91\n");
+    assert.match(result.stderr, /replacing linked PR #90/);
+    const ghCalls = await readGhCalls(ghLogPath);
+    assert.equal(ghCalls.length, 2);
+    // --allow-replacement-pr is consumed, never forwarded to gh.
+    assert.equal(ghCalls.every((call) => call.includes("--allow-replacement-pr") === false), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --allow-replacement-pr that does not match the open linked PR is still refused (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-replacement-mismatch-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlSingleLinkedPrPayload({ number: 90, url: "https://github.com/owner/repo/pull/90" }) },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+      "--allow-replacement-pr", "99",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr rejects a non-integer --allow-replacement-pr value before invoking gh (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-replacement-invalid-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+      "--allow-replacement-pr", "abc",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /--allow-replacement-pr must be a positive integer/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed on ambiguity when the linked-PR probe has no --repo (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-no-repo-guard-"));
+  try {
+    // repo probe cannot run without --repo; the create must not reach gh.
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
+    assert.match(stderrPayload.error, /--repo owner\/name was not provided/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed on ambiguity when --repo is empty/whitespace (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-empty-repo-guard-"));
+  try {
+    // An empty repo slug must be treated as missing, not sent to the network
+    // probe and misreported as "API unavailable" (copilot review finding).
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
+    assert.match(stderrPayload.error, /--repo owner\/name was not provided/);
+    assert.doesNotMatch(stderrPayload.error, /API was unavailable/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses a valueless bare --allow-replacement-pr token (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-replacement-bare-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+      "--allow-replacement-pr",
+    ], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /--allow-replacement-pr requires a positive integer/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed on ambiguity when the GitHub API is unavailable for the linked-PR probe (#1629)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-api-down-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "", stderr: "gh: API down", exitCode: 1 },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
+    assert.match(stderrPayload.error, /API was unavailable/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
