@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectGrillEmbedHeading, detectGrillMarker } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -237,9 +237,14 @@ export async function editPr(options, { env = process.env, ghCommand = "gh", run
   if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
     const body = await resolveBody(options);
     const heading = detectGrillEmbedHeading(body);
-    if (heading !== null) {
+    const marker = detectGrillMarker(body);
+    // Refuse a body that embeds raw grill transcript/synthesis/Q&A headings
+    // unless the sanctioned `<!-- loop-grill: ... -->` marker is present
+    // (GRILL-SUBLOOP-NO-EMBED-SYNTHESIS + the marker predicate, issue #1628).
+    if (heading !== null && !marker) {
       throw new Error(
-        `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS: PR body embeds grill material under heading \`## ${heading}\`; ` +
+        `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS: PR body embeds grill material under heading \`## ${heading}\` ` +
+        `without the sanctioned \`<!-- loop-grill: ... -->\` marker; ` +
         `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable PR body.`,
       );
     }

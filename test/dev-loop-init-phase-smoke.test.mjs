@@ -71,6 +71,11 @@ test("init-phase refuses the durable phase-doc mint for an issue-keyed (tracker)
     });
 
     assert.equal(result.trackerBacked, true, "issue-keyed worktree is detected as tracker-backed");
+    // Each refusal names the rule it upholds (AC6, #1628).
+    assert.ok(
+      result.refusals.some((r) => r.rule === "ARTIFACT-TRACKER-FIRST-NO-DUP"),
+      "tracker refusal names ARTIFACT-TRACKER-FIRST-NO-DUP",
+    );
     // No durable phase doc is minted.
     await assert.rejects(
       readFile(path.join(wtRoot, "docs", "phases", "phase-2.md"), "utf8"),

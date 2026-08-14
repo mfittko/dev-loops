@@ -311,6 +311,17 @@ test("editIssue: --enforce-grill does not refuse a clean body containing no gril
   assert.ok(calls.length === 1);
 });
 
+test("editIssue: --enforce-grill allows a grill embed heading when the sanctioned loop-grill marker is present (GRILL-SUBLOOP marker predicate consumed)", async () => {
+  const { run } = stubGh();
+  const result = await editIssue({
+    repo: "o/n", issue: 5,
+    body: "## Acceptance criteria\n\n- [ ] ac\n\n## Grill synthesis\n\n- findings here\n\n<!-- loop-grill: 2026-08-14 mode:interactive -->",
+    addAssignees: [], removeAssignees: [],
+    enforceGrill: true,
+  }, { run });
+  assert.equal(result.ok, true);
+});
+
 test("parseEditIssueCliArgs: --enforce-grill flag is wired", () => {
   const out = parseEditIssueCliArgs(["--repo", "o/n", "--issue", "5", "--title", "x", "--enforce-grill"]);
   assert.equal(out.enforceGrill, true);

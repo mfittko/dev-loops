@@ -74,6 +74,13 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
     ...result,
     generated: outputs.map(([, outputPath]) => path.relative(projectRoot, outputPath)),
     trackerBacked,
+    // Each refusal names the rule it upholds (AC6, #1628). The tracker-backed
+    // durable phase-doc mint is refused by making the caller aware of the rule
+    // it upholds (ARTIFACT-TRACKER-FIRST-NO-DUP) rather than dropping the file
+    // silently.
+    refusals: trackerBacked
+      ? [{ rule: "ARTIFACT-TRACKER-FIRST-NO-DUP", reason: "tracker-backed (issue-keyed) worktree; refusing durable phase-doc mint" }]
+      : [],
   };
 }
 
