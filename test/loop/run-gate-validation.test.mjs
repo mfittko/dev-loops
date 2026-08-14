@@ -347,13 +347,22 @@ test("--help documents the shared --jq/--silent flags", async () => {
 // Dependency-state stamp (#1627)
 // ---------------------------------------------------------------------------
 
-test("buildValidationArtifact: stamps depState synced when installed deps match the lockfile", async () => {
+test("buildValidationArtifact: stamps depState synced when installed deps match the lockfile (npm-shaped)", async () => {
   const { repoRoot } = await makeFixtureRepo();
   try {
     await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
-    const lock = JSON.stringify({ lockfileVersion: 3, name: "fixture" });
+    // npm-realistic: the committed lock carries the root entry + deps; the hidden
+    // installed lock omits the root entry (never byte-identical) but matches deps.
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "": { name: "fixture" }, "node_modules/a": { version: "1.0.0" } },
+    });
+    const installed = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/a": { version: "1.0.0" } },
+    });
     await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
-    await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), lock, "utf8");
+    await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), installed, "utf8");
 
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
@@ -369,22 +378,55 @@ test("buildValidationArtifact: stamps depState stale when installed deps diverge
   const { repoRoot } = await makeFixtureRepo();
   try {
     await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "package-lock.json"),
-      JSON.stringify({ lockfileVersion: 3, name: "fixture", version: "2.0.0" }),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "node_modules", ".package-lock.json"),
-      JSON.stringify({ lockfileVersion: 3, name: "fixture", version: "1.0.0" }),
-      "utf8",
-    );
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/a": { version: "2.0.0" } },
+    });
+    const installed = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/a": { version: "1.0.0" } },
+    });
+    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
+    await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), installed, "utf8");
 
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
     assert.equal(artifact.depState.status, "stale");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState stale when installed lockfile is absent", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      "utf8",
+    );
+    // No node_modules/.package-lock.json → deps not materialized → stale.
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState n-a when there is no package-lock.json", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "n-a");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

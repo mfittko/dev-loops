@@ -82,12 +82,15 @@ export const WORKTREE_CLEANUP_TIMEOUT_MS = 60_000;
  * @returns {string} the cleanup command, or "" when `prNumber` is absent.
  */
 export function buildWorktreeCleanupCommand(mainCheckout, prNumber) {
-  if (prNumber === undefined || prNumber === null || String(prNumber).trim() === "") {
+  const pr = String(prNumber ?? "").trim();
+  // Validate the PR number is a positive integer BEFORE embedding it into the
+  // shell string; a caller passing a non-numeric string (could carry command
+  // substitution) is refused by returning "" — defense-in-depth in a public helper.
+  if (!/^[0-9]+$/u.test(pr)) {
     return "";
   }
   const quotedMain = shellQuotePath(mainCheckout);
   const script = shellQuotePath(path.join(mainCheckout, "scripts", "loop", "cleanup-worktree.mjs"));
-  const pr = String(prNumber).trim();
   // Guard the script's existence (consumer no-op) and keep the whole thing
   // non-fatal with `|| true` — removal must never break a merge-completion flow.
   return `if [ -f ${script} ]; then node ${script} --repo-root ${quotedMain} --pr "${pr}"; fi || true`;

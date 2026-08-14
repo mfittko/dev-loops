@@ -7,6 +7,7 @@ import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
+  extractPrNumberFromGhPrMergeAnywhere,
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
@@ -16,7 +17,6 @@ import {
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
 } from '@dev-loops/core/loop/main-checkout-ff';
-import { extractPrNumberFromGhPrMergeAnywhere } from '@dev-loops/core/loop/bash-command-classify';
 
 // The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
 // Pi extension and the Claude Code Bash hook share one source of truth. Re-export them here so
