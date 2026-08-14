@@ -315,3 +315,44 @@ test("parseEditIssueCliArgs: --enforce-grill flag is wired", () => {
   const out = parseEditIssueCliArgs(["--repo", "o/n", "--issue", "5", "--title", "x", "--enforce-grill"]);
   assert.equal(out.enforceGrill, true);
 });
+
+test("editIssue: --enforce-grill with --body-file - forwards stdin inline (no fd 0 double-read), not --body-file -", () => {
+  // Under --enforce-grill the grill check reads stdin first; the fix forwards
+  // the resolved text inline so the gh call never re-reads the exhausted fd 0.
+  const modUrl = new URL("../../scripts/github/edit-issue.mjs", import.meta.url).href;
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-grill-stdin-"));
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    driver,
+    `import { editIssue } from ${JSON.stringify(modUrl)};\n` +
+      "const calls = [];\n" +
+      "await editIssue(\n" +
+      "  { repo: \"o/n\", issue: 17, bodyFile: \"-\", enforceGrill: true, addAssignees: [], removeAssignees: [] },\n" +
+      "  { run: async (_c, args) => { calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
+      ");\n" +
+      "process.stdout.write(JSON.stringify(calls[0]));\n",
+  );
+  const res = spawnSync(process.execPath, [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  const args = JSON.parse(res.stdout);
+  assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "## Acceptance criteria\n\n- [ ] ac\n"]);
+  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - under --enforce-grill");
+});
+
+test("editIssue: --enforce-grill with empty stdin fails closed (blank --body-file - cannot clear the body)", () => {
+  const modUrl = new URL("../../scripts/github/edit-issue.mjs", import.meta.url).href;
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-grill-empty-"));
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    driver,
+    `import { editIssue } from ${JSON.stringify(modUrl)};\n` +
+      "try {\n" +
+      "  await editIssue({ repo: \"o/n\", issue: 17, bodyFile: \"-\", enforceGrill: true },\n" +
+      "    { run: async () => ({ code: 0, stdout: \"\", stderr: \"\" }) });\n" +
+      "  process.stdout.write(\"NO_THROW\");\n" +
+      "} catch (e) { process.stdout.write(\"THREW:\" + e.message); }\n",
+  );
+  const res = spawnSync(process.execPath, [driver], { input: "   \n", encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /^THREW:--body-file - is empty/);
+});

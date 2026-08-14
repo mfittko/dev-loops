@@ -213,7 +213,19 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
   if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
     const body = options.body !== undefined
       ? options.body
-      : (options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8"));
+      : (async () => {
+          const b = options.bodyFile === "-" ? readFileSync(0, "utf8") : null;
+          // A body read from a file/stdin (not inline) fails closed on an empty /
+          // whitespace-only value so a blank --body-file cannot silently clear the
+          // issue body — mirroring edit-pr's resolveBody (USAGE promises --body /
+          // --body-file reject empties). Without this guard, empty stdin would be
+          // forwarded inline below (bodyFile becomes undefined) and gh would clear
+          // the body via `--body ''`.
+          if (b !== null && b.trim().length === 0) {
+            throw new Error(`--body-file ${options.bodyFile} is empty`);
+          }
+          return b !== null ? b : await readFile(options.bodyFile, "utf8");
+        })();
     const heading = detectGrillEmbedHeading(body);
     if (heading !== null) {
       throw new Error(

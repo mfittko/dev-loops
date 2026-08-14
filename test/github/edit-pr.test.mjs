@@ -190,3 +190,26 @@ test("parseEditPrCliArgs: --enforce-grill flag is wired", () => {
   const opts = parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--title", "x", "--enforce-grill"]);
   assert.equal(opts.enforceGrill, true);
 });
+
+test("editPr: --enforce-grill with --body-file - forwards stdin inline (no fd 0 double-read), not --body-file -", () => {
+  // Under --enforce-grill the grill check reads std IN first; the fix forwards
+  // the resolved text inline so the gh call never re-reads the exhausted fd 0.
+  const modUrl = new URL("../../scripts/github/edit-pr.mjs", import.meta.url).href;
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-grill-stdin-"));
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    driver,
+    `import { editPr } from ${JSON.stringify(modUrl)};\n` +
+      "const calls = [];\n" +
+      "await editPr(\n" +
+      "  { repo: \"o/n\", pr: 17, bodyFile: \"-\", enforceGrill: true, addAssignees: [], removeAssignees: [] },\n" +
+      "  { run: async (_c, args) => { calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
+      ");\n" +
+      "process.stdout.write(JSON.stringify(calls[0]));\n",
+  );
+  const res = spawnSync(process.execPath, [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  const args = JSON.parse(res.stdout);
+  assert.deepEqual(args, ["pr", "edit", "17", "--repo", "o/n", "--body", "## Acceptance criteria\n\n- [ ] ac\n"]);
+  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - under --enforce-grill");
+});
