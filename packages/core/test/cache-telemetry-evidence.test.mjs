@@ -182,6 +182,21 @@ describe("buildCacheTelemetryEvidence — opaque harness never claims verified r
       () => buildCacheTelemetryEvidence({ plan: { gate: "g", headSha: "abcdef1234", planHash: "h" } }),
       /plan with requestGroups/,
     );
+    const anyway = { requestGroups: [{ model: "model-a" }] };
+    // Each new build-time guard fires independently on an otherwise-valid plan.
+    assert.throws(
+      () => buildCacheTelemetryEvidence({ plan: { ...anyway, gate: "" } }),
+      /non-empty gate/,
+    );
+    assert.throws(
+      () => buildCacheTelemetryEvidence({ plan: { ...anyway, gate: "g", headSha: "zz!" } }),
+      /hex headSha/,
+    );
+    assert.throws(
+      () =>
+        buildCacheTelemetryEvidence({ plan: { ...anyway, gate: "g", headSha: "abcdef1234", planHash: "" } }),
+      /non-empty planHash/,
+    );
     const plan = claudePlan();
     assert.throws(
       () => buildCacheTelemetryEvidence({ plan, primerCacheCreations: "nope" }),
@@ -290,6 +305,52 @@ describe("validateCacheTelemetryEvidence — fail-closed honesty gate", () => {
     const r = validateCacheTelemetryEvidence({ evidence: null });
     assert.equal(r.ok, false);
     assert.ok(r.failures.some((f) => f.check === "artifact"));
+  });
+
+  test("returns structured failures (never throws) on a truthy non-array events field", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    for (const bad of ["abc", { a: 1 }, 5]) {
+      const subverted = { ...ev, primerCacheCreations: bad };
+      assert.doesNotThrow(() => validateCacheTelemetryEvidence({ evidence: subverted }));
+      const r = validateCacheTelemetryEvidence({ evidence: subverted });
+      assert.equal(r.ok, false);
+      assert.ok(r.failures.some((f) => f.check === "aggregate_consistency"));
+    }
+  });
+
+  test("returns structured failures (never throws) on null/non-object array elements", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    for (const bad of [[null], ["x"], [null, { model: "model-a", tokens: 5 }]]) {
+      const subverted = { ...ev, primerCacheCreations: bad, creationCount: bad.length };
+      assert.doesNotThrow(() => validateCacheTelemetryEvidence({ evidence: subverted }));
+      const r = validateCacheTelemetryEvidence({ evidence: subverted });
+      assert.equal(r.ok, false);
+    }
+  });
+
+  test("fails closed on report prose contradicting cacheReuseVerified", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    // Report claims "verified ... cache read" while machine verdict stays false.
+    const subverted = {
+      ...ev,
+      cacheReuseVerified: false,
+      aggregate: { ...ev.aggregate, report: "verified 1 cache read after 1 cache creation" },
+    };
+    const r = validateCacheTelemetryEvidence({ evidence: subverted });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "aggregate_consistency"));
   });
 });
 

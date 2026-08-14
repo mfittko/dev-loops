@@ -59,15 +59,18 @@ export function cacheTelemetryPath({ dir, gate, headSha } = {}) {
   return path.join(dir, `${gate}-${headSha.trim().toLowerCase()}.cache-telemetry.json`);
 }
 
-/** Count of entries whose `tokens` is a finite non-negative number. */
+/** Count of entries whose `tokens` is a finite non-negative number. Non-object/null entries are skipped so a malformed artifact element can never throw. */
 function countTokens(entries) {
-  return entries.filter((e) => Number.isFinite(e.tokens) && e.tokens >= 0).length;
+  return entries.filter(
+    (e) => e != null && typeof e === "object" && Number.isFinite(e.tokens) && e.tokens >= 0,
+  ).length;
 }
 
-/** Sum of finite non-negative `tokens` across entries. */
+/** Sum of finite non-negative `tokens` across entries. Non-object/null entries are skipped. */
 function sumTokens(entries) {
   return entries.reduce((acc, e) => {
-    const t = Number.isFinite(e.tokens) && e.tokens >= 0 ? e.tokens : 0;
+    const t =
+      e != null && typeof e === "object" && Number.isFinite(e.tokens) && e.tokens >= 0 ? e.tokens : 0;
     return acc + t;
   }, 0);
 }
@@ -262,6 +265,16 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
       reason: `reviewerCacheReads must be an array, got ${JSON.stringify(evidence.reviewerCacheReads)}`,
     });
   }
+  // Safe, array-only view of the events fields for every downstream consumer
+  // (length/sum/count checks). A truthy non-array field never reaches
+  // sumTokens/countTokens (`.reduce`/`.filter` would throw on it) and its
+  // `.length` is never read (a string would report its char count): the
+  // validator keeps its documented "return failures, never throw" contract
+  // even for an malformed artifact whose events field is a string/object/number.
+  const creations = Array.isArray(evidence.primerCacheCreations)
+    ? evidence.primerCacheCreations
+    : [];
+  const reads = Array.isArray(evidence.reviewerCacheReads) ? evidence.reviewerCacheReads : [];
 
   // Honesty gate: verified reuse requires the capability record's usage
   // telemetry to be available. The verdict is re-derived from
@@ -293,28 +306,28 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
   }
 
   // Self-consistency of the aggregate report against the recorded events.
-  if (evidence.creationCount !== (evidence.primerCacheCreations?.length ?? 0)) {
+  if (evidence.creationCount !== creations.length) {
     failures.push({
       check: "aggregate_consistency",
-      reason: `creationCount ${evidence.creationCount} != recorded primerCacheCreations.length ${evidence.primerCacheCreations?.length ?? 0}`,
+      reason: `creationCount ${evidence.creationCount} != recorded primerCacheCreations.length ${creations.length}`,
     });
   }
-  if (evidence.readCount !== (evidence.reviewerCacheReads?.length ?? 0)) {
+  if (evidence.readCount !== reads.length) {
     failures.push({
       check: "aggregate_consistency",
-      reason: `readCount ${evidence.readCount} != recorded reviewerCacheReads.length ${evidence.reviewerCacheReads?.length ?? 0}`,
+      reason: `readCount ${evidence.readCount} != recorded reviewerCacheReads.length ${reads.length}`,
     });
   }
 
   // Token aggregates must equal the sum over finite event tokens.
-  const expectedCreationTokens = sumTokens(evidence.primerCacheCreations ?? []);
+  const expectedCreationTokens = sumTokens(creations);
   if (evidence.creationTokens !== expectedCreationTokens) {
     failures.push({
       check: "token_aggregate",
       reason: `creationTokens ${evidence.creationTokens} != sum of primer creations ${expectedCreationTokens}`,
     });
   }
-  const expectedReadTokens = sumTokens(evidence.reviewerCacheReads ?? []);
+  const expectedReadTokens = sumTokens(reads);
   if (evidence.readTokens !== expectedReadTokens) {
     failures.push({
       check: "token_aggregate",
@@ -345,13 +358,13 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
     evidence.aggregate?.creates !== evidence.creationCount ||
     evidence.aggregate?.reads !== evidence.readCount ||
     evidence.aggregate?.readToCreateRatio !== expectedRatio ||
-    evidence.aggregate?.creationsWithTokens !== countTokens(evidence.primerCacheCreations ?? []) ||
-    evidence.aggregate?.readsWithTokens !== countTokens(evidence.reviewerCacheReads ?? []) ||
+    evidence.aggregate?.creationsWithTokens !== countTokens(creations) ||
+    evidence.aggregate?.readsWithTokens !== countTokens(reads) ||
     evidence.aggregate?.measured !== evidence.cacheReuseVerified
   ) {
     failures.push({
       check: "aggregate_consistency",
-      reason: `aggregate report does not mirror the recorded events (creates=${evidence.aggregate?.creates}, reads=${evidence.aggregate?.reads}, readToCreateRatio=${evidence.aggregate?.readToCreateRatio}, creationsWithTokens=${evidence.aggregate?.creationsWithTokens}, readsWithTokens=${evidence.aggregate?.readsWithTokens}, measured=${evidence.aggregate?.measured}); expected creates=${record.creates}, reads=${record.reads}, ratio=${expectedRatio}, creationsWithTokens=${countTokens(evidence.primerCacheCreations ?? [])}, readsWithTokens=${countTokens(evidence.reviewerCacheReads ?? [])}, measured=${evidence.cacheReuseVerified}`,
+      reason: `aggregate report does not mirror the recorded events (creates=${evidence.aggregate?.creates}, reads=${evidence.aggregate?.reads}, readToCreateRatio=${evidence.aggregate?.readToCreateRatio}, creationsWithTokens=${evidence.aggregate?.creationsWithTokens}, readsWithTokens=${evidence.aggregate?.readsWithTokens}, measured=${evidence.aggregate?.measured}); expected creates=${record.creates}, reads=${record.reads}, ratio=${expectedRatio}, creationsWithTokens=${countTokens(creations)}, readsWithTokens=${countTokens(reads)}, measured=${evidence.cacheReuseVerified}`,
     });
   }
 
