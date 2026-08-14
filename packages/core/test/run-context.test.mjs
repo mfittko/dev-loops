@@ -59,7 +59,13 @@ test("resolveRunId trims and treats blank/absent as null", () => {
   assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "  spaced  " }), "spaced");
   assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "   " }), null);
   assert.equal(resolveRunId({}), null);
-  assert.equal(resolveRunId(undefined), null);
+  // The undefined default resolves from process.env. In CI no run-id marker is
+  // present, but under a Pi async-subagent session the runtime injects its
+  // run-id alias into process.env, so strip every ambient marker to keep this
+  // assertion environment-independent (mirrors the CI guarantee).
+  const ambientClean = { ...process.env };
+  for (const marker of RUN_ID_MARKERS) delete ambientClean[marker];
+  assert.equal(resolveRunId(ambientClean), null);
 });
 
 test("mintRunId returns a neutral, unique id", () => {

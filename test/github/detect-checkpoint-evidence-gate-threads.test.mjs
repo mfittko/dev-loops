@@ -3,13 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: { ...process.env, ...(options.env ?? {}), DEVLOOPS_RUN_ID: "" },
+  env: runIdFreeEnv({ ...(options.env ?? {}), DEVLOOPS_RUN_ID: "" }),
 });
 
 function cleanGateBody(gate, headSha) {

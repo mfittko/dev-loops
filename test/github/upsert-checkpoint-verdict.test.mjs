@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { after, before } from "node:test";
-import { DEFAULT_TEST_PR_BODY, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   buildCoordinationEvaluatorInput,
@@ -106,11 +106,10 @@ const runNode = async (args = [], options = {}) => {
     return runNodeHelper(scriptPath, augmented, {
       ...options,
       cwd: options.cwd ?? fanoutDisabledRepoRoot,
-      env: {
-        ...process.env,
+      env: runIdFreeEnv({
         ...(options.env ?? {}),
         DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-      },
+      }),
     });
   }
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
@@ -123,7 +122,7 @@ const runNode = async (args = [], options = {}) => {
   } catch (error) {
     return { code: 1, stdout: "", stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`, ghCallCount };
   }
-  const env = { ...process.env, ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" };
+  const env = runIdFreeEnv({ ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" });
   delete env[GH_MOCK_ENTRIES];
   // Mirror the subprocess cwd: tests that stage a per-test .devloops pass
   // { cwd: tempDir }, so config (gate angle contract, rejectForeignAngles) must
@@ -447,7 +446,7 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
       nextAction: "next",
       force: true,
       forceReason: "test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     // force metadata no longer included
@@ -1043,7 +1042,7 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
 
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
@@ -1536,7 +1535,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
       },
     ], { repeatLastOnOverflow: true });
-    const created = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot });
+    const created = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(created.action, "created");
 
     const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
@@ -1560,7 +1559,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
     ], { repeatLastOnOverflow: true });
-    const second = await upsertCheckpointVerdict(inputs, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
+    const second = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(second.action, "noop");
     assert.equal(second.commentId, 103);
     // Same-head noop means no create/update comment call fires.
@@ -4663,7 +4662,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
       findingsLedger: ledgerPath,
       nextAction: "fix then re-gate",
       executionMode: "fanout_fanin",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
     assert.equal(result.action, "created");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -5434,7 +5433,7 @@ test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inlin
     "--findings-summary", "no issues found", "--next-action", "mark ready for review",
   ];
   const result = await runNodeHelper(scriptPath, args, {
-    env: { ...process.env, DEVLOOPS_RUN_ID: "" },
+    env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }),
   });
   assert.equal(result.code, 1);
   const payload = JSON.parse(result.stderr);
@@ -5545,7 +5544,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       findingsLedger: ledgerPath,
       nextAction: "stay draft and fix",
       executionMode: "fanout_fanin",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
     assert.equal(result.action, "created");
     assert.equal(result.surface, "review");
@@ -5617,7 +5616,7 @@ test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-au
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
     assert.equal(result.suppressed, 1);
     assert.equal(result.inlineComments, 0);
@@ -5673,7 +5672,7 @@ test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
     assert.equal(result.action, "updated");
     assert.equal(result.surface, "review");
@@ -5721,7 +5720,7 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent",
       inlineReason: "single-agent inline review (test)",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
     assert.equal(result.action, "noop");
     assert.equal(result.surface, "review");
@@ -5773,7 +5772,7 @@ test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAP
       inlineReason: "single-agent inline review (test)",
       findingsLedger: path.join(tempDir, "ledger.json"),
     };
-    const ghOptions = { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot: tempDir };
+    const ghOptions = { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: tempDir };
 
     // Control: the SAME ledger the posted review already carries still noops.
     await writeSingleSurfaceLedger(tempDir, [postedFinding]);
@@ -5822,7 +5821,7 @@ test("upsert-checkpoint-verdict rejects a --findings-ledger written for a differ
         nextAction: "stay draft and fix",
         executionMode: "inline_single_agent",
         inlineReason: "single-agent inline review (test)",
-      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir }),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
       /refuse to post another round's findings/,
     );
   } finally {
@@ -5879,7 +5878,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
       findingsLedger: ledgerPath,
       nextAction: "stay draft and fix",
       executionMode: "fanout_fanin",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
@@ -5982,7 +5981,7 @@ function permissiveVerdictRunChild(headSha) {
 async function runVerdictEnforcement(args, { repoRoot, headSha }) {
   const options = parseUpsertCheckpointVerdictCliArgs(args);
   try {
-    const result = await upsertCheckpointVerdict(options, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild: permissiveVerdictRunChild(headSha) });
+    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: permissiveVerdictRunChild(headSha) });
     return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
   } catch (error) {
     return { code: 1, stdout: "", stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n` };
@@ -6254,7 +6253,7 @@ test("#1621: a findings_present draft_gate verdict DERIVES the next action, igno
       // An ADVANCING next action the caller tried to splice in.
       nextAction: "merge",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
     assert.ok(postCall, "a review was posted");
@@ -6293,7 +6292,7 @@ test("#1621: a findings_present pre_approval_gate verdict derives 'rerun gate' (
       // An ADVANCING action the caller tried to splice into a non-clean verdict.
       nextAction: "await final human approval",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
     assert.ok(postCall, "a review was posted");
@@ -6327,7 +6326,7 @@ test("#1621: same-head idempotency holds after next-action derivation (a rerun i
       // the existing comment already carries.
       nextAction: "merge",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "noop");
     // No re-post occurred.
     assert.equal(calls.filter((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")).length, 0);
@@ -6346,7 +6345,7 @@ test("#1621: an inline round that surfaces a blocking finding applies the gate:f
       findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent", inlineReason: "inline blocking finding",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     // The post succeeded.
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, true);
@@ -6370,7 +6369,7 @@ test("#1621: an inline CLEAN round does NOT apply the gate:full label", async ()
       findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
       nextAction: "mark ready for review",
       executionMode: "inline_single_agent", inlineReason: "inline clean",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, undefined);
     assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
@@ -6406,7 +6405,7 @@ test("#1526: an inline round that surfaces an UNPARSEABLE blocking finding appli
       findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent", inlineReason: "inline unparseable blocking finding",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, true);
     const labelCreate = calls.find((c) => c.args[0] === "label" && c.args[1] === "create" && c.args.includes("gate:full"));
@@ -6450,7 +6449,7 @@ test("#1621: a clean pre_approval_gate verdict is REFUSED while the spec-of-reco
         findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
         nextAction: "await final human approval",
         executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
-      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
       (err) => {
         assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
         assert.match(err.message, /unticked Acceptance criteria/);
@@ -6492,7 +6491,7 @@ test("#1621: a clean pre_approval_gate verdict is ALLOWED when the spec-of-recor
       findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
       nextAction: "await final human approval",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gate, "pre_approval_gate");
   } finally {
@@ -6527,7 +6526,7 @@ test("#1621: a clean pre_approval_gate verdict is ALLOWED when there is no linke
       findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
       nextAction: "await final human approval",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 pre-approval test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -6545,7 +6544,7 @@ test("#1621: a blocked draft_gate verdict DERIVES 'stay draft and fix' (not the 
       // also derive, not accept the caller's advancing action.
       nextAction: "mark ready for review",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 blocked test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     const postCall = calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
     assert.ok(postCall, "a review was posted");
@@ -6572,7 +6571,7 @@ test("#1621: an inline round whose --findings-json carries a blocking-severity f
       findingsSummary: "ignored in structured mode",
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent", inlineReason: "inline structured #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, true);
     assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added");
@@ -6596,7 +6595,7 @@ test("#1621: a blocking-severity finding with a resolved disposition does NOT es
       findingsSummary: "ignored in structured mode",
       nextAction: "mark ready for review",
       executionMode: "inline_single_agent", inlineReason: "inline structured resolved #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, undefined);
     assert.equal(calls.some((c) => c.args[0] === "label" && c.args.includes("gate:full")), false);
@@ -6626,7 +6625,7 @@ test("#1621: an inline UPDATE round that surfaces a blocking finding applies gat
       findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 update test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "updated");
     assert.equal(result.gateFullLabelApplied, true);
     assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added on update");
@@ -6664,7 +6663,7 @@ test("#1621: an umbrella ready PR whose first-linked issue is ticked but a sibli
         findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
         nextAction: "await final human approval",
         executionMode: "inline_single_agent", inlineReason: "inline #1621 umbrella test",
-      }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild }),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
       (err) => {
         assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
         assert.match(err.message, /ACCEPT-CRITERIA-VERIFY-AND-REFLECT/);
@@ -6691,7 +6690,7 @@ test("#1621: an inline free-text-only findings_present round (no structuredFindi
       // `return verdict === "findings_present"` free-text fallback branch.
       nextAction: "stay draft and fix",
       executionMode: "inline_single_agent", inlineReason: "inline free-text #1621 test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "created");
     assert.equal(result.gateFullLabelApplied, true);
     assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label added via free-text fallback");
@@ -6720,7 +6719,7 @@ test("#1621: gate:full label is re-applied on a noop rerun (idempotent retry aft
       findingsSeverityCounts: { high: 1, medium: 0, low: 0 },
       nextAction: "merge",
       executionMode: "inline_single_agent", inlineReason: "inline #1621 noop-retry test",
-    }, { env: { ...process.env, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", repoRoot, runChild });
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     assert.equal(result.action, "noop");
     assert.equal(result.gateFullLabelApplied, true);
     assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("gate:full")), "label re-applied on noop");

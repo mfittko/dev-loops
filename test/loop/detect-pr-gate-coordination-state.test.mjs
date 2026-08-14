@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, it } from "node:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -57,7 +57,7 @@ function buildMockRuntime(rawEnv = {}, extra = {}) {
     // (a mock throw would not distinguish "git missing" from "git present").
     return defaultRunChild(cmd, cmdArgs, childEnv, stdinText);
   };
-  return { env: { ...process.env, ...rawEnv, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, ...extra };
+  return { env: runIdFreeEnv({ ...rawEnv, DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, ...extra };
 }
 
 // Run the CLI in-process when gh entries are stashed on the env, mirroring main()'s
@@ -69,11 +69,10 @@ const runNode = async (args = [], options = {}) => {
   const entries = options.env?.[GH_MOCK_ENTRIES];
   const fallback = () => runNodeHelper(scriptPath, args, {
     ...options,
-    env: {
-      ...process.env,
+    env: runIdFreeEnv({
       ...(options.env ?? {}),
       DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-    },
+    }),
   });
   if (!entries) return fallback();
   let opts;

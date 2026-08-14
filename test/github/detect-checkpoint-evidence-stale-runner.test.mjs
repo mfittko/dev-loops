@@ -8,17 +8,16 @@ import {
   claimRunnerOwnership,
   recordExitSignalForRunner,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: {
-    ...process.env,
+  env: runIdFreeEnv({
     ...(options.env ?? {}),
     DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
+  }),
 });
 
 async function writeGhStub(tempDir) {

@@ -1,5 +1,5 @@
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -579,13 +579,12 @@ process.exit(97);
     );
     await chmod(ghPath, 0o755);
 
-    const env = {
-      ...process.env,
+    const env = runIdFreeEnv({
       PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
       GH_REREQUEST_STATE_PATH: path.join(tempDir, "requested-state.txt"),
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
       DEVLOOPS_RUN_ID: "",
-    };
+    });
 
     const result = await runWatchCycle(
       {

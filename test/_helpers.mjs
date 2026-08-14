@@ -1,6 +1,31 @@
 import { spawn } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+
+// Build a test env that strips the ambient async run-id markers from process.env.
+//
+// The dev-loop async path resolves an active run id from RUN_ID_MARKERS
+// (DEVLOOPS_RUN_ID, then the Pi-runtime-injected alias) in precedence order (see
+// packages/core/src/loop/run-context.mjs). Under a Pi async-subagent session the
+// runtime injects its run-id alias into the child env, so a test env built via
+// `{ ...process.env, DEVLOOPS_RUN_ID: "" }` still resolves the Pi marker and the
+// suite behaves as if in a production async context — green in CI (no Pi marker),
+// failing in a local worktree under Pi. Route gh/run-id test env construction
+// through this helper so all ambient run-id markers (any DEVLOOPS marker and the
+// Pi-injected alias) are stripped, then apply explicit overrides on top. CI is
+// unaffected because it carries neither marker; overriding suites that intend an
+// active run id pass `DEVLOOPS_RUN_ID` explicitly in overrides and it wins. Marker
+// names come from the shared RUN_ID_MARKERS contract (the adapter boundary owns the
+// Pi marker literal), keeping this helper harness-agnostic.
+//
+// @param {Record<string, string|undefined>} [overrides]
+// @returns {Record<string, string|undefined>}
+export function runIdFreeEnv(overrides = {}) {
+  const base = { ...process.env };
+  for (const marker of RUN_ID_MARKERS) delete base[marker];
+  return { ...base, ...overrides };
+}
 
 // In-process replacement for the PATH-installed gh stub (buildGhStubScript /
 // writeGhStub). Returns `{ runChild, calls }` where `runChild(command, args, env,
@@ -291,7 +316,7 @@ export async function writeGhStub(tempDir, entries = [], {
   await chmod(ghPath, 0o755);
 
   const env = {
-    ...process.env,
+    ...runIdFreeEnv(),
     PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter),
     GH_SEQUENCE_PATH: sequencePath,
     GH_STUB_MODE: matchMode,
