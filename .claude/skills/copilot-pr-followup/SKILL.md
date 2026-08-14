@@ -453,6 +453,8 @@ The auto-loop now releases its claim best-effort when a run reaches a terminal s
 
 Beyond the terminal release, #1706 removes the stall on the path here: `copilot-pr-handoff` acquires ownership with `supersedeStale: true`, so pre-flight handoff takes over a competing claim whose owning run is **confirmed dead** (recorded exit signal) or past the stale-max-age window — proceeding instead of returning a blocking stop against a leaked lock. The headless dev-loop driver also clears every claim its run still owns when the spawned run's process exits (release-on-death). A genuinely live owner still blocks (one-runner-per-PR preserved); only confirmed-dead or stale claims are superseded. The manual takeover below therefore only remains for a pre-#1706 leak or a live-but-unreleasable edge.
 
+**Anti-trap — a fresh lock heartbeat is not proof of a live driver.** A runner-lock claim carrying a fresh heartbeat does NOT prove a live agent is driving: the lock may be held by a completed/control run that claimed at takeover and then ended without releasing, yet the heartbeat still reads fresh — which this drive saw as repeated false "live owner / standing down" stalls. LIVE requires a subagent run verified via `subagent status` showing an actively-updating `EXECUTING` child (a workflow child active now with a recent update). Before any stand-down or dispatch decision, confirm real execution via `subagent status`; never trust the lock heartbeat alone. Only genuinely-executing runs count as a live owner.
+
 If a stale claim still blocks the merge because the completing run could not release (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh
