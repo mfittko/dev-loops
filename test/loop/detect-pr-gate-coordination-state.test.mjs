@@ -115,6 +115,20 @@ function jsonLine(value) {
   return `${JSON.stringify(value)}\n`;
 }
 
+test("parseDetectPrGateCoordinationCliArgs reports --expected-issue in its own error message, not --pr (#1713)", () => {
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "abc"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "0"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  // A valid value still parses.
+  const opts = parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "1628"]);
+  assert.equal(opts.expectedIssue, 1628);
+});
+
 test("parseGitStatusConflictFiles parses NUL-delimited porcelain output with deterministic paths", () => {
   const parsed = parseGitStatusConflictFiles([
     "UU config.test.mjs",

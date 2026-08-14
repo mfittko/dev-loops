@@ -10,7 +10,7 @@ import {
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
@@ -166,7 +166,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       continue;
     }
     if (token.name === "expected-issue") {
-      options.expectedIssue = parsePrNumber(requireTokenValue(token, parseError), parseError);
+      options.expectedIssue = parsePositiveInteger(requireTokenValue(token, parseError), "--expected-issue", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;

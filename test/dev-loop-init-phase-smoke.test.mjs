@@ -83,6 +83,10 @@ test("init-phase refuses the durable phase-doc mint for an issue-keyed (tracker)
     assert.equal(manifest.status, "planning");
     // The durable phase-doc artifact is not advertised in the manifest.
     assert.ok(!manifest.artifacts.some((a) => a.includes("docs/phases/phase-2.md")), "no phase-doc artifact in manifest");
+    // The ephemeral tmp/ artifacts are still advertised (issue #1713 finding).
+    for (const ephemeral of ["variant-a.md", "variant-b.md", "merged-plan.md", "review.md", "manifest.json"]) {
+      assert.ok(manifest.artifacts.includes(ephemeral), `ephemeral artifact ${ephemeral} advertised in tracker-backed manifest`);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

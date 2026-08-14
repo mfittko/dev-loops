@@ -41,9 +41,14 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
 
   const nextPatch = {
     ...patch,
-    ...(trackerBacked
-      ? {}
-      : { artifacts: [...(patch.artifacts ?? []), ...DEFAULT_PHASE_ARTIFACTS, phasePlanArtifact] }),
+    artifacts: [
+      ...(patch.artifacts ?? []),
+      ...DEFAULT_PHASE_ARTIFACTS,
+      // Tracker-backed sessions refuse the durable phase-doc mint
+      // (ARTIFACT-TRACKER-FIRST-NO-DUP); the ephemeral tmp/ artifacts are
+      // unaffected and still advertised so manifest.artifacts stays populated.
+      ...(trackerBacked ? [] : [phasePlanArtifact]),
+    ],
   };
 
   const result = await ensurePhaseFiles(projectRoot, phase, nextPatch);

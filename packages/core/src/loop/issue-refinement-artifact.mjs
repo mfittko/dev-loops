@@ -523,7 +523,8 @@ export function detectGrillMarker(body = "") {
 
 /**
  * Detect a grill transcript/synthesis/Q&A embed heading in the body. Pure
- * predicate; returns the first offending `##`-level heading name or null.
+ * predicate; returns the first offending heading name at any markdown level
+ * (# through ######) or null.
  * @param {string} [body]
  * @returns {string|null} the offending heading name, or null when none.
  */
