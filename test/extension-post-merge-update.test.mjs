@@ -307,6 +307,7 @@ test("killed post-merge updates surface a clear warning message", async () => {
     { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
+    { message: "Post-merge worktree cleanup skipped (warning only): command was killed before completing", level: "warning" },
   ]);
 });
 

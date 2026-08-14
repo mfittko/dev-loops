@@ -128,9 +128,16 @@ async function pathExists(p) {
  * provisioning loop below, mirroring the existing {mode:"reject", reason:"traversal"}
  * shape with a distinct reason so the failure is attributable.
  */
-function isUnderNodeModules(abs) {
-  const parts = abs.split(/[\\/]+/u).filter(Boolean);
-  return parts.includes("node_modules");
+function isUnderNodeModules(abs, root) {
+  // Reject only sources that resolve under THIS repo's node_modules (root/
+  // node_modules), never a node_modules component in an ancestor dir: a repos
+  // installed under a path named node_modules (e.g. /work/node_modules/dev-
+  // loops) must not have every provisioning entry rejected (WORKTREE-DEPS-
+  // ISOLATED applies to the main checkout's dependencies, not to arbitrary
+  // path segments).
+  const rootModules = path.join(path.resolve(root), "node_modules");
+  const target = path.resolve(abs);
+  return target === rootModules || target.startsWith(`${rootModules}${path.sep}`);
 }
 
 /**
@@ -259,7 +266,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         // (#1627): provisioning must never mirror the main checkout's installed
         // dependencies into a worktree (WORKTREE-DEPS-ISOLATED). Same reject shape
         // as the traversal guards.
-        if (isUnderNodeModules(src)) {
+        if (isUnderNodeModules(src, root)) {
           logWarn(`rejected (node_modules source): ${entry} → ${src}`);
           actions.push({ mode: "reject", reason: "node_modules", entry, src });
           continue;

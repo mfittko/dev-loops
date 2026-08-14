@@ -427,3 +427,29 @@ test("provision: rejects an entry whose source resolves under node_modules", asy
     fx.cleanup();
   }
 });
+
+test("provision: does not reject normal entries when the main checkout lives under a node_modules dir (#1712)", async () => {
+  // WORKTREE-DEPS-ISOLATED targets the MAIN checkout's own node_modules, not
+  // an arbitrary ancestor dir named node_modules. A consumer repo installed at
+  // /work/node_modules/consumer must not have every provisioning entry rejected.
+  const base = mkdtempSync(path.join(tmpdir(), "wt-nm-\u002d"));
+  const repoRoot = path.join(base, "node_modules", "consumer");
+  mkdirSync(repoRoot, { recursive: true });
+  const worktreePath = path.join(base, "consumer-wt");
+  mkdirSync(worktreePath, { recursive: true });
+  try {
+    writeFileSync(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\nworktree:\n  entries:\n    - path: config/app.yml\n      mode: copy\n",
+    );
+    mkdirSync(path.join(repoRoot, "config"));
+    writeFileSync(path.join(repoRoot, "config/app.yml"), "key: value\n");
+
+    const res = await provisionWorktree({ worktreePath, repoRoot });
+    assert.equal(res.summary.rejected, 0, `expected no rejections, got ${JSON.stringify(res.actions)}`);
+    assert.equal(res.summary.copied, 1);
+    assert.equal(readFileSync(path.join(worktreePath, "config/app.yml"), "utf8"), "key: value\n");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
