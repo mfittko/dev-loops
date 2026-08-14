@@ -270,7 +270,15 @@ per-gate accounting is an optional follow-up, not a precondition.)
    write-before-reads ordering. The completion fallback fully serializes the lead reviewer
    ahead of the rest — a small, bounded latency cost, and the reason the near-free
    one-reviewer form is still the default rather than a mandatory streaming dependency.
-4. **Release the fan-out over the SAME model and the SAME byte-identical prefix**, so each
+4. **Record ordering evidence** — write the primer-dispatch evidence artifact (issue
+   #1468 slice 3) to the deterministic path `<gate>-<headSha>.primer-evidence.json`
+   beside the gate-context artifacts: `@dev-loops/core/loop/primer-evidence`
+   (`primerEvidencePath` / `buildPrimerEvidence` / `writePrimerEvidence`). The artifact
+   pairs the request plan with the observed primer runs and reviewer releases, binding
+   each primer to its own model + request-prefix fingerprint and each released reviewer
+   to a primer that landed before it. This is what lets fan-in fail closed (see
+   Phase 3 — Consolidation) instead of trusting the rule in prose.
+5. **Release the fan-out** over the SAME model and the SAME byte-identical prefix, so each
    reviewer READS the cache the primer wrote instead of racing to write its own. A
    differing model or prefix defeats reuse and is the same failure the byte-identity rule
    already guards against.
@@ -707,6 +715,19 @@ would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typicall
 the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
 dispatch; NOT the per-angle artifact count, which would false-fail every grouped
 round).
+
+<!-- rule: GATE-EXEC-PRIMER-EVIDENCE -->
+`GATE-EXEC-PRIMER-EVIDENCE`: when the round recorded primer-dispatch ordering
+evidence (Phase 1.5 step 4, `<gate>-<headSha>.primer-evidence.json`), fan-in MUST
+validate it against the request plan via `@dev-loops/core/loop/primer-evidence`
+`validatePrimerEvidence` and fail closed — refusing to proceed to consolidation —
+when the evidence is missing, or when the ordering barrier, request-group
+coverage, model-group binding, request-prefix fingerprint, shared-prefix hash, or
+plan hash is missing or mismatched. The refusal names the failing check
+(`primer_order` / `group_coverage` / `model_group` / `request_fingerprint` /
+`shared_prefix_hash` / `plan_hash`). This materially backs the `GATE-EXEC-PRIME`
+barrier: the primer write-before-read ordering is no longer asserted only in
+prose, but is a mechanically-checkable fail-closed input to consolidation.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
