@@ -184,6 +184,35 @@ describe("append-only round request composition — Section E (AC-2)", () => {
     );
   });
 
+  test("angle suffix segment is appended last ([lineage base][deltas][angle suffix] contract)", () => {
+    const b = base();
+    const d1 = delta1();
+    const d2 = delta2();
+    const suffix = "review the diff against the acceptance criteria only";
+
+    // Round 1 with a suffix: the suffix is the trailing segment.
+    const round1 = composeRoundRequest({ lineageBase: b, priorDeltas: [], newDelta: d1, angleSuffix: suffix });
+    const tail1 = round1.segments[round1.segments.length - 1];
+    assert.equal(tail1.slot, ANGLE_SUFFIX_SLOT);
+    assert.equal(tail1.ref, "angle-suffix");
+    assert.equal(tail1.bytes, suffix);
+
+    // Round 2 with the same suffix appends exactly one new delta before the suffix.
+    const round2 = composeRoundRequest({ lineageBase: b, priorDeltas: [d1], newDelta: d2, angleSuffix: suffix });
+    assert.equal(round2.segments.length, round1.segments.length + 1);
+    const tail2 = round2.segments[round2.segments.length - 1];
+    assert.equal(tail2.slot, ANGLE_SUFFIX_SLOT);
+    // Suffix is byte-identical across rounds (append-only, prior segments reused).
+    assert.equal(tail2.bytes, tail1.bytes);
+    // The appended delta sits directly before the suffix.
+    assert.equal(round2.segments[round2.segments.length - 2].slot, ROUND_DELTA_SLOT);
+    assert.equal(round2.segments[round2.segments.length - 2].round, 2);
+
+    // A Buffer suffix is normalized to a utf8 string.
+    const roundBuf = composeRoundRequest({ lineageBase: b, priorDeltas: [], newDelta: d1, angleSuffix: Buffer.from("suffix-bytes") });
+    assert.equal(roundBuf.segments[roundBuf.segments.length - 1].bytes, "suffix-bytes");
+  });
+
   test("segment bytes are key-order-canonical (byte-deterministic for nested objects)", () => {
     const dA = buildFixRoundDelta({
       lineageId: "lin-1", round: 1, gate: GATE, baseHead: BASE, reviewedHead: R1, fixDiff: FIX1,
