@@ -184,7 +184,11 @@ export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, 
 // a non-null reason string to refuse with (null = allow), `replaced` records the
 // prior PR number when an explicit replacement override was honored.
 export async function resolveLinkedPrGuard({ repo, issue, allowReplacementPr, runtime = {} }) {
-  if (repo === null) {
+  // #1629: treat an absent OR empty/whitespace repo slug as missing — an
+  // empty `--repo=`/`--repo ""` would otherwise reach the network probe with
+  // an invalid value and be misreported as "API unavailable" instead of the
+  // honest fail-closed ambiguity refusal (copilot review finding).
+  if (repo === null || (typeof repo === "string" && repo.trim() === "")) {
     return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: cannot verify whether issue #${issue} already has an open linked PR because --repo owner/name was not provided — refusing on ambiguity (fail closed). Pass --repo owner/name to enable the same-repo duplicate-linked-PR check.` };
   }
   let linked;
@@ -283,7 +287,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   // #1629: --allow-replacement-pr <prior> records a deliberate replacement of
   // an existing open linked PR (must match the detected prior PR number).
+  // A present-but-valueless flag (bare trailing token, or `--allow-replacement-pr=`)
+  // MUST refuse rather than silently skip the override — mirroring the
+  // --issue MUST (copilot review finding).
+  const allowReplacementPresent = argv.some((token) => ALLOW_REPLACEMENT_FLAG_PATTERN.test(token));
   const allowReplacementRaw = getFlagValue(argv, ALLOW_REPLACEMENT_FLAG_PATTERN);
+  if (allowReplacementPresent && (allowReplacementRaw === null || allowReplacementRaw.trim() === "")) {
+    throw parseError("--allow-replacement-pr requires a positive integer PR number (the existing open linked PR being replaced)");
+  }
   let allowReplacementPr = null;
   if (allowReplacementRaw !== null) {
     const trimmed = allowReplacementRaw.trim();
