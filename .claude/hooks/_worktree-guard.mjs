@@ -9,6 +9,7 @@
  */
 
 import { realpathSync } from "node:fs";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Worktree path helpers
@@ -110,6 +111,85 @@ export function isListedWorktree(cwd, worktreePaths) {
     // Accept exact match or cwd is a subdirectory of a listed worktree root.
     return normalized === normalizedP || normalized.startsWith(normalizedP + "/");
   });
+}
+
+/**
+ * Resolve the root of the listed git worktree that contains `cwd`.
+ *
+ * Mirrors `isListedWorktree`'s matching (realpath-resolved, tmp/worktrees/-scoped,
+ * exact-or-subdirectory) but returns the worktree ROOT instead of a boolean, so
+ * callers can address files relative to the worktree's own subtree (`packages/`,
+ * `node_modules/`) rather than the possibly-nested `cwd`.
+ *
+ * @param {string} cwd - Absolute or relative path inside the worktree.
+ * @param {string[]} worktreePaths - Array of paths from `parseAllWorktreePaths`.
+ * @returns {string | null} The worktree root path, or null when `cwd` is not inside a listed worktree.
+ */
+export function resolveContainingWorktreeRoot(cwd, worktreePaths) {
+  let resolvedCwd;
+  try { resolvedCwd = realpathSync(cwd); } catch { resolvedCwd = cwd; }
+  const normalizedCwd = resolvedCwd.replace(/\\/g, "/").replace(/\/+$/u, "");
+  for (const p of worktreePaths) {
+    let resolvedP;
+    try { resolvedP = realpathSync(p); } catch { resolvedP = p; }
+    const normalizedP = resolvedP.replace(/\\/g, "/").replace(/\/+$/u, "");
+    if (!isUnderWorktreePath(normalizedP)) continue;
+    if (normalizedCwd === normalizedP || normalizedCwd.startsWith(normalizedP + "/")) {
+      return normalizedP;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check whether a worktree's `node_modules/@dev-loops/core` resolves into the
+ * worktree's OWN `packages/core`, not the main checkout's (#1627).
+ *
+ * A link escaping to the main checkout silently tests main's core instead of the
+ * branch's (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION): the forbidden
+ * state is a worktree whose node_modules resolves dependencies from the main
+ * checkout.
+ *
+ * Tolerates consumer repos with no `packages/core` (no monorepo core to isolate,
+ * so the requirement is vacuously satisfied), and worktrees whose
+ * `node_modules/@dev-loops/core` link is absent (nothing resolves out of tree, so
+ * there is no escape to refuse). Only a link that RESOLVES and points outside the
+ * worktree's own `packages/core` is treated as the escaping (non-isolated) state.
+ * The worktree root is resolved from `cwd` via the listed worktree paths so a
+ * nested `cwd` still addresses the worktree's own subtree.
+ *
+ * @param {string} cwd - Absolute or relative path inside the worktree.
+ * @param {string[]} worktreePaths - Array of paths from `parseAllWorktreePaths`.
+ * @returns {boolean} true when isolated (or no core to isolate); false when the
+ *   core link escapes the worktree's own `packages/core`.
+ */
+export function isWorktreeCoreIsolated(cwd, worktreePaths) {
+  const root = resolveContainingWorktreeRoot(cwd, worktreePaths);
+  if (root === null) {
+    // Not resolving to a listed worktree — isolation is enforced elsewhere
+    // (isListedWorktree / isUnderWorktreePath); vacuously satisfied here.
+    return true;
+  }
+  const coreDir = path.join(root, "packages", "core");
+  const linkPath = path.join(root, "node_modules", "@dev-loops", "core");
+  const normalize = (p) => {
+    try {
+      return realpathSync(p).replace(/\\/g, "/").replace(/\/+$/u, "");
+    } catch {
+      return null;
+    }
+  };
+  const coreReal = normalize(coreDir);
+  if (coreReal === null) {
+    // Consumer repo with no packages/core — no monorepo core to isolate.
+    return true;
+  }
+  const linkReal = normalize(linkPath);
+  if (linkReal === null) {
+    // node_modules/@dev-loops/core absent — nothing resolves out of tree.
+    return true;
+  }
+  return linkReal === coreReal;
 }
 
 

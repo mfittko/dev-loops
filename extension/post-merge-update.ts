@@ -7,10 +7,13 @@ import {
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
+  extractPrNumberFromGhPrMergeAnywhere,
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
   buildMainCheckoutFastForwardCommand,
+  buildWorktreeCleanupCommand,
+  WORKTREE_CLEANUP_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
 } from '@dev-loops/core/loop/main-checkout-ff';
@@ -65,6 +68,7 @@ type PostMergeUpdateHookState = {
   pendingPostMergeUpdate: boolean;
   updateInFlight: boolean;
   pendingRepoRoot: string | null;
+  pendingPrNumber: number | null;
 };
 
 type CreatePostMergeUpdateHookOptions = {
@@ -244,6 +248,62 @@ async function fastForwardMainCheckout(
   }
 }
 
+/**
+ * Best-effort post-merge worktree removal (#1627).
+ *
+ * Resolves the main checkout the same way fastForwardMainCheckout does, then runs
+ * the shared cleanup command built by `buildWorktreeCleanupCommand` (which invokes
+ * `cleanup-worktree.mjs --pr <n>` FROM the main checkout — the hook's cwd can be
+ * inside the worktree being removed). Non-fatal: every failure is a warning.
+ */
+async function removeMergedWorktree(
+  runCommand: (args: RunCommandArgs) => Promise<RunCommandResult>,
+  pendingRoot: string,
+  prNumber: number | null,
+  ctx: Pick<HarnessContext, 'hasUI' | 'ui'>,
+): Promise<void> {
+  if (prNumber === null) {
+    return;
+  }
+  let mainCheckout = pendingRoot;
+  try {
+    const wtResult = await runCommand({
+      command: 'git worktree list',
+      cwd: pendingRoot,
+      timeout: MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
+    });
+    if (wtResult.code === 0 && !wtResult.killed) {
+      const resolved = parseMainWorktreePath(wtResult.stdout ?? '');
+      if (resolved) mainCheckout = resolved;
+    }
+  } catch {
+    // fall back to pendingRoot
+  }
+
+  const cleanupCommand = buildWorktreeCleanupCommand(mainCheckout, prNumber);
+  if (!cleanupCommand) {
+    return;
+  }
+  notify(ctx, `Post-merge worktree cleanup running for PR #${prNumber}`, 'info');
+  try {
+    const result = await runCommand({
+      command: cleanupCommand,
+      cwd: mainCheckout,
+      timeout: WORKTREE_CLEANUP_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.killed) {
+      notify(
+        ctx,
+        `Post-merge worktree cleanup skipped (warning only): ${buildFailureSummary(result)}`,
+        'warning',
+      );
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    notify(ctx, `Post-merge worktree cleanup skipped (warning only): ${detail}`, 'warning');
+  }
+}
+
 export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
   const exec = options.exec ?? null;
 
@@ -260,12 +320,14 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
     pendingPostMergeUpdate: false,
     updateInFlight: false,
     pendingRepoRoot: null,
+    pendingPrNumber: null,
   };
 
   function reset(): void {
     state.pendingPostMergeUpdate = false;
     state.updateInFlight = false;
     state.pendingRepoRoot = null;
+    state.pendingPrNumber = null;
   }
 
   return {
@@ -285,7 +347,11 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       if (!command || event.isError) {
         return;
       }
-      await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
+      const pending = await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
+      if (pending) {
+        const pr = extractPrNumberFromGhPrMergeAnywhere(command);
+        if (pr !== null) state.pendingPrNumber = pr;
+      }
     },
 
     async onUserBash(rawEvent: unknown, _ctx?: HarnessContext): Promise<UserBashResultLike | undefined> {
@@ -399,6 +465,8 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
 
         if (result.code === 0 && !result.killed) {
           markPendingUpdate(state, event.command, repoContext);
+          const pr = extractPrNumberFromGhPrMergeAnywhere(event.command);
+          if (pr !== null) state.pendingPrNumber = pr;
         }
 
         return {
@@ -460,6 +528,12 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
         await fastForwardMainCheckout(runCommand, pendingRoot, ctx).catch((error) => {
           const detail = error instanceof Error ? error.message : String(error);
           notify(ctx, `Post-merge main-checkout fast-forward skipped (warning only): ${detail}`, 'warning');
+        });
+        // Post-merge worktree removal (#1627): remove the merged branch's worktree from
+        // the main checkout, non-fatal (never throws out of onAgentEnd).
+        await removeMergedWorktree(runCommand, pendingRoot, state.pendingPrNumber, ctx).catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          notify(ctx, `Post-merge worktree cleanup skipped (warning only): ${detail}`, 'warning');
         });
         reset();
       }

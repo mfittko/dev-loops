@@ -289,8 +289,86 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     headSha,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
+    // Stamp dependency state relative to package-lock.json (#1627): a worktree
+    // whose installed deps (node_modules/.package-lock.json) do not match the
+    // lockfile is validated against stale deps, so the artifact records the
+    // delta instead of blessing it. Non-blocking (does not flip allPassed) — it
+    // is a trust signal for consumers of the artifact, not a hard gate failure.
+    depState: await resolveDepState(repoRoot),
     suites: suiteResults,
   };
+}
+
+/**
+ * Compare the repo's package-lock.json against the installed lock snapshot
+ * (node_modules/.package-lock.json) (#1627). A mismatch means the validation
+ * suites ran against stale deps — stamped, not blocking, so gate consumers can
+ * distrust a stale run without a stale run itself failing the gate.
+ *
+ * npm's hidden lockfile (`node_modules/.package-lock.json`) is NEVER byte-
+ * identical to the committed `package-lock.json` (it omits the root package
+ * entry `packages[""]` and install-time metadata), so the comparison must be
+ * structure-aware: the non-root dependency tree is compared by
+ * `node_modules/<path>` key + `version`. A package present in the lock but
+ * missing or version-differing in the installed snapshot means the installed
+ * deps are stale relative to the lock. Cross-platform pure optional packages
+ * (os/cpu-gated to a non-host platform) are not installed on this host, so they
+ * are excluded from the comparison to avoid false "stale" stamps on a synced
+ * tree.
+ *
+ * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
+ * @returns {Promise<{status: string, detail: string}>}
+ */
+function isInstallableOnHost(pkg) {
+  if (pkg.os && !pkg.os.includes(process.platform)) return false;
+  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
+  return true;
+}
+
+async function resolveDepState(repoRoot) {
+  const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
+  const installedRaw = await readFile(path.join(repoRoot, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
+  if (lockRaw === null) {
+    return { status: "n-a", detail: "no package-lock.json at repo root" };
+  }
+  if (installedRaw === null) {
+    return { status: "stale", detail: "node_modules/.package-lock.json absent — installed deps not materialized (npm ci/install not run)" };
+  }
+  let lock;
+  let installed;
+  try {
+    lock = JSON.parse(lockRaw);
+  } catch {
+    return { status: "n-a", detail: "package-lock.json unparseable" };
+  }
+  try {
+    installed = JSON.parse(installedRaw);
+  } catch {
+    return { status: "stale", detail: "node_modules/.package-lock.json unparseable — cannot verify installed deps" };
+  }
+  const expected = lock.packages ?? {};
+  const have = installed.packages ?? {};
+  const missing = [];
+  const mismatched = [];
+  for (const [key, val] of Object.entries(expected)) {
+    if (key === "") continue; // root package — absent from the installed hidden lock
+    if (typeof val !== "object" || val === null) continue;
+    if (!isInstallableOnHost(val)) continue; // non-host os/cpu-gated optional — never installed
+    const installedEntry = have[key];
+    if (!installedEntry) {
+      missing.push(key);
+      continue;
+    }
+    if (installedEntry.version !== val.version) mismatched.push(key);
+  }
+  if (missing.length === 0 && mismatched.length === 0) {
+    const installedCount = Object.keys(have).filter((k) => k !== "").length;
+    return { status: "synced", detail: `installed deps match package-lock.json (${installedCount} packages)` };
+  }
+  const parts = [];
+  if (missing.length) parts.push(`${missing.length} missing package(s)`);
+  if (mismatched.length) parts.push(`${mismatched.length} version-mismatched package(s)`);
+  return { status: "stale", detail: `installed deps diverge from package-lock.json: ${parts.join(", ")}` };
 }
 
 /**

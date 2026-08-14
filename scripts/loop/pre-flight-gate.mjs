@@ -10,6 +10,7 @@ import {
   isMainCheckout,
   parseAllWorktreePaths,
   isListedWorktree,
+  isWorktreeCoreIsolated,
   detectSubagentAvailability,
 } from "@dev-loops/core/loop/worktree-guard";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -127,6 +128,18 @@ function checkWorktreeIsolation({ cwd, env, gitCommand = "git" }) {
         "Create a worktree with:\n" +
         "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
         "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
+        "Then re-run from the worktree directory.",
+      mainWorktreePath: mainWorktreePath ?? undefined,
+    };
+  }
+  if (!isWorktreeCoreIsolated(cwd, allPaths)) {
+    return {
+      ok: false,
+      error: "core_link_escapes",
+      guidance:
+        "Worktree isolation violation: node_modules/@dev-loops/core resolves OUTSIDE this worktree's own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION). " +
+        "A worktree must resolve its own packages/core, not the main checkout's. Re-provision the worktree with:\n" +
+        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
         "Then re-run from the worktree directory.",
       mainWorktreePath: mainWorktreePath ?? undefined,
     };

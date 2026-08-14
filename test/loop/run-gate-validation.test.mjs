@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   readPackageScripts,
   stripAnsi,
   validateSuiteNames,
+  buildValidationArtifact,
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { runNode } from "../_helpers.mjs";
 
@@ -175,7 +176,7 @@ test("artifact shape: no outputSha256/durationMs anywhere, and the documented ke
 
     const artifact = JSON.parse(stdout.trim());
     assert.deepEqual(Object.keys(artifact).sort(), [
-      "allPassed", "gate", "generatedAt", "headSha", "ok", "pr", "repo", "suites",
+      "allPassed", "depState", "gate", "generatedAt", "headSha", "ok", "pr", "repo", "suites",
     ]);
     assert.deepEqual(Object.keys(artifact.suites[0]).sort(), [
       "command", "exitCode", "name", "outputPath", "outputTail",
@@ -340,4 +341,109 @@ test("--help documents the shared --jq/--silent flags", async () => {
   assert.equal(code, 0);
   assert.match(stdout, /--jq <filter>/);
   assert.match(stdout, /--silent, -s/);
+});
+
+// ---------------------------------------------------------------------------
+// Dependency-state stamp (#1627)
+// ---------------------------------------------------------------------------
+
+test("buildValidationArtifact: stamps depState synced when installed deps match the lockfile (npm-shaped)", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    // npm-realistic: the committed lock carries the root entry + deps; the hidden
+    // installed lock omits the root entry (never byte-identical) but matches deps.
+    // Host-independent fixture: the "non-host" optional is always a different
+    // os/cpu than the runner, and the host optional is always present, so the
+    // expected stamp is platform-agnostic (works on linux-x64 CI and darwin-arm64).
+    const hostOs = process.platform;
+    const hostCpu = process.arch;
+    const otherOs = hostOs === "linux" ? "darwin" : "linux";
+    const otherCpu = hostCpu === "x64" ? "arm64" : "x64";
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "fixture" },
+        "node_modules/a": { version: "1.0.0" },
+        [`node_modules/@pkg/${hostOs}-${hostCpu}`]: { version: "1.0.0", os: [hostOs], cpu: [hostCpu], optional: true },
+        [`node_modules/@pkg/${otherOs}-${otherCpu}`]: { version: "1.0.0", os: [otherOs], cpu: [otherCpu], optional: true },
+      },
+    });
+    // Only the host-installable optional plus the plain dep exist in the installed tree.
+    const installed = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/a": { version: "1.0.0" },
+        [`node_modules/@pkg/${hostOs}-${hostCpu}`]: { version: "1.0.0", os: [hostOs], cpu: [hostCpu], optional: true },
+      },
+    });
+    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
+    await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), installed, "utf8");
+
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "synced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState stale when installed deps diverge from the lockfile", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/a": { version: "2.0.0" } },
+    });
+    const installed = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/a": { version: "1.0.0" } },
+    });
+    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
+    await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), installed, "utf8");
+
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState stale when installed lockfile is absent", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      "utf8",
+    );
+    // No node_modules/.package-lock.json → deps not materialized → stale.
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState n-a when there is no package-lock.json", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "n-a");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

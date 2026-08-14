@@ -15,7 +15,7 @@ import {
   extractRepoFlagFromGhPrReady,
   normalizeGitHubRepoSlug,
 } from "../extension/post-merge-update.ts";
-import { buildMainCheckoutFastForwardCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
+import { buildMainCheckoutFastForwardCommand, buildWorktreeCleanupCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
 
 function createUiCalls() {
   const notifications = [];
@@ -100,17 +100,20 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
   ]);
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward completed: local main advanced to origin/main", level: "info" },
+    { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
   ]);
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
 
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
 });
 
 test("successful user_bash git merge queues and flushes one update", async () => {
@@ -260,6 +263,8 @@ test("multiple merge signals in one turn still run only one update", async () =>
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
   ]);
 });
 
@@ -280,6 +285,8 @@ test("update failure is warning-only and leaves the session healthy", async () =
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
     { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
+    { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
+    { message: "Post-merge worktree cleanup skipped (warning only): permission denied", level: "warning" },
   ]);
 });
 
@@ -299,6 +306,8 @@ test("killed post-merge updates surface a clear warning message", async () => {
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
     { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
+    { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
+    { message: "Post-merge worktree cleanup skipped (warning only): command was killed before completing", level: "warning" },
   ]);
 });
 

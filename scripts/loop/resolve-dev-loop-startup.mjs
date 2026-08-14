@@ -17,6 +17,7 @@ import {
   isMainCheckout,
   parseAllWorktreePaths,
   isListedWorktree,
+  isWorktreeCoreIsolated,
 } from "@dev-loops/core/loop/worktree-guard";
 import {
   validateAsyncStartContext,
@@ -1149,6 +1150,18 @@ export function buildResolveDevLoopStartupResult(input, {
       }
       if (!isListedWorktree(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`;
+        return {
+          ok: true,
+          bundleKind: "needs_reconcile",
+          selectedStrategy: "none",
+          requiredReads: STRATEGY_REQUIRED_READS["none"],
+          nextAction: reason,
+          canonicalStateSummary: summarizeCanonicalState(bundle),
+          bundle,
+        };
+      }
+      if (!isWorktreeCoreIsolated(effectiveCwd, allPaths)) {
+        const reason = `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`;
         return {
           ok: true,
           bundleKind: "needs_reconcile",
