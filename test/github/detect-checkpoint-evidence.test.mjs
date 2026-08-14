@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   parseGateReviewCommentMarkerBody,
@@ -49,11 +49,10 @@ const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs")
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: {
-    ...process.env,
+  env: runIdFreeEnv({
     ...(options.env ?? {}),
     DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
+  }),
 });
 
 async function writeGhStub(tempDir, entries) {

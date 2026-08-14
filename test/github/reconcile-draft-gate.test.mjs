@@ -22,7 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import test from "node:test";
-import { DEFAULT_TEST_PR_BODY, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   parseReconcileDraftGateCliArgs,
@@ -32,11 +32,10 @@ const scriptPath = path.resolve("scripts/github/reconcile-draft-gate.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: {
-    ...process.env,
+  env: runIdFreeEnv({
     ...(options.env ?? {}),
     DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
+  }),
 });
 
 async function writeGhStub(tempDir, entries) {

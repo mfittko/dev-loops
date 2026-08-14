@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { after, before } from "node:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -47,11 +47,10 @@ const runNode = async (args = [], options = {}) => {
   if (!entries) {
     return runNodeHelper(scriptPath, args, {
       ...options,
-      env: {
-        ...process.env,
+      env: runIdFreeEnv({
         ...(options.env ?? {}),
         DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-      },
+      }),
     });
   }
   const { runChild } = makeGhMock(entries);
@@ -64,7 +63,7 @@ const runNode = async (args = [], options = {}) => {
   if (parsed.help) {
     return { code: 0, stdout: "", stderr: "" };
   }
-  const env = { ...process.env, ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" };
+  const env = runIdFreeEnv({ ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" });
   delete env[GH_MOCK_ENTRIES];
   const repoRoot = options.cwd ?? process.cwd();
   const stderrChunks = [];
@@ -899,12 +898,11 @@ process.exit(97);
     );
     await chmod(ghPath, 0o755);
 
-    const env = {
-      ...process.env,
+    const env = runIdFreeEnv({
       PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
       GH_REREQUEST_STATE_PATH: requestedStatePath,
-    };
+    });
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1199,12 +1197,11 @@ process.exit(97);
     );
     await chmod(ghPath, 0o755);
 
-    const env = {
-      ...process.env,
+    const env = runIdFreeEnv({
       PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
       GH_REREQUEST_STATE_PATH: requestedStatePath,
-    };
+    });
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 

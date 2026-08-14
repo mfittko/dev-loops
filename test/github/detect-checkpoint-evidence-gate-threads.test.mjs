@@ -3,13 +3,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: { ...process.env, ...(options.env ?? {}), DEVLOOPS_RUN_ID: "" },
+  env: runIdFreeEnv({ ...(options.env ?? {}), DEVLOOPS_RUN_ID: "" }),
 });
 
 function cleanGateBody(gate, headSha) {
@@ -127,4 +128,28 @@ test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to f
   const parsed = JSON.parse(result.stderr);
   assert.equal(parsed.preMergeGateCheck.ok, false);
   assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
+});
+
+test("runIdFreeEnv strips ambient markers, drops undefined overrides, and lets explicit overrides win", () => {
+  // Drive the markers from the shared RUN_ID_MARKERS adapter contract rather than
+  // any harness-runtime literal, so this test stays harness-agnostic (the
+  // harness-runtime var name is owned by the adapter boundary, not test code).
+  const prev = new Map();
+  try {
+    for (const marker of RUN_ID_MARKERS) {
+      prev.set(marker, process.env[marker]);
+      process.env[marker] = "ambient-" + marker;
+    }
+    const forced = runIdFreeEnv({ EXPLICIT: "kept", UNSET: undefined });
+    for (const marker of RUN_ID_MARKERS) {
+      assert.equal(forced[marker], undefined, `${marker} must be stripped from the built env`);
+    }
+    assert.equal(forced.EXPLICIT, "kept");
+    assert.ok(!Object.prototype.hasOwnProperty.call(forced, "UNSET"), "undefined overrides must be removed, not kept as undefined (child_process.spawn rejects non-string env values)");
+  } finally {
+    for (const [key, value] of prev) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

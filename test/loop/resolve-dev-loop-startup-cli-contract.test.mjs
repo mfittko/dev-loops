@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "resolve-dev-loop-startup.mjs");
@@ -177,7 +178,7 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
       env: Object.fromEntries(
         Object.entries(process.env).filter(
           ([k]) =>
-            k !== "DEVLOOPS_RUN_ID" &&
+            !RUN_ID_MARKERS.includes(k) &&
             k !== "CLAUDECODE" &&
             k !== "DEVLOOPS_DETACHED",
         ),
