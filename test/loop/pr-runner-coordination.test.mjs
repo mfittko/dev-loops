@@ -599,6 +599,46 @@ test("releaseRunClaimsOnExit reports no_coordination_dir when the root is absent
   }
 });
 
+test("releaseRunClaimsOnExit treats a missing-dir (ENOENT) readdir error as no_coordination_dir", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-enoent-"));
+  const missingDirError = Object.assign(new Error("missing"), { code: "ENOENT" });
+  try {
+    const result = await releaseRunClaimsOnExit({
+      runId: "run-x",
+      root: tempDir,
+      readDir: async () => { throw missingDirError; },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "no_coordination_dir");
+    assert.equal(result.error, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit does not mask a non-ENOENT readdir failure as no_coordination_dir", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-scanfail-"));
+  const permissionError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+  try {
+    const result = await releaseRunClaimsOnExit({
+      runId: "run-x",
+      root: tempDir,
+      readDir: async () => { throw permissionError; },
+    });
+    // Non-fatal by contract (ok stays true, nothing thrown) but the failure is
+    // surfaced via a distinct scan_failed status + message, not a clean-looking
+    // no_coordination_dir that would make the sweep appear successful while
+    // doing nothing.
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "scan_failed");
+    assert.match(result.error, /EACCES/);
+    assert.deepEqual(result.released, []);
+    assert.deepEqual(result.failed, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("releaseRunClaimsOnExit records parse_failed on a corrupt claim file and continues", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-corrupt-"));
   try {

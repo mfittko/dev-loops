@@ -806,7 +806,19 @@ export async function releaseAsyncRunnerOwnership({
  * legitimately-dispatched run. Fail-closed competitor semantics are preserved:
  * only claims owned by {@link runId} are cleared; a genuinely live competing
  * run's claim is left intact.
- *
+ */
+/**
+ * True for the "directory just isn't there" readdir errors that mean a normal
+ * nothing-to-sweep exit (no coordination claims were ever written). Any other
+ * readdir failure is a real scan problem and must not be treated as an absent
+ * coordination dir.
+ */
+function isMissingDirError(error) {
+  const code = error?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
  * Coordination files live at `.pi/runner-coordination/<owner>/<name>/pr-<n>.json`.
  * Best-effort/non-fatal by contract (mirrors {@link releaseAsyncRunnerOwnership}):
  * an unreadable/parsing/lock failure is swallowed and reported, never thrown.
@@ -833,8 +845,24 @@ export async function releaseRunClaimsOnExit({
   let entries;
   try {
     entries = await readDir(coordinationRoot, { recursive: true });
-  } catch {
-    return { ok: true, status: "no_coordination_dir", released: [], failed: [], root };
+  } catch (error) {
+    // #1706/review: a missing coordination root (ENOENT/ENOTDIR) is the normal
+    // nothing-to-sweep case; ANY other readdir failure (permissions, IO,
+    // unsupported options) must not masquerade as that or the sweep looks
+    // successful while doing nothing. Surface it as a distinct scan_failed
+    // status so the caller can log a non-fatal warning. Non-fatal by contract:
+    // never rethrow.
+    if (isMissingDirError(error)) {
+      return { ok: true, status: "no_coordination_dir", released: [], failed: [], root };
+    }
+    return {
+      ok: true,
+      status: "scan_failed",
+      released: [],
+      failed: [],
+      root,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
   const released = [];
   const failed = [];

@@ -130,9 +130,29 @@ async function main(argv) {
   // and non-fatal; the driver's exit status is never altered by a failed sweep.
   if (!opts.dryRun) {
     try {
-      await releaseRunClaimsOnExit({ runId, root: repoRoot });
-    } catch {
+      const sweep = await releaseRunClaimsOnExit({ runId, root: repoRoot });
+      // #1706/review: surface a failed or partially-failed exit-claim sweep on
+      // stderr so leaked claims stay diagnosable, while keeping the sweep
+      // non-fatal — the driver's exit status is never altered by sweep failure.
+      if (sweep?.status === "scan_failed" || (sweep?.failed?.length ?? 0) > 0) {
+        process.stderr.write(
+          JSON.stringify({
+            ok: false,
+            warning: "exit-claim sweep encountered failures",
+            status: sweep.status,
+            failed: sweep.failed,
+          }) + "\n",
+        );
+      }
+    } catch (error) {
       // swallow; never let a failed sweep change the driver exit status
+      process.stderr.write(
+        JSON.stringify({
+          ok: false,
+          warning: "exit-claim sweep failed",
+          error: error instanceof Error ? error.message : String(error),
+        }) + "\n",
+      );
     }
   }
   return res.status ?? 1;
