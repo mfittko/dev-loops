@@ -101,7 +101,9 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   if (typeof command !== "string") {
     return ALLOW;
   }
-  const inTargetRepo = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+  // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
+  // silently fail OPEN and disable every guard that depends on inTargetRepo (#1622).
+  const inTargetRepo = (repoSlug ?? "").trim().toLowerCase() === TARGET_REPO_SLUG.trim().toLowerCase();
 
   // OPS-NO-INLINE-INTERPRETER (#1622): inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
   // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars

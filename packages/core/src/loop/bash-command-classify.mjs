@@ -506,11 +506,14 @@ export function extractRepoFlagFromGhPrMerge(command) {
 // ---------------------------------------------------------------------------
 
 /** gh api value-taking flags (short forms). Each consumes the following token. Lowercase (compared
- * against token.toLowerCase()) — the `-H` header flag is real but case-folded here like the rest.
- * Covers every value-taking short flag gh api accepts so a flag placed BEFORE the endpoint skips
- * its value and the real endpoint is still read (#1622): -X/--method, -f/--field, -F/--raw-field
- * (both case-fold to -f), -H/--header, -q/--jq, -p/--preview, -t/--template, -r/--repo. */
-const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h", "-r", "-q", "-p", "-t"]);
+ * against token.toLowerCase()) — covers every value-taking short flag gh api accepts so a flag
+ * placed BEFORE the endpoint skips its value and the real endpoint is still read (#1622):
+ * -X/--method, -m/--method, -f/--field, -F/--raw-field (both case-fold to -f), -q/--jq, -p/--preview,
+ * -t/--template, -r/--repo. `-h` (help) is intentionally EXCLUDED: it is a boolean help flag that
+ * consumes no value, and case-folding it together with `-H` (header) made a mid-command `-h`
+ * swallow the real endpoint and bypass the write-path deny (#1622). `-H` is matched as an exact
+ * token in the scanner so it stays a value-taking flag despite the case-fold. */
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-r", "-q", "-p", "-t"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
 const GH_API_VALUE_LONG_FLAGS = new Set([
   "--method", "--field", "--raw-field", "--header", "--repo", "--jq", "--preview",
@@ -546,8 +549,12 @@ export function extractGhApiEndpointSegments(command) {
         endpoint = token;
         break;
       }
+      // `-h`/`--help` is a boolean help flag (consumes no value); mid-command it must not swallow
+      // the endpoint and silently bypass the write-path deny. `-H` is the case-sensitive header
+      // value flag and stays value-taking here even though `-h` is excluded from the folded set.
+      if (token === "-h" || token === "--help") continue;
       const lower = token.toLowerCase();
-      if (GH_API_VALUE_FLAGS.has(lower) || GH_API_VALUE_LONG_FLAGS.has(lower)) {
+      if (token === "-H" || GH_API_VALUE_FLAGS.has(lower) || GH_API_VALUE_LONG_FLAGS.has(lower)) {
         i += 1; // consume the flag's value token
         // A value that opens with a quote may span whitespace (e.g. `-H "Accept: application/vnd.github+json"`)
         // — keep consuming tokens until the matching closing quote so the quoted value is skipped whole
@@ -584,7 +591,7 @@ function targetGhApiPathRegex(suffix) {
  * anchors or an absolute-URL write bypasses the deny (#1622). */
 function normalizeGhApiEndpoint(endpoint) {
   if (!endpoint) return endpoint;
-  return endpoint.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "");
+  return endpoint.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").replace(/\/+$/, "");
 }
 
 /** Whether any `gh api` segment targets the `graphql` endpoint. */
@@ -594,9 +601,21 @@ function ghApiGraphqlSegments(command) {
 
 /** Whether a `gh api` segment names an explicit write method (POST/PUT/PATCH/DELETE). gh api
  * defaults to GET, so the ad-hoc-write predicates require an explicit write method to refuse. */
-const GH_API_WRITE_METHOD_RE = /(?:-X|-m|--method)(?:\s+|\s*=)?(?:"|')?\s*(?:POST|PUT|PATCH|DELETE)\b/i;
 function ghApiSegmentHasWriteMethod(segment) {
-  return GH_API_WRITE_METHOD_RE.test(segment);
+  const re = ghApiRegex();
+  if (!re.test(segment)) return false;
+  const tokens = segment.replace(re, "").trim().split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    // Only a method FLAG (`--method`, `-X`/`-m`, or an inline `=POST`) declares an explicit write
+    // method. A method-looking token inside a FIELD VALUE (`-F 'body=--method DELETE'`) is data, not
+    // the method flag, so the read gets no write-method deny (token-scoped, not segment-scoped).
+    const m = tokens[i].match(/^(?:--method|-X|-m)(?:=([A-Za-z]+)|([A-Za-z]+))?$/i);
+    if (!m) continue;
+    const inline = m[1] ?? m[2];
+    const value = (inline ?? tokens[i + 1] ?? "").replace(/^["']|["']$/g, "");
+    if (/^(?:POST|PUT|PATCH|DELETE)\b/i.test(value)) return true;
+  }
+  return false;
 }
 
 /**
@@ -610,7 +629,7 @@ function ghApiSegmentHasWriteMethod(segment) {
 export function commandContainsSubIssueAdHocBypass(command) {
   const re = targetGhApiPathRegex(`issues/\\d+/sub_issues(?:/priority)?(?:\\s|$)`);
   return extractGhApiEndpointSegments(command).some(
-    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );
 }
 
@@ -623,7 +642,7 @@ export function commandContainsSubIssueAdHocBypass(command) {
 export function commandContainsReplyResolveBypass(command) {
   const re = targetGhApiPathRegex(`pulls/\\d+/comments/\\d+/replies(?:\\s|$)`);
   return extractGhApiEndpointSegments(command).some(
-    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );
 }
 
@@ -647,7 +666,7 @@ export function commandContainsGraphqlResolveReviewThread(command) {
 export function commandContainsCopilotRequestBypass(command) {
   const re = targetGhApiPathRegex(`pulls/\\d+/requested_reviewers(?:\\s|$)`);
   return extractGhApiEndpointSegments(command).some(
-    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );
 }
 
@@ -664,7 +683,11 @@ export function commandContainsCopilotSummonComment(command) {
   // prose mention like `see /copilot for more` / `see /copilot docs`. A bare `/copilot` must run to
   // the end of the (quoted) body; the explicit `re-review` form allows trailing modifiers
   // (`/copilot re-review now`) so appending a word cannot defeat the summon deny (#1622).
-  return /\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
+  // A summon is `/copilot`/`/copilot re-review` at the START of the quoted body — anchored on the
+  // opening quote so a trailing prose mention (`--body "see /copilot"` / `"thanks /copilot"`) is
+  // NOT misread as a bare summon, and an in-prose `/copilot re-review` (`"see ... re-review in
+  // docs"`) is likewise not a summon. Only `gh pr comment` segments reach here (guard above).
+  return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
 /**
@@ -683,7 +706,11 @@ export function commandContainsDetachedWaitTool(command) {
   // like `gh pr view 1 && while ...` must not silence the deny) as long as the body carries both a
   // `sleep` and a gh/loop-state call. `gh` must be a standalone token (followed by whitespace/end) —
   // a bare mention of `gh` inside another word (`grep gh-notes`) is not a GitHub call.
-  if (/\b(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|loop-state/.test(whole)) {
+  // while/until/for loop heads (a bare `seq` sequence generator is not a loop head on its own —
+  // `seq | while read` is caught by the `while` head), with `sleep` and a gh/loop-state *call*.
+  // loop-state must sit at a command-head position (`; lo`, `&& lo`, start), not be a substring of
+  // a grep/echo target (no false-deny on `grep loop-state x`).
+  if (/(?:while|until|for)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)) {
     return true;
   }
   return shellSegments(command).some((segment) => {
@@ -719,12 +746,18 @@ export function commandContainsInlineInterpreter(command) {
       // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
       if (/^(?:-\s*)?<</i.test(code)) return true;
       const tokens = code.split(/\s+/).filter(Boolean);
-      for (const t of tokens) {
+      // Node value-taking flags (short + long) each consume the following token. Consuming them lets
+      // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
+      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value (#1622).
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
         // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
         // is a script argument.
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
+        if (NODE_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
       }
     }
     if (interpreterRegex("python3?").test(s)) {

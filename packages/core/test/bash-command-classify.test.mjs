@@ -385,6 +385,15 @@ test("commandContainsSubIssueAdHocBypass detects target-repo sub_issues WRITES i
   // a quoted endpoint is stripped of its quotes before the write-path regex matches
   assert.equal(commandContainsSubIssueAdHocBypass('gh api "repos/mfittko/dev-loops/issues/5/sub_issues" -X POST -f child=6'), true);
   assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X GET"), false);
+  // trailing-slash endpoint forms (GitHub serves the same resource) are normalized and denied
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/ -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/priority/ -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues/ -X POST -f child=6"), true);
+  // a mid-command boolean `-h` (help) must not swallow the endpoint and bypass the write deny
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -h issues/5/sub_issues -X POST -f child=6"), true);
+  // a method-looking token inside a FIELD VALUE is data, not an explicit write method (no deny)
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -F 'body=--method DELETE'"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -f body='--method POST'"), false);
 });
 
 test("commandContainsReplyResolveBypass detects target-repo replies POSTs (write method required)", () => {
@@ -396,6 +405,8 @@ test("commandContainsReplyResolveBypass detects target-repo replies POSTs (write
   // absolute-URL endpoint form is normalized and denied
   assert.equal(commandContainsReplyResolveBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi"), true);
   assert.equal(commandContainsReplyResolveBypass("node scripts/github/reply-resolve-review-thread.mjs --thread 5"), false);
+  // trailing-slash endpoint form is normalized and denied
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies/ -f body=hi"), true);
 });
 
 test("commandContainsGraphqlResolveReviewThread detects resolveReviewThread on the graphql endpoint", () => {
@@ -420,6 +431,8 @@ test("commandContainsCopilotRequestBypass detects target-repo requested_reviewer
   assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
   assert.equal(commandContainsCopilotRequestBypass("gh api -XPOST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
   assert.equal(commandContainsCopilotRequestBypass("gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST"), true);
+  // trailing-slash endpoint form is normalized and denied
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers/ -f reviewers[]=x"), true);
 });
 
 test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr comment bodies", () => {
@@ -434,6 +447,12 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
   // prose mentions of /copilot are NOT a bare summon
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot for more"'), false);
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot docs"'), false);
+  // a trailing/leading prose mention where /copilot is the LAST token is still NOT a bare summon
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot"'), false);
+  assert.equal(commandContainsCopilotSummonComment("gh pr comment 5 --body 'thanks /copilot'"), false);
+  // an in-prose `/copilot re-review` is not a summon either (only the body-start form is)
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot re-review in docs"'), false);
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "take a look /copilot"'), false);
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
@@ -456,6 +475,13 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // until/seq loop forms are detected too
   assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
+  // a for-based poll is now caught (previously only while|until|seq heads matched)
+  assert.equal(commandContainsDetachedWaitTool("for i in 1 2 3; do sleep 1; gh pr view 1; done"), true);
+  // a bare `seq` sequence-generator (not a loop head) is NOT a polling loop
+  assert.equal(commandContainsDetachedWaitTool("seq 1 5 > /tmp/f; sleep 2; gh pr view 1"), false);
+  // loop-state must be a command-head CALL, not a substring of a grep/echo target
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
+  assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
@@ -482,4 +508,8 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   // env/wrapper/path prefixes are tolerated
   assert.equal(commandContainsInlineInterpreter('DEBUG=1 node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('command python3 -c "print(1)"'), true);
+  // a value-taking flag BEFORE the interpreter flag must not break the scan for -e/--eval
+  assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
+  assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
+  assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
 });
