@@ -338,3 +338,52 @@ describe("fingerprint-less request groups — stable per-model ordinal keying (u
     );
   });
 });
+
+describe("draft-gate hardening of validatePrimerEvidence (fan-in converge findings)", () => {
+  test("shared_prefix_hash passes when BOTH plan and evidence omit a shared prefix (no false-positive)", () => {
+    const plan = buildReviewDispatchPlan({
+      gate: "pre_approval_gate",
+      headSha: "abcdef1234567890",
+      // deliberately NO sharedPrefixHash
+      requestGroups: [
+        { model: "model-a", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["scope"] },
+      ],
+      capabilities: { harness: "claude" },
+    });
+    assert.equal(plan.sharedPrefixHash == null, true); // buildReviewDispatchPlan omits the key when absent
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+      reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: fp, releasedAt: 11 }],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, true, JSON.stringify(r.failures));
+  });
+
+  test("plan_hash fails closed when evidence planHash is missing (tampered/truncated evidence)", () => {
+    const plan = makePlan();
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+      reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: fp, releasedAt: 11 }],
+    });
+    const stripped = { ...ev, planHash: null };
+    const r = validatePrimerEvidence({ plan, evidence: stripped });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "plan_hash"));
+    assert.throws(() => enforcePrimerEvidence({ plan, evidence: stripped }), /plan_hash/);
+  });
+
+  test("primer_order fails closed when release/landed timestamps are missing (barrier unprovable)", () => {
+    const plan = makePlan();
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+      reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: fp, releasedAt: null }],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "primer_order"));
+    assert.throws(() => enforcePrimerEvidence({ plan, evidence: ev }), /primer_order/);
+  });
+});

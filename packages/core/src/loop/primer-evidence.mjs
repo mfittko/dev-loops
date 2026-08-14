@@ -25,12 +25,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- API surface reserved for future harness adapters
-
 export const PRIMER_EVIDENCE_SCHEMA_VERSION = 1;
 
-/** @param {string} s */
-const isHex = (s) => /^[0-9a-f]{64}$/i.test(String(s));
 const sha = (s) => `sha256:${String(s).replace(/^sha256:/, "").trim().toLowerCase()}`;
 
 /**
@@ -101,7 +97,7 @@ function normFp(v) {
  * @param {Array<object>} input.reviewerReleases - [{ model, requestPrefixFingerprint, releasedAt }]
  * @returns {object} canonical evidence artifact.
  */
-export function buildPrimerEvidence({ plan, primerRuns = [], reviewerReleases = [], _now = 0 } = {}) {
+export function buildPrimerEvidence({ plan, primerRuns = [], reviewerReleases = [] } = {}) {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.requestGroups)) {
     throw new Error("buildPrimerEvidence requires a plan with requestGroups");
   }
@@ -168,16 +164,24 @@ export function buildPrimerEvidence({ plan, primerRuns = [], reviewerReleases = 
 export function validatePrimerEvidence({ plan, evidence } = {}) {
   const failures = [];
 
-  // shared-prefix hash binding.
-  if (evidence.sharedPrefixHash == null || evidence.sharedPrefixHash !== (plan.sharedPrefixHash ?? null)) {
+  // shared-prefix hash binding. A plan that carries no shared-prefix hash HAS
+  // no cache-access binding to enforce (both null is a pass); when the plan
+  // carrys one, the evidence must carry the SAME value. This is a real bug
+  // fix: the prior `evidence.sharedPrefixHash == null ||` clause failed even
+  // when plan and evidence were BOTH absent (a both-absent plan could never be
+  // validated).
+  if (evidence.sharedPrefixHash !== (plan.sharedPrefixHash ?? null)) {
     failures.push({
       check: "shared_prefix_hash",
       reason: `evidence sharedPrefixHash ${JSON.stringify(evidence.sharedPrefixHash)} does not match the plan's ${JSON.stringify(plan.sharedPrefixHash ?? null)}`,
     });
   }
 
-  // plan hash binding: evidence must reference the same search.
-  if (evidence.planHash != null && plan.planHash != null && evidence.planHash !== plan.planHash) {
+  // plan hash binding: evidence must reference the same search. Fails closed
+  // on a MISSING evidence planHash too (the evidence was not derived from this
+  // search, or was tampered), not only on a mismatch — matching the contract
+  // text that "plan hash is missing or mismatched" refuses consolidation.
+  if (evidence.planHash == null || plan.planHash == null || evidence.planHash !== plan.planHash) {
     failures.push({
       check: "plan_hash",
       reason: `evidence planHash ${JSON.stringify(evidence.planHash)} does not match the plan's ${JSON.stringify(plan.planHash)}`,
@@ -244,10 +248,14 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
         check: "model_group",
         reason: `reviewer release ${i} has no primer run for model ${JSON.stringify(rel.model)}`,
       });
-    } else if (Number.isFinite(rel.releasedAt) && Number.isFinite(primerForRel.landedAt) && rel.releasedAt < primerForRel.landedAt) {
+    } else if (!Number.isFinite(rel.releasedAt) || !Number.isFinite(primerForRel.landedAt) || rel.releasedAt < primerForRel.landedAt) {
+      // Fail CLOSED when the ordering barrier is unprovable (missing / non-finite
+      // timestamps), not only when it is provably reversed: a release without a
+      // landed primer timestamp cannot attest the primer ran before it, so the
+      // evidence must not proceed.
       failures.push({
         check: "primer_order",
-        reason: `reviewer release ${i} released at ${rel.releasedAt} before its primer landed at ${primerForRel.landedAt} (ordering barrier violated)`,
+        reason: `reviewer release ${i} (${JSON.stringify(rel.model)}) cannot prove its primer landed before it: releasedAt=${String(rel.releasedAt)}, primer landedAt=${String(primerForRel.landedAt)} (ordering barrier missing or violated)`,
       });
     }
   }
