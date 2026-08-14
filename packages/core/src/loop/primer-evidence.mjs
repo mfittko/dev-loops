@@ -61,9 +61,25 @@ export function primerEvidencePath({ dir, gate, headSha } = {}) {
  */
 function planGroupIndex(requestGroups) {
   const idx = new Map();
+  // Fingerprint-less groups are keyed by a PER-MODEL ordinal so a primer run
+  // maps to the SAME plan group regardless of array positions. The prior
+  // position-based `${model}::__unkeyed:${i}` key used the array index (the
+  // primer run's position), which was NOT the same index planGroupIndex used
+  // (the group's position in the plan) — a fingerprint-less run whose array
+  // index differed from its group's plan index threw a false "prefix not
+  // present" error, and validatePrimerEvidence keyed them without any index
+  // at all (`__unkeyed`). One ordinal scheme everywhere closes that drift.
+  const unkeyedOrdinals = new Map();
   for (let i = 0; i < requestGroups.length; i++) {
     const g = requestGroups[i];
-    const key = g.requestPrefixFingerprint ? `${g.model}::${g.requestPrefixFingerprint}` : `${g.model}::__unkeyed:${i}`;
+    let key;
+    if (g.requestPrefixFingerprint) {
+      key = `${g.model}::${g.requestPrefixFingerprint}`;
+    } else {
+      const n = unkeyedOrdinals.get(g.model) ?? 0;
+      unkeyedOrdinals.set(g.model, n + 1);
+      key = `${g.model}::__unkeyed:${n}`;
+    }
     if (!idx.has(key)) idx.set(key, []);
     idx.get(key).push(g);
   }
@@ -95,12 +111,20 @@ export function buildPrimerEvidence({ plan, primerRuns = [], reviewerReleases = 
   const groups = plan.requestGroups;
   const idx = planGroupIndex(groups);
 
+  const runUnkeyedOrdinals = new Map();
   const normRuns = primerRuns.map((r, i) => {
     if (typeof r.model !== "string" || r.model.length === 0) {
       throw new Error(`primerRuns[${i}].model must be a non-empty concrete model`);
     }
     const fp = normFp(r.requestPrefixFingerprint);
-    const key = fp ? `${r.model}::${fp}` : `${r.model}::__unkeyed:${i}`;
+    let key;
+    if (fp) {
+      key = `${r.model}::${fp}`;
+    } else {
+      const n = runUnkeyedOrdinals.get(r.model) ?? 0;
+      runUnkeyedOrdinals.set(r.model, n + 1);
+      key = `${r.model}::__unkeyed:${n}`;
+    }
     if (!idx.has(key)) {
       throw new Error(
         `primerRuns[${i}] references model ${JSON.stringify(r.model)} with a prefix not present in the plan's request groups`,
@@ -165,18 +189,28 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
 
   // group coverage: every request group must have a primer run bound to its
   // model + request fingerprint.
-  const coveredKeys = new Set(
-    evidence.primerRuns.map((r) =>
-      r.requestPrefixFingerprint
-        ? `${r.model}::${r.requestPrefixFingerprint}`
-        : `${r.model}::__unkeyed`,
-    ),
-  );
+  const coveredKeys = new Set();
+  const coveredUnkeyedOrdinals = new Map();
+  for (const r of evidence.primerRuns) {
+    if (r.requestPrefixFingerprint) {
+      coveredKeys.add(`${r.model}::${r.requestPrefixFingerprint}`);
+    } else {
+      const n = coveredUnkeyedOrdinals.get(r.model) ?? 0;
+      coveredUnkeyedOrdinals.set(r.model, n + 1);
+      coveredKeys.add(`${r.model}::__unkeyed:${n}`);
+    }
+  }
+  const groupUnkeyedOrdinals = new Map();
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
-    const key = g.requestPrefixFingerprint
-      ? `${g.model}::${g.requestPrefixFingerprint}`
-      : `${g.model}::__unkeyed`;
+    let key;
+    if (g.requestPrefixFingerprint) {
+      key = `${g.model}::${g.requestPrefixFingerprint}`;
+    } else {
+      const n = groupUnkeyedOrdinals.get(g.model) ?? 0;
+      groupUnkeyedOrdinals.set(g.model, n + 1);
+      key = `${g.model}::__unkeyed:${n}`;
+    }
     if (!coveredKeys.has(key)) {
       failures.push({
         check: "group_coverage",

@@ -63,6 +63,7 @@ import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixe
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -176,6 +177,18 @@ Optional:
                                  GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
                                  artifact count — comparing against the angle count would false-fail
                                  every grouped round.
+  --primer-evidence <path>       The recorded primer-dispatch ordering evidence artifact
+                                 (<gate>-<headSha>.primer-evidence.json, Phase 1.5 step 4) as JSON.
+                                 Must be paired with --primer-plan (either flag alone fails closed at
+                                 parse time). When both are given, the fan-in re-validates the
+                                 evidence against the dispatch plan via enforcePrimerEvidence
+                                 (GATE-EXEC-PRIMER-EVIDENCE) and FAILS CLOSED (exit 1) when the
+                                 ordering barrier, request-group coverage, model-group binding,
+                                 request-prefix fingerprint, shared-prefix hash, or plan hash is
+                                 missing or mismatched — the refusal names the failing check.
+  --primer-plan <path>           The dispatch plan (buildReviewDispatchPlan output, carrying its
+                                 requestGroups / planHash / sharedPrefixHash) the evidence was
+                                 derived from, as JSON. Required together with --primer-evidence.
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
@@ -559,6 +572,8 @@ export function parseConsolidateFaninCliArgs(argv) {
     carryForwardPlan: undefined,
     repoRoot: undefined,
     expectedDispatchUnits: undefined,
+    primerEvidence: undefined,
+    primerPlan: undefined,
     tmpRoot: undefined,
   };
   const { tokens } = parseArgs({
@@ -575,6 +590,8 @@ export function parseConsolidateFaninCliArgs(argv) {
       "carry-forward-plan": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
+      "primer-evidence": { type: "string" },
+      "primer-plan": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -687,11 +704,36 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.tmpRoot = tmpRoot;
       continue;
     }
+    if (token.name === "primer-evidence") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--primer-evidence requires a non-empty path");
+      }
+      options.primerEvidence = p;
+      continue;
+    }
+    if (token.name === "primer-plan") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--primer-plan requires a non-empty path");
+      }
+      options.primerPlan = p;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
+  }
+  // Primer-evidence enforcement only makes sense when BOTH the recorded
+  // evidence artifact (Phase 1.5 step 4) and the dispatch plan it was derived
+  // from are present — enforcePrimerEvidence needs the plan's request groups
+  // and hashes to check the evidence against. Either alone fails closed here,
+  // so a caller can never half-enable the gate (a plan with no evidence to
+  // check, or evidence with no plan to validate it against).
+  if ((options.primerEvidence === undefined) !== (options.primerPlan === undefined)) {
+    throw parseError("--primer-evidence and --primer-plan must be given together: a primer-evidence artifact cannot be enforced against no plan, and a plan without its recorded evidence would silently skip the gate");
   }
   // --carried-angles is proof-carrying, not a bare trust-me list (high-severity
   // regression: a mandatory angle or a fabricated name could otherwise mint a
@@ -955,6 +997,43 @@ export async function consolidateGateFanin(options) {
     if (options.expectedDispatchUnits !== undefined && prefixVerdict.reviewerCount > 0
         && prefixVerdict.reviewerCount < options.expectedDispatchUnits) {
       throw new Error(`GATE-EXEC-BRIEFING-PREFIX sentinel count (${prefixVerdict.reviewerCount}) is short of the expected dispatch-unit count (${options.expectedDispatchUnits}) for head ${options.headSha} — ${options.expectedDispatchUnits - prefixVerdict.reviewerCount} dispatched reviewer(s) never ran the fresh-context guard (no sentinel written). Re-run the missing reviewer(s), then re-consolidate.`);
+    }
+  }
+
+  // GATE-EXEC-PRIMER-EVIDENCE (#1475): the fan-in enforcing primer-dispatch
+  // ordering evidence as a real fail-closed input to consolidation. The
+  // primer-evidence artifact (Phase 1.5 step 4, `<gate>-<headSha>`
+  // `.primer-evidence.json`) and the dispatch plan it was derived from are
+  // passed in TOGETHER (parse-time both-or-neither); when present the fan-in
+  // re-validates them via enforcePrimerEvidence and FAILS CLOSED (this throw
+  // -> exit 1) when the ordering barrier, request-group coverage, model-group
+  // binding, request-prefix fingerprint, shared-prefix hash, or plan hash is
+  // missing or mismatched — the refusal names the failing check. Absent both
+  // flags the fan-in proceeds unchanged: recording evidence is progressive /
+  // optional, so rounds that never recorded it (all pre-slice-3 rounds) are
+  // not newly blocked. This is the wiring that gives GATE-EXEC-PRIMER-EVIDENCE
+  // a real invocation site (previously it was dead code referenced only by its
+  // own error-message string).
+  if (options.primerEvidence !== undefined && options.primerPlan !== undefined) {
+    const readJson = async (filePath, label) => {
+      let text;
+      try {
+        text = await readFile(filePath, "utf8");
+      } catch (err) {
+        throw new Error(`--primer-${label} "${filePath}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`--primer-${label} "${filePath}" is not valid JSON`);
+      }
+    };
+    const evidence = await readJson(options.primerEvidence, "evidence");
+    const plan = await readJson(options.primerPlan, "plan");
+    try {
+      enforcePrimerEvidence({ plan, evidence });
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : String(err));
     }
   }
 

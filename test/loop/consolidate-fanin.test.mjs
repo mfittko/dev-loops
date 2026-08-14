@@ -12,6 +12,8 @@ import {
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
+import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runNode } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -522,6 +524,153 @@ test("a finding's oversized file reference is truncated with a plain ellipsis su
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GATE-EXEC-PRIMER-EVIDENCE wiring (#1475): the fan-in enforces the recorded
+// primer-dispatch evidence against the dispatch plan via enforcePrimerEvidence,
+// failing closed on missing/mismatched evidence — and proceeds unchanged when
+// neither flag is given (progressive/optional recording).
+// ---------------------------------------------------------------------------
+
+const PRIMER_FP = "sha256:" + "a".repeat(64);
+const PRIMER_HEAD = "0123456789abcdef0123456789abcdef01234567";
+
+function makePrimerPlanAndEvidence() {
+  const plan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: PRIMER_HEAD,
+    sharedPrefixPath: "/tmp/shared.md",
+    sharedPrefixHash: PRIMER_FP,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope", "dry"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+  const evidence = buildPrimerEvidence({
+    plan,
+    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 11 }],
+  });
+  return { plan, evidence };
+}
+
+async function withPrimerFiles(files, fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "primer-evidence-"));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content), "utf8");
+    }
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("consolidateGateFanin enforces valid primer evidence and consolidates (GATE-EXEC-PRIMER-EVIDENCE)", async () => {
+  const { plan, evidence } = makePrimerPlanAndEvidence();
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": evidence, "primer-plan.json": plan },
+        async (pdir) => {
+          const result = await consolidateGateFanin({
+            findingsDir: dir,
+            primerEvidence: path.join(pdir, "primer-evidence.json"),
+            primerPlan: path.join(pdir, "primer-plan.json"),
+          });
+          assert.equal(result.ok, true);
+          assert.equal(result.overallVerdict, "clean");
+          assert.equal(result.angles.length, 1);
+        },
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed when primer evidence violates the ordering barrier", async () => {
+  const { plan } = makePrimerPlanAndEvidence();
+  // Violation: the reviewer release at t=5 lands BEFORE its primer at t=10.
+  const violation = buildPrimerEvidence({
+    plan,
+    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 5 }],
+  });
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": violation, "primer-plan.json": plan },
+        async (pdir) => {
+          await assert.rejects(
+            consolidateGateFanin({
+              findingsDir: dir,
+              primerEvidence: path.join(pdir, "primer-evidence.json"),
+              primerPlan: path.join(pdir, "primer-plan.json"),
+            }),
+            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("primer_order"),
+          );
+        },
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed when primer evidence references a plan it did not come from", async () => {
+  const { evidence } = makePrimerPlanAndEvidence();
+  // A DIFFERENT plan (different request group model) than the evidence was
+  // built from: the plan-hash / shared-prefix bindings no longer match.
+  const otherPlan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: PRIMER_HEAD,
+    sharedPrefixPath: "/tmp/shared.md",
+    requestGroups: [
+      {
+        model: "model-c",
+        requestPrefixFingerprint: "sha256:" + "c".repeat(64),
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": evidence, "primer-plan.json": otherPlan },
+        async (pdir) => {
+          await assert.rejects(
+            consolidateGateFanin({
+              findingsDir: dir,
+              primerEvidence: path.join(pdir, "primer-evidence.json"),
+              primerPlan: path.join(pdir, "primer-plan.json"),
+            }),
+            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("shared_prefix_hash"),
+          );
+        },
+      );
+    },
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --primer-evidence without --primer-plan (and vice versa)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-evidence", "/tmp/e.json"]),
+    /--primer-evidence and --primer-plan must be given together/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-plan", "/tmp/p.json"]),
+    /--primer-evidence and --primer-plan must be given together/,
+  );
+});
+
 // pr-checklist-matrix mandatory-angle upsert
 // ---------------------------------------------------------------------------
 

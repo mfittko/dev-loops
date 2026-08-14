@@ -267,3 +267,74 @@ describe("enforcePrimerEvidence — strict fail-closed refusal surface (GATE-EXE
     );
   });
 });
+
+describe("fingerprint-less request groups — stable per-model ordinal keying (unkeyed edge path)", () => {
+  // Regression for the unkeyed-key drift: buildPrimerEvidence keyed
+  // fingerprint-less runs by their ARRAY index while planGroupIndex keyed
+  // plan groups by their PLAN index, so a fingerprint-less run whose array
+  // position differed from its group's plan position threw a false
+  // "prefix not present" error; validatePrimerEvidence keyed them with no
+  // index at all. Both now use the same per-model ordinal scheme.
+  test("a fingerprint-less group + run validates clean (no false prefix error)", () => {
+    const plan = makePlan({
+      groups: [
+        {
+          model: "model-a",
+          requestPrefixFingerprint: null,
+          cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+          ttlIntent: "1h",
+          angles: ["correctness", "security"],
+        },
+        {
+          model: "model-b",
+          requestPrefixFingerprint: fp2,
+          cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+          ttlIntent: "1h",
+          angles: ["scope"],
+        },
+      ],
+    });
+    // The fingerprint-less run is at array index 1, the fingerprint-keyed
+    // run at index 0 — the wrong-order case that previously false-threw.
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [
+        { model: "model-b", requestPrefixFingerprint: fp2, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 3 },
+        { model: "model-a", primerForm: PRIMER_FORM_DEDICATED, landedAt: 1 },
+      ],
+      reviewerReleases: [
+        { model: "model-a", releasedAt: 2 },
+        { model: "model-b", requestPrefixFingerprint: fp2, releasedAt: 4 },
+      ],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, true, JSON.stringify(r.failures));
+    assert.equal(enforcePrimerEvidence({ plan, evidence: ev }), true);
+  });
+
+  test("a fingerprint-less group with no primer run fails closed on group_coverage", () => {
+    const plan = makePlan({
+      groups: [
+        {
+          model: "model-a",
+          requestPrefixFingerprint: null,
+          cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+          ttlIntent: "1h",
+          angles: ["correctness", "security"],
+        },
+      ],
+    });
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [],
+      reviewerReleases: [{ model: "model-a", releasedAt: 5 }],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "group_coverage"));
+    assert.throws(
+      () => enforcePrimerEvidence({ plan, evidence: ev }),
+      /group_coverage/,
+    );
+  });
+});
