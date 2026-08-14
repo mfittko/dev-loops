@@ -245,6 +245,28 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
 }
 
 /**
+ * Strict fail-closed enforcement surface (GATE-EXEC-PRIMER-EVIDENCE): throws
+ * when fan-in evidence is missing or invalid, naming the failing check. This is
+ * the refusal path a gate conductor calls after validatePrimerEvidence returns
+ * ok:false — it turns a reported failure into a hard stop.
+ *
+ * @param {object} input
+ * @param {object} input.plan - dispatch plan.
+ * @param {object} input.evidence - artifact from buildPrimerEvidence().
+ * @returns {true}
+ * @throws {Error} when any primer-evidence check fails.
+ */
+export function enforcePrimerEvidence({ plan, evidence } = {}) {
+  const r = validatePrimerEvidence({ plan, evidence });
+  if (!r.ok) {
+    throw new Error(
+      `GATE-EXEC-PRIMER-EVIDENCE: primer evidence failed validation; refusing to proceed (${r.failures.map((f) => `${f.check}: ${f.reason}`).join("; ")})`,
+    );
+  }
+  return true;
+}
+
+/**
  * Persist the evidence artifact to its deterministic path.
  *
  * @param {object} input

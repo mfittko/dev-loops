@@ -4,6 +4,7 @@ import test, { describe } from "node:test";
 import {
   PRIMER_EVIDENCE_SCHEMA_VERSION,
   buildPrimerEvidence,
+  enforcePrimerEvidence,
   primerEvidencePath,
   validatePrimerEvidence,
 } from "../src/loop/primer-evidence.mjs";
@@ -239,5 +240,30 @@ describe("validatePrimerEvidence — fail-closed fan-in gate (AC-3)", () => {
     const r = validatePrimerEvidence({ plan, evidence: ev });
     assert.equal(r.ok, true);
     assert.ok(ev.primerRuns.length === 2);
+  });
+});
+
+describe("enforcePrimerEvidence — strict fail-closed refusal surface (GATE-EXEC-PRIMER-EVIDENCE)", () => {
+  test("clean evidence resolves to true", () => {
+    const plan = makePlan();
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+      reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: fp, releasedAt: 11 }],
+    });
+    assert.equal(enforcePrimerEvidence({ plan, evidence: ev }), true);
+  });
+
+  test("invalid evidence throws a refusal naming the failing check", () => {
+    const plan = makePlan();
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+      reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: fp, releasedAt: 5 }], // before primer
+    });
+    assert.throws(
+      () => enforcePrimerEvidence({ plan, evidence: ev }),
+      /GATE-EXEC-PRIMER-EVIDENCE.*primer_order/,
+    );
   });
 });

@@ -275,6 +275,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-PRIMER-EVIDENCE",
+      "enforcement": "runtime",
+      "enforcementNote": "fan-in validates the recorded primer dispatch evidence via packages/core/src/loop/primer-evidence.mjs validatePrimerEvidence"
+    },
+    {
       "id": "GATE-EXEC-REGATE-MANDATORY"
     },
     {
