@@ -24,7 +24,15 @@ import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 export function runIdFreeEnv(overrides = {}) {
   const base = { ...process.env };
   for (const marker of RUN_ID_MARKERS) delete base[marker];
-  return { ...base, ...overrides };
+  const env = { ...base, ...overrides };
+  // The adapter boundary owns the marker literals; overrides may also unset a
+  // key by passing `undefined` (matching resolverTestEnv's established
+  // behavior). Drop undefined values so the env never carries a non-string
+  // entry that child_process.spawn would reject.
+  for (const key of Object.keys(env)) {
+    if (env[key] === undefined) delete env[key];
+  }
+  return env;
 }
 
 // In-process replacement for the PATH-installed gh stub (buildGhStubScript /

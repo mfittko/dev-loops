@@ -128,3 +128,20 @@ test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to f
   assert.equal(parsed.preMergeGateCheck.ok, false);
   assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
 });
+
+test("runIdFreeEnv strips ambient markers, drops undefined overrides, and lets explicit overrides win", () => {
+  const prevDev = process.env.DEVLOOPS_RUN_ID;
+  const prevPi = process.env.PI_SUBAGENT_RUN_ID;
+  try {
+    process.env.DEVLOOPS_RUN_ID = "ambient-dev";
+    process.env.PI_SUBAGENT_RUN_ID = "ambient-pi";
+    const forced = runIdFreeEnv({ EXPLICIT: "kept", UNSET: undefined });
+    assert.equal(forced.DEVLOOPS_RUN_ID, undefined, "ambient DEVLOOPS_RUN_ID must be stripped");
+    assert.equal(forced.PI_SUBAGENT_RUN_ID, undefined, "ambient PI_SUBAGENT_RUN_ID must be stripped");
+    assert.equal(forced.EXPLICIT, "kept");
+    assert.ok(!Object.prototype.hasOwnProperty.call(forced, "UNSET"), "undefined overrides must be removed, not kept as undefined (child_process.spawn rejects non-string env values)");
+  } finally {
+    if (prevDev === undefined) delete process.env.DEVLOOPS_RUN_ID; else process.env.DEVLOOPS_RUN_ID = prevDev;
+    if (prevPi === undefined) delete process.env.PI_SUBAGENT_RUN_ID; else process.env.PI_SUBAGENT_RUN_ID = prevPi;
+  }
+});
