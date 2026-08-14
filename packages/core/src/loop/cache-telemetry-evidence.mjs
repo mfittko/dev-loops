@@ -99,6 +99,15 @@ export function buildCacheTelemetryEvidence({
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.requestGroups)) {
     throw new Error("buildCacheTelemetryEvidence requires a plan with requestGroups");
   }
+  if (typeof plan.gate !== "string" || plan.gate.length === 0) {
+    throw new Error("buildCacheTelemetryEvidence requires a plan with a non-empty gate");
+  }
+  if (typeof plan.headSha !== "string" || !/^[0-9a-f]{7,64}$/i.test(plan.headSha.trim())) {
+    throw new Error("buildCacheTelemetryEvidence requires a plan with a hex headSha");
+  }
+  if (typeof plan.planHash !== "string" || plan.planHash.length === 0) {
+    throw new Error("buildCacheTelemetryEvidence requires a plan with a non-empty planHash");
+  }
   if (!Array.isArray(primerCacheCreations)) throw new Error("primerCacheCreations must be an array");
   if (!Array.isArray(reviewerCacheReads)) throw new Error("reviewerCacheReads must be an array");
 
@@ -236,6 +245,24 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
     });
   }
 
+  // Events fields must be arrays (a malformed JSON artifact with a non-array
+  // events field would otherwise make sumTokens/countTokens below throw a raw
+  // TypeError instead of a structured fail-closed failure). Downstream the
+  // enforce call re-throws as GATE-EXEC-CACHE-TELEMETRY, but the validator's
+  // documented contract is "return failures, never throw".
+  if (!Array.isArray(evidence.primerCacheCreations)) {
+    failures.push({
+      check: "aggregate_consistency",
+      reason: `primerCacheCreations must be an array, got ${JSON.stringify(evidence.primerCacheCreations)}`,
+    });
+  }
+  if (!Array.isArray(evidence.reviewerCacheReads)) {
+    failures.push({
+      check: "aggregate_consistency",
+      reason: `reviewerCacheReads must be an array, got ${JSON.stringify(evidence.reviewerCacheReads)}`,
+    });
+  }
+
   // Honesty gate: verified reuse requires the capability record's usage
   // telemetry to be available. The verdict is re-derived from
   // evidence.capabilities.usageTelemetry — NOT from the stored
@@ -301,6 +328,19 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
   // aggregate that contradicts the evidence fails closed.
   const record = { creates: evidence.creationCount, reads: evidence.readCount };
   const expectedRatio = record.creates > 0 ? record.reads / record.creates : 0;
+  // The human-readable report must agree with the machine verdict: a verified
+  // report only when cacheReuseVerified is true, a could-not-verify report
+  // otherwise. This closes the over-claim surface where a hand-edited artifact
+  // keeps the numeric aggregates consistent (measured:false) while the report
+  // prose claims "verified N reads after M creations" (informational, not a
+  // gate-number bypass, but the human-facing surface must not contradict it).
+  const expectedReportVerified = /^verified .+ cache read/.test(evidence.aggregate?.report ?? "");
+  if (expectedReportVerified !== evidence.cacheReuseVerified) {
+    failures.push({
+      check: "aggregate_consistency",
+      reason: `aggregate.report prose (${JSON.stringify(evidence.aggregate?.report)}) contradicts cacheReuseVerified=${evidence.cacheReuseVerified}`,
+    });
+  }
   if (
     evidence.aggregate?.creates !== evidence.creationCount ||
     evidence.aggregate?.reads !== evidence.readCount ||

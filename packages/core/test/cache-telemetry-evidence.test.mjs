@@ -178,6 +178,10 @@ describe("buildCacheTelemetryEvidence — opaque harness never claims verified r
 
   test("fails closed on a missing requestGroups plan / non-array event lists", () => {
     assert.throws(() => buildCacheTelemetryEvidence({ plan: {} }), /plan with requestGroups/);
+    assert.throws(
+      () => buildCacheTelemetryEvidence({ plan: { gate: "g", headSha: "abcdef1234", planHash: "h" } }),
+      /plan with requestGroups/,
+    );
     const plan = claudePlan();
     assert.throws(
       () => buildCacheTelemetryEvidence({ plan, primerCacheCreations: "nope" }),

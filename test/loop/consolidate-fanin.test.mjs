@@ -792,6 +792,21 @@ test("consolidateGateFanin fails closed on an unreadable/malformed cache-telemet
   );
 });
 
+test("consolidateGateFanin fails closed on a missing (unreadable) cache-telemetry path", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        consolidateGateFanin({
+          findingsDir: dir,
+          cacheTelemetry: "/nonexistent/cache-telemetry.json",
+        }),
+        (err) => err.message.includes("could not be read"),
+      );
+    },
+  );
+});
+
 test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
