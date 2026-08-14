@@ -387,3 +387,80 @@ describe("draft-gate hardening of validatePrimerEvidence (fan-in converge findin
     assert.throws(() => enforcePrimerEvidence({ plan, evidence: ev }), /primer_order/);
   });
 });
+
+describe("primer_order — deterministic, group-scoped binding (fan-in converge medium findings)", () => {
+  test("an unkeyed release is NOT credited to a same-model keyed primer (fail-open closed)", () => {
+    // A model with BOTH a keyed and an unkeyed primer group: partitionPrimerGroups
+    // provably produces this. The unkeyed release here is released AFTER the
+    // keyed group's earlier primer but BEFORE its own unkeyed primer — the exact
+    // cross-credit that previously passed via first-match-by-model .find().
+    const plan = buildReviewDispatchPlan({
+      gate: "pre_approval_gate",
+      headSha: "abcdef1234567890",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "model-a", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["correctness"] },
+        { model: "model-a", requestPrefixFingerprint: null, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["scope"] },
+      ],
+      capabilities: { harness: "claude" },
+    });
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [
+        { model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 1 },
+        { model: "model-a", primerForm: PRIMER_FORM_DEDICATED, landedAt: 6 },
+      ],
+      reviewerReleases: [
+        { model: "model-a", releasedAt: 4 }, // after keyed primer (1), before its own unkeyed primer (6)
+      ],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, false, JSON.stringify(r.failures));
+    assert.ok(r.failures.some((f) => f.check === "primer_order" && /releasedAt=4/.test(f.reason)));
+    assert.throws(() => enforcePrimerEvidence({ plan, evidence: ev }), /primer_order/);
+  });
+
+  test("an unkeyed release with no unkeyed primer for its model fails closed on model_group", () => {
+    // A model whose plan has ONLY a keyed group: nothing an unkeyed release may
+    // bind to, so it must fail closed rather than be credited to the keyed primer.
+    const plan = makePlan(); // single keyed group, model-a, fp
+    const ev = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 1 }],
+      reviewerReleases: [{ model: "model-a", releasedAt: 5 }],
+    });
+    const r = validatePrimerEvidence({ plan, evidence: ev });
+    assert.equal(r.ok, false, JSON.stringify(r.failures));
+    assert.ok(r.failures.some((f) => f.check === "model_group"));
+    assert.throws(() => enforcePrimerEvidence({ plan, evidence: ev }), /model_group/);
+  });
+
+  test("primer_order is order-independent (no first-match-by-array-order defect)", () => {
+    const plan = makePlan();
+    const land = [5, 20];
+    const release = { model: "model-a", requestPrefixFingerprint: fp, releasedAt: 10 }; // between the two primers
+    const a = buildPrimerEvidence({
+      plan,
+      primerRuns: [
+        { model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: land[0] },
+        { model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_DEDICATED, landedAt: land[1] },
+      ],
+      reviewerReleases: [release],
+    });
+    const b = buildPrimerEvidence({
+      plan,
+      primerRuns: [
+        { model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_DEDICATED, landedAt: land[1] },
+        { model: "model-a", requestPrefixFingerprint: fp, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: land[0] },
+      ],
+      reviewerReleases: [release],
+    });
+    // The barrier must hold against the LAST-landed same-group primer (20), so a
+    // release at t=10 fails identically regardless of run array order — the old
+    // .find() first-match passed when landedAt:5 happened to come first.
+    assert.equal(validatePrimerEvidence({ plan, evidence: a }).ok, false);
+    assert.equal(validatePrimerEvidence({ plan, evidence: b }).ok, false);
+    assert.equal(validatePrimerEvidence({ plan, evidence: a }).failures.some((f) => f.check === "primer_order"),
+      validatePrimerEvidence({ plan, evidence: b }).failures.some((f) => f.check === "primer_order"));
+  });
+});

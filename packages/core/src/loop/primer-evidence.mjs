@@ -237,26 +237,43 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
         reason: `reviewer release ${i} bound to model ${JSON.stringify(rel.model)} + fingerprint that is not a request group (heterogeneous routing must not credit one model's primer to another)`,
       });
     }
-    // ordering: a released reviewer must have a primer landed before it.
-    const primerForRel = evidence.primerRuns.find(
+    // ordering: a released reviewer must have ITS group's primer landed before
+    // it. Candidate primers are scoped to the release's OWN primer group — a
+    // keyed release binds to a same-model + same-fingerprint run, a
+    // fingerprint-less release binds to a same-model fingerprint-less run —
+    // NEVER the first same-model primer (which could belong to a different
+    // group sharing the model, e.g. a keyed group). This closes the fail-open
+    // where an unkeyed release was credited to a keyed group's earlier primer
+    // even though its own group's primer landed after it.
+    const candidates = evidence.primerRuns.filter(
       (r) =>
         r.model === rel.model &&
-        (rel.requestPrefixFingerprint == null || r.requestPrefixFingerprint === rel.requestPrefixFingerprint),
+        (rel.requestPrefixFingerprint == null
+          ? r.requestPrefixFingerprint == null
+          : r.requestPrefixFingerprint === rel.requestPrefixFingerprint),
     );
-    if (!primerForRel) {
+    if (candidates.length === 0) {
       failures.push({
         check: "model_group",
         reason: `reviewer release ${i} has no primer run for model ${JSON.stringify(rel.model)}`,
       });
-    } else if (!Number.isFinite(rel.releasedAt) || !Number.isFinite(primerForRel.landedAt) || rel.releasedAt < primerForRel.landedAt) {
-      // Fail CLOSED when the ordering barrier is unprovable (missing / non-finite
-      // timestamps), not only when it is provably reversed: a release without a
-      // landed primer timestamp cannot attest the primer ran before it, so the
-      // evidence must not proceed.
-      failures.push({
-        check: "primer_order",
-        reason: `reviewer release ${i} (${JSON.stringify(rel.model)}) cannot prove its primer landed before it: releasedAt=${String(rel.releasedAt)}, primer landedAt=${String(primerForRel.landedAt)} (ordering barrier missing or violated)`,
-      });
+    } else {
+      // Deterministic: the barrier must hold against the LAST-landed candidate
+      // (reduce/max is order-independent, unlike .find()'s first-match). With a
+      // single same-group primer this is exactly that group's primer; only an
+      // anomalous multiplicity of same-group primers here is stricter, and
+      // stricter is the fail-closed direction.
+      const primerForRel = candidates.reduce((a, b) => (b.landedAt > a.landedAt ? b : a));
+      if (!Number.isFinite(rel.releasedAt) || !Number.isFinite(primerForRel.landedAt) || rel.releasedAt < primerForRel.landedAt) {
+        // Fail CLOSED when the ordering barrier is unprovable (missing / non-finite
+        // timestamps), not only when it is provably reversed: a release without a
+        // landed primer timestamp cannot attest the primer ran before it, so the
+        // evidence must not proceed.
+        failures.push({
+          check: "primer_order",
+          reason: `reviewer release ${i} (${JSON.stringify(rel.model)}) cannot prove its primer landed before it: releasedAt=${String(rel.releasedAt)}, primer landedAt=${String(primerForRel.landedAt)} (ordering barrier missing or violated)`,
+        });
+      }
     }
   }
 
