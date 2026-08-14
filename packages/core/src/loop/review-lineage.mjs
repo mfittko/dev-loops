@@ -37,12 +37,40 @@
  */
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 
-const HEX = /^[0-9a-f]{7,64}$/i;
+// Full-length SHA only: GitHub abbreviated prefixes (7-39 hex) must NOT validate
+// as an "exact SHA" (findings: input-validation). Accept only a full 40-hex
+// (SHA-1) or 64-hex (SHA-256) digest.
+const HEX = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
 /** @param {string} value @returns {boolean} */
 function isHexSha(value) {
-  return typeof value === "string" && HEX.test(value.trim());
+  return typeof value === "string" && HEX.test(value.trim().toLowerCase());
 }
+
+const isPlainObject = (v) => v != null && typeof v === "object" && !Array.isArray(v) && !Buffer.isBuffer(v);
+
+/**
+ * Recursively sort object keys for a byte-deterministic serialization. Nested
+ * caller-supplied objects (validationEvidence, findingsChecklist entries) may
+ * arrive with arbitrary key insertion order; canonicalizing here guarantees the
+ * rendered segment bytes are key-order-independent (findings: determinism).
+ */
+function stableStringify(value) {
+  if (Array.isArray(value)) return value.map(stableStringify);
+  if (Buffer.isBuffer(value)) return `__buffer:${value.toString("hex")}`;
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = stableStringify(value[key]);
+    return out;
+  }
+  return value;
+}
+
+/** Canonical byte-serialization of an artifact (sorted keys, JSON). */
+function canonicalJson(value) {
+  return JSON.stringify(stableStringify(value));
+}
+
 
 /** Normalize a text-ish field (string | string[] | Buffer) to a canonical string. */
 function normalizeText(value, label) {
@@ -239,10 +267,20 @@ export function composeRoundRequest({ lineageBase, priorDeltas = [], newDelta, a
     throw new Error("composeRoundRequest newDelta lineageId must match the lineage base");
   }
   if (!Array.isArray(carriedAngles)) throw new Error("composeRoundRequest carriedAngles must be an array");
+  // Every delta in the lineage (prior + new) must share the base's gate
+  // (findings: scope — gate consistency) and carry a valid deltaHash
+  // (findings: input-validation — prior-delta hash validation).
+  const allDeltas = [...priorDeltas, newDelta];
   for (let i = 0; i < priorDeltas.length; i++) {
     const d = priorDeltas[i];
     if (!d || d.kind !== "round-delta" || d.lineageId !== lineageBase.lineageId) {
       throw new Error("composeRoundRequest priorDeltas must be valid round-delta artifacts of the same lineage");
+    }
+    if (!isSha256(d.deltaHash)) {
+      throw new Error(`composeRoundRequest priorDeltas[${i}].deltaHash must be a valid sha256:<64hex>`);
+    }
+    if (d.gate !== lineageBase.gate) {
+      throw new Error("composeRoundRequest priorDeltas gate must match the lineage base gate");
     }
     if (d.round !== i + 1) {
       throw new Error(`composeRoundRequest priorDeltas must be contiguous from round 1; expected round ${i + 1}, got ${d.round}`);
@@ -253,13 +291,36 @@ export function composeRoundRequest({ lineageBase, priorDeltas = [], newDelta, a
       `composeRoundRequest newDelta.round must follow the prior deltas; expected ${priorDeltas.length + 1}, got ${newDelta.round}`,
     );
   }
+  if (newDelta.gate !== lineageBase.gate) {
+    throw new Error("composeRoundRequest newDelta gate must match the lineage base gate");
+  }
+  // SHA-chain continuity (findings: correctness / scope): the delta chain must
+  // be anchored to the lineage base and head-linked end-to-end — round-1's
+  // baseHead must equal the base's originalHead, and each later delta's
+  // baseHead must equal the immediately prior delta's reviewedHead. This keeps
+  // the "exact SHAs" record truthful: a composed request can never claim a base
+  // that was not actually the prior reviewed head.
+  for (let i = 0; i < allDeltas.length; i++) {
+    const d = allDeltas[i];
+    if (i === 0) {
+      if (d.baseHead !== lineageBase.originalHead) {
+        throw new Error(
+          `composeRoundRequest round-1 baseHead ${d.baseHead} must equal the lineage base originalHead ${lineageBase.originalHead}`,
+        );
+      }
+    } else if (d.baseHead !== allDeltas[i - 1].reviewedHead) {
+      throw new Error(
+        `composeRoundRequest round-${d.round} baseHead ${d.baseHead} must equal prior round reviewedHead ${allDeltas[i - 1].reviewedHead}`,
+      );
+    }
+  }
 
   const segments = [
     {
       slot: LINEAGE_BASE_SLOT,
       ref: "lineage-base",
       hash: lineageBase.baseHash,
-      bytes: JSON.stringify(lineageBase),
+      bytes: canonicalJson(lineageBase),
     },
   ];
   const deltas = [...priorDeltas, newDelta];
@@ -269,7 +330,7 @@ export function composeRoundRequest({ lineageBase, priorDeltas = [], newDelta, a
       ref: `round-${String(d.round).padStart(2, "0")}`,
       round: d.round,
       hash: d.deltaHash,
-      bytes: JSON.stringify(d),
+      bytes: canonicalJson(d),
     });
   }
   if (angleSuffix != null && String(angleSuffix).length > 0) {
@@ -285,7 +346,11 @@ export function composeRoundRequest({ lineageBase, priorDeltas = [], newDelta, a
     if (typeof c.angle !== "string" || typeof c.originalReviewer !== "string" || !isHexSha(c.priorHead)) {
       throw new Error("composeRoundRequest carriedAngles entries require { angle, originalReviewer, priorHead }");
     }
-    return { angle: c.angle, originalReviewer: c.originalReviewer, priorHead: c.priorHead.toLowerCase() };
+    return {
+      angle: c.angle,
+      originalReviewer: c.originalReviewer,
+      priorHead: c.priorHead.trim().toLowerCase(), // trim + lower, consistent with other SHA fields
+    };
   });
 
   const composedRequest = {

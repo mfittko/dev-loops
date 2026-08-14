@@ -166,19 +166,40 @@ describe("append-only round request composition — Section E (AC-2)", () => {
     // The lineage base appears exactly once, byte-identical across rounds.
     const baseSegs = round2.segments.filter((s) => s.slot === LINEAGE_BASE_SLOT);
     assert.equal(baseSegs.length, 1);
-    assert.equal(baseSegs[0].bytes, JSON.stringify(b));
+    assert.equal(baseSegs[0].hash, b.baseHash);
+    assert.deepEqual(JSON.parse(baseSegs[0].bytes), JSON.parse(JSON.stringify(b)));
 
-    // The appended delta is exactly delta 2 bytes.
+    // The appended delta is exactly delta 2 (canonical bytes).
     const appended = round2.segments[round2.segments.length - (round2.segments.find((s) => s.slot === ANGLE_SUFFIX_SLOT) ? 2 : 1)];
     assert.equal(appended.slot, ROUND_DELTA_SLOT);
     assert.equal(appended.round, 2);
-    assert.equal(appended.bytes, JSON.stringify(d2));
+    assert.equal(appended.hash, d2.deltaHash);
+    assert.deepEqual(JSON.parse(appended.bytes), JSON.parse(JSON.stringify(d2)));
 
-    // Append-only: round2 rendered bytes = round1 rendered bytes + delta2 bytes.
+    // Append-only: round2 rendered bytes = round1 rendered bytes + the new
+    // delta's canonical bytes (byte-identical reuse of every prior segment).
     assert.equal(
       renderComposedRequest(round2),
-      renderComposedRequest(round1) + JSON.stringify(d2),
+      renderComposedRequest(round1) + JSON.stringify({ ...JSON.parse(appended.bytes) }),
     );
+  });
+
+  test("segment bytes are key-order-canonical (byte-deterministic for nested objects)", () => {
+    const dA = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: GATE, baseHead: BASE, reviewedHead: R1, fixDiff: FIX1,
+      validationEvidence: { tests: "npm test", result: "pass" },
+      findingsChecklist: [{ severity: "high", check: "c", resolved: true, evidence: "e" }],
+    });
+    const dB = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: GATE, baseHead: BASE, reviewedHead: R1, fixDiff: FIX1,
+      validationEvidence: { result: "pass", tests: "npm test" }, // different key order
+      findingsChecklist: [{ resolved: true, severity: "high", evidence: "e", check: "c" }], // different order
+    });
+    const rA = composeRoundRequest({ lineageBase: base(), priorDeltas: [], newDelta: dA });
+    const rB = composeRoundRequest({ lineageBase: base(), priorDeltas: [], newDelta: dB });
+    assert.equal(dA.deltaHash, dB.deltaHash);
+    assert.equal(rA.composedHash, rB.composedHash);
+    assert.equal(renderComposedRequest(rA), renderComposedRequest(rB));
   });
 
   test("does NOT rebuild the full PR context as a replacement block", () => {
@@ -193,7 +214,9 @@ describe("append-only round request composition — Section E (AC-2)", () => {
     // their own delta segments — no re-serialized aggregate.
     const bytes = renderComposedRequest(round2);
     assert.equal(countOccurrences(bytes, "diff --git a/src/a.mjs"), 3); // original intro + fix1 + fix2
-    assert.equal(countOccurrences(bytes, JSON.stringify(b)), 1); // base not duplicated
+    // The base artifact's stable fingerprint appears exactly once -> base is not
+    // duplicated/rebuild as a replacement block.
+    assert.equal(countOccurrences(bytes, b.baseHash), 1);
     // Round-2 delta bytes do not re-embed the original full diff.
     assert.equal(JSON.stringify(d2).includes("original"), false);
   });
@@ -231,6 +254,32 @@ describe("append-only round request composition — Section E (AC-2)", () => {
     // Invalid base / delta.
     assert.throws(() => composeRoundRequest({ lineageBase: {}, newDelta: d1 }));
     assert.throws(() => composeRoundRequest({ lineageBase: b, newDelta: {} }));
+  });
+
+  test("SHA-chain continuity is enforced (in-gate correctness finding)", () => {
+    const b = base();
+    const d1 = delta1(); // baseHead=BASE(reviewed r1).
+    // Round 1 whose baseHead != base.originalHead fails.
+    const badR1 = buildFixRoundDelta({ lineageId: "lin-1", round: 1, gate: GATE, baseHead: R2, reviewedHead: R1, fixDiff: FIX1 });
+    assert.throws(() => composeRoundRequest({ lineageBase: b, priorDeltas: [], newDelta: badR1 }));
+    // Round 2 whose baseHead != prior delta's reviewedHead fails.
+    const badR2 = buildFixRoundDelta({ lineageId: "lin-1", round: 2, gate: GATE, baseHead: BASE, reviewedHead: R2, fixDiff: FIX2 });
+    assert.throws(() => composeRoundRequest({ lineageBase: b, priorDeltas: [d1], newDelta: badR2 }));
+    // A well-linked chain passes.
+    assert.ok(composeRoundRequest({ lineageBase: b, priorDeltas: [d1], newDelta: delta2() }));
+  });
+
+  test("gate consistency is enforced across base and deltas (in-gate scope finding)", () => {
+    const b = base();
+    const wrongGate = buildFixRoundDelta({ lineageId: "lin-1", round: 1, gate: "draft_gate", baseHead: BASE, reviewedHead: R1, fixDiff: FIX1 });
+    assert.throws(() => composeRoundRequest({ lineageBase: b, priorDeltas: [], newDelta: wrongGate }));
+  });
+
+  test("abbreviated SHA prefixes are rejected (in-gate input-validation finding)", () => {
+    // Original head may not be an abbreviated 7-hex prefix.
+    assert.throws(() => buildReviewLineageBase({ lineageId: "l", gate: GATE, originalHead: "aaaaaaa", originalDiff: "d" }));
+    // All SHAs must be full-length.
+    assert.throws(() => buildFixRoundDelta({ lineageId: "l", round: 1, gate: GATE, baseHead: "bbbbbbbb", reviewedHead: R1, fixDiff: "d" }));
   });
 });
 
