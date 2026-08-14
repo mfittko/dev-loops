@@ -14,7 +14,9 @@ import test from "node:test";
 // A candidate **CLI entry point** is a standalone script under `scripts/**/*.mjs`
 // that self-declares a CLI run via the repo's canonical `isDirectCliRun` gate.
 // Shared library/primitives (`scripts/lib/`, `_*.mjs` helpers, asset/presentational
-// generators) do not use that gate and are naturally excluded.
+// generators) are excluded only by having callers: `_*.mjs` helpers re-export
+// `isDirectCliRun`, so they are swept like any entry point and surface on the
+// orphan set only if nothing wires them.
 //
 // ## "non-test caller"
 // An entry point has a non-test caller when any non-test artifact **executes or
@@ -115,13 +117,21 @@ async function nonTestSources() {
   return all.filter((f) => !f.split(path.sep).includes("test"));
 }
 
+// Shared import/export-from statement scraper: returns `{ statement, spec }` for
+// every `from` clause, matching both single- and double-quoted specifiers so all
+// entry points (and every parser below) normalize quotes identically.
+function importFromStatements(code) {
+  const out = [];
+  const re = /(?:import|export)[^;]*?\bfrom\s*(["'])([^"']+)\1/g;
+  let m;
+  while ((m = re.exec(code))) out.push({ statement: m[0], spec: m[2] });
+  return out;
+}
+
 // Relative import targets in `code` originating from `fromFile`, resolved to abs.
 function resolveRelativeImportTargets(code, fromFile) {
   const targets = [];
-  const re = /(?:import|export)[^;]*?\bfrom\s*"([^"]+)"/g;
-  let m;
-  while ((m = re.exec(code))) {
-    const spec = m[1];
+  for (const { spec } of importFromStatements(code)) {
     if (!spec.startsWith(".")) continue;
     const abs = path.resolve(path.dirname(fromFile), spec);
     if (abs.endsWith(".mjs")) targets.push(abs);
@@ -139,7 +149,7 @@ async function hasNonTestCaller(scriptAbs, scriptRel, base, sources, workflowTex
   for (const source of sources) {
     if (source === scriptAbs) continue;
     const code = await read(source);
-    if (resolveRelativeImportTargets(code, source).some((t) => t === scriptAbs || path.basename(t) === base)) {
+    if (resolveRelativeImportTargets(code, source).some((t) => t === scriptAbs)) {
       return true;
     }
     if (hasSpawnOrPathRef(code, scriptRel, base)) return true;
@@ -217,13 +227,13 @@ test("seeded predicate orphans still exist and still have no non-test code impor
     const script = path.join(REPO_ROOT, rel);
     const code = await read(script);
     const exportStillExists = new RegExp(`export\\s+(?:async\\s+)?function\\s+${exportName}\\b`).test(code);
-    const importRe = new RegExp(`import\\s*\\{[^}]*\\b${exportName}\\b[^}]*}\\s*from\\s*"([^"]+)"`);
+    const namedImportRe = new RegExp(`import\\s*\\{[^}]*\\b${exportName}\\b[^}]*}`);
     let importer = null;
     for (const source of sources) {
       const scode = await read(source);
-      const m = importRe.exec(scode);
-      if (m) {
-        const target = path.resolve(path.dirname(source), m[1]);
+      const st = importFromStatements(scode).find((s) => namedImportRe.test(s.statement));
+      if (st) {
+        const target = path.resolve(path.dirname(source), st.spec);
         if (target === script) {
           importer = path.relative(REPO_ROOT, source);
           break;
