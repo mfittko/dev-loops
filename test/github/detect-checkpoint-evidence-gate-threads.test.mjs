@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
@@ -130,18 +131,25 @@ test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to f
 });
 
 test("runIdFreeEnv strips ambient markers, drops undefined overrides, and lets explicit overrides win", () => {
-  const prevDev = process.env.DEVLOOPS_RUN_ID;
-  const prevPi = process.env.PI_SUBAGENT_RUN_ID;
+  // Drive the markers from the shared RUN_ID_MARKERS adapter contract rather than
+  // any harness-runtime literal, so this test stays harness-agnostic (the
+  // harness-runtime var name is owned by the adapter boundary, not test code).
+  const prev = new Map();
   try {
-    process.env.DEVLOOPS_RUN_ID = "ambient-dev";
-    process.env.PI_SUBAGENT_RUN_ID = "ambient-pi";
+    for (const marker of RUN_ID_MARKERS) {
+      prev.set(marker, process.env[marker]);
+      process.env[marker] = "ambient-" + marker;
+    }
     const forced = runIdFreeEnv({ EXPLICIT: "kept", UNSET: undefined });
-    assert.equal(forced.DEVLOOPS_RUN_ID, undefined, "ambient DEVLOOPS_RUN_ID must be stripped");
-    assert.equal(forced.PI_SUBAGENT_RUN_ID, undefined, "ambient PI_SUBAGENT_RUN_ID must be stripped");
+    for (const marker of RUN_ID_MARKERS) {
+      assert.equal(forced[marker], undefined, `${marker} must be stripped from the built env`);
+    }
     assert.equal(forced.EXPLICIT, "kept");
     assert.ok(!Object.prototype.hasOwnProperty.call(forced, "UNSET"), "undefined overrides must be removed, not kept as undefined (child_process.spawn rejects non-string env values)");
   } finally {
-    if (prevDev === undefined) delete process.env.DEVLOOPS_RUN_ID; else process.env.DEVLOOPS_RUN_ID = prevDev;
-    if (prevPi === undefined) delete process.env.PI_SUBAGENT_RUN_ID; else process.env.PI_SUBAGENT_RUN_ID = prevPi;
+    for (const [key, value] of prev) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
