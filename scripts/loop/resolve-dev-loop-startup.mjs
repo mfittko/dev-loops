@@ -1047,10 +1047,20 @@ export function buildResolveDevLoopStartupResult(input, {
   // side effect, never racy) and no GitHub query at all. Gated on
   // workflow.requireRetrospective so a repo that never opts into cycle
   // scoping never pays for the extra git calls — the plain checkpoint file
-  // read below is unaffected either way. `durableCheckpoint` stays
-  // `undefined` when the file is genuinely absent (ENOENT) so
-  // resolveCheckpointStateFromArtifact can tell that apart from a file
-  // present but containing the JSON literal `null`.
+  // read below is unaffected either way (RETRO-ENFORCEMENT-CONFIG-GATED,
+  // #1628: the READ and INJECT are gated on the same flag, so a repo that
+  // never opts in is never blocked by a stale/missing/pending checkpoint
+  // either). `durableCheckpoint` stays `undefined` when the file is genuinely
+  // absent (ENOENT) so resolveCheckpointStateFromArtifact can tell that apart
+  // from a file present but containing the JSON literal `null`.
+  //
+  // When `workflow.requireRetrospective` is not true the enforcement is
+  // entirely inert: the file is not read and `retrospectiveCheckpointState`
+  // is not injected, so `retrospectiveCheckpointStateProvided` stays false
+  // downstream and `applyRetrospectiveCheckpointGate` passes the routing
+  // through unchanged (no over-blocking for non-opted-in repos). The only
+  // gating flag read below is `requireRetrospective`; the whole block is
+  // skipped when it is unset/false.
   //
   // The path is resolved from the REPO ROOT (the main checkout), not
   // cwd-relative: the checkpoint is gitignored and lives ONCE per repo, not
@@ -1060,45 +1070,45 @@ export function buildResolveDevLoopStartupResult(input, {
   // write is not silently discarded the moment that worktree is removed, and
   // the main checkout and a worktree of the same repo never disagree about
   // the checkpoint state depending on which one last wrote it.
-  const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
-  let durableCheckpoint;
-  let checkpointReadFailed = false;
-  try {
-    durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
-  } catch (err) {
-    if (err?.code !== "ENOENT") {
-      checkpointReadFailed = true;
+  const retrospectiveEnforced = resolveWorkflowConfig(config, "requireRetrospective") === true;
+  if (retrospectiveEnforced) {
+    const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
+    let durableCheckpoint;
+    let checkpointReadFailed = false;
+    try {
+      durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
+    } catch (err) {
+      if (err?.code !== "ENOENT") {
+        checkpointReadFailed = true;
+      }
     }
-  }
-  // Only a `complete`/`skipped` checkpoint needs a recency check — every
-  // other state ignores `hasNewerMergeSinceCheckpoint` (see
-  // resolveCheckpointStateFromArtifact). An unresolvable/absent recorded
-  // `mergeCommit` is an unverifiable discharge claim — it must not be
-  // trusted, so it fails closed exactly like a confirmed newer merge.
-  let hasNewerMergeSinceCheckpoint = false;
-  const durableState = typeof durableCheckpoint?.state === "string"
-    ? durableCheckpoint.state.trim().toLowerCase()
-    : null;
-  if (
-    resolveWorkflowConfig(config, "requireRetrospective") === true &&
-    (durableState === "complete" || durableState === "skipped")
-  ) {
-    const identity = normalizeCheckpointCycleIdentity(durableCheckpoint.identity);
-    if (identity === null) {
-      hasNewerMergeSinceCheckpoint = true;
-    } else {
-      const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
-      hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
-        mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
-      });
+    // Only a `complete`/`skipped` checkpoint needs a recency check — every
+    // other state ignores `hasNewerMergeSinceCheckpoint` (see
+    // resolveCheckpointStateFromArtifact). An unresolvable/absent recorded
+    // `mergeCommit` is an unverifiable discharge claim — it must not be
+    // trusted, so it fails closed exactly like a confirmed newer merge.
+    let hasNewerMergeSinceCheckpoint = false;
+    const durableState = typeof durableCheckpoint?.state === "string"
+      ? durableCheckpoint.state.trim().toLowerCase()
+      : null;
+    if (durableState === "complete" || durableState === "skipped") {
+      const identity = normalizeCheckpointCycleIdentity(durableCheckpoint.identity);
+      if (identity === null) {
+        hasNewerMergeSinceCheckpoint = true;
+      } else {
+        const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
+        hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
+          mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
+        });
+      }
     }
+    input = {
+      ...input,
+      retrospectiveCheckpointState: checkpointReadFailed
+        ? "missing"
+        : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint }),
+    };
   }
-  input = {
-    ...input,
-    retrospectiveCheckpointState: checkpointReadFailed
-      ? "missing"
-      : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint }),
-  };
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {
