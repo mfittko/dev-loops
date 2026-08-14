@@ -224,8 +224,8 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
       return {
         decision: "deny",
         reason:
-          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/github/detect-copilot-" +
-          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
+          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/loop/detect-copilot-" +
+          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " + +
           "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
           "dev-loop driving agent.",
       };

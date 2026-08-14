@@ -506,8 +506,9 @@ export function extractRepoFlagFromGhPrMerge(command) {
 // call was invisible to the gate).
 // ---------------------------------------------------------------------------
 
-/** gh api value-taking flags (short forms). Each consumes the following token. */
-const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-F", "-H"]);
+/** gh api value-taking flags (short forms). Each consumes the following token. Lowercase (compared
+ * against token.toLowerCase()) — the `-H` header flag is real but case-folded here like the rest. */
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
 const GH_API_VALUE_LONG_FLAGS = new Set(["--method", "--field", "--raw-field", "--header"]);
 
@@ -536,13 +537,20 @@ export function extractGhApiEndpointSegments(command) {
     let endpoint = null;
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
-      const lower = token.toLowerCase();
       if (!token.startsWith("-")) {
         endpoint = token;
         break;
       }
+      const lower = token.toLowerCase();
       if (GH_API_VALUE_FLAGS.has(lower) || GH_API_VALUE_LONG_FLAGS.has(lower)) {
         i += 1; // consume the flag's value token
+        // A value that opens with a quote may span whitespace (e.g. `-H "Accept: application/vnd.github+json"`)
+        // — keep consuming tokens until the matching closing quote so the quoted value is skipped whole
+        // and a later positional endpoint is not mis-read as the value's remainder.
+        if (i < tokens.length && (tokens[i][0] === '"' || tokens[i][0] === "'")) {
+          const quote = tokens[i][0];
+          while (i < tokens.length && !tokens[i].endsWith(quote)) i += 1;
+        }
       }
     }
     out.push({ segment, endpoint });
@@ -563,7 +571,7 @@ function ghApiGraphqlSegments(command) {
 
 /** Whether a `gh api` segment names an explicit write method (POST/PUT/PATCH/DELETE). gh api
  * defaults to GET, so the ad-hoc-write predicates require an explicit write method to refuse. */
-const GH_API_WRITE_METHOD_RE = /(?:-X|-m|--method)\s+(?:"|')?\s*(?:POST|PUT|PATCH|DELETE)\b/i;
+const GH_API_WRITE_METHOD_RE = /(?:-X|-m|--method)(?:\s+|\s*=)?(?:"|')?\s*(?:POST|PUT|PATCH|DELETE)\b/i;
 function ghApiSegmentHasWriteMethod(segment) {
   return GH_API_WRITE_METHOD_RE.test(segment);
 }
@@ -629,7 +637,10 @@ export function commandContainsCopilotRequestBypass(command) {
  */
 export function commandContainsCopilotSummonComment(command) {
   if (!findGhSubcmdVerbSegment(command, "pr", "comment")) return false;
-  return /\/copilot(?:\s|["']|$)/i.test(command);
+  // A bare summon is `/copilot` or `/copilot re-review` on its own (optionally quoted) — never a
+  // prose mention like `see /copilot for more` / `see /copilot docs`. Match only when the summon
+  // runs to the end of the (quoted) body or is the explicit `re-review` form.
+  return /\/copilot(?:\s+re-review\b)?\s*(?:["']|$)/i.test(command);
 }
 
 /**
@@ -644,11 +655,16 @@ export function commandContainsDetachedWaitTool(command) {
   // while/until/seq polling loop with both a sleep and a gh or loop-state call. The loop body is
   // `;`-delimited, so this is checked against the whole command (a per-segment split would
   // separate the `while` head from the `sleep`/`gh` body calls and miss the pattern).
-  if (/^(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\b(?:gh|loop-state)\b/.test(whole)) {
+  // A polling loop is detected wherever the `while`/`until`/`seq` head appears (a leading expression
+  // like `gh pr view 1 && while ...` must not silence the deny) as long as the body carries both a
+  // `sleep` and a gh/loop-state call.
+  if (/\b(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\b(?:gh|loop-state)\b/.test(whole)) {
     return true;
   }
   return shellSegments(command).some((segment) => {
-    if (/\bnohup\b/.test(segment) || /\bdisown\b/.test(segment)) return true;
+    // `nohup`/`disown` only detach when they head a command (segment start, or right after a shell
+    // operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
+    if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
     if (/^tmux\s+new-session\b/i.test(segment)) return true;
     if (/^screen\s+-dm/i.test(segment)) return true;
     return false;
@@ -683,7 +699,10 @@ export function commandContainsInlineInterpreter(command) {
     }
     if (interpreterRegex("python3?").test(s)) {
       const tokens = s.replace(interpreterRegex("python3?"), "").trim().split(/\s+/).filter(Boolean);
-      if (tokens.includes("-c")) return true;
+      for (const t of tokens) {
+        if (t === "-c") return true;
+        if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
+      }
     }
     return false;
   });

@@ -328,6 +328,14 @@ test("extractGhApiEndpointSegments reads the endpoint from gh api calls, skippin
   // compound command — scans all segments
   assert.equal(extractGhApiEndpointSegments("echo hi && gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers")[0].endpoint,
     "repos/mfittko/dev-loops/pulls/5/requested_reviewers");
+  // a value-taking flag whose quoted value spans whitespace (header before endpoint) must not
+  // mis-read the endpoint as the value's remainder
+  assert.equal(
+    extractGhApiEndpointSegments('gh api -X POST -H "Accept: application/vnd.github+json" repos/mfittko/dev-loops/pulls/5/requested_reviewers')[0].endpoint,
+    "repos/mfittko/dev-loops/pulls/5/requested_reviewers");
+  assert.equal(
+    extractGhApiEndpointSegments('gh api -H "Accept: application/vnd.github+json" repos/mfittko/dev-loops/issues/5/sub_issues')[0].endpoint,
+    "repos/mfittko/dev-loops/issues/5/sub_issues");
   assert.equal(extractGhApiEndpointSegments("npm test").length, 0);
 });
 
@@ -377,6 +385,9 @@ test("commandContainsCopilotRequestBypass detects target-repo requested_reviewer
   assert.equal(commandContainsCopilotRequestBypass("gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers"), false);
   assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers"), false);
   assert.equal(commandContainsCopilotRequestBypass("node scripts/github/request-copilot-review.mjs --pr 5"), false);
+  // attached-form write methods gh's flag parser accepts must still be detected
+  assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -XPOST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
 });
 
 test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr comment bodies", () => {
@@ -385,6 +396,9 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "please take a look"'), false);
   // only relevant for gh pr comment (not a bare echo of the string)
   assert.equal(commandContainsCopilotSummonComment('echo "/copilot"'), false);
+  // prose mentions of /copilot are NOT a bare summon
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot for more"'), false);
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "see /copilot docs"'), false);
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
@@ -396,6 +410,12 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("npm test"), false);
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1"), false);
   assert.equal(commandContainsDetachedWaitTool("sleep 5"), false);
+  // bare mentions / reads that merely name the words are not detaches
+  assert.equal(commandContainsDetachedWaitTool("cat nohup.out"), false);
+  assert.equal(commandContainsDetachedWaitTool('echo "nohup banned"'), false);
+  assert.equal(commandContainsDetachedWaitTool("echo disown is a shell builtin"), false);
+  // a polling loop with a LEADING expression is still a polling loop
+  assert.equal(commandContainsDetachedWaitTool("gh pr view 1 && while ! gh pr view 1; do sleep 5; done"), true);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
@@ -410,6 +430,8 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter("node scripts/github/comment-issue.mjs 5"), false);
   assert.equal(commandContainsInlineInterpreter("node -v"), false);
   assert.equal(commandContainsInlineInterpreter("python3 script.py"), false);
+  // a script path stopping the python -c scan (later -c is a script argument, not an interpreter)
+  assert.equal(commandContainsInlineInterpreter("python3 myfile.py -c argvalue"), false);
   assert.equal(commandContainsInlineInterpreter("gh pr view 1 --jq .state"), false);
   // env/wrapper/path prefixes are tolerated
   assert.equal(commandContainsInlineInterpreter('DEBUG=1 node -e "console.log(1)"'), true);
