@@ -13,7 +13,9 @@ import {
   defaultRunnerCoordinationFilePathForTarget,
   ensureAsyncRunnerOwnership,
   loadRunnerCoordinationState,
+  recordExitSignalForRunner,
   releaseAsyncRunnerOwnership,
+  releaseRunClaimsOnExit,
   releaseRunnerOwnership,
   RUNNER_COORDINATION_HISTORY_LIMIT,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
@@ -393,6 +395,308 @@ test("ensureAsyncRunnerOwnership auto-claims after release when no active owner 
     });
     assert.equal(strict.ok, false);
     assert.equal(strict.error, "ownership_missing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706: a run that dies without releasing (exit signal recorded) is treated as
+// confirmed-dead immediately; ensureAsyncRunnerOwnership with supersedeStale
+// takes the claim over so the next legitimately-dispatched run proceeds.
+test("ensureAsyncRunnerOwnership supersedes a dead run's claim when supersedeStale (exit signal)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir });
+    // run-dead dies without releasing — record its exit signal (confirmed death)
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    assert.equal(sig.ok, true);
+    assert.equal(sig.status, "exit_signal_recorded");
+
+    // live (default) supersedeStale=false → fail closed against the dead claim
+    const strict = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+    });
+    assert.equal(strict.ok, false);
+    assert.equal(strict.error, "ownership_lost");
+
+    // supersedeStale=true → the confirmed-dead claim is taken over
+    const superseded = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(superseded.ok, true);
+    assert.equal(superseded.status, "taken_over");
+    assert.equal(superseded.activeRun.runId, "run-next");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-next");
+    assert.equal(loaded.state.previousRun.runId, "run-dead");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706: a run whose claim has gone stale (no heartbeat past the max-age window)
+// is treated as dead; supersedeStale takes it over.
+test("ensureAsyncRunnerOwnership supersedes a stale claim when supersedeStale (staleness exceeded)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "60000"; // 1 minute
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 21,
+      runId: "run-stale",
+      cwd: tempDir,
+      now: new Date(Date.now() - 1000 * 60 * 10).toISOString(), // claimed 10 min ago
+    });
+
+    const superseded = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 21,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-fresh" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(superseded.ok, true);
+    assert.equal(superseded.status, "taken_over");
+    assert.equal(superseded.activeRun.runId, "run-fresh");
+  } finally {
+    if (prevMaxAge === undefined) {
+      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    } else {
+      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-3: supersedeStale must NOT supersede a genuinely live owner (no exit
+// signal, fresh claim) — one-runner-per-PR preserved for active work.
+test("ensureAsyncRunnerOwnership keeps a live owner (stand down) even with supersedeStale", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 23, runId: "run-live", cwd: tempDir, now: new Date().toISOString() });
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 23,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-wannabe" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "ownership_lost");
+    assert.equal(result.activeRun.runId, "run-live");
+
+    // Live owner's claim is untouched.
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 23, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-live");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-1: the release-on-process-exit sweep clears every claim owned by a
+// run (completed/killed/timed out/crashed) so no leaky lock blocks the next run.
+test("releaseRunClaimsOnExit clears all claims owned by a run on process exit", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-exit", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "run-exit", cwd: tempDir });
+    // A competing live run's claim must remain untouched.
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 19, runId: "run-other", cwd: tempDir });
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-exit", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 2);
+
+    const pr17 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    const pr18 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 18, cwd: tempDir });
+    const pr19 = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 19, cwd: tempDir });
+    assert.equal(pr17.state.activeRun, null);
+    assert.equal(pr18.state.activeRun, null);
+    // Competing live run untouched.
+    assert.equal(pr19.state.activeRun.runId, "run-other");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit no-ops when no run id is present", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-x", cwd: tempDir });
+    const result = await releaseRunClaimsOnExit({ runId: "", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "skipped_no_async_run_id");
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-x");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706: the release-on-death sweep must anchor at the git-common-dir root
+// (resolveRepoCoordinationRoot) the claims are actually stored under, NOT a
+// naive path.join(root, ".pi", ...). In a linked worktree the run's claims
+// live in the MAIN repo's .pi (common dir), so a worktree-cwd sweep that scans
+// the worktree's own .pi would miss them and leak the lock.
+test("releaseRunClaimsOnExit anchors at the git-common-dir root (linked worktree)", async () => {
+  const { repoRoot, wtPath } = await makeRepoWithWorktree();
+
+  try {
+    // Claim under the WORKTREE cwd — claims are stored at the common-dir root.
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-wt", cwd: wtPath });
+    const claimPath = defaultRunnerCoordinationFilePathForTarget(
+      { repo: "owner/repo", pr: 31 },
+      wtPath,
+    );
+    assert.ok(
+      claimPath.startsWith(path.join(realpathSync(repoRoot), ".pi")),
+      "claim must live under the main repo's .pi (git-common-dir anchored), not the worktree's",
+    );
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-wt", root: wtPath });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 1);
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 31, cwd: wtPath });
+    assert.equal(loaded.state.activeRun, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(wtPath, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit reports no_coordination_dir when the root is absent", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-missing-"));
+  try {
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "no_coordination_dir");
+    assert.deepEqual(result.released, []);
+    assert.deepEqual(result.failed, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit treats a missing-dir (ENOENT) readdir error as no_coordination_dir", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-enoent-"));
+  const missingDirError = Object.assign(new Error("missing"), { code: "ENOENT" });
+  try {
+    const result = await releaseRunClaimsOnExit({
+      runId: "run-x",
+      root: tempDir,
+      readDir: async () => { throw missingDirError; },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "no_coordination_dir");
+    assert.equal(result.error, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit does not mask a non-ENOENT readdir failure as no_coordination_dir", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-scanfail-"));
+  const permissionError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+  try {
+    const result = await releaseRunClaimsOnExit({
+      runId: "run-x",
+      root: tempDir,
+      readDir: async () => { throw permissionError; },
+    });
+    // Non-fatal by contract (ok stays true, nothing thrown) but the failure is
+    // surfaced via a distinct scan_failed status + message, not a clean-looking
+    // no_coordination_dir that would make the sweep appear successful while
+    // doing nothing.
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "scan_failed");
+    assert.match(result.error, /EACCES/);
+    assert.deepEqual(result.released, []);
+    assert.deepEqual(result.failed, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit records parse_failed on a corrupt claim file and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-corrupt-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 41, runId: "run-a", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 42, runId: "run-a", cwd: tempDir });
+    // Corrupt one of the two claim files.
+    const corruptPath = defaultRunnerCoordinationFilePathForTarget(
+      { repo: "owner/repo", pr: 42 },
+      tempDir,
+    );
+    await writeFile(corruptPath, "{ not-json", "utf8");
+
+    const result = await releaseRunClaimsOnExit({ runId: "run-a", root: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    // The healthy claim is released; the corrupt one is recorded as parse_failed,
+    // never thrown, and the sweep keeps going.
+    assert.equal(result.released.length, 1);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].reason, "parse_failed");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit records release_failed when the release fn throws and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-releasefail-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 51, runId: "run-x", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 52, runId: "run-x", cwd: tempDir });
+    const throwingReleaseFn = async () => {
+      throw new Error("release boom");
+    };
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, releaseFn: throwingReleaseFn });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 0);
+    assert.equal(result.failed.length, 2);
+    assert.ok(result.failed.every((f) => f.reason === "release_failed"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("releaseRunClaimsOnExit records read_failed when a claim file is unreadable and continues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-readfail-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 61, runId: "run-x", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 62, runId: "run-x", cwd: tempDir });
+    const throwingReadFile = async () => {
+      throw new Error("read boom");
+    };
+    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, readFile: throwingReadFile });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "released");
+    assert.equal(result.released.length, 0);
+    assert.equal(result.failed.length, 2);
+    assert.ok(result.failed.every((f) => f.reason === "read_failed"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

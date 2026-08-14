@@ -451,6 +451,8 @@ The pre-merge gate evidence check fails closed on the PR's runner-coordination c
 
 The auto-loop now releases its claim best-effort when a run reaches a terminal stop (clean-converged, blocked, or done — including the stop at the human approval checkpoint), so a merge-authorized re-dispatch normally inherits a cleared claim and proceeds. The release is non-fatal: it never blocks the stop, and it never clears a claim owned by a genuinely active competing run.
 
+Beyond the terminal release, #1706 removes the stall on the path here: `copilot-pr-handoff` acquires ownership with `supersedeStale: true`, so pre-flight handoff takes over a competing claim whose owning run is **confirmed dead** (recorded exit signal) or past the stale-max-age window — proceeding instead of returning a blocking stop against a leaked lock. The headless dev-loop driver also clears every claim its run still owns when the spawned run's process exits (release-on-death). A genuinely live owner still blocks (one-runner-per-PR preserved); only confirmed-dead or stale claims are superseded. The manual takeover below therefore only remains for a pre-#1706 leak or a live-but-unreleasable edge.
+
 If a stale claim still blocks the merge because the completing run could not release (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh

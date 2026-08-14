@@ -28,6 +28,7 @@ import {
   buildHeadlessClaudeInvocation,
   DEFAULT_CLAUDE_BIN,
 } from "@dev-loops/core/claude/headless-entry";
+import { releaseRunClaimsOnExit } from "../loop/_pr-runner-coordination.mjs";
 
 function parseCliArgs(argv) {
   const opts = { dryRun: false, claudeBin: DEFAULT_CLAUDE_BIN };
@@ -90,7 +91,7 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-function main(argv) {
+async function main(argv) {
   let opts;
   try {
     opts = parseCliArgs(argv);
@@ -123,7 +124,42 @@ function main(argv) {
     );
     return 127;
   }
+  // #1706: the spawned run's process has now terminated (completed, killed,
+  // timed out, or crashed) — deterministically release every coordination claim
+  // this run still owns so a dead run never leaves a leaky lock. Best-effort
+  // and non-fatal; the driver's exit status is never altered by a failed sweep.
+  if (!opts.dryRun) {
+    try {
+      const sweep = await releaseRunClaimsOnExit({ runId, root: repoRoot });
+      // #1706/review: surface a failed or partially-failed exit-claim sweep on
+      // stderr so leaked claims stay diagnosable, while keeping the sweep
+      // non-fatal — the driver's exit status is never altered by sweep failure.
+      if (sweep?.status === "scan_failed" || (sweep?.failed?.length ?? 0) > 0) {
+        process.stderr.write(
+          JSON.stringify({
+            ok: false,
+            warning: "exit-claim sweep encountered failures",
+            status: sweep.status,
+            failed: sweep.failed,
+          }) + "\n",
+        );
+      }
+    } catch (error) {
+      // swallow; never let a failed sweep change the driver exit status
+      process.stderr.write(
+        JSON.stringify({
+          ok: false,
+          warning: "exit-claim sweep failed",
+          error: error instanceof Error ? error.message : String(error),
+        }) + "\n",
+      );
+    }
+  }
   return res.status ?? 1;
 }
 
-process.exit(main(process.argv.slice(2)));
+main(process.argv.slice(2)).then((code) => {
+  process.exit(code ?? 1);
+}).catch(() => {
+  process.exit(1);
+});

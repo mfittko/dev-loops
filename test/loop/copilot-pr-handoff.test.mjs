@@ -10,7 +10,7 @@ import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper,
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { claimRunnerOwnership, loadRunnerCoordinationState, recordExitSignalForRunner } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
 
 const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
@@ -2023,6 +2023,53 @@ test("copilot-pr-handoff stops cleanly when another run already owns the PR", as
     assert.equal(output.runnerOwnership.ok, false);
     assert.equal(output.runnerOwnership.error, "ownership_lost");
     assert.equal(output.runnerOwnership.activeRun.runId, "run-active");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-2/AC-1: a run that dies WITHOUT releasing (exit signal recorded) is
+// treated as immediately stale — pre-flight handoff takes its claim over and
+// proceeds instead of returning the blocking stop.
+test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds instead of stop (#1706)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-supersede-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: new Date().toISOString() });
+    // run-dead dies without releasing — record its exit signal (confirmed death)
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    assert.equal(sig.ok, true);
+
+    const BOT_COMMENT = JSON.stringify({
+      id: 199,
+      body: "Gate review: draft_gate verdict=clean",
+      user: { login: "copilot-pull-request-reviewer[bot]", type: "Bot" },
+      created_at: "2026-06-07T09:00:00Z",
+    });
+
+    const { env } = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: OPEN_PR + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"], stdout: BOT_COMMENT + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
+      cwd: tempDir,
+      env: { ...env, DEVLOOPS_RUN_ID: "run-new" },
+    });
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    // The dead-run claim was taken over — no blocking stop.
+    assert.equal(output.runnerOwnership.ok, true);
+    assert.equal(output.runnerOwnership.status, "taken_over");
+    assert.equal(output.runnerOwnership.activeRun.runId, "run-new");
+    assert.notEqual(output.state, "blocked_needs_user_decision");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-new");
+    assert.equal(loaded.state.previousRun.runId, "run-dead");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
