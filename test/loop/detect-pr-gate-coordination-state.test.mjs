@@ -1851,6 +1851,35 @@ test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferenc
   }
 });
 
+test("loadRefinementArtifact: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS — a tracker-backed (expectedIssue) draft PR dropping its Closes #N surfaces missing_refinement_artifact instead of validating clean", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [],
+          body: "## Probe\n\nProse only.\n\n## Acceptance criteria\n\n- [ ] the AC\n\n## Definition of done\n\n- [ ] the DoD\n",
+        },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+        expectedIssue: 900,
+      },
+    );
+    // Even though the body carries AC/DoD, a tracker-backed PR that dropped its
+    // closing reference must fail closed (missing_closing_issue_reference), not
+    // be reclassified as an issue-less lightweight body and validate clean.
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssues.length, 0);
+    assert.equal(result.finding, "missing_refinement_artifact");
+    assert.match(result.reason, /missing_closing_issue_reference/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 // ── draft gate round-count reset (#560) ──────────────────────────────────
 
 test("detect-pr-gate-coordination-state resets Copilot round count when draft_gate re-passed on different head", async () => {
