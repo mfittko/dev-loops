@@ -49,8 +49,9 @@ export function primerEvidencePath({ dir, gate, headSha } = {}) {
 
 /**
  * Import a plan's request groups into a plain lookup keyed by canonical
- * (model, requestPrefixFingerprint). Fingerprint-less groups are keyed by
- * `model` only (they never collapse, mirroring partitionPrimerGroups).
+ * (model, requestPrefixFingerprint). Fingerprint-less groups are keyed by a
+ * per-model ordinal (`${model}::__unkeyed:<n>`), mirroring partitionPrimerGroups'
+ * per-partition separation.
  *
  * @param {object[]} requestGroups
  * @returns {Map<string, object>}
@@ -166,7 +167,7 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
 
   // shared-prefix hash binding. A plan that carries no shared-prefix hash HAS
   // no cache-access binding to enforce (both null is a pass); when the plan
-  // carrys one, the evidence must carry the SAME value. This is a real bug
+  // carries one, the evidence must carry the SAME value. This is a real bug
   // fix: the prior `evidence.sharedPrefixHash == null ||` clause failed even
   // when plan and evidence were BOTH absent (a both-absent plan could never be
   // validated).
@@ -278,6 +279,19 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
   }
 
   // request-fingerprint binding for primer runs that reference a real prefix.
+  // (planUnkeyedKeys + the per-model run ordinal counter support the inverse
+  // fingerprint-LESS binding below.)
+  const planUnkeyedKeys = new Set();
+  {
+    const planUnkeyedOrdinals = new Map();
+    for (const g of groups) {
+      if (g.requestPrefixFingerprint) continue;
+      const n = planUnkeyedOrdinals.get(g.model) ?? 0;
+      planUnkeyedOrdinals.set(g.model, n + 1);
+      planUnkeyedKeys.add(`${g.model}::__unkeyed:${n}`);
+    }
+  }
+  const unkeyedRunOrdinals = new Map();
   for (let i = 0; i < evidence.primerRuns.length; i++) {
     const r = evidence.primerRuns[i];
     if (r.requestPrefixFingerprint) {
@@ -286,6 +300,22 @@ export function validatePrimerEvidence({ plan, evidence } = {}) {
         failures.push({
           check: "request_fingerprint",
           reason: `primer run ${i} request-prefix fingerprint not present in the plan's request groups for model ${JSON.stringify(r.model)}`,
+        });
+      }
+    } else {
+      // Inverse group binding for fingerprint-LESS runs: mirror the keyed
+      // check above. group_coverage proves every plan group has a primer run;
+      // this proves the reverse — that every unkeyed primer run maps to a
+      // fingerprint-less plan group for its model. Without it, a hand-edited /
+      // legacy evidence file could carry extra fingerprint-less runs for models
+      // or groups the plan never requested and still validate, breaking the
+      // "derived from the plan" invariant for unkeyed groups.
+      const n = unkeyedRunOrdinals.get(r.model) ?? 0;
+      unkeyedRunOrdinals.set(r.model, n + 1);
+      if (!planUnkeyedKeys.has(`${r.model}::__unkeyed:${n}`)) {
+        failures.push({
+          check: "request_group_unkeyed",
+          reason: `primer run ${i} (${JSON.stringify(r.model)}) is fingerprint-less but no fingerprint-less request group exists in the plan for that ordinal`,
         });
       }
     }

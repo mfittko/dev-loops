@@ -337,6 +337,46 @@ describe("fingerprint-less request groups — stable per-model ordinal keying (u
       /group_coverage/,
     );
   });
+
+  test("an extra fingerprint-less primer run with no matching plan group fails closed (inverse unkeyed binding)", () => {
+    // The plan has only ONE fingerprint-less group for model-a, so a second
+    // fingerprint-less run (same model, higher ordinal) is a run the plan never
+    // requested — it must fail closed via the inverse unkeyed binding, closing
+    // the gap where a hand-edited/legacy evidence file could carry extra unkeyed
+    // runs and still validate.
+    const plan = makePlan({
+      groups: [
+        {
+          model: "model-a",
+          requestPrefixFingerprint: null,
+          cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+          ttlIntent: "1h",
+          angles: ["correctness", "security"],
+        },
+      ],
+    });
+    // Build the evidence via buildPrimerEvidence (single run) then append a
+    // second unkeyed run directly, simulating a tampered evidence artifact.
+    const base = buildPrimerEvidence({
+      plan,
+      primerRuns: [{ model: "model-a", primerForm: PRIMER_FORM_DEDICATED, landedAt: 1 }],
+      reviewerReleases: [{ model: "model-a", releasedAt: 2 }],
+    });
+    const tampered = {
+      ...base,
+      primerRuns: [
+        ...base.primerRuns,
+        Object.freeze({ model: "model-a", requestPrefixFingerprint: null, primerForm: PRIMER_FORM_DEDICATED, landedAt: 3 }),
+      ],
+    };
+    const r = validatePrimerEvidence({ plan, evidence: tampered });
+    assert.equal(r.ok, false, JSON.stringify(r.failures));
+    assert.ok(r.failures.some((f) => f.check === "request_group_unkeyed"));
+    assert.throws(
+      () => enforcePrimerEvidence({ plan, evidence: tampered }),
+      /request_group_unkeyed/,
+    );
+  });
 });
 
 describe("draft-gate hardening of validatePrimerEvidence (fan-in converge findings)", () => {
