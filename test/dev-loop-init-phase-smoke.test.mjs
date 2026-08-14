@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -53,6 +53,36 @@ test("init-phase materializes DoD-enabled planning artifacts", async () => {
     assert.match(review, /## Definition-of-done clarity check/);
     assert.match(review, /review-surface completeness/);
     assert.match(review, /RFC-escalation sanity/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("init-phase refuses the durable phase-doc mint for an issue-keyed (tracker) worktree (ARTIFACT-TRACKER-FIRST-NO-DUP)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-init-phase-"));
+  // Issue-keyed worktree layout: tmp/worktrees/dev-loops/issue-<n>.
+  const wtRoot = path.join(tempDir, "tmp", "worktrees", "dev-loops", "issue-42");
+
+  try {
+    await mkdir(wtRoot, { recursive: true });
+    const result = await initializePhase(wtRoot, "phase-2", {
+      status: "planning",
+      notes: ["tracker-backed session"],
+    });
+
+    assert.equal(result.trackerBacked, true, "issue-keyed worktree is detected as tracker-backed");
+    // No durable phase doc is minted.
+    await assert.rejects(
+      readFile(path.join(wtRoot, "docs", "phases", "phase-2.md"), "utf8"),
+      /ENOENT/,
+    );
+    // The ephemeral tmp/ scaffold is still created.
+    const manifest = JSON.parse(
+      await readFile(path.join(wtRoot, "tmp", "phases", "phase-2", "manifest.json"), "utf8"),
+    );
+    assert.equal(manifest.status, "planning");
+    // The durable phase-doc artifact is not advertised in the manifest.
+    assert.ok(!manifest.artifacts.some((a) => a.includes("docs/phases/phase-2.md")), "no phase-doc artifact in manifest");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
