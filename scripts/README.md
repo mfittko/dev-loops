@@ -544,6 +544,13 @@ Release-on-death & dead-claim supersession (#1706):
   stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
   leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
   only confirmed-dead or stale claims are superseded.
+- Anti-trap: a fresh heartbeat on a claim is not proof of a live driver. The lock may be held by a
+  completed/control run that claimed at takeover then ended without releasing, yet the heartbeat still
+  reads fresh — which this rc.6 drive saw as repeated false "live owner / standing down" stalls. LIVE
+  means a subagent run verified via `subagent status` showing an actively-updating `EXECUTING` child
+  (a workflow child active now with a recent update). Before any stand-down or dispatch decision,
+  confirm real execution via `subagent status`; never trust the lock heartbeat alone. Only
+  genuinely-executing runs count as a live owner.
 
 ### `scripts/loop/run-watch-cycle.mjs`
 
