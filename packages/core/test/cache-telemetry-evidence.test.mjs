@@ -313,12 +313,22 @@ describe("validateCacheTelemetryEvidence — fail-closed honesty gate", () => {
       primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
       reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
     });
+    // Both events fields get the same truthy non-array treatment (the symmetric
+    // reviewerCacheReads arm and its safe-array fallback must not throw either).
     for (const bad of ["abc", { a: 1 }, 5]) {
-      const subverted = { ...ev, primerCacheCreations: bad };
-      assert.doesNotThrow(() => validateCacheTelemetryEvidence({ evidence: subverted }));
-      const r = validateCacheTelemetryEvidence({ evidence: subverted });
-      assert.equal(r.ok, false);
-      assert.ok(r.failures.some((f) => f.check === "aggregate_consistency"));
+      for (const [field, label] of [
+        ["primerCacheCreations", "primerCacheCreations"],
+        ["reviewerCacheReads", "reviewerCacheReads"],
+      ]) {
+        const subverted = { ...ev, [field]: bad };
+        assert.doesNotThrow(() => validateCacheTelemetryEvidence({ evidence: subverted }));
+        const r = validateCacheTelemetryEvidence({ evidence: subverted });
+        assert.equal(r.ok, false);
+        assert.ok(
+          r.failures.some((f) => f.check === "aggregate_consistency"),
+          `${label} non-array should yield an aggregate_consistency failure`,
+        );
+      }
     }
   });
 
