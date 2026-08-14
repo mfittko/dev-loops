@@ -507,10 +507,16 @@ export function extractRepoFlagFromGhPrMerge(command) {
 // ---------------------------------------------------------------------------
 
 /** gh api value-taking flags (short forms). Each consumes the following token. Lowercase (compared
- * against token.toLowerCase()) — the `-H` header flag is real but case-folded here like the rest. */
-const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h", "-r"]);
+ * against token.toLowerCase()) — the `-H` header flag is real but case-folded here like the rest.
+ * Covers every value-taking short flag gh api accepts so a flag placed BEFORE the endpoint skips
+ * its value and the real endpoint is still read (#1622): -X/--method, -f/--field, -F/--raw-field
+ * (both case-fold to -f), -H/--header, -q/--jq, -p/--preview, -t/--template, -r/--repo. */
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h", "-r", "-q", "-p", "-t"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
-const GH_API_VALUE_LONG_FLAGS = new Set(["--method", "--field", "--raw-field", "--header", "--repo"]);
+const GH_API_VALUE_LONG_FLAGS = new Set([
+  "--method", "--field", "--raw-field", "--header", "--repo", "--jq", "--preview",
+  "--template", "--hostname", "--input", "--cache", "--cache-ttl", "--unix-socket",
+]);
 
 function ghApiRegex() {
   return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+api(?:\\s|$)`, "i");
@@ -571,6 +577,15 @@ export function extractGhApiEndpointSegments(command) {
 function targetGhApiPathRegex(suffix) {
   const slug = TARGET_REPO_SLUG.replace("/", "\\/");
   return new RegExp(`(?:repos/${slug}/|^)${suffix}`);
+}
+
+/** Strip a `scheme://host` prefix from an absolute gh api URL endpoint (`https://api.github.com/...`),
+ * yielding the bare `/repos/<slug>/…` path that the write-path anchors match. gh api accepts both a
+ * bare `repos/<slug>/…`/`issues/…` path and an absolute https:// URL, so both must reach the same
+ * anchors or an absolute-URL write bypasses the deny (#1622). */
+function normalizeGhApiEndpoint(endpoint) {
+  if (!endpoint) return endpoint;
+  return endpoint.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "");
 }
 
 /** Whether any `gh api` segment targets the `graphql` endpoint. */
@@ -647,9 +662,10 @@ export function commandContainsCopilotRequestBypass(command) {
 export function commandContainsCopilotSummonComment(command) {
   if (!findGhSubcmdVerbSegment(command, "pr", "comment")) return false;
   // A bare summon is `/copilot` or `/copilot re-review` on its own (optionally quoted) — never a
-  // prose mention like `see /copilot for more` / `see /copilot docs`. Match only when the summon
-  // runs to the end of the (quoted) body or is the explicit `re-review` form.
-  return /\/copilot(?:\s+re-review\b)?\s*(?:["']|$)/i.test(command);
+  // prose mention like `see /copilot for more` / `see /copilot docs`. A bare `/copilot` must run to
+  // the end of the (quoted) body; the explicit `re-review` form allows trailing modifiers
+  // (`/copilot re-review now`) so appending a word cannot defeat the summon deny (#1622).
+  return /\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
 /**
@@ -698,10 +714,12 @@ function interpreterRegex(bin) {
 export function commandContainsInlineInterpreter(command) {
   return shellSegments(command).some((segment) => {
     const s = segment.trim();
-    // Heredoc fed straight to an interpreter (`node - <<EOF`, `python3 - <<EOF`, or `node <<EOF`).
-    if (/(?:^|\s)(?:node|python3?)\s+(?:-\s*)?<</i.test(s)) return true;
     if (interpreterRegex("node").test(s)) {
-      const tokens = s.replace(interpreterRegex("node"), "").trim().split(/\s+/).filter(Boolean);
+      const code = s.replace(interpreterRegex("node"), "").trim();
+      // Heredoc fed straight to node where node is the command head (`node - <<EOF`, `node <<EOF`),
+      // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
+      if (/^(?:-\s*)?<</i.test(code)) return true;
+      const tokens = code.split(/\s+/).filter(Boolean);
       for (const t of tokens) {
         // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
@@ -711,7 +729,10 @@ export function commandContainsInlineInterpreter(command) {
       }
     }
     if (interpreterRegex("python3?").test(s)) {
-      const tokens = s.replace(interpreterRegex("python3?"), "").trim().split(/\s+/).filter(Boolean);
+      const code = s.replace(interpreterRegex("python3?"), "").trim();
+      // Heredoc fed straight to python where python is the command head (`python3 - <<EOF`).
+      if (/^(?:-\s*)?<</i.test(code)) return true;
+      const tokens = code.split(/\s+/).filter(Boolean);
       for (const t of tokens) {
         if (t === "-c" || t.startsWith("-c")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument

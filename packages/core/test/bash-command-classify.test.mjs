@@ -336,6 +336,19 @@ test("extractGhApiEndpointSegments reads the endpoint from gh api calls, skippin
   assert.equal(
     extractGhApiEndpointSegments('gh api -H "Accept: application/vnd.github+json" repos/mfittko/dev-loops/issues/5/sub_issues')[0].endpoint,
     "repos/mfittko/dev-loops/issues/5/sub_issues");
+  // every gh api value-taking flag (short + long) placed before the endpoint skips its value so
+  // the real endpoint is still read — -q/--jq, -p/--preview, -t/--template, --hostname, --input
+  assert.equal(extractGhApiEndpointSegments("gh api --jq .data repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6")[0].endpoint,
+    "repos/mfittko/dev-loops/issues/5/sub_issues");
+  assert.equal(extractGhApiEndpointSegments("gh api -X POST -q '.node_id' repos/mfittko/dev-loops/pulls/5/requested_reviewers")[0].endpoint,
+    "repos/mfittko/dev-loops/pulls/5/requested_reviewers");
+  assert.equal(extractGhApiEndpointSegments("gh api --hostname github.com repos/mfittko/dev-loops/pulls/5/requested_reviewers -X POST")[0].endpoint,
+    "repos/mfittko/dev-loops/pulls/5/requested_reviewers");
+  assert.equal(extractGhApiEndpointSegments("gh api -t '{{.title}}' -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers")[0].endpoint,
+    "repos/mfittko/dev-loops/pulls/5/requested_reviewers");
+  assert.equal(extractGhApiEndpointSegments("gh api --preview nebula-preview repos/mfittko/dev-loops/issues/5/sub_issues -X POST")[0].endpoint,
+    "repos/mfittko/dev-loops/issues/5/sub_issues");
+  assert.equal(extractGhApiEndpointSegments("gh api --jq . graphql")[0].endpoint, "graphql");
   assert.equal(extractGhApiEndpointSegments("npm test").length, 0);
 });
 
@@ -355,6 +368,12 @@ test("commandContainsSubIssueAdHocBypass detects target-repo sub_issues WRITES i
   assert.equal(commandContainsSubIssueAdHocBypass("gh api --method PUT repos/mfittko/dev-loops/issues/5/sub_issues/priority"), true);
   // other repo's sub_issues write passes through (scoped to target repo path)
   assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/other/repo/issues/5/sub_issues -f child=6"), false);
+  // value flags placed before the endpoint must still route to the real endpoint and be denied
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --hostname github.com repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6"), true);
+  // absolute-URL endpoint form (gh api accepts https://api.github.com/...) is normalized and denied
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/issues/5/sub_issues -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/other/repo/issues/5/sub_issues -X POST"), false);
   // a READ of the sub_issues list is not the ad-hoc write bypass
   assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues"), false);
   assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -X GET"), false);
@@ -374,6 +393,8 @@ test("commandContainsReplyResolveBypass detects target-repo replies POSTs (write
   // a GET of the replies list is a read, not the ad-hoc reply bypass
   assert.equal(commandContainsReplyResolveBypass("gh api repos/mfittko/dev-loops/pulls/5/comments/10/replies"), false);
   assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/other/repo/pulls/5/comments/10/replies"), false);
+  // absolute-URL endpoint form is normalized and denied
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi"), true);
   assert.equal(commandContainsReplyResolveBypass("node scripts/github/reply-resolve-review-thread.mjs --thread 5"), false);
 });
 
@@ -390,6 +411,10 @@ test("commandContainsCopilotRequestBypass detects target-repo requested_reviewer
   // a GET of requested_reviewers is a read; the sanctioned read is gh pr view --json reviewRequests
   assert.equal(commandContainsCopilotRequestBypass("gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers"), false);
   assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers"), false);
+  // value flag -q/--jq before the endpoint must still route to the real endpoint and be denied
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST -q '.node_id' repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
+  // absolute-URL endpoint form is normalized and denied
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
   assert.equal(commandContainsCopilotRequestBypass("node scripts/github/request-copilot-review.mjs --pr 5"), false);
   // attached-form and --repo-targeted shapes gh's flag parser accepts must still be detected
   assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
@@ -401,6 +426,9 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "/copilot"'), true);
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "/copilot re-review"'), true);
   assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "please take a look"'), false);
+  // a trailing word after the explicit re-review summon must not defeat the deny
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "/copilot re-review now"'), true);
+  assert.equal(commandContainsCopilotSummonComment('gh pr comment 5 --body "/copilot re-review please"'), true);
   // only relevant for gh pr comment (not a bare echo of the string)
   assert.equal(commandContainsCopilotSummonComment('echo "/copilot"'), false);
   // prose mentions of /copilot are NOT a bare summon
@@ -449,6 +477,8 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   // a script path stopping the python -c scan (later -c is a script argument, not an interpreter)
   assert.equal(commandContainsInlineInterpreter("python3 myfile.py -c argvalue"), false);
   assert.equal(commandContainsInlineInterpreter("gh pr view 1 --jq .state"), false);
+  // a heredoc fed to a command that merely contains the word `node` is NOT an inline interpreter
+  assert.equal(commandContainsInlineInterpreter("grep node <<EOF"), false);
   // env/wrapper/path prefixes are tolerated
   assert.equal(commandContainsInlineInterpreter('DEBUG=1 node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('command python3 -c "print(1)"'), true);
