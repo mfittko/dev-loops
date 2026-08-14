@@ -507,9 +507,9 @@ export function extractRepoFlagFromGhPrMerge(command) {
 
 /** gh api value-taking flags (short forms). Each consumes the following token. Lowercase (compared
  * against token.toLowerCase()) — the `-H` header flag is real but case-folded here like the rest. */
-const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h"]);
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-h", "-r"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
-const GH_API_VALUE_LONG_FLAGS = new Set(["--method", "--field", "--raw-field", "--header"]);
+const GH_API_VALUE_LONG_FLAGS = new Set(["--method", "--field", "--raw-field", "--header", "--repo"]);
 
 function ghApiRegex() {
   return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+api(?:\\s|$)`, "i");
@@ -552,15 +552,24 @@ export function extractGhApiEndpointSegments(command) {
         }
       }
     }
+    // A quoted endpoint (`gh api "repos/..."`) carries its surrounding quotes through the tokenizer;
+    // strip them so the write-path/anchor regexes see the bare path.
+    if (endpoint && endpoint.length >= 2 && (endpoint[0] === '"' || endpoint[0] === "'")) {
+      const q = endpoint[0];
+      if (endpoint.endsWith(q)) endpoint = endpoint.slice(1, -1);
+    }
     out.push({ segment, endpoint });
   }
   return out;
 }
 
-/** The `gh api` segments whose endpoint is the target repo's URL path (embedded repo slug). */
+/** The `gh api` segments whose endpoint is the target repo's URL path. Matches the absolute
+ * slug-embedded form (`repos/mfittko/dev-loops/...`) and the bare relative form (`issues/...`),
+ * which gh api resolves against the cwd repo — the decideBashGate call site gates the relative form
+ * on `inTargetRepo`. */
 function targetGhApiPathRegex(suffix) {
   const slug = TARGET_REPO_SLUG.replace("/", "\\/");
-  return new RegExp(`repos/${slug}/${suffix}`);
+  return new RegExp(`(?:repos/${slug}/|^)${suffix}`);
 }
 
 /** Whether any `gh api` segment targets the `graphql` endpoint. */
@@ -656,8 +665,9 @@ export function commandContainsDetachedWaitTool(command) {
   // separate the `while` head from the `sleep`/`gh` body calls and miss the pattern).
   // A polling loop is detected wherever the `while`/`until`/`seq` head appears (a leading expression
   // like `gh pr view 1 && while ...` must not silence the deny) as long as the body carries both a
-  // `sleep` and a gh/loop-state call.
-  if (/\b(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\b(?:gh|loop-state)\b/.test(whole)) {
+  // `sleep` and a gh/loop-state call. `gh` must be a standalone token (followed by whitespace/end) —
+  // a bare mention of `gh` inside another word (`grep gh-notes`) is not a GitHub call.
+  if (/\b(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|loop-state/.test(whole)) {
     return true;
   }
   return shellSegments(command).some((segment) => {
@@ -687,19 +697,22 @@ function interpreterRegex(bin) {
 export function commandContainsInlineInterpreter(command) {
   return shellSegments(command).some((segment) => {
     const s = segment.trim();
-    // Heredoc fed straight to an interpreter (`node - <<EOF`, `python3 - <<EOF`).
-    if (/(?:^|\s)(?:node|python3?)\s+-\s*<</i.test(s)) return true;
+    // Heredoc fed straight to an interpreter (`node - <<EOF`, `python3 - <<EOF`, or `node <<EOF`).
+    if (/(?:^|\s)(?:node|python3?)\s+(?:-\s*)?<</i.test(s)) return true;
     if (interpreterRegex("node").test(s)) {
       const tokens = s.replace(interpreterRegex("node"), "").trim().split(/\s+/).filter(Boolean);
       for (const t of tokens) {
-        if (t === "-e" || t === "--eval" || t.startsWith("--eval=") || t === "-p") return true;
+        // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
+        // prefix match catches; break at the first non-flag token so a later `-e` on a script path
+        // is a script argument.
+        if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
       }
     }
     if (interpreterRegex("python3?").test(s)) {
       const tokens = s.replace(interpreterRegex("python3?"), "").trim().split(/\s+/).filter(Boolean);
       for (const t of tokens) {
-        if (t === "-c") return true;
+        if (t === "-c" || t.startsWith("-c")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
       }
     }

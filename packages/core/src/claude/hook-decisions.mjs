@@ -117,9 +117,11 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
 
   // SUBISSUE-NO-ADHOC-BYPASS (#1622): ad-hoc `gh api` writes to the target repo's sub-issue endpoints.
-  // Actor-independent (no reserved direct path). The path names the target repo, so it is refused even
-  // when cwd is elsewhere (mirrors the #1047 explicit-`--repo`-target posture).
-  if (commandContainsSubIssueAdHocBypass(command)) {
+  // Actor-independent (no reserved direct path). Gated on the target repo: the absolute slug-embedded
+  // form identifies the target repo; the bare relative form (`gh api issues/5/sub_issues`) resolves
+  // against the cwd repo, so it is in scope only when running in the target repo (mirrors the #1047
+  // explicit-`--repo`/cwd-target posture).
+  if (inTargetRepo && commandContainsSubIssueAdHocBypass(command)) {
     return {
       decision: "deny",
       reason:
@@ -132,7 +134,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // to pulls/<n>/comments/<m>/replies, or a `gh api graphql` resolveReviewThread mutation (the Rest
   // path names the target repo; the graphql form has no path-host repo, so it is scoped to the cwd
   // repo). Actor-independent: reply through reply-resolve-review-thread(s).mjs.
-  if (commandContainsReplyResolveBypass(command) || (inTargetRepo && commandContainsGraphqlResolveReviewThread(command))) {
+  if (inTargetRepo && (commandContainsReplyResolveBypass(command) || commandContainsGraphqlResolveReviewThread(command))) {
     return {
       decision: "deny",
       reason:
@@ -145,7 +147,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (#1622): ad-hoc Copilot review requests — raw `gh api` writes
   // to pulls/<n>/requested_reviewers, or a bare `/copilot` / `/copilot re-review` comment summon on the
   // target repo. Actor-independent: request Copilot via scripts/github/request-copilot-review.mjs.
-  if (commandContainsCopilotRequestBypass(command) || (inTargetRepo && commandContainsCopilotSummonComment(command))) {
+  if (inTargetRepo && (commandContainsCopilotRequestBypass(command) || commandContainsCopilotSummonComment(command))) {
     return {
       decision: "deny",
       reason:
@@ -225,7 +227,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
         decision: "deny",
         reason:
           "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/loop/detect-copilot-" +
-          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " + +
+          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
           "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
           "dev-loop driving agent.",
       };

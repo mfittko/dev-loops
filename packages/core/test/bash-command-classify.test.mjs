@@ -360,6 +360,12 @@ test("commandContainsSubIssueAdHocBypass detects target-repo sub_issues WRITES i
   assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -X GET"), false);
   // the sanctioned wrapper never matches (first token is `node`)
   assert.equal(commandContainsSubIssueAdHocBypass("node scripts/github/manage-sub-issues.mjs --repo x"), false);
+  // gh api's bare relative endpoint form (resolved against the cwd repo) and explicit --repo targeting
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --repo mfittko/dev-loops issues/5/sub_issues -X POST -f child=6"), true);
+  // a quoted endpoint is stripped of its quotes before the write-path regex matches
+  assert.equal(commandContainsSubIssueAdHocBypass('gh api "repos/mfittko/dev-loops/issues/5/sub_issues" -X POST -f child=6'), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X GET"), false);
 });
 
 test("commandContainsReplyResolveBypass detects target-repo replies POSTs (write method required)", () => {
@@ -385,9 +391,10 @@ test("commandContainsCopilotRequestBypass detects target-repo requested_reviewer
   assert.equal(commandContainsCopilotRequestBypass("gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers"), false);
   assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers"), false);
   assert.equal(commandContainsCopilotRequestBypass("node scripts/github/request-copilot-review.mjs --pr 5"), false);
-  // attached-form write methods gh's flag parser accepts must still be detected
+  // attached-form and --repo-targeted shapes gh's flag parser accepts must still be detected
   assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
   assert.equal(commandContainsCopilotRequestBypass("gh api -XPOST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST"), true);
 });
 
 test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr comment bodies", () => {
@@ -416,6 +423,11 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("echo disown is a shell builtin"), false);
   // a polling loop with a LEADING expression is still a polling loop
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1 && while ! gh pr view 1; do sleep 5; done"), true);
+  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
+  // until/seq loop forms are detected too
+  assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
+  assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
@@ -423,6 +435,10 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -p "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('python3 -c "print(1)"'), true);
+  assert.equal(commandContainsInlineInterpreter('python3 -c"print(1)"'), true);
+  assert.equal(commandContainsInlineInterpreter('node -e"console.log(1)"'), true);
+  assert.equal(commandContainsInlineInterpreter('node -p"1+1"'), true);
+  assert.equal(commandContainsInlineInterpreter("node <<EOF\nconsole.log(1)\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter('python -c "print(1)"'), true);
   assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);

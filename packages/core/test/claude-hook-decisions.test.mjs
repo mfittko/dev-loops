@@ -600,6 +600,23 @@ test("decideBashGate denies detached wait tools only from a subagent (COPILOT-FO
   assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: null }).decision, "allow");
   // off-target subagent passes through
   assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", agentType: "dev-loop" }).decision, "allow");
+  // the refusal body is not corrupted by a stray concat operator: it names the full deterministic
+  // tool set and the banned detach forms (regression for the #1622 gate hardening round)
+  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, agentType: "dev-loop" }).reason;
+  assert.match(reason, /gh run watch/);
+  assert.match(reason, /nohup\/disown\/tmux\/screen/);
+  assert.doesNotMatch(reason, /NaN/);
+});
+
+test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
+  // bare relative endpoint (resolved against the cwd repo) is denied in the target repo
+  const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  // the same relative write outside the target repo is NOT this repo's bypass
+  assert.equal(decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  // --repo-targeted relative writes to the target repo are denied
+  assert.equal(decideBashGate({ command: "gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", repoSlug: TARGET, agentType: null }).decision, "deny");
 });
 
 test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independently (STOP-HUMAN-MERGE-001)", () => {
