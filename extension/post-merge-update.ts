@@ -291,7 +291,7 @@ async function removeMergedWorktree(
       cwd: mainCheckout,
       timeout: WORKTREE_CLEANUP_TIMEOUT_MS,
     });
-    if (result.code !== 0) {
+    if (result.code !== 0 || result.killed) {
       notify(
         ctx,
         `Post-merge worktree cleanup skipped (warning only): ${buildFailureSummary(result)}`,

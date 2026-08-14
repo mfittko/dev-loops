@@ -5,7 +5,7 @@ strategy: local-first
 inputSource: tracker
 
 refinement:
-  maxCopilotRounds: 2
+  maxCopilotRounds: 0
 
 gates:
   # Fail-closed enforcement that gate verdicts were produced by the
