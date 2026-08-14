@@ -24,6 +24,14 @@ import {
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
   commandContainsGitStash,
+  extractGhApiEndpointSegments,
+  commandContainsSubIssueAdHocBypass,
+  commandContainsReplyResolveBypass,
+  commandContainsGraphqlResolveReviewThread,
+  commandContainsCopilotRequestBypass,
+  commandContainsCopilotSummonComment,
+  commandContainsDetachedWaitTool,
+  commandContainsInlineInterpreter,
   TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
@@ -82,18 +90,77 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  * @param {boolean} [params.gatePassed] - Whether the relevant gate evidence exists for the PR.
  * @param {string|null} [params.gateError] - Error detail when the gate guard could not run.
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload; non-null
- *   string inside a subagent, null in the main agent. Scopes the external-write guard.
+ *   string inside a subagent, null in the main agent. Scopes the subagent-only predicates.
+ * @param {boolean} [params.humanMergeOnly] - Effective repo `autonomy.humanMergeOnly` invariant
+ *   (`resolveHumanMergeOnly`); when true, `gh pr merge` is refused actor-independently
+ *   (STOP-HUMAN-MERGE-001), because the main agent is the actor that performs GitHub writes and a
+ *   subagent-only deny would enforce nothing.
  * @returns {HookDecision}
  */
-export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null, agentType = null }) {
+export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null, agentType = null, humanMergeOnly = false }) {
   if (typeof command !== "string") {
     return ALLOW;
   }
+  const inTargetRepo = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+
+  // OPS-NO-INLINE-INTERPRETER (#1622): inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
+  // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars
+  // "Coordinator and agent flows"; sanctioned output parsing uses `--jq`/`--silent`, never an
+  // inline interpreter.
+  if (inTargetRepo && commandContainsInlineInterpreter(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, heredoc to " +
+        "node/python) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
+        "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
+    };
+  }
+
+  // SUBISSUE-NO-ADHOC-BYPASS (#1622): ad-hoc `gh api` writes to the target repo's sub-issue endpoints.
+  // Actor-independent (no reserved direct path). The path names the target repo, so it is refused even
+  // when cwd is elsewhere (mirrors the #1047 explicit-`--repo`-target posture).
+  if (commandContainsSubIssueAdHocBypass(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "SUBISSUE-NO-ADHOC-BYPASS: ad-hoc `gh api` writes to the target repo's sub_issues endpoint are " +
+        "blocked. Manage sub-issues via the sanctioned manage-sub-issues wrapper instead.",
+    };
+  }
+
+  // COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (#1622): ad-hoc thread-resolution writes — raw `gh api` POST
+  // to pulls/<n>/comments/<m>/replies, or a `gh api graphql` resolveReviewThread mutation (the Rest
+  // path names the target repo; the graphql form has no path-host repo, so it is scoped to the cwd
+  // repo). Actor-independent: reply through reply-resolve-review-thread(s).mjs.
+  if (commandContainsReplyResolveBypass(command) || (inTargetRepo && commandContainsGraphqlResolveReviewThread(command))) {
+    return {
+      decision: "deny",
+      reason:
+        "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-reply mutations are blocked. Resolve review " +
+        "threads via scripts/github/reply-resolve-review-thread.mjs (one thread) or " +
+        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql.",
+    };
+  }
+
+  // COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (#1622): ad-hoc Copilot review requests — raw `gh api` writes
+  // to pulls/<n>/requested_reviewers, or a bare `/copilot` / `/copilot re-review` comment summon on the
+  // target repo. Actor-independent: request Copilot via scripts/github/request-copilot-review.mjs.
+  if (commandContainsCopilotRequestBypass(command) || (inTargetRepo && commandContainsCopilotSummonComment(command))) {
+    return {
+      decision: "deny",
+      reason:
+        "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY: ad-hoc Copilot review requests are blocked. Request Copilot " +
+        "via scripts/github/request-copilot-review.mjs — do not write requested_reviewers or post a literal " +
+        "/copilot comment.",
+    };
+  }
+
   // `git stash` writes to `refs/stash`, one ref shared by every worktree over this repo's single
   // `.git` directory — a stash from one worktree can pop into another's. Block it outright on the
   // target repo; see skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout for the
   // stash-free alternative (git diff / a patch file / a scratch checkout).
-  if (commandContainsGitStash(command) && (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase()) {
+  if (commandContainsGitStash(command) && inTargetRepo) {
     return {
       decision: "deny",
       reason:
@@ -134,7 +201,36 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   const isReady = commandContainsGhPrReady(command);
   const isMerge = commandContainsGhPrMerge(command);
   const isCreate = commandContainsGhPrCreate(command);
+
+  // STOP-HUMAN-MERGE-001 (#1622): when the repo resolves `autonomy.humanMergeOnly`, `gh pr merge` is
+  // refused actor-independently — the main agent is the actor that performs GitHub writes, so only an
+  // actor-independent deny enforces the human-merge invariant (an agent-scoped deny would enforce
+  // nothing on the main-agent write path).
+  if (humanMergeOnly && isMerge && inTargetRepo) {
+    return {
+      decision: "deny",
+      reason:
+        "STOP-HUMAN-MERGE-001: this repo resolves autonomy.humanMergeOnly — the loop must stop at merge " +
+        "for a human action; the agent MUST NOT run `gh pr merge`. Leave the PR merge-ready and a human " +
+        "merges it.",
+    };
+  }
+
   if (!isReady && !isMerge && !isCreate) {
+    // COPILOT-FOLLOWUP-WAIT-TOOLS (#1622): banned detached/polling wait wrappers. Subagent-only — the
+    // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
+    // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
+    // the deterministic tools.
+    if (typeof agentType === "string" && inTargetRepo && commandContainsDetachedWaitTool(command)) {
+      return {
+        decision: "deny",
+        reason:
+          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/github/detect-copilot-" +
+          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
+          "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
+          "dev-loop driving agent.",
+      };
+    }
     return ALLOW;
   }
 

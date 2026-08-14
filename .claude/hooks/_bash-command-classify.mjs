@@ -497,3 +497,194 @@ export function extractPrNumberFromGhPrMerge(command) {
 export function extractRepoFlagFromGhPrMerge(command) {
   return extractRepoFlagFromGhPrVerb(command, "merge");
 }
+
+// ---------------------------------------------------------------------------
+// gh api URL-path matchers + the six guard-rule classifiers (#1622).
+// These make the six rules that describe operations the Bash gate could refuse
+// enforceable at one seam (decideBashGate in hook-decisions.mjs), where raw
+// `gh api` shapes were previously unclassified (anything expressed as a raw API
+// call was invisible to the gate).
+// ---------------------------------------------------------------------------
+
+/** gh api value-taking flags (short forms). Each consumes the following token. */
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-F", "-H"]);
+/** gh api value-taking flags (long forms). Each consumes the following token. */
+const GH_API_VALUE_LONG_FLAGS = new Set(["--method", "--field", "--raw-field", "--header"]);
+
+function ghApiRegex() {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+api(?:\\s|$)`, "i");
+}
+
+/**
+ * Return one `{ segment, endpoint }` entry for EVERY `gh api <endpoint>` call (ignoring --help/-h).
+ * `endpoint` is the first positional (non-flag) token after `gh api`, skipping value-taking flags and
+ * their values (`gh api -X POST repos/...`, `gh api --method POST repos/...`). Env-assignment /
+ * `command`/`env`/`exec` wrapper / binary-path prefixes are tolerated via the shared SHELL_EXEC_PREFIX
+ * (`GH_TOKEN=x gh api ...`, `/usr/bin/gh api ...`). Node-wrapper commands (`node scripts/...`) never
+ * match — first token is `node`, not `gh`. The endpoint may be a full URL, a `repos/OWNER/REPO/...`
+ * path (gh api prefixes a bare path with `https://api.github.com/`), or `graphql`.
+ * @param {string} command @returns {{ segment: string, endpoint: string|null }[]}
+ */
+export function extractGhApiEndpointSegments(command) {
+  const re = ghApiRegex();
+  const out = [];
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").replace(/(?:--help|-h)\s*$/i, "").trim();
+    if (!remainder) continue;
+    const tokens = remainder.split(/\s+/);
+    let endpoint = null;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      const lower = token.toLowerCase();
+      if (!token.startsWith("-")) {
+        endpoint = token;
+        break;
+      }
+      if (GH_API_VALUE_FLAGS.has(lower) || GH_API_VALUE_LONG_FLAGS.has(lower)) {
+        i += 1; // consume the flag's value token
+      }
+    }
+    out.push({ segment, endpoint });
+  }
+  return out;
+}
+
+/** The `gh api` segments whose endpoint is the target repo's URL path (embedded repo slug). */
+function targetGhApiPathRegex(suffix) {
+  const slug = TARGET_REPO_SLUG.replace("/", "\\/");
+  return new RegExp(`repos/${slug}/${suffix}`);
+}
+
+/** Whether any `gh api` segment targets the `graphql` endpoint. */
+function ghApiGraphqlSegments(command) {
+  return extractGhApiEndpointSegments(command).filter(({ endpoint }) => endpoint && /^graphql$/i.test(endpoint));
+}
+
+/** Whether a `gh api` segment names an explicit write method (POST/PUT/PATCH/DELETE). gh api
+ * defaults to GET, so the ad-hoc-write predicates require an explicit write method to refuse. */
+const GH_API_WRITE_METHOD_RE = /(?:-X|-m|--method)\s+(?:"|')?\s*(?:POST|PUT|PATCH|DELETE)\b/i;
+function ghApiSegmentHasWriteMethod(segment) {
+  return GH_API_WRITE_METHOD_RE.test(segment);
+}
+
+/**
+ * SUBISSUE-NO-ADHOC-BYPASS: raw `gh api` WRITE to `.../issues/<n>/sub_issues[/priority]` on the target
+ * repo — the ad-hoc sub-issue mutation that must flow through the sanctioned `manage-sub-issues`
+ * wrapper instead. Actor-independent (the issue's decided policy): the main agent gets no reserved
+ * direct path to sub-issue writes. Anchored on the target repo's URL path segment AND an explicit write
+ * method, so a `gh api` read or another repo's `sub_issues` write passes through (no false deny).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsSubIssueAdHocBypass(command) {
+  const re = targetGhApiPathRegex(`issues/\\d+/sub_issues(?:/priority)?(?:\\s|$)`);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/**
+ * COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (REST half): raw `gh api` POST to
+ * `.../pulls/<n>/comments/<m>/replies` on the target repo — the ad-hoc thread reply that must flow
+ * through `reply-resolve-review-thread(s).mjs`. Actor-independent: no reserved direct reply path.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsReplyResolveBypass(command) {
+  const re = targetGhApiPathRegex(`pulls/\\d+/comments/\\d+/replies(?:\\s|$)`);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/**
+ * COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (GraphQL half): a raw `gh api graphql` that carries a
+ * `resolveReviewThread` mutation — the ad-hoc GraphQL thread-resolution bypass, which must also flow
+ * through `reply-resolve-review-thread(s).mjs`. `graphql` has no path-host repo (gh api graphql
+ * resolves against the cwd repo), so the surrounding decideBashGate scopes it to the target repo.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGraphqlResolveReviewThread(command) {
+  return ghApiGraphqlSegments(command).some(({ segment }) => /resolveReviewThread/.test(segment));
+}
+
+/**
+ * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (REST half): raw `gh api` write to
+ * `.../pulls/<n>/requested_reviewers` on the target repo — the ad-hoc Copilot review request that must
+ * flow through `scripts/github/request-copilot-review.mjs`. Actor-independent.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCopilotRequestBypass(command) {
+  const re = targetGhApiPathRegex(`pulls/\\d+/requested_reviewers(?:\\s|$)`);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(endpoint) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/**
+ * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (comment-summon half): a raw `gh pr comment` body carrying a
+ * bare Copilot summon (`/copilot` or `/copilot re-review`). The agent MUST request Copilot via
+ * `request-copilot-review.mjs`, never by posting a literal `/copilot` comment. Actor-independent: even
+ * the main agent (which may otherwise post `gh pr comment`) must not summon Copilot by comment.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCopilotSummonComment(command) {
+  if (!findGhSubcmdVerbSegment(command, "pr", "comment")) return false;
+  return /\/copilot(?:\s|["']|$)/i.test(command);
+}
+
+/**
+ * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait — `nohup`, `disown`, `tmux new-session`,
+ * `screen -dm`, or a `while`/`until`/`seq` loop whose body contains both a `sleep` and a gh or
+ * loop-state call. Behavioral rule (required-rules classification `agent`): scoped in decideBashGate to the
+ * dev-loop driving agent (subagent-only) so the main agent/operator retains manual wait tooling.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsDetachedWaitTool(command) {
+  const whole = command.trim();
+  // while/until/seq polling loop with both a sleep and a gh or loop-state call. The loop body is
+  // `;`-delimited, so this is checked against the whole command (a per-segment split would
+  // separate the `while` head from the `sleep`/`gh` body calls and miss the pattern).
+  if (/^(?:while|until|seq)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\b(?:gh|loop-state)\b/.test(whole)) {
+    return true;
+  }
+  return shellSegments(command).some((segment) => {
+    if (/\bnohup\b/.test(segment) || /\bdisown\b/.test(segment)) return true;
+    if (/^tmux\s+new-session\b/i.test(segment)) return true;
+    if (/^screen\s+-dm/i.test(segment)) return true;
+    return false;
+  });
+}
+
+/** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
+function interpreterRegex(bin) {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
+}
+
+/**
+ * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
+ * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Ported from the long-orphaned
+ * inline-interpreter classifier in the retrospective-tooling check (zero production callers). Sanctioned
+ * output parsing uses `--jq`/`--silent`, never an inline interpreter. Actor-independent: the rule bars
+ * "Coordinator and agent flows" (both actors). Script-path invocations (running a `.mjs` file,
+ * `python3 script.py`) never match.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsInlineInterpreter(command) {
+  return shellSegments(command).some((segment) => {
+    const s = segment.trim();
+    // Heredoc fed straight to an interpreter (`node - <<EOF`, `python3 - <<EOF`).
+    if (/(?:^|\s)(?:node|python3?)\s+-\s*<</i.test(s)) return true;
+    if (interpreterRegex("node").test(s)) {
+      const tokens = s.replace(interpreterRegex("node"), "").trim().split(/\s+/).filter(Boolean);
+      for (const t of tokens) {
+        if (t === "-e" || t === "--eval" || t.startsWith("--eval=") || t === "-p") return true;
+        if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
+      }
+    }
+    if (interpreterRegex("python3?").test(s)) {
+      const tokens = s.replace(interpreterRegex("python3?"), "").trim().split(/\s+/).filter(Boolean);
+      if (tokens.includes("-c")) return true;
+    }
+    return false;
+  });
+}
