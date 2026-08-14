@@ -194,6 +194,33 @@ test("bash-gate hook allows the create-pr.mjs wrapper (e2e)", () => {
   assert.equal(json, null, "the canonical wrapper must pass through");
 });
 
+test("bash-gate hook denies an inline interpreter in the target repo (e2e, #1622 decision seam)", () => {
+  // Regression for the #1622 enforcement-seam finding: the six guard-rule predicates are decided in
+  // decideBashGate, so the real hook deny path (line ~65 short-circuit) must exercise at least one of
+  // them. Reverting the predicate from the early-return short-circuit must fail this test.
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: 'node -e "console.log(1)"' },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured deny for an inline interpreter");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /OPS-NO-INLINE-INTERPRETER/);
+});
+
+test("bash-gate hook denies a raw gh api sub_issues write in the target repo (e2e, #1622)", () => {
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6" },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured deny for a sub_issues write");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /manage-sub-issues/);
+});
+
 test("write-guard hook fails open when enforcement is disabled (default)", () => {
   const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
     tool_name: "Write",

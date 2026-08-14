@@ -540,3 +540,95 @@ test("decideSubagentStopGuard blocks when pendingCommitAuthorization is false (n
 test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", () => {
   assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });
+
+// ---------------------------------------------------------------------------
+// decideBashGate — the six guard rules enforced at one seam (#1622)
+// ---------------------------------------------------------------------------
+
+test("decideBashGate denies inline interpreters actor-independently on the target repo (OPS-NO-INLINE-INTERPRETER)", () => {
+  const d = decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /OPS-NO-INLINE-INTERPRETER/);
+  // actor-independent: denied from the main agent too (agentType null)
+  const dMain = decideBashGate({ command: "python3 -c 'print(1)'", repoSlug: TARGET, agentType: null });
+  assert.equal(dMain.decision, "deny");
+  assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
+});
+
+test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
+  assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else" }).decision, "allow");
+});
+
+test("decideBashGate denies sub_issues ad-hoc writes naming SUBISSUE-NO-ADHOC-BYPASS (actor-independent)", () => {
+  const d = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  // a read passes; the sanctioned wrapper passes
+  assert.equal(decideBashGate({ command: "gh api repos/mfittko/dev-loops/issues/5/sub_issues", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/manage-sub-issues.mjs --repo x", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies thread-reply bypasses naming COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", () => {
+  const rest = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", repoSlug: TARGET, agentType: null });
+  assert.equal(rest.decision, "deny");
+  assert.match(rest.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
+  const gql = decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: TARGET, agentType: null });
+  assert.equal(gql.decision, "deny");
+  assert.match(gql.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
+  // graphql resolveReviewThread is scoped to the target repo (cwd)
+  assert.equal(decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/reply-resolve-review-thread.mjs --thread 5", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
+  const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, agentType: null });
+  assert.equal(api.decision, "deny");
+  assert.match(api.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
+  // a bare /copilot comment summon is refused even from the main agent (actor-independent)
+  const summon = decideBashGate({ command: 'gh pr comment 5 --body "/copilot re-review"', repoSlug: TARGET, agentType: null });
+  assert.equal(summon.decision, "deny");
+  assert.match(summon.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
+  assert.equal(decideBashGate({ command: "node scripts/github/request-copilot-review.mjs --pr 5", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies detached wait tools only from a subagent (COPILOT-FOLLOWUP-WAIT-TOOLS)", () => {
+  const sub = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: "dev-loop" });
+  assert.equal(sub.decision, "deny");
+  assert.match(sub.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  // main agent retains manual wait tooling (behavioral, subagent-only rule)
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: null }).decision, "allow");
+  // off-target subagent passes through
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", agentType: "dev-loop" }).decision, "allow");
+  // the refusal body is not corrupted by a stray concat operator: it names the full deterministic
+  // tool set and the banned detach forms (regression for the #1622 gate hardening round)
+  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, agentType: "dev-loop" }).reason;
+  assert.match(reason, /gh run watch/);
+  assert.match(reason, /nohup\/disown\/tmux\/screen/);
+  assert.doesNotMatch(reason, /NaN/);
+});
+
+test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
+  // bare relative endpoint (resolved against the cwd repo) is denied in the target repo
+  const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  // the same relative write outside the target repo is NOT this repo's bypass
+  assert.equal(decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  // --repo-targeted relative writes to the target repo are denied
+  assert.equal(decideBashGate({ command: "gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", repoSlug: TARGET, agentType: null }).decision, "deny");
+});
+
+test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independently (STOP-HUMAN-MERGE-001)", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: true, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /STOP-HUMAN-MERGE-001/);
+  // refusal holds regardless of gate evidence (the human-merge invariant overrides)
+  const dNoEvidence = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: false, agentType: null });
+  assert.equal(dNoEvidence.decision, "deny");
+  assert.match(dNoEvidence.reason, /STOP-HUMAN-MERGE-001/);
+  // without humanMergeOnly the normal merge gating applies (gatePassed true → allow)
+  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null }).decision, "allow");
+  // non-target repo is unaffected by this repo's humanMergeOnly invariant
+  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
+});
