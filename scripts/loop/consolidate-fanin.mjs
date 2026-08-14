@@ -63,6 +63,7 @@ import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixe
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
@@ -189,6 +190,15 @@ Optional:
   --primer-plan <path>           The dispatch plan (buildReviewDispatchPlan output, carrying its
                                  requestGroups / planHash / sharedPrefixHash) the evidence was
                                  derived from, as JSON. Required together with --primer-evidence.
+  --cache-telemetry <path>       The before/after cache-telemetry evidence artifact
+                                 (<gate>-<headSha>.cache-telemetry.json, Phase 1.5 step 5) as JSON.
+                                 When given, the fan-in validates it via enforceCacheTelemetryEvidence
+                                 (GATE-EXEC-CACHE-TELEMETRY) and FAILS CLOSED (exit 1) when the
+                                 artifact is missing, when verified provider reuse is claimed for an
+                                 opaque/unavailable-telemetry harness, when a verified result lacks a
+                                 measured create-then-read sequence, or when the aggregate/token
+                                 report contradicts the recorded events. Absent the flag, the fan-in
+                                 proceeds unchanged (recording telemetry is progressive/optional).
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
@@ -573,6 +583,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     repoRoot: undefined,
     expectedDispatchUnits: undefined,
     primerEvidence: undefined,
+    cacheTelemetry: undefined,
     primerPlan: undefined,
     tmpRoot: undefined,
   };
@@ -718,6 +729,14 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--primer-plan requires a non-empty path");
       }
       options.primerPlan = p;
+      continue;
+    }
+    if (token.name === "cache-telemetry") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--cache-telemetry requires a non-empty path");
+      }
+      options.cacheTelemetry = p;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1032,6 +1051,60 @@ export async function consolidateGateFanin(options) {
     const plan = await readJson(options.primerPlan, "plan");
     try {
       enforcePrimerEvidence({ plan, evidence });
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // GATE-EXEC-CACHE-TELEMETRY (#1476): the fan-in enforcing the before/after
+  // cache-telemetry evidence as a real fail-closed input to consolidation. The
+  // cache-telemetry artifact (Phase 1.5 step 5, `<gate>-<headSha>`
+  // `.cache-telemetry.json`) is passed as a single JSON path; when present the
+  // fan-in re-validates it via enforceCacheTelemetryEvidence and FAILS CLOSED
+  // (this throw -> exit 1) when the artifact is missing, when verified provider
+  // reuse is claimed for an opaque/unavailable-telemetry harness
+  // (opaque_veracity), when a verified result lacks a measured create-then-read
+  // sequence (measured_sequence), when the aggregate/token report contradicts
+  // the recorded events (aggregate_consistency / token_aggregate), or when the
+  // capability record is missing (capability_record) — the refusal names the
+  // failing check. This is the wiring that gives GATE-EXEC-CACHE-TELEMETRY a
+  // real invocation site (previously it was dead code referenced only by its
+  // own error-message string). Absent the flag the fan-in proceeds unchanged:
+  // recording telemetry is progressive / optional, so rounds that never recorded
+  // it (all pre-slice-4 rounds) are not newly blocked.
+  if (options.cacheTelemetry !== undefined) {
+    let text;
+    try {
+      text = await readFile(options.cacheTelemetry, "utf8");
+    } catch (err) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let evidence;
+    try {
+      evidence = JSON.parse(text);
+    } catch {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is not valid JSON`);
+    }
+    // Bind the artifact to this round's --head-sha/--gate when those are
+    // provided: a cache-telemetry artifact is <gate>-<headSha>-scoped evidence
+    // (GATE-EXEC-CACHE-TELEMETRY), so a stale or mismatched artifact for a
+    // DIFFERENT head or gate must fail closed rather than pass as this round's
+    // telemetry.
+    if (
+      options.headSha !== undefined &&
+      String(evidence?.headSha ?? "").trim().toLowerCase() !== options.headSha
+    ) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for head ${JSON.stringify(
+        evidence?.headSha,
+      )} but this round consolidates head ${options.headSha} — a stale/mismatched cache-telemetry artifact must not be accepted for a different head`);
+    }
+    if (options.gate !== undefined && String(evidence?.gate ?? "").trim() !== options.gate) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for gate ${JSON.stringify(
+        evidence?.gate,
+      )} but this round consolidates gate ${options.gate} — a mismatched cache-telemetry artifact must not be accepted`);
+    }
+    try {
+      enforceCacheTelemetryEvidence({ evidence });
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : String(err));
     }

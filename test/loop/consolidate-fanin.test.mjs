@@ -12,6 +12,7 @@ import {
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runNode } from "../_helpers.mjs";
@@ -668,6 +669,189 @@ test("parseConsolidateFaninCliArgs rejects --primer-evidence without --primer-pl
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-plan", "/tmp/p.json"]),
     /--primer-evidence and --primer-plan must be given together/,
+  );
+});
+
+// --------------------------------------------------------------------------
+// GATE-EXEC-CACHE-TELEMETRY wiring (#1476): the fan-in enforces the before/after
+// cache-telemetry evidence via enforceCacheTelemetryEvidence, failing closed on
+// an opaque/over-claimed/unmeasured artifact — and proceeds unchanged when the
+// flag is absent (progressive/optional recording).
+// --------------------------------------------------------------------------
+
+const TELEMETRY_HEAD = "abcdef1234567890abcdef1234567890abcdef12";
+
+function makeTelemetryPlan() {
+  return buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: TELEMETRY_HEAD,
+    sharedPrefixHash: PRIMER_FP,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+}
+
+function makeTelemetryEvidence() {
+  return buildCacheTelemetryEvidence({
+    plan: makeTelemetryPlan(),
+    primerCacheCreations: [{ model: "model-a", primerForm: "lead_reviewer", tokens: 12000 }],
+    reviewerCacheReads: [
+      { model: "model-a", angle: "scope", tokens: 200 },
+      { model: "model-a", angle: "dry", tokens: 210 },
+    ],
+  });
+}
+
+async function withTelemetryFile(filename, content, fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cache-telemetry-"));
+  try {
+    await writeFile(path.join(dir, filename), typeof content === "string" ? content : JSON.stringify(content), "utf8");
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("consolidateGateFanin enforces valid cache-telemetry evidence (GATE-EXEC-CACHE-TELEMETRY)", async () => {
+  const evidence = makeTelemetryEvidence();
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", evidence, async (tdir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          headSha: TELEMETRY_HEAD,
+          gate: "pre_approval_gate",
+        });
+        assert.equal(result.ok, true);
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a cache-telemetry artifact stamped for a different head/gate", async () => {
+  // The artifact is <gate>-<headSha>-scoped evidence: a stale/mismatched
+  // artifact for a different head OR gate must fail closed rather than pass as
+  // this round's telemetry when --head-sha/--gate are provided.
+  const evidence = makeTelemetryEvidence(); // stamped for TELEMETRY_HEAD / pre_approval_gate
+  const wrongHead = { ...evidence, headSha: "ffffffffffffffffffffffffffffffffffffffff" };
+  const wrongGate = { ...evidence, gate: "draft_gate" };
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", wrongHead, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("stale/mismatched cache-telemetry artifact"),
+        );
+      });
+      await withTelemetryFile("cache-telemetry.json", wrongGate, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("mismatched cache-telemetry artifact"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on cache telemetry over-claiming opaque reuse", async () => {
+  // Build under an opaque (pi) harness then mutate the verdict to simulate an
+  // over-claim; the fan-in must refuse it as an opaque_veracity violation.
+  const plan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: TELEMETRY_HEAD,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "pi" },
+  });
+  const honest = buildCacheTelemetryEvidence({
+    plan,
+    primerCacheCreations: [{ model: "model-a" }],
+    reviewerCacheReads: [{ model: "model-a", angle: "scope" }],
+  });
+  const subverted = { ...honest, cacheReuseVerified: true };
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", subverted, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          }),
+          (err) => err.message.includes("GATE-EXEC-CACHE-TELEMETRY") && err.message.includes("opaque_veracity"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on an unreadable/malformed cache-telemetry artifact", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", "{ not json", async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          }),
+          (err) => err.message.includes("not valid JSON"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a missing (unreadable) cache-telemetry path", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        consolidateGateFanin({
+          findingsDir: dir,
+          cacheTelemetry: "/nonexistent/cache-telemetry.json",
+        }),
+        (err) => err.message.includes("could not be read"),
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.ok, true);
+    },
   );
 });
 

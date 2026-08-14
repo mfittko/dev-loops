@@ -278,7 +278,19 @@ per-gate accounting is an optional follow-up, not a precondition.)
    each primer to its own model + request-prefix fingerprint and each released reviewer
    to a primer that landed before it. This is what lets fan-in fail closed (see
    Phase 3 — Consolidation) instead of trusting the rule in prose.
-5. **Release the fan-out** over the SAME model and the SAME byte-identical prefix, so each
+5. **Record before/after cache-telemetry evidence** — where the harness exposes
+   cache usage telemetry (issue #1468 slice 4), record the cache-creation
+   (“before”) and cache-read (“after”) events to the deterministic path
+   `<gate>-<headSha>.cache-telemetry.json` beside the gate-context artifacts:
+   `@dev-loops/core/loop/cache-telemetry-evidence` (`cacheTelemetryPath` /
+   `buildCacheTelemetryEvidence` / `writeCacheTelemetryEvidence`). The artifact
+   pairs the request plan + capability record with the observed creation/read
+   events and an aggregate read:create report. Where the harness is opaque or
+   telemetry is unavailable, the same builder records `cacheReuseVerified:
+   false` with the reason and MUST NOT be described as a verified `1 write + N
+   reads` outcome — only the ordering + request-fingerprint invariants from
+   steps 3-4 may be claimed (Section D honesty gate).
+6. **Release the fan-out** over the SAME model and the SAME byte-identical prefix, so each
    reviewer READS the cache the primer wrote instead of racing to write its own. A
    differing model or prefix defeats reuse and is the same failure the byte-identity rule
    already guards against.
@@ -728,6 +740,24 @@ plan hash is missing or mismatched. The refusal names the failing check
 `shared_prefix_hash` / `plan_hash`). This materially backs the `GATE-EXEC-PRIME`
 barrier: the primer write-before-read ordering is no longer asserted only in
 prose, but is a mechanically-checkable fail-closed input to consolidation.
+
+<!-- rule: GATE-EXEC-CACHE-TELEMETRY -->
+`GATE-EXEC-CACHE-TELEMETRY`: when a round records cache-telemetry evidence
+(Phase 1.5 step 5, `<gate>-<headSha>.cache-telemetry.json`) it MUST be validated
+via `@dev-loops/core/loop/cache-telemetry-evidence` `validateCacheTelemetryEvidence`
+and fail closed — refusing to proceed to consolidation — when the artifact is
+missing/malformed, when verified provider reuse is claimed for a harness whose usage
+telemetry is unavailable/opaque (`opaque_veracity`), when verified reuse lacks a
+measured create-then-read sequence (`measured_sequence`), or when the aggregate
+/token report contradicts the recorded events (`aggregate_consistency` /
+`token_aggregate`) or the capability record is missing
+(`capability_record`). Recording telemetry is progressive/optional: a round that
+never records an artifact (e.g. a pre-slice-4 round, or one run with `--cache-telemetry`
+omitted) is not newly blocked — the fail-closed path engages ONLY when the artifact
+is supplied (the `--cache-telemetry` flag), so a supplied-but-invalid artifact never
+passes. This enforces the Section D honesty invariant: a harness
+whose cache reuse is not measurable must never be reported as a verified `1
+write + N reads` result.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
