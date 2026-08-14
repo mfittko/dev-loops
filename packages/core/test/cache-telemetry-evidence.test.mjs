@@ -54,6 +54,11 @@ describe("cacheTelemetryPath — deterministic artifact path (AC-1)", () => {
     assert.throws(() => cacheTelemetryPath({ dir: "d", headSha: "abc" }));
     assert.throws(() => cacheTelemetryPath({ dir: "d", gate: "g" }));
   });
+
+  test("fails closed on a malformed (non-hex / wrong-length) headSha", () => {
+    assert.throws(() => cacheTelemetryPath({ dir: "d", gate: "g", headSha: "not-hex-sh" }));
+    assert.throws(() => cacheTelemetryPath({ dir: "d", gate: "g", headSha: "abc" })); // < 7 chars
+  });
 });
 
 describe("buildCacheTelemetryEvidence — telemetry-capable harness records create+reads", () => {
@@ -126,6 +131,63 @@ describe("buildCacheTelemetryEvidence — opaque harness never claims verified r
     assert.equal(ev.cacheReuseVerified, false);
     assert.match(ev.aggregate.report, /could not be verified/);
   });
+
+  test("fails closed on a non-numeric token value (no silent coercion)", () => {
+    const plan = claudePlan();
+    assert.throws(
+      () =>
+        buildCacheTelemetryEvidence({
+          plan,
+          primerCacheCreations: [{ model: "model-a", tokens: "12000" }],
+          reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+        }),
+      /tokens must be a finite non-negative number or null/,
+    );
+    assert.throws(
+      () =>
+        buildCacheTelemetryEvidence({
+          plan,
+          primerCacheCreations: [{ model: "model-a", tokens: -5 }],
+          reviewerCacheReads: [],
+        }),
+      /tokens must be a finite non-negative number or null/,
+    );
+  });
+
+  test("fails closed on a null/entry with empty model (nil-entry guard)", () => {
+    const plan = claudePlan();
+    assert.throws(
+      () =>
+        buildCacheTelemetryEvidence({
+          plan,
+          primerCacheCreations: [null],
+          reviewerCacheReads: [],
+        }),
+      /must be an object with a non-empty concrete model/,
+    );
+    assert.throws(
+      () =>
+        buildCacheTelemetryEvidence({
+          plan,
+          primerCacheCreations: [{ model: "" }],
+          reviewerCacheReads: [],
+        }),
+      /must be an object with a non-empty concrete model/,
+    );
+  });
+
+  test("fails closed on a missing requestGroups plan / non-array event lists", () => {
+    assert.throws(() => buildCacheTelemetryEvidence({ plan: {} }), /plan with requestGroups/);
+    const plan = claudePlan();
+    assert.throws(
+      () => buildCacheTelemetryEvidence({ plan, primerCacheCreations: "nope" }),
+      /primerCacheCreations must be an array/,
+    );
+    assert.throws(
+      () => buildCacheTelemetryEvidence({ plan, reviewerCacheReads: "nope" }),
+      /reviewerCacheReads must be an array/,
+    );
+  });
 });
 
 describe("validateCacheTelemetryEvidence — fail-closed honesty gate", () => {
@@ -154,6 +216,58 @@ describe("validateCacheTelemetryEvidence — fail-closed honesty gate", () => {
     const r = validateCacheTelemetryEvidence({ evidence: subverted });
     assert.equal(r.ok, false);
     assert.ok(r.failures.some((f) => f.check === "opaque_veracity"));
+  });
+
+  test("fails closed even when BOTH cacheReuseVerified and telemetryAvailable are flipped (re-derived from capabilities)", () => {
+    // The honesty gate must be driven by evidence.capabilities.usageTelemetry,
+    // not the stored telemetryAvailable boolean: flipping both booleans on an
+    // opaque (pi) artifact must still fail closed.
+    const ev = buildCacheTelemetryEvidence({
+      plan: piPlan(),
+      primerCacheCreations: [{ model: "model-a" }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness" }],
+    });
+    const subverted = { ...ev, telemetryAvailable: true, cacheReuseVerified: true };
+    const r = validateCacheTelemetryEvidence({ evidence: subverted });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "opaque_veracity"));
+  });
+
+  test("fails closed on a tampered aggregate report (aggregate_consistency)", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    // Forge a readToCreateRatio that contradicts the counts.
+    const subverted = { ...ev, aggregate: { ...ev.aggregate, readToCreateRatio: 99 } };
+    const r = validateCacheTelemetryEvidence({ evidence: subverted });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "aggregate_consistency"));
+  });
+
+  test("fails closed on a tampered token aggregate (token_aggregate)", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    const subverted = { ...ev, creationTokens: 1 };
+    const r = validateCacheTelemetryEvidence({ evidence: subverted });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "token_aggregate"));
+  });
+
+  test("fails closed on a missing capability record (capability_record)", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    const subverted = { ...ev, capabilities: null };
+    const r = validateCacheTelemetryEvidence({ evidence: subverted });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "capability_record"));
   });
 
   test("fails closed when verified reuse lacks a measured create-then-read sequence", () => {
@@ -199,6 +313,27 @@ describe("enforceCacheTelemetryEvidence — strict refusal surface", () => {
 });
 
 describe("writeCacheTelemetryEvidence — deterministic persistence", () => {
+  test("two identical builds produce byte-identical artifacts (content determinism)", () => {
+    const a = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [
+        { model: "model-a", angle: "correctness", tokens: 200 },
+        { model: "model-a", angle: "security", tokens: 210 },
+      ],
+    });
+    const b = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [
+        { model: "model-a", angle: "correctness", tokens: 200 },
+        { model: "model-a", angle: "security", tokens: 210 },
+      ],
+    });
+    assert.equal(JSON.stringify(a), JSON.stringify(b));
+    assert.deepEqual(a, b);
+  });
+
   test("writes the artifact to its deterministic path", async () => {
     const ev = buildCacheTelemetryEvidence({
       plan: claudePlan(),

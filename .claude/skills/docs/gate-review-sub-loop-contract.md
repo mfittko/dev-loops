@@ -742,16 +742,20 @@ barrier: the primer write-before-read ordering is no longer asserted only in
 prose, but is a mechanically-checkable fail-closed input to consolidation.
 
 <!-- rule: GATE-EXEC-CACHE-TELEMETRY -->
-`GATE-EXEC-CACHE-TELEMETRY`: cache-telemetry evidence (Phase 1.5 step 5,
-`<gate>-<headSha>.cache-telemetry.json`) MUST be validated via
-`@dev-loops/core/loop/cache-telemetry-evidence` `validateCacheTelemetryEvidence`
+`GATE-EXEC-CACHE-TELEMETRY`: when a round records cache-telemetry evidence
+(Phase 1.5 step 5, `<gate>-<headSha>.cache-telemetry.json`) it MUST be validated
+via `@dev-loops/core/loop/cache-telemetry-evidence` `validateCacheTelemetryEvidence`
 and fail closed — refusing to proceed to consolidation — when the artifact is
-missing, when verified provider reuse is claimed for a harness whose usage
+missing/malformed, when verified provider reuse is claimed for a harness whose usage
 telemetry is unavailable/opaque (`opaque_veracity`), when verified reuse lacks a
 measured create-then-read sequence (`measured_sequence`), or when the aggregate
 /token report contradicts the recorded events (`aggregate_consistency` /
 `token_aggregate`) or the capability record is missing
-(`capability_record`). This enforces the Section D honesty invariant: a harness
+(`capability_record`). Recording telemetry is progressive/optional: a round that
+never records an artifact (e.g. a pre-slice-4 round, or one run with `--cache-telemetry`
+omitted) is not newly blocked — the fail-closed path engages ONLY when the artifact
+is supplied (the `--cache-telemetry` flag), so a supplied-but-invalid artifact never
+passes. This enforces the Section D honesty invariant: a harness
 whose cache reuse is not measurable must never be reported as a verified `1
 write + N reads` result.
 

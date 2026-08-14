@@ -118,27 +118,40 @@ export function buildCacheTelemetryEvidence({
     }
   }
 
+  const normalizeTokens = (tokens, label) => {
+    // Fail CLOSED on a non-null token that is not a finite non-negative
+    // number (numeric strings, NaN, Infinity, negatives, other types): the
+    // reported value is telemetry evidence and a silently-coerced token would
+    // under-report the create/read contribution with no signal. `null` is the
+    // honest "not observable" marker.
+    if (tokens == null) return null;
+    if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) {
+      throw new Error(`${label} tokens must be a finite non-negative number or null, got ${JSON.stringify(tokens)}`);
+    }
+    return tokens;
+  };
+
   const normCreations = Object.freeze(
     primerCacheCreations.map((c, i) => {
-      if (typeof c.model !== "string" || c.model.length === 0) {
-        throw new Error(`primerCacheCreations[${i}].model must be a non-empty concrete model`);
+      if (c == null || typeof c !== "object" || typeof c.model !== "string" || c.model.length === 0) {
+        throw new Error(`primerCacheCreations[${i}] must be an object with a non-empty concrete model`);
       }
       return Object.freeze({
         model: c.model,
         primerForm: c.primerForm ?? null,
-        tokens: Number.isFinite(c.tokens) && c.tokens >= 0 ? c.tokens : null,
+        tokens: normalizeTokens(c.tokens, `primerCacheCreations[${i}]`),
       });
     }),
   );
   const normReads = Object.freeze(
     reviewerCacheReads.map((r, i) => {
-      if (typeof r.model !== "string" || r.model.length === 0) {
-        throw new Error(`reviewerCacheReads[${i}].model must be a non-empty concrete model`);
+      if (r == null || typeof r !== "object" || typeof r.model !== "string" || r.model.length === 0) {
+        throw new Error(`reviewerCacheReads[${i}] must be an object with a non-empty concrete model`);
       }
       return Object.freeze({
         model: r.model,
         angle: r.angle ?? null,
-        tokens: Number.isFinite(r.tokens) && r.tokens >= 0 ? r.tokens : null,
+        tokens: normalizeTokens(r.tokens, `reviewerCacheReads[${i}]`),
       });
     }),
   );
@@ -168,7 +181,7 @@ export function buildCacheTelemetryEvidence({
   return Object.freeze({
     schemaVersion: CACHE_TELEMETRY_SCHEMA_VERSION,
     gate: plan.gate,
-    headSha: plan.headSha,
+    headSha: String(plan.headSha).trim().toLowerCase(),
     planHash: plan.planHash,
     sharedPrefixHash: plan.sharedPrefixHash ?? null,
     cacheBoundary: plan.requestGroups[0]?.cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
@@ -194,7 +207,7 @@ export function buildCacheTelemetryEvidence({
       measured: cacheReuseVerified,
       report:
         cacheReuseVerified
-          ? `verified ${normReads.length} cache read${normReads.length === 1 ? "" : "s"} after ${normCreations.length} cache creation${normCreations.length === 1 ? "" : "s"} (measureable read:create = ${normReads.length}:${normCreations.length})`
+          ? `verified ${normReads.length} cache read${normReads.length === 1 ? "" : "s"} after ${normCreations.length} cache creation${normCreations.length === 1 ? "" : "s"} (measurable read:create = ${normReads.length}:${normCreations.length})`
           : `provider reuse could not be verified (usageTelemetry=${caps?.usageTelemetry ?? "missing"}) — only ordering + request-fingerprint invariants may be claimed`,
     }),
   });
@@ -223,8 +236,17 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
     });
   }
 
-  // Honesty gate: verified reuse requires telemetry to actually be available.
-  if (evidence.cacheReuseVerified && !evidence.telemetryAvailable) {
+  // Honesty gate: verified reuse requires the capability record's usage
+  // telemetry to be available. The verdict is re-derived from
+  // evidence.capabilities.usageTelemetry — NOT from the stored
+  // evidence.telemetryAvailable boolean — so a hand-edited / forged artifact
+  // that flips BOTH cacheReuseVerified AND telemetryAvailable to true still
+  // fails closed (the capability record is the source of truth). The builder
+  // always normalizes capabilities (usageTelemetry included), so this is
+  // re-derivable here.
+  const derivedTelemetryAvailable =
+    evidence.capabilities != null && evidence.capabilities.usageTelemetry === "available";
+  if (evidence.cacheReuseVerified && !derivedTelemetryAvailable) {
     failures.push({
       check: "opaque_veracity",
       reason: `cacheReuseVerified=true but usageTelemetry=${evidence.capabilities?.usageTelemetry ?? "missing"} — an opaque/unavailable harness must never claim verified provider reuse`,
@@ -273,11 +295,23 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
     });
   }
 
-  // Aggregate reads/creates must mirror the counts.
-  if (evidence.aggregate?.creates !== evidence.creationCount || evidence.aggregate?.reads !== evidence.readCount) {
+  // Aggregate reads/creates must mirror the counts, and every derived aggregate
+  // value (readToCreateRatio, creationsWithTokens, readsWithTokens, measured)
+  // must be re-derivable from the recorded events — a forged / hand-edited
+  // aggregate that contradicts the evidence fails closed.
+  const record = { creates: evidence.creationCount, reads: evidence.readCount };
+  const expectedRatio = record.creates > 0 ? record.reads / record.creates : 0;
+  if (
+    evidence.aggregate?.creates !== evidence.creationCount ||
+    evidence.aggregate?.reads !== evidence.readCount ||
+    evidence.aggregate?.readToCreateRatio !== expectedRatio ||
+    evidence.aggregate?.creationsWithTokens !== countTokens(evidence.primerCacheCreations ?? []) ||
+    evidence.aggregate?.readsWithTokens !== countTokens(evidence.reviewerCacheReads ?? []) ||
+    evidence.aggregate?.measured !== evidence.cacheReuseVerified
+  ) {
     failures.push({
       check: "aggregate_consistency",
-      reason: `aggregate report (creates=${evidence.aggregate?.creates}, reads=${evidence.aggregate?.reads}) does not mirror recorded counts (creates=${evidence.creationCount}, reads=${evidence.readCount})`,
+      reason: `aggregate report does not mirror the recorded events (creates=${evidence.aggregate?.creates}, reads=${evidence.aggregate?.reads}, readToCreateRatio=${evidence.aggregate?.readToCreateRatio}, creationsWithTokens=${evidence.aggregate?.creationsWithTokens}, readsWithTokens=${evidence.aggregate?.readsWithTokens}, measured=${evidence.aggregate?.measured}); expected creates=${record.creates}, reads=${record.reads}, ratio=${expectedRatio}, creationsWithTokens=${countTokens(evidence.primerCacheCreations ?? [])}, readsWithTokens=${countTokens(evidence.reviewerCacheReads ?? [])}, measured=${evidence.cacheReuseVerified}`,
     });
   }
 
