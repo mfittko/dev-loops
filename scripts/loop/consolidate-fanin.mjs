@@ -1085,6 +1085,24 @@ export async function consolidateGateFanin(options) {
     } catch {
       throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is not valid JSON`);
     }
+    // Bind the artifact to this round's --head-sha/--gate when those are
+    // provided: a cache-telemetry artifact is <gate>-<headSha>-scoped evidence
+    // (GATE-EXEC-CACHE-TELEMETRY), so a stale or mismatched artifact for a
+    // DIFFERENT head or gate must fail closed rather than pass as this round's
+    // telemetry.
+    if (
+      options.headSha !== undefined &&
+      String(evidence?.headSha ?? "").trim().toLowerCase() !== options.headSha
+    ) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for head ${JSON.stringify(
+        evidence?.headSha,
+      )} but this round consolidates head ${options.headSha} — a stale/mismatched cache-telemetry artifact must not be accepted for a different head`);
+    }
+    if (options.gate !== undefined && String(evidence?.gate ?? "").trim() !== options.gate) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for gate ${JSON.stringify(
+        evidence?.gate,
+      )} but this round consolidates gate ${options.gate} — a mismatched cache-telemetry artifact must not be accepted`);
+    }
     try {
       enforceCacheTelemetryEvidence({ evidence });
     } catch (err) {

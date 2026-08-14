@@ -723,14 +723,52 @@ async function withTelemetryFile(filename, content, fn) {
 test("consolidateGateFanin enforces valid cache-telemetry evidence (GATE-EXEC-CACHE-TELEMETRY)", async () => {
   const evidence = makeTelemetryEvidence();
   await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
     async (dir) => {
       await withTelemetryFile("cache-telemetry.json", evidence, async (tdir) => {
         const result = await consolidateGateFanin({
           findingsDir: dir,
           cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          headSha: TELEMETRY_HEAD,
+          gate: "pre_approval_gate",
         });
         assert.equal(result.ok, true);
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a cache-telemetry artifact stamped for a different head/gate", async () => {
+  // The artifact is <gate>-<headSha>-scoped evidence: a stale/mismatched
+  // artifact for a different head OR gate must fail closed rather than pass as
+  // this round's telemetry when --head-sha/--gate are provided.
+  const evidence = makeTelemetryEvidence(); // stamped for TELEMETRY_HEAD / pre_approval_gate
+  const wrongHead = { ...evidence, headSha: "ffffffffffffffffffffffffffffffffffffffff" };
+  const wrongGate = { ...evidence, gate: "draft_gate" };
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", wrongHead, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("stale/mismatched cache-telemetry artifact"),
+        );
+      });
+      await withTelemetryFile("cache-telemetry.json", wrongGate, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("mismatched cache-telemetry artifact"),
+        );
       });
     },
   );

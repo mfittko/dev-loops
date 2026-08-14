@@ -240,6 +240,30 @@ export function validateCacheTelemetryEvidence({ evidence } = {}) {
     return { ok: false, failures: [{ check: "artifact", reason: "missing cache-telemetry evidence artifact" }] };
   }
 
+  // Identity fields (gate/headSha/planHash/schemaVersion) must be present and
+  // well-formed for the artifact to be accepted — fail closed on a structurally
+  // incomplete artifact (missing/dropped identity fields) even when the event
+  // arrays and aggregates are internally self-consistent. A hand-edited or
+  // truncated artifact carrying none of its round identity is not
+  // cache-telemetry evidence for any gate/head and must never be accepted by
+  // fan-in as a valid artifact.
+  const identityChecks = [
+    { field: "gate", valid: (v) => typeof v === "string" && v.trim().length > 0 },
+    { field: "headSha", valid: (v) => typeof v === "string" && /^[0-9a-f]{7,64}$/i.test(v.trim()) },
+    { field: "planHash", valid: (v) => typeof v === "string" && v.trim().length > 0 },
+    { field: "schemaVersion", valid: (v) => typeof v === "number" && Number.isInteger(v) },
+  ];
+  for (const { field, valid } of identityChecks) {
+    if (!valid(evidence[field])) {
+      failures.push({
+        check: "identity_field",
+        reason: `cache-telemetry evidence missing or malformed identity field "${field}" (${JSON.stringify(
+          evidence[field],
+        )}) — a structurally incomplete artifact must fail closed`,
+      });
+    }
+  }
+
   // Capability record must be present to reason about veracity.
   if (!evidence.capabilities) {
     failures.push({

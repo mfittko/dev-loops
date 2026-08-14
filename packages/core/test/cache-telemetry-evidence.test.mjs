@@ -277,6 +277,21 @@ describe("validateCacheTelemetryEvidence — fail-closed honesty gate", () => {
     assert.ok(r.failures.some((f) => f.check === "token_aggregate"));
   });
 
+  test("fails closed on a structurally incomplete artifact (missing identity fields)", () => {
+    const ev = buildCacheTelemetryEvidence({
+      plan: claudePlan(),
+      primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
+      reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
+    });
+    // Drop the identity fields while keeping the event arrays/aggregates
+    // self-consistent — the artifact must still fail closed on the missing
+    // round identity rather than pass as valid evidence.
+    const { gate, headSha, planHash, schemaVersion, ...incomplete } = ev;
+    const r = validateCacheTelemetryEvidence({ evidence: incomplete });
+    assert.equal(r.ok, false);
+    assert.ok(r.failures.some((f) => f.check === "identity_field"));
+  });
+
   test("fails closed on a missing capability record (capability_record)", () => {
     const ev = buildCacheTelemetryEvidence({
       plan: claudePlan(),
