@@ -243,6 +243,14 @@ export async function editPr(options, { env = process.env, ghCommand = "gh", run
         `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable PR body.`,
       );
     }
+    // Stdin (`--body-file -`) was already consumed by resolveBody above to run
+    // the grill check; forward the resolved text inline so buildEditArgs reuses
+    // it instead of re-reading the exhausted fd 0 (which would yield "" and
+    // throw). A real file path re-reads idempotently, so only stdin is rewritten.
+    if (options.bodyFile === "-") {
+      options.body = body;
+      options.bodyFile = undefined;
+    }
   }
   const { args, edited } = await buildEditArgs(options);
   const result = await run(ghCommand, args, env);

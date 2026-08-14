@@ -221,6 +221,13 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
         `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable issue body.`,
       );
     }
+    // Stdin (`--body-file -`) was consumed above to run the grill check; forward
+    // the resolved text inline so the core edit reuses it instead of re-reading
+    // the exhausted fd 0 (which would yield "" and throw).
+    if (options.bodyFile === "-") {
+      options.body = body;
+      options.bodyFile = undefined;
+    }
   }
   return coreEditIssue(options, { env, ghCommand, run });
 }

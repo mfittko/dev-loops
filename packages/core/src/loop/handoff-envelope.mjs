@@ -605,7 +605,9 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   // profile instead of the default local-implementation gate. The spike
   // marker lives at the TOP level of the resolver output (the bundle does not
   // carry it), so it is read off `resolverOutput` directly.
-  const subGate = isSpikeRun(resolverOutput) ? "spike" : resolveSubGate(strategy, gs);
+  const subGate = (strategy === INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION && isSpikeRun(resolverOutput))
+    ? "spike"
+    : resolveSubGate(strategy, gs);
   // Normalize each source independently, then fall back on the normalized result
   // (not the raw value): a present-but-invalid gateState value must NOT shadow a
   // valid options.retrospectiveFindings fallback (issue #1077 review finding).
