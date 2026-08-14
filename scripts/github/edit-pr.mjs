@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -24,6 +25,9 @@ At least one edit:
                                 (--title/--body/--body-file reject empty or
                                 whitespace-only values; use --milestone "" only
                                 to clear the milestone)
+  --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
+                                refuse a body that embeds grill
+                                transcript/synthesis/Q&A headings.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -48,6 +52,7 @@ export function parseEditPrCliArgs(argv) {
       "add-assignee": { type: "string", multiple: true },
       "remove-assignee": { type: "string", multiple: true },
       milestone: { type: "string" },
+      "enforce-grill": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -64,6 +69,7 @@ export function parseEditPrCliArgs(argv) {
     addAssignees: [],
     removeAssignees: [],
     milestone: undefined,
+    enforceGrill: false,
     jq: undefined,
     silent: false,
   };
@@ -136,6 +142,10 @@ export function parseEditPrCliArgs(argv) {
         throw parseError('--milestone must be a milestone name or "" to clear (whitespace-only is not allowed)');
       }
       options.milestone = token.value;
+      continue;
+    }
+    if (token.name === "enforce-grill") {
+      options.enforceGrill = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -220,6 +230,20 @@ async function buildEditArgs(options) {
 }
 
 export async function editPr(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+  // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
+  // refuse to write a body that embeds grill transcript/synthesis/Q&A headings
+  // (the raw Q&A and synthesis belong in an ephemeral tmp artifact, not the
+  // durable PR body). Judgment-bound grill clauses stay agent-level.
+  if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
+    const body = await resolveBody(options);
+    const heading = detectGrillEmbedHeading(body);
+    if (heading !== null) {
+      throw new Error(
+        `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS: PR body embeds grill material under heading \`## ${heading}\`; ` +
+        `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable PR body.`,
+      );
+    }
+  }
   const { args, edited } = await buildEditArgs(options);
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {

@@ -285,3 +285,33 @@ test("runCli: --state closed reports state in edited via --jq", async () => {
   assert.equal(code, 0);
   assert.equal(stdout.get().trim(), "state");
 });
+
+test("editIssue: GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628) refuses a body embedding grill headings under --enforce-grill", async () => {
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editIssue({
+      repo: "o/n", issue: 5,
+      body: "## Acceptance criteria\n\n- [ ] ac\n\n## Grill synthesis\n\n- findings here\n",
+      addAssignees: [], removeAssignees: [],
+      enforceGrill: true,
+    }, { run }),
+    /GRILL-SUBLOOP-NO-EMBED-SYNTHESIS/,
+  );
+});
+
+test("editIssue: --enforce-grill does not refuse a clean body containing no grill embed", async () => {
+  const { run, calls } = stubGh();
+  const result = await editIssue({
+    repo: "o/n", issue: 5,
+    body: "## Acceptance criteria\n\n- [ ] ac\n\n<!-- loop-grill: 2026-08-14 mode:interactive -->",
+    addAssignees: [], removeAssignees: [],
+    enforceGrill: true,
+  }, { run });
+  assert.equal(result.ok, true);
+  assert.ok(calls.length === 1);
+});
+
+test("parseEditIssueCliArgs: --enforce-grill flag is wired", () => {
+  const out = parseEditIssueCliArgs(["--repo", "o/n", "--issue", "5", "--title", "x", "--enforce-grill"]);
+  assert.equal(out.enforceGrill, true);
+});

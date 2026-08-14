@@ -241,6 +241,7 @@ export function extractUncheckedChecklistItems(sectionBody) {
  * `## Refinement` / `## Plan` / `## Refinement doc` sections.
  */
 export function detectLinkedRefinementDoc(body) {
+
   if (typeof body !== "string" || body.length === 0) {
     return { found: false, path: null, reason: "empty-body" };
   }
@@ -486,6 +487,58 @@ function sectionHasBody(section) {
  * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean }} input
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
+
+// ---------------------------------------------------------------------------
+// Grill sub-loop body predicates (GRILL-SUBLOOP-*, #1628)
+// ---------------------------------------------------------------------------
+// The loop-grill skill writes its raw Q&A transcript and synthesis to an
+// ephemeral tmp artifact and keeps only the canonical synthesized sections
+// (Acceptance criteria / Definition of done / Non-goals) plus the sanctioned
+// `<!-- loop-grill: ... -->` marker in the durable issue/PR body. The body
+// MUST NOT embed the raw grill transcript/synthesis/Q&A headings
+// (GRILL-SUBLOOP-NO-EMBED-SYNTHESIS). These pure predicates are the only
+// mechanically-enforceable part of that contract; the judgment-bound clauses
+// ("resolve every gap the grill decided", "stale contradicting prose") stay
+// agent-level.
+
+export const GRILL_MARKER_PATTERN = /<!--\s*loop-grill:\s*.*?-->/iu;
+
+/** Case-insensitive **section heading names** that embed grill material. */
+export const GRILL_EMBED_HEADING_PATTERNS = Object.freeze([
+  /^grill\s+findings$/iu,
+  /^grill\s+transcript$/iu,
+  /^grill\s+synthesis$/iu,
+  /^grill\s+q&a$/iu,
+  /^grill\s+qa$/iu,
+]);
+
+/**
+ * Detect the sanctioned `<!-- loop-grill: ... -->` marker. Pure predicate.
+ * @param {string} [body]
+ * @returns {boolean} true when the marker is present.
+ */
+export function detectGrillMarker(body = "") {
+  return typeof body === "string" && GRILL_MARKER_PATTERN.test(body);
+}
+
+/**
+ * Detect a grill transcript/synthesis/Q&A embed heading in the body. Pure
+ * predicate; returns the first offending `##`-level heading name or null.
+ * @param {string} [body]
+ * @returns {string|null} the offending heading name, or null when none.
+ */
+export function detectGrillEmbedHeading(body = "") {
+  if (typeof body !== "string" || body.length === 0) return null;
+  for (const section of parseMarkdownSections(body)) {
+    for (const pattern of GRILL_EMBED_HEADING_PATTERNS) {
+      if (pattern.test(String(section.name))) {
+        return String(section.name);
+      }
+    }
+  }
+  return null;
+}
+
 export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false } = {}) {
   if (issueLess && Number.isInteger(expectedIssue)) {
     // Fail closed at the library boundary too (not just the CLI): the two modes
