@@ -289,8 +289,38 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     headSha,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
+    // Stamp dependency state relative to package-lock.json (#1627): a worktree
+    // whose installed deps (node_modules/.package-lock.json) do not match the
+    // lockfile is validated against stale deps, so the artifact records the
+    // delta instead of blessing it. Non-blocking (does not flip allPassed) — it
+    // is a trust signal for consumers of the artifact, not a hard gate failure.
+    depState: await resolveDepState(repoRoot),
     suites: suiteResults,
   };
+}
+
+/**
+ * Compare the repo's package-lock.json against the installed lock snapshot
+ * (node_modules/.package-lock.json) (#1627). A mismatch means the validation
+ * suites ran against stale deps — stamped, not blocking, so gate consumers can
+ * distrust a stale run without a stale run itself failing the gate.
+ *
+ * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
+ * @returns {Promise<{status: string, detail: string}>}
+ */
+async function resolveDepState(repoRoot) {
+  const lock = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
+  const installed = await readFile(path.join(repoRoot, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
+  if (lock === null) {
+    return { status: "n-a", detail: "no package-lock.json at repo root" };
+  }
+  if (installed === null) {
+    return { status: "stale", detail: "node_modules/.package-lock.json absent — installed deps not materialized" };
+  }
+  if (installed === lock) {
+    return { status: "synced", detail: "node_modules/.package-lock.json matches package-lock.json" };
+  }
+  return { status: "stale", detail: "node_modules/.package-lock.json differs from package-lock.json" };
 }
 
 /**

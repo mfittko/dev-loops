@@ -24,6 +24,7 @@
  * No imports so this file vendors into the `.claude/hooks/` bundle unchanged
  * (vendored modules may only import `node:` builtins or relative paths).
  */
+import path from "node:path";
 
 /**
  * Timeout (ms) for the `git worktree list` resolution step (the fetch-half budget;
@@ -55,4 +56,39 @@ export function buildMainCheckoutFastForwardCommand(mainCheckout) {
   // non-main checkout fails the && chain (warn-and-continue) rather than ff-ing the
   // wrong branch. No state change, no git switch.
   return `git -C ${quoted} fetch origin main && [ "$(git -C ${quoted} rev-parse --abbrev-ref HEAD)" = main ] && git -C ${quoted} merge --ff-only origin/main`;
+}
+
+/**
+ * Worktree-cleanup timeout (ms) for the post-merge `git worktree remove` half.
+ */
+export const WORKTREE_CLEANUP_TIMEOUT_MS = 60_000;
+
+/**
+ * Build the best-effort post-merge worktree-removal command string (#1627).
+ *
+ * The dev-loop mandates removing the branch's worktree after merge, but neither
+ * the merge procedure nor the post-merge hooks performed it. This builds the
+ * shell command that runs the shared `cleanup-worktree.mjs` script FROM the main
+ * checkout (the hook's cwd can be inside the worktree being removed, which makes
+ * `git worktree remove` fail), and stays non-fatal: the script itself is fail-soft
+ * (refuses any path outside tmp/worktrees/dev-loops/, exits 0 on git errors), and
+ * the surrounding guard makes a consumer checkout without the script a silent no-op.
+ * `prNumber` is shell-escaped as a double-quoted argument; `mainCheckout` and the
+ * script path are POSIX single-quoted. Returns an empty string when no PR number
+ * (or no meaningful target) is available, so callers can skip cleanly.
+ *
+ * @param {string} mainCheckout - Absolute path to the main (primary) git checkout.
+ * @param {string | number | undefined} prNumber - Merged PR number (drives `--pr`).
+ * @returns {string} the cleanup command, or "" when `prNumber` is absent.
+ */
+export function buildWorktreeCleanupCommand(mainCheckout, prNumber) {
+  if (prNumber === undefined || prNumber === null || String(prNumber).trim() === "") {
+    return "";
+  }
+  const quotedMain = shellQuotePath(mainCheckout);
+  const script = shellQuotePath(path.join(mainCheckout, "scripts", "loop", "cleanup-worktree.mjs"));
+  const pr = String(prNumber).trim();
+  // Guard the script's existence (consumer no-op) and keep the whole thing
+  // non-fatal with `|| true` — removal must never break a merge-completion flow.
+  return `if [ -f ${script} ]; then node ${script} --repo-root ${quotedMain} --pr "${pr}"; fi || true`;
 }

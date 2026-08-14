@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync, cpSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync, cpSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -2831,5 +2831,51 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: requireRetrospective unset m
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolver returns needs_reconcile for local_implementation when the worktree's core link escapes (#1627)", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-core-escape-"));
+  try {
+    const { worktreeDir } = writeWorktreeEnv(tempDir);
+    // The forbidden state: the worktree's node_modules/@dev-loops/core resolves
+    // into the MAIN checkout's dependency tree, not its own packages/core.
+    mkdirSync(path.join(worktreeDir, "packages", "core"), { recursive: true });
+    const mainCore = path.join(tempDir, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainCore, { recursive: true });
+    const scope = path.join(worktreeDir, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(mainCore, path.join(scope, "core"));
+
+    const env = {
+      ...process.env,
+      PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
+    };
+
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_phase", issue: 1627, phase: "issue-1627" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "authorized",
+        },
+        loopState: "implementation_pending",
+        artifactState: "not_applicable",
+        issueLinkageResolution: "not_applicable",
+      },
+      { env, cwd: worktreeDir },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.equal(result.selectedStrategy, "none");
+    assert.ok(
+      result.nextAction.includes("node_modules/@dev-loops/core"),
+      `nextAction should mention the core link, got: ${result.nextAction}`,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
   }
 });

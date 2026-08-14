@@ -14,10 +14,9 @@
  * main without rewriting history, so a diverged checkout warns and continues.
  */
 import { execFileSync, execSync } from "node:child_process";
-
-import { isMergeCapableCommand } from "./_bash-command-classify.mjs";
+import { isMergeCapableCommand, extractPrNumberFromGhPrMergeAnywhere } from "./_bash-command-classify.mjs";
 import { parseMainWorktreePath } from "./_worktree-guard.mjs";
-import { buildMainCheckoutFastForwardCommand, MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS } from "./_main-checkout-ff.mjs";
+import { buildMainCheckoutFastForwardCommand, WORKTREE_CLEANUP_TIMEOUT_MS, MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS, buildWorktreeCleanupCommand } from "./_main-checkout-ff.mjs";
 
 import { readHookInput } from "./_hook-io.mjs";
 
@@ -52,6 +51,31 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
       process.stderr.write(
         `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${reason}\n`,
       );
+    }
+  }
+
+  // Post-merge worktree removal (#1627): the loop mandates removing the branch's
+  // worktree after merge but never performed it. Runs from the main checkout (the
+  // hook's cwd can be inside the worktree being removed) and stays non-fatal.
+  const prNumber = extractPrNumberFromGhPrMergeAnywhere(command);
+  if (mainCheckout && prNumber) {
+    const cleanupCommand = buildWorktreeCleanupCommand(mainCheckout, prNumber);
+    if (cleanupCommand) {
+      try {
+        execSync(cleanupCommand, {
+          cwd: mainCheckout,
+          timeout: WORKTREE_CLEANUP_TIMEOUT_MS,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        process.stderr.write(
+          `[dev-loops] post-merge: worktree cleanup ran for PR #${prNumber}.\n`,
+        );
+      } catch (error) {
+        const reason = error?.stderr?.toString?.()?.trim() || error?.message || String(error);
+        process.stderr.write(
+          `[dev-loops] post-merge: worktree cleanup skipped (best-effort): ${reason}\n`,
+        );
+      }
     }
   }
 }

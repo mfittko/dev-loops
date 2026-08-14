@@ -401,3 +401,29 @@ test("provision: idempotent on reuse (second run skips)", async () => {
     fx.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// node_modules source rejection (#1627)
+// ---------------------------------------------------------------------------
+
+test("provision: rejects an entry whose source resolves under node_modules", async () => {
+  const fx = makeFixture(
+    "version: 1\nworktree:\n  entries:\n    - path: node_modules/some-pkg\n      mode: link\n",
+  );
+  try {
+    const srcDir = path.join(fx.repoRoot, "node_modules", "some-pkg");
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(path.join(srcDir, "index.js"), "x\n");
+
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+
+    assert.equal(res.summary.rejected, 1);
+    const reject = res.actions.find((a) => a.mode === "reject");
+    assert.ok(reject, "expected a reject action");
+    assert.equal(reject.reason, "node_modules");
+    // The forbidden dependency tree must not be linked into the worktree.
+    assert.equal(existsSync(path.join(fx.worktreePath, "node_modules", "some-pkg")), false);
+  } finally {
+    fx.cleanup();
+  }
+});
