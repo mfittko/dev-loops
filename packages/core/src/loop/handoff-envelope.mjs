@@ -130,6 +130,21 @@ register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "default", {
   activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });
 
+// local_implementation · spike run (SPIKE-RELAXED-GATE-PROFILE, #1628): a
+// spike-mode spin resolves the relaxed `spike` gate profile instead of the
+// default local-implementation gate. Kept as its own acceptance key so the
+// generic default can stay approach-agnostic.
+register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "spike", {
+  criteria: [
+    { id: "spike-recorded", must: "The spike exploration and its recommendation are recorded (spike file + summary).", severity: "required" },
+    { id: "verify-green", must: "`npm run verify` passes with no failures.", severity: "required" },
+  ],
+  evidence: ["commands-run", "validation-output", "changed-files"],
+  maxFinalizationTurns: 6,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
+});
+
 // wait_watch — dedicated window matching external healthy wait budget (policy-constants)
 register(INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH, "default", {
   criteria: [
@@ -545,6 +560,11 @@ function resolveSubGate(strategy, gateState) {
   return "default";
 }
 
+/** True when the resolver output identifies a spike-mode run (#1628). */
+function isSpikeRun(resolverOutput) {
+  return Boolean(resolverOutput && resolverOutput.spikeIntakeState);
+}
+
 
 // ---------------------------------------------------------------------------
 // Deep freeze helper
@@ -580,7 +600,12 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   if (!repo) throw new Error("handoff-envelope: repo slug is required (owner/name)");
 
   const gs = normalizeGateState(gateState);
-  const subGate = resolveSubGate(strategy, gs);
+  // SPIKE-RELAXED-GATE-PROFILE (#1628): a spike-mode spin (startup resolver
+  // result carrying `spikeIntakeState`) resolves the relaxed `spike` gate
+  // profile instead of the default local-implementation gate. The spike
+  // marker lives at the TOP level of the resolver output (the bundle does not
+  // carry it), so it is read off `resolverOutput` directly.
+  const subGate = isSpikeRun(resolverOutput) ? "spike" : resolveSubGate(strategy, gs);
   // Normalize each source independently, then fall back on the normalized result
   // (not the raw value): a present-but-invalid gateState value must NOT shadow a
   // valid options.retrospectiveFindings fallback (issue #1077 review finding).
