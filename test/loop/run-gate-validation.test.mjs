@@ -353,13 +353,20 @@ test("buildValidationArtifact: stamps depState synced when installed deps match 
     await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
     // npm-realistic: the committed lock carries the root entry + deps; the hidden
     // installed lock omits the root entry (never byte-identical) but matches deps.
+    // Host-independent fixture: the "non-host" optional is always a different
+    // os/cpu than the runner, and the host optional is always present, so the
+    // expected stamp is platform-agnostic (works on linux-x64 CI and darwin-arm64).
+    const hostOs = process.platform;
+    const hostCpu = process.arch;
+    const otherOs = hostOs === "linux" ? "darwin" : "linux";
+    const otherCpu = hostCpu === "x64" ? "arm64" : "x64";
     const lock = JSON.stringify({
       lockfileVersion: 3,
       packages: {
         "": { name: "fixture" },
         "node_modules/a": { version: "1.0.0" },
-        "node_modules/@pkg/darwin-arm64": { version: "1.0.0", os: ["darwin"], cpu: ["arm64"], optional: true },
-        "node_modules/@pkg/linux-x64": { version: "1.0.0", os: ["linux"], cpu: ["x64"], optional: true },
+        [`node_modules/@pkg/${hostOs}-${hostCpu}`]: { version: "1.0.0", os: [hostOs], cpu: [hostCpu], optional: true },
+        [`node_modules/@pkg/${otherOs}-${otherCpu}`]: { version: "1.0.0", os: [otherOs], cpu: [otherCpu], optional: true },
       },
     });
     // Only the host-installable optional plus the plain dep exist in the installed tree.
@@ -367,7 +374,7 @@ test("buildValidationArtifact: stamps depState synced when installed deps match 
       lockfileVersion: 3,
       packages: {
         "node_modules/a": { version: "1.0.0" },
-        "node_modules/@pkg/darwin-arm64": { version: "1.0.0", os: ["darwin"], cpu: ["arm64"], optional: true },
+        [`node_modules/@pkg/${hostOs}-${hostCpu}`]: { version: "1.0.0", os: [hostOs], cpu: [hostCpu], optional: true },
       },
     });
     await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
