@@ -3,11 +3,15 @@ import test, { describe } from "node:test";
 
 import {
   ANGLE_SUFFIX_SLOT,
+  DEFAULT_LINEAGE_MAX_ROUNDS,
   LINEAGE_BASE_SLOT,
   ROUND_DELTA_SLOT,
   buildFixRoundDelta,
   buildReviewLineageBase,
+  checkLineageCompaction,
   composeRoundRequest,
+  lineageByteSize,
+  rebaseLineage,
   renderComposedRequest,
 } from "../src/loop/review-lineage.mjs";
 
@@ -309,6 +313,134 @@ describe("append-only round request composition — Section E (AC-2)", () => {
     assert.throws(() => buildReviewLineageBase({ lineageId: "l", gate: GATE, originalHead: "aaaaaaa", originalDiff: "d" }));
     // All SHAs must be full-length.
     assert.throws(() => buildFixRoundDelta({ lineageId: "l", round: 1, gate: GATE, baseHead: "bbbbbbbb", reviewedHead: R1, fixDiff: "d" }));
+  });
+});
+
+describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
+  function deltas(count) {
+    const out = [];
+    let prevHead = BASE;
+    for (let i = 1; i <= count; i++) {
+      const reviewedHead = `d`.repeat(60) + String(i).padStart(4, "0");
+      out.push(
+        buildFixRoundDelta({
+          lineageId: "lin-1",
+          round: i,
+          gate: GATE,
+          baseHead: prevHead,
+          reviewedHead,
+          fixDiff: `diff --git a/src/a.mjs b/src/a.mjs\n+round ${i}\n`,
+          validationEvidence: { tests: "npm test", result: "pass", head: reviewedHead },
+          findingsChecklist: [{ id: `F${i}`, severity: "high", check: `verify round ${i}`, resolved: true, evidence: "test-assert" }],
+        }),
+      );
+      prevHead = reviewedHead;
+    }
+    return out;
+  }
+
+  test("compaction threshold is exceeded once delta count passes maxRounds (default 20)", () => {
+    assert.equal(DEFAULT_LINEAGE_MAX_ROUNDS, 20);
+    assert.equal(checkLineageCompaction({ lineageBase: base(), deltas: deltas(20) }).requiresCompaction, false);
+    const over = checkLineageCompaction({ lineageBase: base(), deltas: deltas(21) });
+    assert.equal(over.requiresCompaction, true);
+    assert.match(over.reason, /exceeds maxRounds 20/);
+  });
+
+  test("a byte budget triggers compaction even under the round cap", () => {
+    const d = deltas(2);
+    const small = 200; // well under the composed size
+    const r = checkLineageCompaction({ lineageBase: base(), deltas: d, maxLineageBytes: small });
+    assert.equal(r.requiresCompaction, true);
+    assert.match(r.reason, /exceed maxLineageBytes 200/);
+  });
+
+  test("lineageByteSize is deterministic and grows with each appended delta", () => {
+    const s1 = lineageByteSize({ lineageBase: base(), deltas: deltas(1) });
+    const s2 = lineageByteSize({ lineageBase: base(), deltas: deltas(2) });
+    assert.ok(Number.isInteger(s1) && s1 > 0);
+    assert.ok(s2 > s1);
+    assert.equal(lineageByteSize({ lineageBase: base(), deltas: deltas(2) }), s2); // deterministic
+  });
+
+  test("rebase preserves composition rules — compacted base resumes appending round-1 delta", () => {
+    const ds = deltas(21);
+    assert.equal(checkLineageCompaction({ lineageBase: base(), deltas: ds }).requiresCompaction, true);
+
+    const compacted = rebaseLineage({ lineageBase: base(), deltas: ds });
+    assert.equal(compacted.kind, "review-lineage-base");
+    assert.equal(compacted.lineageId, "lin-1");
+    assert.equal(compacted.gate, GATE);
+    assert.equal(compacted.compaction, true);
+    assert.equal(compacted.compactedRoundCount, 21);
+    assert.equal(compacted.rebaseSourceBaseHash, base().baseHash);
+    // originalHead advances to the latest reviewed head.
+    assert.equal(compacted.originalHead, ds[ds.length - 1].reviewedHead);
+    // cumulative diff folds in every fix diff, in order.
+    assert.match(compacted.originalDiff, /round 1/);
+    assert.match(compacted.originalDiff, /round 21/);
+    assert.match(compacted.baseHash, /^sha256:[0-9a-f]{64}$/);
+    assert.ok(Object.isFrozen(compacted));
+
+    // The compacted base is accepted by composeRoundRequest unchanged, and a
+    // fresh round-1 delta against it composes cleanly (SHA-chain continuity +
+    // append-only contract preserved).
+    const fresh = buildFixRoundDelta({
+      lineageId: "lin-1",
+      round: 1,
+      gate: GATE,
+      baseHead: compacted.originalHead,
+      reviewedHead: `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`,
+      fixDiff: "diff --git a/src/a.mjs b/src/a.mjs\n+post-rebase\n",
+      validationEvidence: { tests: "npm test", result: "pass" },
+    });
+    const composed = composeRoundRequest({ lineageBase: compacted, priorDeltas: [], newDelta: fresh });
+    assert.equal(composed.segments.length, 2); // compacted base + one fresh delta
+    assert.equal(composed.segments[0].hash, compacted.baseHash);
+    assert.equal(composed.segments[1].hash, fresh.deltaHash);
+    // Byte-deterministic.
+    const again = composeRoundRequest({ lineageBase: compacted, priorDeltas: [], newDelta: fresh });
+    assert.equal(composed.composedHash, again.composedHash);
+  });
+
+  test("rebase chain trimming keeps the composed request bounded", () => {
+    const ds = deltas(21);
+    const before = renderComposedRequest(composeRoundRequest({ lineageBase: base(), priorDeltas: ds.slice(0, -1), newDelta: ds[ds.length - 1] }));
+    const compacted = rebaseLineage({ lineageBase: base(), deltas: ds });
+    const fresh = buildFixRoundDelta({
+      lineageId: "lin-1",
+      round: 1,
+      gate: GATE,
+      baseHead: compacted.originalHead,
+      reviewedHead: `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`,
+      fixDiff: "diff --git a/src/a.mjs b/src/a.mjs\n+post-rebase\n",
+    });
+    const after = renderComposedRequest(composeRoundRequest({ lineageBase: compacted, priorDeltas: [], newDelta: fresh }));
+    // The single compacted base + one delta is strictly smaller than the full
+    // 21-delta append chain (unbounded growth prevented).
+    assert.ok(after.length < before.length);
+  });
+
+  test("rebase fails closed on a broken SHA chain, wrong gate, or foreign lineage", () => {
+    const badChain = [...deltas(2)];
+    badChain[1] = buildFixRoundDelta({
+      lineageId: "lin-1", round: 2, gate: GATE,
+      baseHead: BASE, // should equal deltas[0].reviewedHead
+      reviewedHead: `cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`,
+      fixDiff: "x",
+    });
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: badChain }));
+    const wrongGate = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: "draft_gate", baseHead: BASE,
+      reviewedHead: R1, fixDiff: "x",
+    });
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [wrongGate] }));
+    const foreign = buildFixRoundDelta({
+      lineageId: "lin-OTHER", round: 1, gate: GATE, baseHead: BASE,
+      reviewedHead: R1, fixDiff: "x",
+    });
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [foreign] }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: deltas(1), maxRounds: 0 }));
   });
 });
 

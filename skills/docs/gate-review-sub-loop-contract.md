@@ -1708,12 +1708,47 @@ carried clean angle still records its ORIGINAL reviewer and PRIOR head,
 unchanged from the existing carry-forward contract. The composed request weaves
 that provenance into its `composedHash`.
 
+### Compaction / rebase policy (slice 6)
+
+Unbounded delta accumulation would eventually overflow provider prompt-cache
+breakpoint/lookback limits and the context window. A documented compaction
+(rebase) rule bounds the composed lineage so it cannot grow without limit.
+
+**Threshold.** A rebase is triggered when EITHER bound is exceeded:
+
+- the accumulated round-delta count exceeds `maxRounds` (default
+  `DEFAULT_LINEAGE_MAX_ROUNDS`, `20`), OR
+- the composed lineage byte size exceeds `maxLineageBytes` (a provider context
+  budget a consumer may set) when one is configured.
+
+`checkLineageCompaction({ lineageBase, deltas, maxRounds, maxLineageBytes })`
+returns `{ requiresCompaction, reason, ... }` (pure predicate — never mutates).
+
+**Rebase behaviour.** `rebaseLineage({ lineageBase, deltas })` folds the
+accumulated deltas into a new compacted `review-lineage-base`: `originalHead`
+advances to the latest reviewed head and `originalDiff` becomes the cumulative
+diff (original full diff merged with every accepted fix diff, in order). The
+compacted base keeps the same `lineageId`/`gate`, is itself a valid base that
+`composeRoundRequest` accepts unchanged, and records `rebaseSourceBaseHash` +
+`compactedRoundCount` for traceability. Subsequent rounds append fresh deltas
+to the compacted base, so the composed request stays within the provider
+breakpoint/lookback + context budget. Composition rules are preserved: a new
+round-1 delta whose `baseHead` equals the compacted base's `originalHead`
+composes cleanly, byte-deterministically, with SHA-chain continuity. Prior
+delta artifacts remain available (append-only history); only the composed
+request is recomposed from the compacted base.
+
+Covered by the compaction suite in `packages/core/test/review-lineage.test.mjs`
+and the end-to-end fixture `packages/core/test/review-lineage-e2e-fixture.test.mjs`
+(driving request plan → primer → fan-out/fan-in → lineage delta → compaction
+for two rounds).
+
 ### Non-goals preserved
 
-- No provider cache-reuse claim from artifact hashes (slice-5 keeps that out of
-  scope; telemetry capability rules live in `review-dispatch-plan.mjs`).
-- No continuity-reviewer convergence loop, calibration audit, or compaction
-  policy yet — those are later #1468 slices (6/7/8) and are NOT introduced here.
+- No provider cache-reuse claim from artifact hashes (telemetry capability
+  rules live in `review-dispatch-plan.mjs`).
+- No continuity-reviewer convergence loop or calibration audit yet — those are
+  later #1468 slices (6/7) and are NOT introduced here.
 - Round-1 fresh one-reviewer-per-angle provenance and fan-in semantics are
   untouched.
 
