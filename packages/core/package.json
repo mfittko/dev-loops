@@ -54,6 +54,7 @@
     "./loop/queue-membership": "./src/loop/queue-membership.mjs",
     "./loop/queue-parallel": "./src/loop/queue-parallel.mjs",
     "./loop/queue-state": "./src/loop/queue-state.mjs",
+    "./loop/cache-telemetry-evidence": "./src/loop/cache-telemetry-evidence.mjs",
     "./loop/primer-evidence": "./src/loop/primer-evidence.mjs",
     "./loop/review-dispatch-plan": "./src/loop/review-dispatch-plan.mjs",
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
