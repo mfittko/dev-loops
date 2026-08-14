@@ -311,11 +311,20 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
  * structure-aware: the non-root dependency tree is compared by
  * `node_modules/<path>` key + `version`. A package present in the lock but
  * missing or version-differing in the installed snapshot means the installed
- * deps are stale relative to the lock.
+ * deps are stale relative to the lock. Cross-platform pure optional packages
+ * (os/cpu-gated to a non-host platform) are not installed on this host, so they
+ * are excluded from the comparison to avoid false "stale" stamps on a synced
+ * tree.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
  */
+function isInstallableOnHost(pkg) {
+  if (pkg.os && !pkg.os.includes(process.platform)) return false;
+  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
+  return true;
+}
+
 async function resolveDepState(repoRoot) {
   const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
   const installedRaw = await readFile(path.join(repoRoot, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
@@ -344,6 +353,7 @@ async function resolveDepState(repoRoot) {
   for (const [key, val] of Object.entries(expected)) {
     if (key === "") continue; // root package — absent from the installed hidden lock
     if (typeof val !== "object" || val === null) continue;
+    if (!isInstallableOnHost(val)) continue; // non-host os/cpu-gated optional — never installed
     const installedEntry = have[key];
     if (!installedEntry) {
       missing.push(key);

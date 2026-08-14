@@ -355,11 +355,20 @@ test("buildValidationArtifact: stamps depState synced when installed deps match 
     // installed lock omits the root entry (never byte-identical) but matches deps.
     const lock = JSON.stringify({
       lockfileVersion: 3,
-      packages: { "": { name: "fixture" }, "node_modules/a": { version: "1.0.0" } },
+      packages: {
+        "": { name: "fixture" },
+        "node_modules/a": { version: "1.0.0" },
+        "node_modules/@pkg/darwin-arm64": { version: "1.0.0", os: ["darwin"], cpu: ["arm64"], optional: true },
+        "node_modules/@pkg/linux-x64": { version: "1.0.0", os: ["linux"], cpu: ["x64"], optional: true },
+      },
     });
+    // Only the host-installable optional plus the plain dep exist in the installed tree.
     const installed = JSON.stringify({
       lockfileVersion: 3,
-      packages: { "node_modules/a": { version: "1.0.0" } },
+      packages: {
+        "node_modules/a": { version: "1.0.0" },
+        "node_modules/@pkg/darwin-arm64": { version: "1.0.0", os: ["darwin"], cpu: ["arm64"], optional: true },
+      },
     });
     await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
     await writeFile(path.join(repoRoot, "node_modules", ".package-lock.json"), installed, "utf8");
