@@ -6,6 +6,8 @@ import {
   decideEnqueueRefinementGate,
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
+  detectGrillMarker,
+  detectGrillEmbedHeading,
   extractChecklistItems,
   extractUncheckedChecklistItems,
   parseMarkdownSections,
@@ -279,4 +281,33 @@ test("#1621 detectIssueRefinementArtifact carries uncheckedAcItems: [] when all 
     body: ["## Acceptance criteria", "", "- [x] done one", "- [x] done two"].join("\n"),
   });
   assert.deepEqual(artifact.uncheckedAcItems, []);
+});
+
+test("GRILL-SUBLOOP (#1628): detectGrillMarker finds the sanctioned loop-grill marker", () => {
+  assert.equal(detectGrillMarker("<!-- loop-grill: 2026-08-14T00:00:00Z mode:interactive -->\n\n## Acceptance criteria\n\n- [ ] ac"), true);
+  assert.equal(detectGrillMarker("## Acceptance criteria\n\n- [ ] ac"), false);
+  assert.equal(detectGrillMarker(""), false);
+});
+
+test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synthesis/Q&A embed headings", () => {
+  const body = [
+    "## Acceptance criteria", "",
+    "- [ ] ac", "",
+    "## Grill findings", "",
+    "- Q: what", "- A: ans",
+  ].join("\n");
+  assert.equal(detectGrillEmbedHeading(body), "Grill findings");
+  assert.equal(
+    detectGrillEmbedHeading(["## Grill transcript", "", "- q", "- a"].join("\n")),
+    "Grill transcript",
+  );
+  assert.equal(
+    detectGrillEmbedHeading(["# Overview", "", "## Grill synthesis", "", "x"].join("\n")),
+    "Grill synthesis",
+  );
+  // A clean body with only canonical sections has no embed heading.
+  assert.equal(
+    detectGrillEmbedHeading(["## Acceptance criteria", "", "- [ ] ac", "", "## Non-goals", "", "- none"].join("\n")),
+    null,
+  );
 });

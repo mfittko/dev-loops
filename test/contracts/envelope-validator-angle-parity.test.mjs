@@ -29,7 +29,7 @@ import { deriveGateConfig } from "@dev-loops/core/loop/handoff-envelope";
 // widens under dynamic.additive, while the envelope advertises the run-set.
 // ---------------------------------------------------------------------------
 
-const GATE_KEYS = ["draft", "preApproval"];
+const GATE_KEYS = ["draft", "preApproval", "spike"];
 
 /**
  * Independently re-derive the mandatory-angle set directly from the merged

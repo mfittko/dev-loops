@@ -423,6 +423,10 @@ test("buildResolveDevLoopStartupResult auto-injects retrospectiveCheckpointState
       JSON.stringify({ state: "required" }),
       "utf8",
     );
+    // RETRO-ENFORCEMENT-CONFIG-GATED (#1628): the checkpoint read/inject is gated
+    // on workflow.requireRetrospective, so this test opts in via a `.devloops`
+    // fixture to keep exercising the read path.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
 
     // Run via CLI with CWD set to temp dir
     const inputPath = await writeTempJson(tempDir, "startup.json", {
@@ -466,6 +470,10 @@ test("buildResolveDevLoopStartupResult fails closed when no checkpoint file exis
       loopState: "active",
     });
 
+    // RETRO-ENFORCEMENT-CONFIG-GATED (#1628): opt in via `.devloops` so the
+    // gated checkpoint read path is exercised (absent file fails closed).
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+
     const result = await runNode(["--input", inputPath], { cwd: tempDir });
 
     assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
@@ -505,7 +513,7 @@ test("buildResolveDevLoopStartupResult maps durable-artifact 'required' to check
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: resolverTestEnv(), cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
     // The resolver auto-reads the checkpoint file and maps "required" → "missing".
@@ -544,7 +552,7 @@ test("buildResolveDevLoopStartupResult overrides caller-provided state with on-d
         loopState: "active",
         retrospectiveCheckpointState: "complete",
       },
-      { env: resolverTestEnv(), cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
     // On-disk "required" overrides caller-provided "complete". The resolver
@@ -580,7 +588,7 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file is malf
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: resolverTestEnv(), cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
     // Malformed file -> fail closed with missing checkpoint state -> needs_reconcile.
@@ -615,13 +623,53 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file has unr
         artifactState: "not_applicable",
         loopState: "active",
       },
-      { env: resolverTestEnv(), cwd: tempDir },
+      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
     // Unrecognized state -> fail closed with missing -> needs_reconcile.
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "needs_reconcile");
     assert.equal(result.selectedStrategy, "none");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: RETRO-ENFORCEMENT-CONFIG-GATED — a repo with requireRetrospective unset is NOT blocked by a pending/missing checkpoint", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-startup-"));
+  try {
+    const piDir = path.join(tempDir, ".pi");
+    await mkdir(piDir, { recursive: true });
+    // A pending ("required") checkpoint exists on disk. In a repo that never
+    // opts into retrospective enforcement (no requireRetrospective), this must
+    // NOT over-block: the read/inject is gated off entirely and the routing
+    // passes through unchanged.
+    await writeFile(
+      path.join(piDir, "dev-loop-retrospective-checkpoint.json"),
+      JSON.stringify({ state: "required" }),
+      "utf8",
+    );
+
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_branch", branch: "feature/local-route" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "authorized",
+        },
+        artifactState: "not_applicable",
+        loopState: "active",
+      },
+      { env: resolverTestEnv(), cwd: tempDir, config: { workflow: {} } },
+    );
+
+    // The checkpoint is present but requireRetrospective is unset: the resolver
+    // never reads/injects it, so it does NOT fail closed to needs_reconcile.
+    // (The routing for this input is a plain pass-through local_branch resolve.)
+    assert.equal(result.ok, true);
+    assert.notEqual(result.bundleKind, "needs_reconcile");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2599,9 +2647,11 @@ test("buildResolveDevLoopStartupResult: a checkpoint written only at the main ch
 
     const fromMain = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
       env: resolverTestEnv(), cwd: mainDir,
+      config: { workflow: { requireRetrospective: true } },
     });
     const fromWorktree = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
       env: resolverTestEnv(), cwd: worktreeDir,
+      config: { workflow: { requireRetrospective: true } },
     });
 
     assert.equal(fromMain.bundleKind, "needs_reconcile");

@@ -115,6 +115,20 @@ function jsonLine(value) {
   return `${JSON.stringify(value)}\n`;
 }
 
+test("parseDetectPrGateCoordinationCliArgs reports --expected-issue in its own error message, not --pr (#1713)", () => {
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "abc"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "0"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  // A valid value still parses.
+  const opts = parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "1628"]);
+  assert.equal(opts.expectedIssue, 1628);
+});
+
 test("parseGitStatusConflictFiles parses NUL-delimited porcelain output with deterministic paths", () => {
   const parsed = parseGitStatusConflictFiles([
     "UU config.test.mjs",
@@ -1846,6 +1860,35 @@ test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferenc
     assert.equal(result.linkedIssue, 900);
     assert.equal(result.specSource, "linked_issue");
     assert.equal(result.finding, "missing_refinement_artifact");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS — a tracker-backed (expectedIssue) draft PR dropping its Closes #N surfaces missing_refinement_artifact instead of validating clean", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [],
+          body: "## Probe\n\nProse only.\n\n## Acceptance criteria\n\n- [ ] the AC\n\n## Definition of done\n\n- [ ] the DoD\n",
+        },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+        expectedIssue: 900,
+      },
+    );
+    // Even though the body carries AC/DoD, a tracker-backed PR that dropped its
+    // closing reference must fail closed (missing_closing_issue_reference), not
+    // be reclassified as an issue-less lightweight body and validate clean.
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssues.length, 0);
+    assert.equal(result.finding, "missing_refinement_artifact");
+    assert.match(result.reason, /missing_closing_issue_reference/);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

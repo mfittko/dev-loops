@@ -10,7 +10,7 @@ import {
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
@@ -61,6 +61,12 @@ Optional:
                   refinement.maxCopilotRounds) instead of using
                   refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
                   0 still disables Copilot rounds even with --lightweight.
+  --expected-issue <n>  Declare the tracker issue this PR is expected to close
+                  (ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS, #1628). For a draft PR
+                  with no linked issue this switches the body-spec validation
+                  from issue-less mode to expectedIssue mode, so a dropped
+                  \`Closes #N\` surfaces missing_closing_issue_reference instead
+                  of validating clean as an issue-less body.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -120,6 +126,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     lightweight: false,
+    expectedIssue: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -128,6 +135,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       lightweight: { type: "boolean" },
+      "expected-issue": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -155,6 +163,10 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     }
     if (token.name === "lightweight") {
       options.lightweight = true;
+      continue;
+    }
+    if (token.name === "expected-issue") {
+      options.expectedIssue = parsePositiveInteger(requireTokenValue(token, parseError), "--expected-issue", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -316,7 +328,7 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 // `specSource` here (linked_issue|pr_body|plan_file) is a distinct enum from
 // handoff-envelope.mjs's CANONICAL_SPEC_SOURCE (phase_doc|pr_body): same field
 // name, different object, different value space — never conflate the two.
-async function resolveNoIssueRefinementArtifact(body) {
+async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
   const { detectIssueRefinementArtifact, validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
   const planDocMatch = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(body);
   if (planDocMatch) {
@@ -372,26 +384,33 @@ async function resolveNoIssueRefinementArtifact(body) {
       finding: "missing_refinement_artifact",
     };
   }
-  const specResult = validatePrBodySpec({ body, issueLess: true });
+  const specResult = Number.isInteger(expectedIssue)
+    ? validatePrBodySpec({ body, expectedIssue })
+    : validatePrBodySpec({ body, issueLess: true });
   if (specResult.ok) {
     return {
       status: "present",
-      linkedIssue: null,
-      linkedIssues: [],
+      linkedIssue: expectedIssue,
+      linkedIssues: expectedIssue ? [expectedIssue] : [],
       specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
       acItems: specResult.acItems,
       dodItems: specResult.dodItems,
       sections: specResult.sections,
-      reason: "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
+      reason: Number.isInteger(expectedIssue)
+        ? `Refinement artifact present via the PR body itself for tracker-backed issue #${expectedIssue} (validate-pr-body-spec clean).`
+        : "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
       finding: null,
     };
   }
+  const reason = Number.isInteger(expectedIssue)
+    ? `PR body fails the tracker-backed spec-of-record validation for expected issue #${expectedIssue} (validate-pr-body-spec: ${specResult.errors.map((e) => e.code).join(", ")}).`
+    : `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
   return {
     status: "missing",
     linkedIssue: null,
     linkedIssues: [],
     specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
-    reason: `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`,
+    reason,
     finding: "missing_refinement_artifact",
   };
 }
@@ -423,12 +442,12 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
   return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed };
 }
 
-export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
     if (prDraft) {
       const body = typeof prData?.body === "string" ? prData.body : "";
-      return resolveNoIssueRefinementArtifact(body);
+      return resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
     }
     return {
       status: "unknown",
@@ -705,7 +724,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const isClosed = String(prData?.state || "").toUpperCase() === "CLOSED";
   const isMerged = String(prData?.state || "").toUpperCase() === "MERGED";
   const refinementArtifact = await loadRefinementArtifact(
-    { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged },
+    { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged, expectedIssue: options.expectedIssue },
     runtime,
   );
   const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(

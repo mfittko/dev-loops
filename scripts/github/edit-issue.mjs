@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
+import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -30,6 +33,9 @@ At least one edit:
   --reason <completed|not_planned>
                                 Close reason; only valid together with
                                 --state closed
+  --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
+                                refuse a body that embeds grill
+                                transcript/synthesis/Q&A headings.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "issue": 17, "edited": ["title", "body", ..., "state"] }
 Error output (stderr, JSON):
@@ -56,6 +62,7 @@ export function parseEditIssueCliArgs(argv) {
       milestone: { type: "string" },
       state: { type: "string" },
       reason: { type: "string" },
+      "enforce-grill": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -74,6 +81,7 @@ export function parseEditIssueCliArgs(argv) {
     milestone: undefined,
     state: undefined,
     reason: undefined,
+    enforceGrill: false,
     jq: undefined,
     silent: false,
   };
@@ -164,6 +172,10 @@ export function parseEditIssueCliArgs(argv) {
       options.reason = r;
       continue;
     }
+    if (token.name === "enforce-grill") {
+      options.enforceGrill = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -196,6 +208,39 @@ export function parseEditIssueCliArgs(argv) {
 }
 
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+  // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
+  // refuse to write a body that embeds grill transcript/synthesis/Q&A headings.
+  if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
+    // Resolve the body ONCE (inline, stdin, or file). The stdin/file read fails
+    // closed on an empty / whitespace-only value so a blank --body-file cannot
+    // silently clear the issue body — mirroring edit-pr's resolveBody (USAGE
+    // promises --body / --body-file reject empties).
+    let body = options.body;
+    if (body === undefined) {
+      if (options.bodyFile === "-") {
+        body = readFileSync(0, "utf8");
+      } else {
+        body = await readFile(options.bodyFile, "utf8");
+      }
+      if (body.trim().length === 0) {
+        throw new Error(`--body-file ${options.bodyFile} is empty`);
+      }
+    }
+    const heading = detectGrillEmbedHeading(body);
+    if (heading !== null) {
+      throw new Error(
+        `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS: issue body embeds grill material under heading \`## ${heading}\`; ` +
+        `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable issue body.`,
+      );
+    }
+    // Stdin (`--body-file -`) was consumed above to run the grill check; forward
+    // the resolved text inline so the core edit reuses it instead of re-reading
+    // the exhausted fd 0 (which would yield "" and throw).
+    if (options.bodyFile === "-") {
+      options.body = body;
+      options.bodyFile = undefined;
+    }
+  }
   return coreEditIssue(options, { env, ghCommand, run });
 }
 
