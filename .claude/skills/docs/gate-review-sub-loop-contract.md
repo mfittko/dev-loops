@@ -1660,6 +1660,63 @@ The full end-to-end driving command that dispatches per-angle review subagents a
 depth is provided by the Pi-harness child (the bridge); this contract specifies only the
 recording + enforcement + fail-closed signal that land independently.
 
+## Additive review-lineage composition (Section E)
+
+A new head after a fix does NOT rebuild a full head-specific briefing. Reviews
+within a PR review lineage compose toward an **additive review lineage**: a
+stable `review-lineage-base` plus deterministic per-fix-round `round-N-delta`
+artifacts, so round 2+ appends only what changed. The pure builder lives in
+`packages/core/src/loop/review-lineage.mjs` (offline, deterministic, no GitHub/
+harness/clock) and is covered by `packages/core/test/review-lineage.test.mjs`.
+
+### Artifact model
+
+```text
+review-lineage-base          lineageId + gate + stable contracts/instructions
+                             + ORIGINAL review target + ORIGINAL full diff
+
+round-N-delta                exact baseHead/reviewedHead SHAs + the fix diff
+                             + validation evidence + an INDEPENDENT findings
+                             verification checklist (not verdict prose)
+```
+
+`buildReviewLineageBase` and `buildFixRoundDelta` are byte-deterministic: the
+same inputs produce a byte-identical artifact (`baseHash` / `deltaHash`), so a
+consumer can prove two runs share a base/delta without re-comparing bodies.
+
+### Append-only composition (`composeRoundRequest`)
+
+```text
+round-N request = [lineage base][delta 1][delta 2]...[delta N][angle suffix]
+```
+
+Composition is **append-only**: the composed request is the ordered
+concatenation of the lineage base and individual delta artifacts, never a
+parse/reserialize of the full PR context as a replacement block. Round N+1
+appends exactly one new delta segment; every prior segment is byte-identical
+(same `slot` + `ref` + `hash`). Consumers render by concatenating segment bytes
+in order (`renderComposedRequest`, or segment-by-segment). Contiguity is
+fail-closed (`newDelta.round` must follow the prior deltas exactly) and
+delta/base `lineageId` must match.
+
+### Carry-forward semantics (unchanged)
+
+The lineage composer only PRESERVES carry-forward provenance (`carriedAngles`
+= `{ angle, originalReviewer, priorHead }`); it never decides carry-forward
+(that stays in `gate-carry-forward.mjs`) and never fabricates a verdict. A
+carried clean angle still records its ORIGINAL reviewer and PRIOR head,
+unchanged from the existing carry-forward contract. The composed request weaves
+that provenance into its `composedHash`.
+
+### Non-goals preserved
+
+- No provider cache-reuse claim from artifact hashes (slice-5 keeps that out of
+  scope; telemetry capability rules live in `review-dispatch-plan.mjs`).
+- No continuity-reviewer convergence loop, calibration audit, or compaction
+  policy yet — those are later #1468 slices (6/7/8) and are NOT introduced here.
+- Round-1 fresh one-reviewer-per-angle provenance and fan-in semantics are
+  untouched.
+
 ## See also
 
 - [Checkpoint Verdict Comment Contract](gate-review-comment-contract.md) — visible PR comment evidence format
