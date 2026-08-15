@@ -1128,54 +1128,6 @@ test("buildPreMergeGateCheck skipFanoutLedgerCheck: still respects the light-mod
   assert.deepEqual(result.failures, []);
 });
 
-test("buildPreMergeGateCheck skipFanoutLedgerCheck (#1648): ACCEPTS an over-threshold DOCUMENTED inline verdict (the #1719 gate-evidence red case)", () => {
-  // Mirrors the exact gate-evidence CI scenario that red-flagged #1719: the
-  // stateless default-branch detector (--skip-fanout-ledger-check) rejected a
-  // genuinely-clean gate whose verdict recorded executorNote as
-  // inline_single_agent with a non-empty DOCUMENTED exception (fan-out child
-  // reviewers SIGTERM'd in child-safe env) just because the reviewed scope
-  // crossed the 20-line light-mode threshold. After #1648 that documented
-  // inline verdict satisfies the required check.
-  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
-    required: true,
-    lightMode: true,
-    hasFullLabel: false,
-    gates: [
-      {
-        name: "draft_gate",
-        executionMode: "inline_single_agent",
-        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
-        scopeUnderThreshold: false,
-        ledgerPath: "tmp/gate-findings/o-r/pr-1719/draft_gate-abc1234.json",
-        ledgerExists: false,
-      },
-      {
-        name: "pre_approval_gate",
-        executionMode: "inline_single_agent",
-        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
-        scopeUnderThreshold: false,
-        ledgerPath: "tmp/gate-findings/o-r/pr-1719/pre_approval_gate-abc1234.json",
-        ledgerExists: false,
-      },
-    ],
-  }, { skipFanoutLedgerCheck: true });
-  assert.equal(result.ok, true, JSON.stringify(result.failures));
-  assert.deepEqual(result.failures, []);
-});
-
-test("buildPreMergeGateCheck skipFanoutLedgerCheck (#1648): still FAILS an over-threshold inline verdict with NO documented reason", () => {
-  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
-    required: true,
-    lightMode: true,
-    hasFullLabel: false,
-    gates: [
-      { name: "pre_approval_gate", executionMode: "inline_single_agent", inlineReason: null, scopeUnderThreshold: false, ledgerPath: "tmp/x.json", ledgerExists: false },
-    ],
-  }, { skipFanoutLedgerCheck: true });
-  assert.equal(result.ok, false);
-  assert.ok(result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")), JSON.stringify(result.failures));
-});
-
 test("buildPreMergeGateCheck skipFanoutLedgerCheck: also skips requireFanoutProvenance/angle-coverage failures", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,
@@ -1898,15 +1850,12 @@ test("buildPreMergeGateCheck angle-coverage enforcement is skipped for an inline
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
-// --- #1174/#1648: documented-inline pre-merge acceptance of verdicts ---------
+// --- #1174: light-mode-aware pre-merge acceptance of inline verdicts ---------
 // A genuinely under-threshold micro-PR collapses the gate fan-out to a single
-// inline check (#1043), and an over-threshold inline verdict is likewise a
-// SANCTIONED path when the gate records a DOCUMENTED exception (#1648: genuine
-// fan-out cannot produce evidence in the child-safe env). buildPreMergeGateCheck
-// accepts that inline verdict ONLY when lightMode is on, the PR has no
-// gate:full label, and a non-empty inline reason was recorded (#1648 drops the
-// old scope-under-threshold boundary). Fail closed on any missing precondition
-// — non-documented inline verdicts stay byte-identically rejected.
+// inline check (#1043). buildPreMergeGateCheck accepts that inline verdict ONLY
+// when lightMode is on, scope was re-derived under threshold, no gate:full label,
+// a ledger exists, and a non-empty inline reason was recorded. Fail closed on any
+// missing precondition — non-light inline verdicts stay byte-identically rejected.
 function lightGate(overrides = {}) {
   return {
     name: "pre_approval_gate",
@@ -1942,29 +1891,33 @@ test("buildPreMergeGateCheck (#1174) REJECTS a light inline verdict when the led
   assert.ok(result.failures.some((f) => f.includes("no findings-log ledger")), JSON.stringify(result.failures));
 });
 
-test("buildPreMergeGateCheck (#1648) ACCEPTS an over-threshold documented inline verdict (documented exception, not scope-bound)", () => {
-  // #1648: a genuinely-clean gate that records a DOCUMENTED inline exception
-  // (scope crosses the light-mode threshold because genuine fan-out cannot
-  // produce evidence in the child-safe env) must satisfy the gate-evidence
-  // required check. The light-mode scope boundary was a proxy for "is there
-  // genuine documented evidence?" — the non-empty inlineReason already
-  // captures that, so an over-threshold verdict with a substantive reason is
-  // now accepted.
+test("buildPreMergeGateCheck (#1174) REJECTS an over-threshold inline verdict (scope not under threshold)", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,
     lightMode: true,
     hasFullLabel: false,
     gates: [lightGate({ scopeUnderThreshold: false })],
   });
-  assert.equal(result.ok, true, JSON.stringify(result.failures));
-  assert.deepEqual(result.failures, []);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+    JSON.stringify(result.failures),
+  );
 });
 
-test("buildPreMergeGateCheck (#1648) still REJECTS an over-threshold inline verdict with NO documented reason (fabricated/empty fails closed)", () => {
-  // Anti-weakening guard: dropping the scope boundary must NOT accept
-  // empty/fabricated inline evidence. An over-threshold inline verdict with no
-  // recorded inlineReason still fails closed.
-  for (const inlineReason of [null, "", "   "]) {
+test("buildPreMergeGateCheck (#1723) REJECTS an over-threshold inline verdict even with a DOCUMENTED reason (revert of #1648)", () => {
+  // #1723: the #1648 relaxation dropped the scopeUnderThreshold conjunct, so
+  // an over-threshold inline_single_agent verdict with a non-empty documented
+  // exception (fan-out could not produce evidence in child-safe env) was
+  // accepted. Reverted: a real fan-out is the ONLY evidence mode for
+  // over-threshold real-code deltas, so an over-threshold inline verdict is
+  // rejected REGARDLESS of how substantive its recorded reason is. Only the
+  // light-mode scopeUnderThreshold carve-out remains.
+  for (const inlineReason of [
+    "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+    "under_threshold",
+    "docs-only micro change",
+  ]) {
     const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
       required: true,
       lightMode: true,
@@ -1977,6 +1930,42 @@ test("buildPreMergeGateCheck (#1648) still REJECTS an over-threshold inline verd
       JSON.stringify(result.failures),
     );
   }
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck (#1723): REJECTS an over-threshold DOCUMENTED inline verdict (revert of #1648 remote-verifier case)", () => {
+  // Mirrors the exact gate-evidence CI scenario the #1648 relaxation flipped
+  // (the #1719 case): the stateless default-branch detector. After the revert,
+  // an over-threshold inline_single_agent with a DOCUMENTED exception is
+  // rejected in remote-verifier mode too, because the scopeUnderThreshold
+  // conjunct is false.
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [
+      {
+        name: "draft_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+        scopeUnderThreshold: false,
+        ledgerPath: "tmp/gate-findings/o-r/pr-1719/draft_gate-abc1234.json",
+        ledgerExists: false,
+      },
+      {
+        name: "pre_approval_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+        scopeUnderThreshold: false,
+        ledgerPath: "tmp/gate-findings/o-r/pr-1719/pre_approval_gate-abc1234.json",
+        ledgerExists: false,
+      },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, false, JSON.stringify(result.failures));
+  assert.ok(
+    result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+    JSON.stringify(result.failures),
+  );
 });
 
 test("buildPreMergeGateCheck (#1174) REJECTS an inline verdict when the gate:full label is present", () => {

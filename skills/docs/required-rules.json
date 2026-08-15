@@ -232,6 +232,10 @@
       "id": "GATE-EXEC-BUILD-ONCE-SEED"
     },
     {
+      "id": "GATE-EXEC-COLLECTABLE-DISPATCH",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-DEFERRAL-RECORD",
       "enforcement": "runtime"
     },

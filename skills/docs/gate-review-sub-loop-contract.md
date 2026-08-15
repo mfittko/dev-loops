@@ -396,7 +396,37 @@ conductor dispatches wave-by-wave — awaiting a free slot (wave completion) bef
 the next — instead of fire-all-then-retry. When a reviewer dispatch 429s despite the cap, the
 conductor halves the active batch (`backoffMaxConcurrent`), recomputes the wave plan, and
 retries before escalating to foreground one-at-a-time fallback; the backoff is recorded in
-the round's provenance. Each
+the round's provenance.
+
+<!-- rule: GATE-EXEC-COLLECTABLE-DISPATCH -->
+`GATE-EXEC-COLLECTABLE-DISPATCH`: Every fan-out reviewer MUST be dispatched as a
+**COLLECTABLE** run — one the orchestrating run observes, awaits, and joins by its
+deterministic per-angle findings artifact (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`)
+— and NEVER as a **detached-and-uncollectable async run** the orchestrator cannot observe or
+join at fan-in (#1723). This is the dispatch-observability root cause of the fan-out failure:
+detaching reviewers into background runs the orchestrator can neither observe nor collect is
+what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
+
+- The orchestrator spawns each reviewer as an awaited/foreground (or otherwise joinable) run
+  whose completion it blocks on, OR it awaits the reviewer's per-angle findings artifact at its
+  deterministic path; it does NOT detach reviewers into background runs whose completion and
+  artifacts it can neither observe nor collect. A dispatch the orchestrator cannot join at
+  fan-in is a FAILED fan-out, not a dispatch strategy.
+- A reviewer that dies mid-review (e.g. SIGTERM / resource kill) is OBSERVABLE AS FAILED and
+  MUST be re-dispatched (or its wave retried at the reduced batch), never silently collected as
+  if it had produced evidence. Bounded concurrency is enforced wave-by-wave at
+  `gates.fanout.maxConcurrent` (default 4, #1601) via `scheduleFanoutWaves`; the conductor
+  awaits a free slot before launching the next wave — never fire-all-then-retry.
+- Review units are right-sized to complete within the run budget: grouped dispatch
+  (`gates.fanout.maxAnglesPerGroup`, default 3, #1601) keeps each reviewer to a bounded,
+  budget-fitting unit, and each unit writes its per-angle artifacts before the fan-in.
+- The fan-in (`consolidate-fanin --expected-dispatch-units <n>`) fails closed when any expected
+  unit's artifact is missing on disk, so an uncollected reviewer can never produce a clean
+  verdict. If a genuine fan-out STILL cannot produce evidence within budget, the drive STOPS
+  and surfaces to the operator for a per-PR decision — it NEVER auto-falls back to an inline
+  single-agent verdict. The inline escape hatch #1648 introduced is removed by #1723: inline
+  remains possible only via the light-mode `scopeUnderThreshold` carve-out, or an explicit
+  operator decision per PR. Each
 reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.

@@ -5031,29 +5031,26 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 // gates.requireFanoutEvidence is already enforced reactively at merge time
 // (detect-checkpoint-evidence.mjs's buildPreMergeGateCheck). These tests cover
 // the PRODUCE-step refusal added to upsert-checkpoint-verdict.mjs: an inline
-// verdict for a required gate that does not document a genuine exception is
-// refused BEFORE it is ever posted, regardless of verdict value. Under #1648 the
-// light-mode SCOPE boundary no longer refuses (a documented inline verdict is a
-// sanctioned exception), but the OTHER fail-closed discriminators are retained:
-// a gate:full label (which always forces fan-out) still refuses an inline
-// verdict at post time.
+// verdict for a required gate that does not qualify for the light-mode
+// carve-out is refused BEFORE it is ever posted, regardless of verdict value.
 
-test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate for every verdict value when the PR carries the gate:full label (retained fail-closed)", async () => {
+test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
   try {
+    // requireFanoutEvidence: true; no explicit base-ref/label mock entry is
+    // staged below, so the light-facts fetch (the shipped default enables
+    // lightMode) gets an unusable response and scope stays un-derivable —
+    // fails closed exactly like an over-threshold PR would.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
 
     for (const verdict of ["clean", "findings_present", "blocked"]) {
       const env = await writeGhStub(tempDir, [
         ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
-        // gate:full label always forces full fan-out — the retained discriminator
-        // refuses the inline verdict even with a non-empty inline reason (#1648).
-        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000","labels":[{"name":"gate:full"}]}\n' },
-      ], { repeatLastOnOverflow: true });
+      ]);
       const result = await runNode([
         "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
         "--verdict", verdict, "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
-        "--execution-mode", "inline_single_agent", "--inline-reason", "gate:full forces fan-out",
+        "--execution-mode", "inline_single_agent", "--inline-reason", "over-threshold local change",
       ], { env, cwd: tempDir });
       assert.equal(result.code, 1, `verdict=${verdict}: ${result.stderr}`);
       const payload = JSON.parse(result.stderr);
@@ -5117,15 +5114,13 @@ test("upsert-checkpoint-verdict accepts an inline verdict under the light-mode t
   }
 });
 
-test("upsert-checkpoint-verdict ACCEPTS a documented inline verdict even when the base ref cannot be resolved (scope un-derivable no longer blocks) (#1648)", async () => {
+test("upsert-checkpoint-verdict fails closed on an inline verdict when the base ref cannot be resolved (scope un-derivable)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-scope-underivable-"));
   try {
-    // lightMode is enabled, but the light-facts fetch below fails (rate limited)
-    // so no base ref / label is known. #1648: an over-threshold (or here,
-    // scope-un-derivable) DOCUMENTED inline verdict — non-empty inline reason —
-    // is a sanctioned exception and is now accepted, so the unresolvable base
-    // ref no longer refuses the post. (The old scope-under-threshold boundary
-    // is what used to refuse; it is removed.)
+    // lightMode is enabled, but the light-facts fetch below fails — with no
+    // base ref, scope re-derivation is skipped and the light-mode carve-out
+    // can never apply, so the post is refused just like the plain
+    // over-threshold case (same fail-closed posture as merge time).
     await writeFile(path.join(tempDir, ".devloops"), [
       "version: 1",
       "gates:",
@@ -5140,28 +5135,18 @@ test("upsert-checkpoint-verdict ACCEPTS a documented inline verdict even when th
 
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
-      // Evidence-scan fetches (reviews + files) run before the light-facts probe.
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
-      // Light-facts fetch FAILS (rate limited): base ref unresolvable. Under the
-      // old scope boundary this refused the post; #1648 accepts the documented
-      // inline verdict anyway.
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], exitCode: 1, stderr: "gh: rate limited\n" },
-      {
-        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
-        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n',
-      },
-    ], { repeatLastOnOverflow: true });
+    ]);
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
       "--findings-summary", "no issues found", "--next-action", "mark ready for review",
-      "--execution-mode", "inline_single_agent", "--inline-reason", "documented over-threshold exception: fan-out cannot produce evidence in child-safe env",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "cannot prove scope",
     ], { env, cwd: tempDir });
-    assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.ok, true);
-    assert.equal(payload.executionMode, "inline_single_agent");
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /inline gate verdicts are not accepted/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -5264,20 +5249,20 @@ test("upsert-checkpoint-verdict refuses an inline verdict at post time when the 
 // test posts --gate draft_gate; this kills the mutation that removes the
 // pre_approval_gate candidate marker entirely (the `gate === "pre_approval_gate"
 // ? candidateMarker : inactiveMarker` branch), which would silently exempt the
-// most important surface from enforcement. #1648 retains the gate:full-label
-// fail-closed refusal for an inline pre_approval_gate verdict.
-test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at post time under requireFanoutEvidence with the gate:full label", async () => {
+// most important surface from enforcement.
+test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at post time under requireFanoutEvidence", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-preapproval-refuse-"));
   try {
+    // lightMode disabled so the lazy light-facts fetch does not fire (no fetch
+    // needed to prove the marker is evaluated); requireFanoutEvidence on so the
+    // pre_approval_gate candidate marker IS evaluated by enforcePostTimeFanoutMode.
     await writeFile(path.join(tempDir, ".devloops"), [
       "version: 1",
       "gates:",
       "  requireFanoutEvidence: true",
       "localImplementation:",
       "  lightMode:",
-      "    enabled: true",
-      "    maxFiles: 5",
-      "    maxLines: 50",
+      "    enabled: false",
       "",
     ].join("\n"), "utf8");
     const env = await writeGhStub(tempDir, [
@@ -5290,15 +5275,12 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
         // enforcement runs — which would not exercise the marker path).
         reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
       }),
-      // gate:full label forces full fan-out: the retained discriminator refuses
-      // the inline pre_approval_gate verdict (#1648).
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000","labels":[{"name":"gate:full"}]}\n' },
     ], { repeatLastOnOverflow: true });
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
       "--findings-summary", "no issues found", "--next-action", "merge ready",
-      "--execution-mode", "inline_single_agent", "--inline-reason", "gate:full forces fan-out",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "single-agent pre-approval",
     ], { env, cwd: tempDir });
     assert.equal(result.code, 1, result.stderr);
     const payload = JSON.parse(result.stderr);
@@ -5309,14 +5291,12 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
   }
 });
 
-// One shared fixture, driven through BOTH the post-time produce-step
+// One shared fixture, driven through BOTH the post-time refusal
 // (upsertCheckpointVerdict, via enforcePostTimeFanoutMode) and the merge-time
-// predicate (buildFanoutEnforcement + evaluateInlineFanoutMode, exactly as
+// rejection (buildFanoutEnforcement + evaluateInlineFanoutMode, exactly as
 // buildPreMergeGateCheck calls it) — proving the two boundaries reach the
 // SAME verdict from the SAME facts because they share the one predicate.
-// #1648: a DOCUMENTED inline fixture (non-empty inline reason) is ACCEPTED on
-// both boundaries regardless of scope.
-test("upsert-checkpoint-verdict post-time produce and detect-checkpoint-evidence merge-time predicate agree on a DOCUMENTED inline fixture (#1648)", async () => {
+test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence merge-time rejection agree on the same fixture", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-agree-"));
   try {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
@@ -5326,33 +5306,25 @@ test("upsert-checkpoint-verdict post-time produce and detect-checkpoint-evidence
       gate: "draft_gate",
       headSha: "abc1234000000000000000000000000000000000",
       executionMode: "inline_single_agent",
-      inlineReason: "shared fixture: documented over-threshold exception",
+      inlineReason: "shared fixture: over-threshold local change",
     };
 
-    // Post-time: the verdict does not exist yet — a DOCUMENTED inline verdict
-    // is allowed to be recorded (posts successfully).
+    // Post-time: the verdict does not exist yet — upsertCheckpointVerdict must
+    // refuse to record it.
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], headSha: fixture.headSha }),
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000","labels":[]}\n' },
-      {
-        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
-        stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n',
-      },
-    ], { repeatLastOnOverflow: true });
+    ]);
     const postTimeResult = await runNode([
       "--repo", fixture.repo, "--pr", String(fixture.pr), "--gate", fixture.gate, "--head-sha", fixture.headSha,
-      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
-      "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
+      "--verdict", "clean", "--findings-summary", "reviewed inline", "--next-action", "fix then re-gate",
       "--execution-mode", fixture.executionMode, "--inline-reason", fixture.inlineReason,
     ], { env, cwd: tempDir });
-    assert.equal(postTimeResult.code, 0, postTimeResult.stderr);
-    assert.equal(JSON.parse(postTimeResult.stdout).ok, true);
+    assert.equal(postTimeResult.code, 1);
+    const postTimeError = JSON.parse(postTimeResult.stderr).error;
 
     // Merge-time: simulate the SAME verdict as if it HAD been posted (a marker
     // read back off the PR) and ask the exact merge-time predicate the same
-    // question, from the same config/fixture facts. It must ALSO accept (null).
+    // question, from the same config/fixture facts.
     const { config } = await loadDevLoopConfig({ repoRoot: tempDir });
     const postedMarker = { visible: true, executionMode: fixture.executionMode, inlineReason: fixture.inlineReason, headSha: fixture.headSha };
     const invisibleMarker = { visible: false };
@@ -5370,10 +5342,15 @@ test("upsert-checkpoint-verdict post-time produce and detect-checkpoint-evidence
     assert.equal(mergeTimeEnforcement.required, true);
     const mergeTimeGate = mergeTimeEnforcement.gates.find((g) => g.name === "draft_gate");
     const mergeTimeError = evaluateInlineFanoutMode(mergeTimeGate, mergeTimeEnforcement);
-    // #1648: the documented inline verdict satisfies the merge-time predicate
-    // even with baseRef null (scope un-derivable) — the old scope boundary
-    // would have rejected it and red-flagged the gate-evidence required check.
-    assert.equal(mergeTimeError, null, "expected merge-time to also accept this documented inline fixture");
+
+    assert.ok(mergeTimeError, "expected merge-time to also reject this fixture");
+    // Post-time wraps the SAME per-gate message with post-time framing; assert
+    // the underlying diagnosis (the merge-time message) is verbatim-contained,
+    // not paraphrased or re-derived.
+    assert.ok(
+      postTimeError.includes(mergeTimeError),
+      `expected post-time error to contain the merge-time message verbatim.\npost-time: ${postTimeError}\nmerge-time: ${mergeTimeError}`,
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
