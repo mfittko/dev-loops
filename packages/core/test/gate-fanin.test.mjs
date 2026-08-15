@@ -707,6 +707,15 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     assert.deepEqual(waves[1].map((u) => u.name), ["e"]);
   });
 
+  test("cap 1 serializes heavy reviewers one at a time (#1726)", () => {
+    const groups = units(["a", "b", "c", "d", "e"]);
+    const waves = scheduleFanoutWaves(groups, 1);
+    // every wave holds exactly one dispatch unit → 5 sequential waves.
+    assert.equal(waves.length, 5);
+    assert.ok(waves.every((w) => w.length === 1));
+    assert.deepEqual(waves.map((w) => w[0].name), ["a", "b", "c", "d", "e"]);
+  });
+
   test("a single unit / light round is one wave of one (not serialized)", () => {
     const waves = scheduleFanoutWaves(units(["a"]), 4);
     assert.deepEqual(waves, [[{ name: "a", angles: ["a"] }]]);

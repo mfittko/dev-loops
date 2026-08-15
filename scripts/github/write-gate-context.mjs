@@ -34,7 +34,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
 import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -1558,9 +1558,17 @@ export function hasRenameEntry(nameStatusOutput) {
  */
 export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
-  const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
-  const wavePlan = scheduleFanoutWaves(groups, maxConcurrent);
+  // #1726: serial (one-at-a-time) dispatch of heavy reviewers when
+  // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
+  // regardless of maxConcurrent, so each heavy reviewer completes and writes its
+  // evidence artifact before the next starts. Kept as a distinct emitted field so
+  // the gate-context artifact records both the configured cap and the applied
+  // serial posture.
+  const sequential = resolveFanoutSequential(config);
+  const maxConcurrent = resolveFanoutMaxConcurrent(config);
+  const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config);
+  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
@@ -1571,8 +1579,8 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // from `pendingGroups`, so the conductor dispatches only the shortfall.
   const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles });
   const pendingGroups = preflight.pendingGroups;
-  const pendingWavePlan = scheduleFanoutWaves(pendingGroups, maxConcurrent);
-  return { groups, wavePlan, maxAnglesPerGroup, maxConcurrent, preflight, pendingGroups, pendingWavePlan };
+  const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
+  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {

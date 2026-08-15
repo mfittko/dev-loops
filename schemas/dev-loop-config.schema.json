@@ -804,9 +804,14 @@
             },
             "maxConcurrent": {
               "default": 4,
-              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves).",
+              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
               "type": "integer",
               "minimum": 1
+            },
+            "sequential": {
+              "default": false,
+              "description": "Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs.",
+              "type": "boolean"
             }
           },
           "additionalProperties": false,

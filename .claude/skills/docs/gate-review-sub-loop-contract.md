@@ -393,7 +393,15 @@ concurrently per wave, planned by `scheduleFanoutWaves` (`@dev-loops/core/loop/g
 reusing `scheduleParallelWaves`); the wave plan is emitted alongside the per-unit briefings
 in the gate-context artifact (`write-gate-context.mjs` → `artifact.fanout.wavePlan`), and the
 conductor dispatches wave-by-wave — awaiting a free slot (wave completion) before launching
-the next — instead of fire-all-then-retry. When a reviewer dispatch 429s despite the cap, the
+the next — instead of fire-all-then-retry. **Serial heavy-reviewer bound (issue #1726):**
+when `gates.fanout.sequential` is set (true), effective concurrency is **one dispatch unit per
+wave** — the wave plan is built with `resolveFanoutEffectiveConcurrency(config)`
+(`@dev-loops/core/config`, returns 1 when sequential else `resolveFanoutMaxConcurrent`),
+emitted as `artifact.fanout.effectiveConcurrency`, so each heavy reviewer completes and writes
+its evidence artifact before the next starts (the mechanism that keeps genuine fan-out from
+SIGTERMing N heavy reviewers at once under child-safe parallel overload; distinct reviewers,
+real fan-in/ledger, and provenance are unchanged — never a collapse to inline single-agent).
+When a reviewer dispatch 429s despite the cap, the
 conductor halves the active batch (`backoffMaxConcurrent`), recomputes the wave plan, and
 retries before escalating to foreground one-at-a-time fallback; the backoff is recorded in
 the round's provenance.
@@ -415,7 +423,8 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
 - A reviewer that dies mid-review (e.g. SIGTERM / resource kill) is OBSERVABLE AS FAILED and
   MUST be re-dispatched (or its wave retried at the reduced batch), never silently collected as
   if it had produced evidence. Bounded concurrency is enforced wave-by-wave at
-  `gates.fanout.maxConcurrent` (default 4, #1601) via `scheduleFanoutWaves`; the conductor
+  `gates.fanout.maxConcurrent` (default 4, #1601) via `scheduleFanoutWaves` (and serialized to
+  one unit per wave when `gates.fanout.sequential` is set, #1726); the conductor
   awaits a free slot before launching the next wave — never fire-all-then-retry.
 - Review units are right-sized to complete within the run budget: grouped dispatch
   (`gates.fanout.maxAnglesPerGroup`, default 3, #1601) keeps each reviewer to a bounded,

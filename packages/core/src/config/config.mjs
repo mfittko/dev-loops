@@ -286,7 +286,8 @@ const FanoutConfig = z.strictObject({
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
   maxAnglesPerGroup: z.number().int().min(1).default(3).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
-  maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves)."),
+  maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave)."),
+  sequential: z.boolean().default(false).describe("Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs."),
 });
 
 /**
@@ -2059,6 +2060,36 @@ export const DEFAULT_MAX_ANGLES_PER_GROUP = 3;
  * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
  */
 export const DEFAULT_FANOUT_MAX_CONCURRENT = 4;
+export const DEFAULT_FANOUT_SEQUENTIAL = false;
+
+/**
+ * Resolve `gates.fanout.sequential` (issue #1726, default false). Serial
+ * (one-at-a-time) dispatch of heavy reviewers so each completes and writes its
+ * evidence before the next starts — the concurrency bound that keeps genuine
+ * fan-out from SIGTERMing under child-safe parallel overload. Separate from
+ * `maxConcurrent` so a repo may choose either serial (sequential: true) or a
+ * small parallel cap (maxConcurrent: 1-2, sequential: false); the shipped
+ * default stays false for cross-harness non-regression (#1086).
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveFanoutSequential(config) {
+  const s = config?.gates?.fanout?.sequential;
+  return s === true;
+}
+
+/**
+ * Resolve the effective fan-out concurrency (dispatch units per wave) for a
+ * round: 1 when `gates.fanout.sequential` is set (serial dispatch forces one
+ * unit per wave), else `resolveFanoutMaxConcurrent`. The conductor builds the
+ * wave plan from this effective value (issue #1726).
+ * @param {DevLoopConfig} config
+ * @returns {number}
+ */
+export function resolveFanoutEffectiveConcurrency(config) {
+  if (resolveFanoutSequential(config)) return 1;
+  return resolveFanoutMaxConcurrent(config);
+}
 
 /**
  * Resolve `gates.fanout.maxAnglesPerGroup` (issue #1601, default 3, min 1).
