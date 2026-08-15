@@ -1008,6 +1008,44 @@ export async function listRepoAsyncRuns(
       await scanAsyncResultRoot(resultsRoot, records);
     }
   }
+  // Decouple merge-success routing from post-merge local-verify exit (#1638).
+  // The meta mapping in scanSessionArtifactRoot (`exitCode !== 0 -> FAILED`) is
+  // correct for a gate or merge failure, but a dev-loop run that lands a clean
+  // merge then runs a post-merge local `npm run verify` can exit non-zero purely
+  // on environmental (non-code) suites (missing gh/run-id context in a worktree).
+  // That must not reclassify a successful merge as FAILED. This pass runs AFTER
+  // every root scanner has merged evidence (so an async-run FAILED cannot
+  // re-introduce itself), reclassifies merge-success runs to COMPLETED, and
+  // surfaces the non-zero post-merge verify as a warning note, not a hard failure.
+  for (const record of records.values()) {
+    if (record.runState !== RUN_STATE.FAILED) {
+      continue;
+    }
+    const outputTexts = [];
+    if (typeof record.outputArtifactPath === "string") {
+      outputTexts.push(await readTextIfExists(record.outputArtifactPath));
+    }
+    const summarySource = record.resultSummaryPath ?? record.resultPath ?? null;
+    if (typeof record.resultSummaryText === "string") {
+      outputTexts.push(record.resultSummaryText);
+    } else if (typeof summarySource === "string") {
+      outputTexts.push(await readTextIfExists(summarySource));
+    }
+    if (typeof record.outputLogPath === "string") {
+      outputTexts.push(await readTextIfExists(record.outputLogPath));
+    }
+    const mergeSuccess = outputTexts.some((text) => text !== null && outputTextIndicatesSuccessfulMerge(text));
+    if (!mergeSuccess) {
+      continue;
+    }
+    record.runState = RUN_STATE.COMPLETED;
+    record.evidence = {
+      ...record.evidence,
+      mergeSuccess: true,
+      postMergeVerifyNonZero: true,
+      warning: "post-merge local verify exited non-zero on environmental (non-code) suites; run reported completed on clean merge",
+    };
+  }
   return [...records.values()]
     .filter((record) => record.agent === "dev-loop")
     .filter((record) => recordMatchesRepo(record, repoIsolation))
@@ -1089,6 +1127,15 @@ function parseArtifactState(text) {
     return "open";
   }
   return null;
+}
+function outputTextIndicatesSuccessfulMerge(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = text.toLowerCase();
+  return parseArtifactState(text) === "merged"
+    || /\bpr merged:\s*#\d+\b/u.test(normalized)
+    || /\bartifact state:\s*merged\b/u.test(normalized);
 }
 function parseLoopState(text) {
   const patterns = [

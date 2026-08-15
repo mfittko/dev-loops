@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runConductorMonitor, isPrHealthy, fetchGithubStatus } from "../../scripts/loop/conductor-monitor.mjs";
+import { runConductorMonitor, isPrHealthy, fetchGithubStatus, listRepoAsyncRuns } from "../../scripts/loop/conductor-monitor.mjs";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/conductor-monitor.mjs");
@@ -1764,4 +1764,50 @@ test("isPrHealthy treats unresolved threads as unhealthy with crediblyGreen CI",
     },
   });
   assert.equal(healthy, false);
+});
+
+test("conductor-monitor decouples merge-success run-state from non-zero post-merge local-verify exit (#1638)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-merge-success-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    // A run whose post-merge local verify exited non-zero (environmental suites)
+    // but whose output artifact records a successful merge.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-merged-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1638\nArtifact state: merged\nPR merged: #1638\n",
+    });
+    // Control: an identically-failing exit with an open, unmerged artifact stays FAILED.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-open-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1648\nArtifact state: open\nLoop state: unresolved_feedback_present\n",
+    });
+
+    const runs = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+
+    const mergedRun = runs.find((run) => run.runId === "run-merged-1638");
+    assert.ok(mergedRun, "merged run should be listed");
+    assert.equal(mergedRun.runState, "completed");
+    assert.equal(mergedRun.evidence.postMergeVerifyNonZero, true);
+    assert.equal(mergedRun.evidence.mergeSuccess, true);
+    assert.match(mergedRun.evidence.warning, /environmental \(non-code\) suites/u);
+
+    const openRun = runs.find((run) => run.runId === "run-open-1638");
+    assert.ok(openRun, "open run should be listed");
+    assert.equal(openRun.runState, "failed");
+    assert.equal(openRun.evidence.postMergeVerifyNonZero, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
