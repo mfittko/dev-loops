@@ -31,6 +31,7 @@ export const AGENT_STALL_REASON = Object.freeze({
   SANCTIONED_WATCH: "sanctioned_watch",
   BELOW_THRESHOLD: "below_threshold",
   NO_SIGNAL: "no_signal",
+  DISABLED: "disabled",
 });
 
 /**

@@ -83,6 +83,28 @@ test("detectAgentStall: stale turn + stale heartbeat => stalled (not sanctioned 
   assert.equal(v.stalled, true);
 });
 
+test("detectAgentStall: no turn signal but stale watch present => stalled no_signal", () => {
+  const v = detectAgentStall({
+    lastActivityAt: null,
+    sanctionedWatchAt: NOW - 6 * MIN,
+    now: NOW,
+  });
+  assert.equal(v.status, AGENT_STALL_STATUS.STALLED);
+  assert.equal(v.reason, AGENT_STALL_REASON.NO_SIGNAL);
+  assert.equal(v.stalled, true);
+});
+
+test("detectAgentStall: no turn signal + fresh watch => sanctioned watch, not stalled", () => {
+  const v = detectAgentStall({
+    lastActivityAt: null,
+    sanctionedWatchAt: NOW - 10_000,
+    now: NOW,
+  });
+  assert.equal(v.status, AGENT_STALL_STATUS.NOT_STALLED);
+  assert.equal(v.reason, AGENT_STALL_REASON.SANCTIONED_WATCH);
+  assert.equal(v.stalled, false);
+});
+
 test("resolveAgentStallThresholdMs: default / override / invalid", () => {
   assert.equal(resolveAgentStallThresholdMs(), DEFAULT_AGENT_STALL_THRESHOLD_MS);
   assert.equal(resolveAgentStallThresholdMs(5), 5 * MIN);

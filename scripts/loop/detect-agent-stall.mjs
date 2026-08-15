@@ -26,7 +26,11 @@ import {
   detectAgentStall,
   resolveAgentStallThresholdMs,
   buildAgentStallRecoveryBrief,
+  AGENT_STALL_REASON,
+  DEFAULT_AGENT_STALL_THRESHOLD_MS,
 } from "@dev-loops/core/loop/agent-stall";
+import { loadDevLoopConfig, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { loadRunnerCoordinationState } from "./_pr-runner-coordination.mjs";
 
 const USAGE = `Usage: detect-agent-stall.mjs --repo <owner/name> [--pr <n>] [--status <path> | --session <path>] [--threshold-min <n>] [--pending-request]
@@ -177,7 +181,26 @@ async function runDetectAgentStall(options) {
   if (pr !== null && prNumber === null) {
     return parseError(`Invalid PR number: ${JSON.stringify(pr)}`);
   }
-  const thresholdMs = resolveAgentStallThresholdMs(coercePositiveInt(thresholdMin));
+
+  // Consume the workflow.stallDetection config surface (#1669): resolve
+  // enabled + thresholdMinutes from the repo .devloops so a repo may disable
+  // auto-bail (enabled: false -> never report a stall) or tune the window
+  // without re-hardcoding. Falls back to built-in defaults when no config
+  // exists; an explicit --threshold-min still overrides the configured window.
+  let stallEnabled = true;
+  let configuredThresholdMs = null;
+  try {
+    const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+    const stallDetection = resolveWorkflowConfig(config, "stallDetection");
+    stallEnabled = stallDetection.enabled !== false;
+    configuredThresholdMs = resolveAgentStallThresholdMs(stallDetection.thresholdMinutes);
+  } catch {
+    // config load never throws for config problems; keep defaults on any error.
+  }
+  const explicitThreshold = coercePositiveInt(thresholdMin);
+  const effectiveConfigThresholdMs =
+    explicitThreshold !== null ? resolveAgentStallThresholdMs(explicitThreshold) : configuredThresholdMs;
+  const thresholdMs = effectiveConfigThresholdMs ?? DEFAULT_AGENT_STALL_THRESHOLD_MS;
   const nowMs = Date.now();
 
   let pending = Boolean(pendingRequest);
@@ -212,11 +235,17 @@ async function runDetectAgentStall(options) {
     thresholdMs,
   });
 
+  // workflow.stallDetection.enabled:false (or unset -> default true) disables
+  // auto-bail: never report a stall, record a distinct disabled reason.
+  const effectVerdict = !stallEnabled
+    ? { ...verdict, status: "not_stalled", stalled: false, reason: AGENT_STALL_REASON.DISABLED }
+    : verdict;
+
   const brief = buildAgentStallRecoveryBrief({
     runId,
     cwd,
     lastAction,
-    reason: verdict.reason,
+    reason: effectVerdict.reason,
   });
 
   return {
@@ -224,13 +253,13 @@ async function runDetectAgentStall(options) {
     repo,
     pr: prNumber,
     checkedAt: new Date(nowMs).toISOString(),
-    status: verdict.status,
-    stalled: verdict.stalled,
-    reason: verdict.reason,
-    thresholdMs: verdict.thresholdMs,
-    thresholdMinutes: Math.floor(verdict.thresholdMs / 60000),
-    turnAgeMs: verdict.turnAgeMs,
-    watchAgeMs: verdict.watchAgeMs,
+    status: effectVerdict.status,
+    stalled: effectVerdict.stalled,
+    reason: effectVerdict.reason,
+    thresholdMs: effectVerdict.thresholdMs,
+    thresholdMinutes: Math.floor(effectVerdict.thresholdMs / 60000),
+    turnAgeMs: effectVerdict.turnAgeMs,
+    watchAgeMs: effectVerdict.watchAgeMs,
     pendingRequest: pending,
     sources: {
       turnSignal: turnMs !== null ? new Date(turnMs).toISOString() : null,

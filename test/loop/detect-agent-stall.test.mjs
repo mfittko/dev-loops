@@ -175,6 +175,61 @@ describe("detect-agent-stall CLI probe (#1669)", () => {
     }
   });
 
+  it("consumes workflow.stallDetection.thresholdMinutes from .devloops", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "stall-"));
+    try {
+      await writeFile(
+        path.join(dir, ".devloops"),
+        `version: 1\nworkflow:\n  stallDetection:\n    enabled: true\n    thresholdMinutes: 1\n`,
+        "utf8",
+      );
+      // 3m turn age: config threshold 1m => stalled (config consumed);
+      // without config the 5m default would report not_stalled.
+      const stale = Date.now() - 3 * 60 * 1000;
+      await mkdir(path.join(dir, "run"));
+      await writeFile(
+        path.join(dir, "run", "status.json"),
+        JSON.stringify({ runId: "run-6", state: "running", lastActivityAt: stale }),
+        "utf8",
+      );
+      const { code, parsed } = await runProbe([
+        "--repo", REPO, "--status", path.join(dir, "run", "status.json"),
+      ], { cwd: dir });
+      assert.equal(code, 0);
+      assert.equal(parsed.status, "stalled");
+      assert.equal(parsed.thresholdMinutes, 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("workflow.stallDetection.enabled:false never reports a stall", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "stall-"));
+    try {
+      await writeFile(
+        path.join(dir, ".devloops"),
+        `version: 1\nworkflow:\n  stallDetection:\n    enabled: false\n`,
+        "utf8",
+      );
+      const stale = Date.now() - 30 * 60 * 1000;
+      await mkdir(path.join(dir, "run"));
+      await writeFile(
+        path.join(dir, "run", "status.json"),
+        JSON.stringify({ runId: "run-7", state: "running", lastActivityAt: stale }),
+        "utf8",
+      );
+      const { code, parsed } = await runProbe([
+        "--repo", REPO, "--status", path.join(dir, "run", "status.json"),
+      ], { cwd: dir });
+      assert.equal(code, 0);
+      assert.equal(parsed.status, "not_stalled");
+      assert.equal(parsed.stalled, false);
+      assert.equal(parsed.reason, "disabled");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("requires a repo slug", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "stall-"));
     try {
