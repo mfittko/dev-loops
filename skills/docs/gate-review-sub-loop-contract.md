@@ -1027,6 +1027,19 @@ ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched fi
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
+**Dispatch bridge (runtime wiring, #1658).** After the judge agent writes its verdict
+artifact and the durable ledger is written with `--judge-verdict`, the conductor runs the
+deterministic bridge `scripts/loop/judge-pass.mjs` (`dev-loops gate judge-pass`) to derive
+the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
+`--judge-verdict` (the judge's artifact path), `judge-pass` validates the verdict shape,
+fails closed unless the verdict's `headSha` matches the current head (a stale verdict must
+never feed the fixer), applies the dispositions via `applyJudgeDispositions`, and emits
+exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
+(`--ledger-out`). The conductor hands that act list — never the full unfiltered ledger —
+to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale
+head, malformed verdict, out-of-range index), the conductor re-runs the judge at the
+current head rather than degrading to severity-only disposition for a wired gate.
+
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
 PR?); the fixer owns **reproduction** (does this finding reproduce / is it a real defect?).
