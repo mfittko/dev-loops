@@ -292,8 +292,8 @@ function normalizeGateMarkerSummary(summary) {
  * Decide whether a gate's recorded (or candidate, not-yet-posted) execution
  * mode satisfies fan-out evidence enforcement, independent of the ledger/
  * provenance/angle-coverage layer below it. Returns null when the mode
- * qualifies (fanout_fanin, or a light-mode-accepted inline verdict) and an
- * error message — identical wording wherever this runs — otherwise.
+ * qualifies (fanout_fanin, or a documented inline verdict) and an error
+ * message — identical wording wherever this runs — otherwise.
  *
  * This is the ONE place mode qualification is decided. buildPreMergeGateCheck
  * (merge-time) and upsert-checkpoint-verdict.mjs (post-time) both call this
@@ -302,24 +302,32 @@ function normalizeGateMarkerSummary(summary) {
  * inline verdict.
  */
 export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
-  // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
-  // collapses the gate fan-out to a single inline check (#1043). Accept that
-  // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
+  // Documented inline acceptance (#1174, #1648): a genuinely under-threshold
+  // micro-PR collapses the gate fan-out to a single inline check (#1043), and
+  // an over-threshold inline verdict is likewise a SANCTIONED path when the
+  // gate records a DOCUMENTED exception (e.g. genuine fan-out cannot produce
+  // evidence in the child-safe env) — both are genuine evidence, not
+  // fabricated/empty. Accept that inline verdict ONLY when ALL hold, fail
+  // CLOSED otherwise:
   //   - lightMode is enabled in config, AND
-  //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
-  //     (scopeUnderThreshold; false whenever scope could not be derived), AND
   //   - the PR carries no gate:full label (which always forces fan-out), AND
-  //   - the verdict records a non-empty inline reason.
-  // Any non-light inline verdict (over threshold / label / lightMode off /
-  // scope underivable) falls through to the byte-identical rejection below.
-  const lightAccepted =
+  //   - the verdict records a non-empty inline reason (the documented
+  //     exception — empty/fabricated reasons stay rejected).
+  // #1648 drops the prior `scopeUnderThreshold` conjunct: the light-mode scope
+  // boundary was a proxy for "is there genuine documented evidence?", which
+  // the non-empty inlineReason requirement already captures. It false-flagged
+  // a genuinely-clean documented inline gate as a violation (a red gate-
+  // evidence required status, blocking merge) whenever the reviewed scope
+  // crossed the light-mode threshold while genuine fan-out couldn't run.
+  // Any inline verdict without a documented reason (or lightMode off /
+  // gate:full label) falls through to the byte-identical rejection below.
+  const documented =
     gate.executionMode === "inline_single_agent"
     && fanoutEnforcement.lightMode === true
     && fanoutEnforcement.hasFullLabel !== true
-    && gate.scopeUnderThreshold === true
     && typeof gate.inlineReason === "string"
     && gate.inlineReason.trim().length > 0;
-  if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
+  if (gate.executionMode !== "fanout_fanin" && !documented) {
     return `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`;
   }
   return null;
@@ -609,9 +617,11 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
  * (gate:full PR label) and `baseRef` feed a fail-closed merge-base scope
  * re-derivation for inline verdicts. A gate's scopeUnderThreshold is true only
  * when light mode is on, the PR has no gate:full label, a base ref is known,
- * and the reviewed head's merge-base diff is genuinely under threshold — which
- * lets the pre-merge check accept an inline single-agent verdict for a
- * small-scope PR instead of always rejecting inline evidence.
+ * and the reviewed head's merge-base diff is genuinely under threshold. The
+ * field is retained in the descriptor (for callers that want the scope fact),
+ * but #1648 no longer uses it as the inline-acceptance boundary: the pre-merge
+ * check accepts a documented inline verdict (non-empty inlineReason) whether or
+ * not the scope is under threshold.
  */
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
@@ -663,11 +673,12 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
-    // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
-    // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
-    // on, the PR has no gate:full label, a base ref is known, and the merge-base
-    // diff for the reviewed head is genuinely under threshold. Any git/scope
-    // failure leaves it false, so the inline verdict is rejected exactly as today.
+    // Re-derive scope FOR THE DESCRIPTOR ONLY (#1648): the scope fact is
+    // retained for callers that want it, but it is no longer the inline
+    // acceptance boundary (see evaluateInlineFanoutMode). scopeUnderThreshold
+    // is true ONLY when lightMode is on, the PR has no gate:full label, a base
+    // ref is known, and the merge-base diff is genuinely under threshold. Any
+    // git/scope failure leaves it false (fail-closed derivation).
     let scopeUnderThreshold = false;
     if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
       const scope = detectMergeBaseScope({ base: baseRef, head: headSha, cwd: repoRoot });
