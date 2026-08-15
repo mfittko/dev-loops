@@ -13,7 +13,11 @@ function extractRuleBlock(content, id) {
   assert.ok(start !== -1, `expected rule marker ${id} to be present`);
   const remaining = lines.slice(start + 1);
   const end = remaining.findIndex(
-    (line) => /<!--\s*rule:\s*[A-Z][A-Z0-9-]*\s*-->/.test(line) || /^\*\*[^*].*\*\*\s*$/.test(line.trim()),
+    // A bold heading terminates the rule block even when it carries trailing
+    // prose on the same line (e.g. `**Grouped dispatch (default).** Before …`),
+    // so the block never swallows the next section: match any line that STARTS
+    // a bold heading, not one that must also end in `**` on the same line.
+    (line) => /<!--\s*rule:\s*[A-Z][A-Z0-9-]*\s*-->/.test(line) || /^\*\*[^*]/.test(line.trim()),
   );
   assert.ok(end !== -1, `expected rule block ${id} to be terminated by the next rule marker or bold heading`);
   const block = remaining.slice(0, end);
@@ -41,6 +45,9 @@ test("gate fan-out contract owns the runs.all dispatch-key + fail-closed require
   assert.match(content, /a per-angle or per-group slug/);
 
   const owned = extractRuleBlock(content, "GATE-EXEC-FANOUT-DISPATCH-KEY");
+  // Negative case: the owned block must terminate at the next bold heading
+  // (`**Grouped dispatch (default).**`), never swallow the following section.
+  assert.equal(owned.includes("Grouped dispatch (default)"), false, "rule block must terminate at the next bold heading, not extend into the grouped-dispatch section");
   // The harness `key`-field requirement is encoded (AC1).
   assert.match(owned, /runs\.all/);
   assert.match(owned, /`key` field on EACH item/);
