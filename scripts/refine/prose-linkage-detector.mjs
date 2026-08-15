@@ -12,7 +12,7 @@ import {
 const USAGE = `Usage:
   prose-linkage-detector.mjs --input <path> [--json]
 Fail when issue bodies use prose linkage (` + "`Child of #`, `Parent: #`, `Depends on: #`, `sub-issue of #`" + `)
-instead of GitHub sub-issue API links.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
+instead of GitHub sub-issue API links, or duplicate a child checklist (duplicate_child_checklist).${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
 function hasDuplicateChildChecklist(issue) {
   const childSet = new Set(issue.children);
@@ -24,7 +24,7 @@ function hasDuplicateChildChecklist(issue) {
   let hasCheckedChildItem = false;
 
   for (const line of issue.body.split(/\r?\n/gu)) {
-    const listItemMatch = /^\s*[-*]\s+(.*)$/u.exec(line);
+    const listItemMatch = /^\s*(?:[-*]|\d+\.)\s+(.*)$/u.exec(line);
     if (!listItemMatch) {
       continue;
     }

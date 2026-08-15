@@ -11,7 +11,7 @@ import {
 
 const USAGE = `Usage:
   refinement-completeness-checker.mjs --input <path> [--json]
-Validate required refinement sections: Acceptance criteria, Definition of done, Non-goals, and AC / DoD matrix.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
+Validate required refinement sections: Acceptance criteria, Definition of done, Non-goals, AC / DoD matrix, and scope-boundary ownership prose (missing_scope_boundary).${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
 // ponytail: distance caps ({0,200}? and {0,120}?) bound the gap between
 // "owns"/"does not own"/(#N) so a single match cannot span the whole body.

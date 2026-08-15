@@ -314,6 +314,67 @@ test("each refusal names the rule it upholds (AC5)", () => {
   assert.match(dupChecklist.message, /SUBISSUE-LEAN-BODY-NO-DUPLICATE/);
 });
 
+test("checker USAGE strings mention the new validation categories (AC1)", async () => {
+  const completenessSrc = await readFile("scripts/refine/refinement-completeness-checker.mjs", "utf8");
+  assert.match(completenessSrc, /scope-boundary ownership prose \(missing_scope_boundary\)/);
+
+  const linkageSrc = await readFile("scripts/refine/prose-linkage-detector.mjs", "utf8");
+  assert.match(linkageSrc, /duplicate a child checklist \(duplicate_child_checklist\)/);
+});
+
+test("hasScopeBoundary: partial boundary without issue ref fires missing_scope_boundary (AC2 negative)", () => {
+  // "owns X" + "does NOT own Y" but no "(#NNN)" must NOT satisfy the scope-boundary
+  // requirement: the full sentence regex requires the issue reference to close it.
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [], body: buildBody({ scope: "owns orchestration", boundary: "This issue owns orchestration. It does NOT own api." }) },
+    ],
+  });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "missing_scope_boundary"));
+});
+
+test("hasScopeBoundary: complete boundary with issue ref satisfies requirement (AC2 positive control)", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [], body: buildBody({ scope: "owns orchestration", boundary: "This issue owns orchestration. It does NOT own api (#2)." }) },
+    ],
+  });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.ok(!result.errors.some((entry) => entry.code === "missing_scope_boundary"), result.errors.map((e) => e.message).join("\n"));
+});
+
+test("duplicate_child_checklist fires on numbered list child checklist items (AC3)", () => {
+  const body = [
+    "## Scope",
+    "- This issue owns parent. It does NOT own api (#2) or ui (#3).",
+    "",
+    "## Acceptance criteria",
+    "1. implement api (#2)",
+    "2. implement ui (#3)",
+  ].join("\n");
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [2, 3], body }],
+  });
+  const result = runProseLinkageDetector(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "duplicate_child_checklist"));
+});
+
+test("duplicate_child_checklist does not fire on a numbered boundary bullet (AC3 boundary skip)", () => {
+  const body = [
+    "## Scope",
+    "1. This issue owns parent. It does NOT own api (#2) or ui (#3).",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [2, 3], body }] });
+  const result = runProseLinkageDetector(tree);
+  assert.ok(!result.errors.some((entry) => entry.code === "duplicate_child_checklist"), result.errors.map((e) => e.message).join("\n"));
+});
+
 test("verify FAILS (no vacuous PASS) when ownership prose is absent (DoD regression)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-refine-vacuous-"));
   try {
