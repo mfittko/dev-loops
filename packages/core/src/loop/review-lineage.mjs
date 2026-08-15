@@ -382,3 +382,207 @@ export function renderComposedRequest(composed) {
   }
   return composed.segments.map((s) => (s.bytes == null ? "" : String(s.bytes))).join("");
 }
+
+/* ------------------------------------------------------------------ *
+ * Compaction / rebase policy (issue #1468 slice 6)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Default lineage compaction threshold: the maximum number of accumulated
+ * round-delta segments a review lineage may carry before it MUST be compacted
+ * (rebased). Provider prompt caches are bounded by breakpoint/lookback limits
+ * and context-window size; unbounded delta accumulation would eventually
+ * overflow them. Consumers may raise or lower this, and may additionally set a
+ * byte budget (`maxLineageBytes`) to bound provider-visible context size
+ * directly.
+ *
+ * A rebase is triggered when EITHER bound is exceeded:
+ *   - round-delta count exceeds `maxRounds` (default 20), OR
+ *   - the composed lineage byte size exceeds `maxLineageBytes` when provided.
+ */
+export const DEFAULT_LINEAGE_MAX_ROUNDS = 20;
+
+/**
+ * Total byte size of a lineage's accumulated artifact content (base + all
+ * accumulated deltas), using the same canonical byte-serialization that
+ * `composeRoundRequest` renders. Used to enforce a byte budget on the only part
+ * of a round request that grows across fix rounds (round-delta accumulation).
+ * It counts the lineage artifacts themselves, not the per-round angle-suffix /
+ * carried-angle context (constant regardless of round count).
+ *
+ * @param {object} input
+ * @param {object} input.lineageBase - valid review-lineage-base.
+ * @param {object[]} [input.deltas] - accumulated round deltas.
+ * @returns {number} total composed byte size.
+ */
+export function lineageByteSize({ lineageBase, deltas = [] } = {}) {
+  if (!lineageBase || lineageBase.kind !== "review-lineage-base" || !isSha256(lineageBase.baseHash)) {
+    throw new Error("lineageByteSize requires a valid lineage base artifact");
+  }
+  if (!Array.isArray(deltas)) throw new Error("lineageByteSize deltas must be an array");
+  const utf8Length = (v) => Buffer.byteLength(canonicalJson(v), "utf8");
+  let total = utf8Length(lineageBase);
+  for (let i = 0; i < deltas.length; i++) {
+    const d = deltas[i];
+    if (!d || d.kind !== "round-delta" || !isSha256(d.deltaHash)) {
+      throw new Error(`lineageByteSize deltas[${i}] must be a valid round-delta artifact`);
+    }
+    if (d.lineageId !== lineageBase.lineageId || d.gate !== lineageBase.gate) {
+      throw new Error(
+        `lineageByteSize deltas[${i}] must share the lineage base's lineageId and gate (parity with rebaseLineage/composeRoundRequest)`,
+      );
+    }
+    total += utf8Length(d);
+  }
+  return total;
+}
+
+/**
+ * Decide whether a review lineage must be compacted (rebased) now, against the
+ * compaction threshold(s). Pure predicate — it never mutates the lineage.
+ *
+ * @param {object} input
+ * @param {object} input.lineageBase - valid review-lineage-base.
+ * @param {object[]} [input.deltas] - accumulated round deltas.
+ * @param {number} [input.maxRounds] - max delta rounds before a rebase (default
+ *   {@link DEFAULT_LINEAGE_MAX_ROUNDS}).
+ * @param {number} [input.maxLineageBytes] - optional byte budget over the
+ *   accumulated lineage (base + deltas — the ONLY part of a round request that
+ *   grows with fix rounds); a lineage whose accumulated size exceeds it must
+ *   be rebased. Per-round angle-suffix and carried-angle context are constant
+ *   regardless of round count, so they are deliberately not part of this
+ *   growing-lineage bound.
+ * @returns {{ requiresCompaction: boolean, reason: string|null, deltaCount: number, lineageBytes: number, maxRounds: number, maxLineageBytes: number|null }}
+ */
+export function checkLineageCompaction({ lineageBase, deltas = [], maxRounds = DEFAULT_LINEAGE_MAX_ROUNDS, maxLineageBytes } = {}) {
+  if (!Number.isInteger(maxRounds) || maxRounds < 1) {
+    throw new Error(`checkLineageCompaction maxRounds must be a positive integer, got ${JSON.stringify(maxRounds)}`);
+  }
+  if (maxLineageBytes != null && (!Number.isInteger(maxLineageBytes) || maxLineageBytes < 1)) {
+    throw new Error(`checkLineageCompaction maxLineageBytes must be a positive integer, got ${JSON.stringify(maxLineageBytes)}`);
+  }
+  if (!Array.isArray(deltas)) throw new Error("checkLineageCompaction deltas must be an array");
+  const deltaCount = deltas.length;
+  const lineageBytes = lineageByteSize({ lineageBase, deltas });
+  let reason = null;
+  if (deltaCount > maxRounds) {
+    reason = `delta count ${deltaCount} exceeds maxRounds ${maxRounds}`;
+  } else if (maxLineageBytes != null && lineageBytes > maxLineageBytes) {
+    reason = `composed lineage bytes ${lineageBytes} exceed maxLineageBytes ${maxLineageBytes}`;
+  }
+  return {
+    requiresCompaction: reason !== null,
+    reason,
+    deltaCount,
+    lineageBytes,
+    maxRounds,
+    maxLineageBytes: maxLineageBytes ?? null,
+  };
+}
+
+/**
+ * Compact (rebase) a review lineage.
+ *
+ * When the delta accumulation crosses the compaction threshold, the lineage is
+ * rebased: the accumulated deltas are folded into a NEW compacted base whose
+ * `originalHead` advances to the current (latest reviewed) head and whose
+ * `originalDiff` becomes the cumulative diff (the base's original full diff
+ * merged with every accepted fix diff, in order). Future rounds append fresh
+ * deltas to this compacted base, so the COMPOSED request stays within the
+ * provider breakpoint/lookback + context budget instead of growing unbounded.
+ *
+ * Rebase behaviour guarantees:
+ *   - The compacted base keeps the same `lineageId` and `gate` and is itself a
+ *     valid `review-lineage-base`; `composeRoundRequest` accepts it unchanged.
+ *   - Composition rules are preserved: a new round-1 delta whose `baseHead`
+ *     equals the compacted base's `originalHead` composes cleanly and
+ *     byte-deterministically (SHA-chain continuity + append-only contract).
+ *   - The rebase is traceable: the compacted base records `rebaseSourceBaseHash`
+ *     (the base it was compacted from) and `compactedRoundCount` (the total
+ *     number of fix rounds folded into this compacted lineage so far). Prior
+ *     delta artifacts remain available (append-only history); only the COMPOSED
+ *     request is recomposed from the compacted base.
+ *
+ * @param {object} input
+ * @param {object} input.lineageBase - valid review-lineage-base.
+ * @param {object[]} [input.deltas] - all accumulated round deltas in order.
+ * @param {string|string[]|Buffer} [input.currentDiff] - optional cumulative diff
+ *   for the rebased `originalDiff`; defaults to the base's original diff merged
+ *   with every delta's fix diff.
+ * @returns {Readonly<object>} compacted review-lineage-base artifact.
+ */
+export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
+  if (!lineageBase || lineageBase.kind !== "review-lineage-base" || !isSha256(lineageBase.baseHash)) {
+    throw new Error("rebaseLineage requires a valid lineage base artifact");
+  }
+  if (!Array.isArray(deltas)) throw new Error("rebaseLineage deltas must be an array");
+  for (let i = 0; i < deltas.length; i++) {
+    const d = deltas[i];
+    if (!d || d.kind !== "round-delta" || d.lineageId !== lineageBase.lineageId) {
+      throw new Error("rebaseLineage deltas must be valid round-delta artifacts of the same lineage");
+    }
+    if (!isSha256(d.deltaHash)) {
+      throw new Error(`rebaseLineage deltas[${i}].deltaHash must be a valid sha256:<64hex>`);
+    }
+    if (!isHexSha(d.baseHead) || !isHexSha(d.reviewedHead)) {
+      throw new Error(`rebaseLineage deltas[${i}].baseHead/reviewedHead must be full hex SHAs`);
+    }
+    if (d.gate !== lineageBase.gate) {
+      throw new Error("rebaseLineage deltas gate must match the lineage base gate");
+    }
+    if (d.round !== i + 1) {
+      throw new Error(`rebaseLineage deltas must be contiguous from round 1; expected round ${i + 1}, got ${d.round}`);
+    }
+    if (d.fixDiff == null || String(d.fixDiff).length === 0) {
+      throw new Error(`rebaseLineage deltas[${i}] requires a non-empty fixDiff (the actual fix diff)`);
+    }
+  }
+  // SHA-chain continuity across the accumulated deltas (keep the composed
+  // request truthful — same rule `composeRoundRequest` enforces).
+  for (let i = 0; i < deltas.length; i++) {
+    const d = deltas[i];
+    if (i === 0) {
+      if (d.baseHead !== lineageBase.originalHead) {
+        throw new Error(
+          `rebaseLineage round-1 baseHead ${d.baseHead} must equal the lineage base originalHead ${lineageBase.originalHead}`,
+        );
+      }
+    } else if (d.baseHead !== deltas[i - 1].reviewedHead) {
+      throw new Error(
+        `rebaseLineage round-${d.round} baseHead ${d.baseHead} must equal prior round reviewedHead ${deltas[i - 1].reviewedHead}`,
+      );
+    }
+  }
+
+  let newOriginalHead = lineageBase.originalHead;
+  if (deltas.length > 0) newOriginalHead = deltas[deltas.length - 1].reviewedHead.trim().toLowerCase();
+
+  let diff;
+  if (currentDiff != null) {
+    const isEmpty = Buffer.isBuffer(currentDiff) ? currentDiff.length === 0 : String(currentDiff).length === 0;
+    if (isEmpty) {
+      throw new Error("rebaseLineage currentDiff must be non-empty");
+    }
+    diff = normalizeText(currentDiff, "currentDiff");
+  } else if (deltas.length === 0) {
+    diff = lineageBase.originalDiff;
+  } else {
+    diff = [lineageBase.originalDiff, ...deltas.map((d) => normalizeText(d.fixDiff, "fixDiff"))].join("\n");
+  }
+
+  const compacted = {
+    kind: "review-lineage-base",
+    lineageId: lineageBase.lineageId,
+    gate: lineageBase.gate,
+    originalHead: newOriginalHead,
+    originalDiff: diff,
+    stableContracts: lineageBase.stableContracts,
+    compaction: true,
+    rebaseSourceBaseHash: lineageBase.baseHash,
+    compactedRoundCount: (lineageBase.compactedRoundCount ?? 0) + deltas.length,
+  };
+  return Object.freeze({
+    ...compacted,
+    baseHash: sha256Hex(compacted),
+  });
+}
