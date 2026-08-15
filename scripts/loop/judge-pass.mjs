@@ -182,8 +182,21 @@ export function validateCliArgs(options) {
     throw parseError("--head-sha must be a 7-64 char hex SHA");
   }
   options.headSha = sha;
-  if (options.findingsFile === options.judgeVerdict) {
-    throw parseError("--findings-file and --judge-verdict must be different paths");
+  options.findingsFile = requireValue(options.findingsFile, "--findings-file", parseError);
+  options.judgeVerdict = requireValue(options.judgeVerdict, "--judge-verdict", parseError);
+  // Every configured path flag must be pairwise distinct: inputs must never be
+  // clobbered by an output, and --out must never be silently deduped against
+  // --ledger-out (which would yield no act list with no warning).
+  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut"].filter(
+    (k) => options[k] !== undefined,
+  );
+  for (let i = 0; i < pathFlags.length; i += 1) {
+    for (let j = i + 1; j < pathFlags.length; j += 1) {
+      if (options[pathFlags[i]] === options[pathFlags[j]]) {
+        const flag = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+        throw parseError(`${flag(pathFlags[i])} and ${flag(pathFlags[j])} must be different paths`);
+      }
+    }
   }
   return options;
 }
@@ -220,6 +233,15 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
   }
   const applied = applyJudgeDispositions(findings, judgeVerdict);
   const enriched = applied.findings;
+  // Fail closed when the judge verdict does not dispose every finding: an
+  // undisposed finding would otherwise be silently dropped from the fixer's act
+  // list (it only lingers in the enriched ledger without a disposition).
+  const uncovered = enriched.filter((f) => !f.judgeDisposition);
+  if (uncovered.length > 0) {
+    throw new Error(
+      `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.map((f) => f.index).join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
+    );
+  }
   const act = enriched.filter((f) => f.judgeDisposition === "act");
   const counts = { act: 0, defer: 0, reject: 0 };
   for (const f of enriched) {
@@ -238,7 +260,7 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
 
 async function resolvePayload(options, repoRoot) {
   const findingsInput = await resolveFindingsInput(
-    { findingsFile: options.findingsFile },
+    { findingsFile: path.resolve(repoRoot, options.findingsFile) },
     { parseError, validate: validateFindingsArray },
   );
   return { findings: findingsInput.findings, overallVerdict: findingsInput.overallVerdict };

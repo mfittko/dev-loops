@@ -105,6 +105,14 @@ test("runJudgePass fails closed on an out-of-range disposition index", () => {
   assert.throws(() => runJudgePass(findings, v, HEAD), /out of range/);
 });
 
+test("runJudgePass fails closed when the verdict does not dispose every finding (#1658)", () => {
+  // Disposition covers index 0 only; index 1 is undisposed and must fail closed
+  // rather than silently drop out of the fixer act list.
+  const findings = ledger(finding({ index: 0 }), finding({ index: 1, summary: "undisposed" }));
+  const v = verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] });
+  assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\)/);
+});
+
 test("validateCliArgs accepts a full invocation and canonicalizes the gate", () => {
   const opts = parseJudgePassCliArgs([
     "--repo", "mfittko/dev-loops",
@@ -149,6 +157,58 @@ test("validateCliArgs fails closed on bad gate / head-sha / missing required", (
     () => validateCliArgs({ repo: "mfittko/dev-loops", pr: "1" }),
     /Missing required arguments/,
   );
+});
+
+test("validateCliArgs rejects empty-string path flags and pairwise collisions", () => {
+  const base = ["--repo", "mfittko/dev-loops", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD];
+  assert.throws(
+    () => parseJudgePassCliArgs([...base, "--findings-file", "", "--judge-verdict", "b"]),
+    /--findings-file requires a non-empty value/,
+  );
+  assert.throws(
+    () => parseJudgePassCliArgs([...base, "--findings-file", "a", "--judge-verdict", ""]),
+    /--judge-verdict requires a non-empty value/,
+  );
+  assert.throws(
+    () => parseJudgePassCliArgs([...base, "--findings-file", "a", "--judge-verdict", "b", "--out", "x", "--ledger-out", "x"]),
+    /--out and --ledger-out must be different paths/,
+  );
+  assert.throws(
+    () => parseJudgePassCliArgs([...base, "--findings-file", "a", "--judge-verdict", "a"]),
+    /--findings-file and --judge-verdict must be different paths/,
+  );
+});
+
+test("judgePassCli resolves a relative findings-file against repo-root (#1658)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-root-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "resolve me" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  // Run from a cwd that is NOT tmpDir (<repo-root>); findings/judge/out are all
+  // relative and must resolve against tmpDir, not the process cwd.
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops",
+      pr: "1658",
+      gate: "draft_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      out: "./act.json",
+      ledgerOut: "./enriched.json",
+    },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.actCount, 1);
+  assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, 1);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
 });
 
 test("judgePassCli writes the act list and enriched ledger for a wrapped ledger", async () => {
