@@ -911,6 +911,28 @@ test("resolveCopilotReviewPresence: no requested reviewer and no submitted revie
   assert.equal(resolveCopilotReviewPresence().present, false);
 });
 
+test("resolveCopilotReviewPresence: requested reviewer AND a submitted Copilot review both report (dual source)", () => {
+  // Real production combination: @copilot is a requested reviewer AND has also
+  // submitted a review on the same PR. Presence stays true and both sources are
+  // recorded in deterministic order (requested_reviewer, then submitted_review).
+  const presence = resolveCopilotReviewPresence({
+    requested: true,
+    reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED" }],
+  });
+  assert.equal(presence.present, true);
+  assert.deepEqual(presence.sources, ["requested_reviewer", "submitted_review"]);
+});
+
+test("resolveCopilotReviewPresence: malformed review entries report absent without throwing", () => {
+  for (const reviews of [[null], [{ author: null }], [{}], [{ author: { login: null } }]]) {
+    const presence = resolveCopilotReviewPresence({ requested: false, reviews });
+    assert.equal(presence.present, false);
+    assert.deepEqual(presence.sources, []);
+  }
+  // A non-array reviews value is tolerated too.
+  assert.equal(resolveCopilotReviewPresence({ requested: false, reviews: "nope" }).present, false);
+});
+
 test("containsBareCopilotSummon detects a bare-text summon literal", () => {
   assert.equal(containsBareCopilotSummon("please @copilot re-review this"), true);
   assert.equal(containsBareCopilotSummon("violates the /copilot prohibition rule"), true);
