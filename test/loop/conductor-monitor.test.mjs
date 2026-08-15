@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runConductorMonitor, isPrHealthy, fetchGithubStatus } from "../../scripts/loop/conductor-monitor.mjs";
+import { runConductorMonitor, isPrHealthy, fetchGithubStatus, listRepoAsyncRuns } from "../../scripts/loop/conductor-monitor.mjs";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/conductor-monitor.mjs");
@@ -1764,4 +1764,109 @@ test("isPrHealthy treats unresolved threads as unhealthy with crediblyGreen CI",
     },
   });
   assert.equal(healthy, false);
+});
+
+test("conductor-monitor decouples merge-success run-state from non-zero post-merge local-verify exit (#1638)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-conductor-monitor-merge-success-"));
+
+  try {
+    const { repoRoot, sessionsRoot, asyncRunsRoot, asyncResultsRoot } = await createAutoResumeRoots(tempDir);
+    // A run whose post-merge local verify exited non-zero (environmental suites)
+    // but whose output artifact records a successful merge.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-merged-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1638\nArtifact state: merged\nPR merged: #1638\n",
+    });
+    // Control: an identically-failing exit with an open, unmerged artifact stays FAILED.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-open-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1648\nArtifact state: open\nLoop state: unresolved_feedback_present\n",
+    });
+
+    const runs = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+
+    const mergedRun = runs.find((run) => run.runId === "run-merged-1638");
+    assert.ok(mergedRun, "merged run should be listed");
+    assert.equal(mergedRun.runState, "completed");
+    assert.equal(mergedRun.evidence.childNonZeroExit, true);
+    assert.equal(mergedRun.evidence.mergeSuccess, true);
+    assert.match(mergedRun.evidence.warning, /recorded a successful merge/u);
+
+    const openRun = runs.find((run) => run.runId === "run-open-1638");
+    assert.ok(openRun, "open run should be listed");
+    assert.equal(openRun.runState, "failed");
+    assert.equal(openRun.evidence.childNonZeroExit, undefined);
+
+    // Negative phrasing ("not merged") must NOT false-downgrade a failed run.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-notmerged-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1660\nArtifact state: open\nStatus: review requested, PR artifacts not merged yet\n",
+    });
+
+    const runs2 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    assert.equal(runs2.find((run) => run.runId === "run-notmerged-1638").runState, "failed");
+
+    // Reversal/narrative phrasing must NOT false-downgrade a genuinely failed run
+    // (e.g. a post-merge-revert narrative that only mentions the merge as a recap).
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-reverted-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1664\nArtifact state: open\nPR merged: #1664 was then reverted due to CI failure\n",
+    });
+    const runs3 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    assert.equal(runs3.find((run) => run.runId === "run-reverted-1638").runState, "failed", "reversal narrative must stay FAILED");
+
+    // A merged run reconstructed from a result-summary state label (no meta
+    // exitCode observed) must downgrade to COMPLETED on clean merge but must NOT
+    // fabricate childNonZeroExit — the flag is only provable from the meta path.
+    await writeFile(
+      path.join(asyncResultsRoot, "run-result-merged-1638.json"),
+      `${JSON.stringify({
+        runId: "run-result-merged-1638",
+        state: "failed",
+        cwd: repoRoot,
+        timestamp: 1700000099000,
+        results: [{
+          agent: "dev-loop",
+          sessionFile: "x",
+          output: "Active PR: owner/repo#1666\nArtifact state: merged\nPR merged: #1666\n",
+        }],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const runs4 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    const stateLabelMerged = runs4.find((run) => run.runId === "run-result-merged-1638");
+    assert.equal(stateLabelMerged.runState, "completed", "state-label merged run downgrades to COMPLETED");
+    assert.equal(stateLabelMerged.evidence.mergeSuccess, true);
+    assert.equal(stateLabelMerged.evidence.childNonZeroExit, undefined, "childNonZeroExit must not be fabricated without an exitCode");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

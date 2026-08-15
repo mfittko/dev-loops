@@ -1008,6 +1008,50 @@ export async function listRepoAsyncRuns(
       await scanAsyncResultRoot(resultsRoot, records);
     }
   }
+  // Decouple merge-success routing from post-merge local-verify exit (#1638).
+  // The meta mapping in scanSessionArtifactRoot (`exitCode !== 0 -> FAILED`) is
+  // correct for a gate or merge failure, but a dev-loop run that lands a clean
+  // merge then runs a post-merge local `npm run verify` can exit non-zero on
+  // environmental (non-code) suites (missing gh/run-id context in a worktree).
+  // That must not reclassify a successful merge as FAILED. This pass runs AFTER
+  // every root scanner has merged evidence (so an async-run FAILED cannot
+  // re-introduce itself) and only downgrades FAILED -> COMPLETED when the run's
+  // AUTHORITATIVE output surface (its own output artifact or result summary)
+  // records a successful merge. The raw output log is deliberately NOT a merge
+  // source: a stale/incidental "PR merged" recap in a log must never veto the
+  // authoritative state, masking a genuine failure. We assert only the facts
+  // we can prove (merge recorded + child exited non-zero) and surface a neutral
+  // warning — never a fabricated "environmental" cause.
+  for (const record of records.values()) {
+    if (record.runState !== RUN_STATE.FAILED) {
+      continue;
+    }
+    const outputTexts = [];
+    if (typeof record.outputArtifactPath === "string") {
+      outputTexts.push(await readTextIfExists(record.outputArtifactPath));
+    }
+    if (typeof record.resultSummaryText === "string") {
+      outputTexts.push(record.resultSummaryText);
+    } else if (typeof record.resultSummaryPath === "string" || typeof record.resultPath === "string") {
+      outputTexts.push(await readTextIfExists(record.resultSummaryPath ?? record.resultPath));
+    }
+    const mergeSuccess = outputTexts.some((text) => text !== null && outputTextIndicatesSuccessfulMerge(text));
+    if (!mergeSuccess) {
+      continue;
+    }
+    record.runState = RUN_STATE.COMPLETED;
+    // Only assert childNonZeroExit when the underlying evidence proves the child
+    // actually exited non-zero (the meta exitCode path). A record reconstructed
+    // from a result-summary state label (scanAsyncResultRoot) never observed an
+    // exit code, so the flag would otherwise fabricate a fact we cannot prove.
+    const childExitCode = Number.isInteger(record.evidence?.exitCode) ? record.evidence.exitCode : null;
+    record.evidence = {
+      ...record.evidence,
+      mergeSuccess: true,
+      ...(childExitCode !== null ? { childNonZeroExit: childExitCode !== 0 } : {}),
+      warning: "run recorded a successful merge but the child exited non-zero post-merge; reported COMPLETED on clean merge — confirm the non-zero exit was post-merge verification noise (CI is authoritative for gate evidence), not a real post-merge regression",
+    };
+  }
   return [...records.values()]
     .filter((record) => record.agent === "dev-loop")
     .filter((record) => recordMatchesRepo(record, repoIsolation))
@@ -1089,6 +1133,35 @@ function parseArtifactState(text) {
     return "open";
   }
   return null;
+}
+function outputTextIndicatesSuccessfulMerge(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  // Strictly-positive, run-terminal merge signals only — the same canonical
+  // set classifyResumeBucket treats as DONE_OR_MERGED. Deliberately NOT the
+  // bare `parseArtifactState(...) === "merged"` short-circuit, because
+  // parseArtifactState's `\bmerged\b` word check also matches negatives
+  // ("artifacts not merged", "merge still pending") in the Status/artifact
+  // lines and would false-downgrade a genuinely failed run.
+  //
+  // Both signals are read as their own line and the extracted value must be
+  // exactly a positive merge signal: narrative/reversal phrasing
+  // ("PR merged: #X was then reverted", "was the PR merged: #X") can never
+  // match because extraction is line-anchored and value-exact. Markdown bold
+  // around the canonical label (`**Artifact state:**`, `**PR merged:**`) is
+  // tolerated as formatting, mirroring parseArtifactState's formatting
+  // tolerance. This parallels the first-line semantics parseArtifactState uses.
+  const padded = `\n${text}`;
+  const prMergedLine = padded.match(/^\**PR merged:\**\s*([^\n]+)$/imu)?.[1];
+  if (prMergedLine !== undefined && /^#\s*\d+\s*$/iu.test(prMergedLine.trim())) {
+    return true;
+  }
+  const artifactStateValue = padded.match(/^\**Artifact state:\**\s*([^\n]+)$/imu)?.[1];
+  if (artifactStateValue !== undefined && stripFormatting(artifactStateValue).toLowerCase() === "merged") {
+    return true;
+  }
+  return false;
 }
 function parseLoopState(text) {
   const patterns = [
