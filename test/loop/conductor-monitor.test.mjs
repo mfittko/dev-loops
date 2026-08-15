@@ -1799,14 +1799,30 @@ test("conductor-monitor decouples merge-success run-state from non-zero post-mer
     const mergedRun = runs.find((run) => run.runId === "run-merged-1638");
     assert.ok(mergedRun, "merged run should be listed");
     assert.equal(mergedRun.runState, "completed");
-    assert.equal(mergedRun.evidence.postMergeVerifyNonZero, true);
+    assert.equal(mergedRun.evidence.childNonZeroExit, true);
     assert.equal(mergedRun.evidence.mergeSuccess, true);
-    assert.match(mergedRun.evidence.warning, /environmental \(non-code\) suites/u);
+    assert.match(mergedRun.evidence.warning, /recorded a successful merge/u);
 
     const openRun = runs.find((run) => run.runId === "run-open-1638");
     assert.ok(openRun, "open run should be listed");
     assert.equal(openRun.runState, "failed");
-    assert.equal(openRun.evidence.postMergeVerifyNonZero, undefined);
+    assert.equal(openRun.evidence.childNonZeroExit, undefined);
+
+    // Negative phrasing ("not merged") must NOT false-downgrade a failed run.
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-notmerged-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1660\nArtifact state: open\nStatus: review requested, PR artifacts not merged yet\n",
+    });
+
+    const runs2 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    assert.equal(runs2.find((run) => run.runId === "run-notmerged-1638").runState, "failed");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

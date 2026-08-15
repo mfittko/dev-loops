@@ -1011,12 +1011,17 @@ export async function listRepoAsyncRuns(
   // Decouple merge-success routing from post-merge local-verify exit (#1638).
   // The meta mapping in scanSessionArtifactRoot (`exitCode !== 0 -> FAILED`) is
   // correct for a gate or merge failure, but a dev-loop run that lands a clean
-  // merge then runs a post-merge local `npm run verify` can exit non-zero purely
-  // on environmental (non-code) suites (missing gh/run-id context in a worktree).
+  // merge then runs a post-merge local `npm run verify` can exit non-zero on
+  // environmental (non-code) suites (missing gh/run-id context in a worktree).
   // That must not reclassify a successful merge as FAILED. This pass runs AFTER
   // every root scanner has merged evidence (so an async-run FAILED cannot
-  // re-introduce itself), reclassifies merge-success runs to COMPLETED, and
-  // surfaces the non-zero post-merge verify as a warning note, not a hard failure.
+  // re-introduce itself) and only downgrades FAILED -> COMPLETED when the run's
+  // AUTHORITATIVE output surface (its own output artifact or result summary)
+  // records a successful merge. The raw output log is deliberately NOT a merge
+  // source: a stale/incidental "PR merged" recap in a log must never veto the
+  // authoritative state, masking a genuine failure. We assert only the facts
+  // we can prove (merge recorded + child exited non-zero) and surface a neutral
+  // warning — never a fabricated "environmental" cause.
   for (const record of records.values()) {
     if (record.runState !== RUN_STATE.FAILED) {
       continue;
@@ -1025,14 +1030,10 @@ export async function listRepoAsyncRuns(
     if (typeof record.outputArtifactPath === "string") {
       outputTexts.push(await readTextIfExists(record.outputArtifactPath));
     }
-    const summarySource = record.resultSummaryPath ?? record.resultPath ?? null;
     if (typeof record.resultSummaryText === "string") {
       outputTexts.push(record.resultSummaryText);
-    } else if (typeof summarySource === "string") {
-      outputTexts.push(await readTextIfExists(summarySource));
-    }
-    if (typeof record.outputLogPath === "string") {
-      outputTexts.push(await readTextIfExists(record.outputLogPath));
+    } else if (typeof record.resultSummaryPath === "string" || typeof record.resultPath === "string") {
+      outputTexts.push(await readTextIfExists(record.resultSummaryPath ?? record.resultPath));
     }
     const mergeSuccess = outputTexts.some((text) => text !== null && outputTextIndicatesSuccessfulMerge(text));
     if (!mergeSuccess) {
@@ -1042,8 +1043,8 @@ export async function listRepoAsyncRuns(
     record.evidence = {
       ...record.evidence,
       mergeSuccess: true,
-      postMergeVerifyNonZero: true,
-      warning: "post-merge local verify exited non-zero on environmental (non-code) suites; run reported completed on clean merge",
+      childNonZeroExit: true,
+      warning: "run recorded a successful merge but the child exited non-zero post-merge; reported COMPLETED on clean merge — confirm the non-zero exit was post-merge verification noise (CI is authoritative for gate evidence), not a real post-merge regression",
     };
   }
   return [...records.values()]
@@ -1132,10 +1133,14 @@ function outputTextIndicatesSuccessfulMerge(text) {
   if (typeof text !== "string") {
     return false;
   }
-  const normalized = text.toLowerCase();
-  return parseArtifactState(text) === "merged"
-    || /\bpr merged:\s*#\d+\b/u.test(normalized)
-    || /\bartifact state:\s*merged\b/u.test(normalized);
+  // Strictly-positive, run-terminal merge signals only — the same canonical
+  // set classifyResumeBucket treats as DONE_OR_MERGED. Deliberately NOT the
+  // bare `parseArtifactState(...) === "merged"` short-circuit, because
+  // parseArtifactState's `\bmerged\b` word check also matches negatives
+  // ("artifacts not merged", "merge still pending") in the Status/artifact
+  // lines and would false-downgrade a genuinely failed run.
+  return /\bPR merged:\s*#\d+\b/iu.test(text)
+    || /\bArtifact state:\s*merged\b/iu.test(text);
 }
 function parseLoopState(text) {
   const patterns = [
