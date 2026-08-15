@@ -31,7 +31,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { buildParseError } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -161,7 +161,8 @@ async function detectInstalledRoot() {
 }
 
 function parseResolveVerdictLedgerSourceCliArgs(argv) {
-  const { values } = parseArgs({
+  const options = { help: false, sourceRoot: undefined, installedRoot: undefined };
+  const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
@@ -169,8 +170,28 @@ function parseResolveVerdictLedgerSourceCliArgs(argv) {
       "installed-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
   });
-  return values;
+  for (const token of tokens) {
+    if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
+    if (token.kind !== "option") continue;
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "source-root") {
+      options.sourceRoot = token.value;
+    } else if (token.name === "installed-root") {
+      options.installedRoot = token.value;
+    } else if (token.name === "jq") {
+      options.jq = token.value;
+    } else if (token.name === "silent") {
+      options.silent = true;
+    }
+  }
+  return options;
 }
 
 export async function main(argv, io = { stdout: process.stdout, stderr: process.stderr }) {
@@ -180,8 +201,8 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
     return 0;
   }
   const sourceRoot =
-    values["source-root"] ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const installedRoot = values["installed-root"] ?? (await detectInstalledRoot());
+    values.sourceRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const installedRoot = values.installedRoot ?? (await detectInstalledRoot());
   const sourceVersion = readVersion(sourceRoot) ?? "unknown";
   const installedVersion = readVersion(installedRoot) ?? "unknown";
   let result;
@@ -205,6 +226,11 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
   });
 }
 
-if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => process.exitCode = code);
+if (isDirectCliRun(import.meta.url)) {
+  try {
+    main(process.argv.slice(2)).then((code) => process.exitCode = code);
+  } catch (error) {
+    process.stderr.write(`${formatCliError(error)}\n`);
+    process.exitCode = 1;
+  }
 }
