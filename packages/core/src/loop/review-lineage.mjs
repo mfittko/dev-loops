@@ -403,9 +403,12 @@ export function renderComposedRequest(composed) {
 export const DEFAULT_LINEAGE_MAX_ROUNDS = 20;
 
 /**
- * Total composed byte size of a lineage (base + all accumulated deltas), using
- * the same canonical byte-serialization that `composeRoundRequest` renders.
- * Used to enforce a provider context-size budget independently of round count.
+ * Total byte size of a lineage's accumulated artifact content (base + all
+ * accumulated deltas), using the same canonical byte-serialization that
+ * `composeRoundRequest` renders. Used to enforce a byte budget on the only part
+ * of a round request that grows across fix rounds (round-delta accumulation).
+ * It counts the lineage artifacts themselves, not the per-round angle-suffix /
+ * carried-angle context (constant regardless of round count).
  *
  * @param {object} input
  * @param {object} input.lineageBase - valid review-lineage-base.
@@ -438,8 +441,12 @@ export function lineageByteSize({ lineageBase, deltas = [] } = {}) {
  * @param {object[]} [input.deltas] - accumulated round deltas.
  * @param {number} [input.maxRounds] - max delta rounds before a rebase (default
  *   {@link DEFAULT_LINEAGE_MAX_ROUNDS}).
- * @param {number} [input.maxLineageBytes] - optional provider context byte
- *   budget; a lineage whose composed size exceeds it must be rebased.
+ * @param {number} [input.maxLineageBytes] - optional byte budget over the
+ *   accumulated lineage (base + deltas — the ONLY part of a round request that
+ *   grows with fix rounds); a lineage whose accumulated size exceeds it must
+ *   be rebased. Per-round angle-suffix and carried-angle context are constant
+ *   regardless of round count, so they are deliberately not part of this
+ *   growing-lineage bound.
  * @returns {{ requiresCompaction: boolean, reason: string|null, deltaCount: number, lineageBytes: number, maxRounds: number, maxLineageBytes: number|null }}
  */
 export function checkLineageCompaction({ lineageBase, deltas = [], maxRounds = DEFAULT_LINEAGE_MAX_ROUNDS, maxLineageBytes } = {}) {

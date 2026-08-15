@@ -509,7 +509,7 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     assert.ok(after.length < before.length);
   });
 
-  test("rebase validates full hex SHAs on every accumulated delta (in-gate hex-SHA chain finding)", () => {
+  test("buildFixRoundDelta rejects abbreviated/full-hex-SHA inputs (in-gate hex-SHA chain finding)", () => {
     // Builders already fail closed on abbreviated SHAs, so a full-hex-SHA
     // malformed delta cannot reach rebaseLineage through the public path.
     assert.throws(() => buildFixRoundDelta({
