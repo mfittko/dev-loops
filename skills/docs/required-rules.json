@@ -246,6 +246,10 @@
       "id": "GATE-EXEC-DISPOSITION-LEDGER"
     },
     {
+      "id": "GATE-EXEC-FANOUT-DISPATCH-KEY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK"
     },
     {
