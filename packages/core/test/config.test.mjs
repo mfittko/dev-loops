@@ -34,8 +34,11 @@ import {
   resolveFanoutGroups,
   resolveMaxAnglesPerGroup,
   resolveFanoutMaxConcurrent,
+  resolveFanoutSequential,
+  resolveFanoutEffectiveConcurrency,
   DEFAULT_MAX_ANGLES_PER_GROUP,
   DEFAULT_FANOUT_MAX_CONCURRENT,
+  DEFAULT_FANOUT_SEQUENTIAL,
   resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
@@ -3667,6 +3670,22 @@ test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config o
   assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 4);
 });
 
+test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound (#1726) with a cross-harness-safe default", () => {
+  // Shipped default is false → other harnesses/repos keep maxConcurrent behavior (no regression).
+  assert.equal(resolveFanoutSequential({ version: 1 }), false);
+  assert.equal(DEFAULT_FANOUT_SEQUENTIAL, false);
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 4);
+  // Effective concurrency follows maxConcurrent when not sequential.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: false, maxConcurrent: 3 } } }), 3);
+  // sequential forces one unit per wave regardless of maxConcurrent.
+  assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: true } } }), true);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }), 1);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true, maxConcurrent: 8 } } }), 1);
+  // A non-boolean truthy value is NOT honored (strict === true).
+  assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
+});
+
 test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-dup-"));
   try {
@@ -5243,4 +5262,28 @@ test("resolveGateDispatchMode: legacy defer input escalates against a nice-to-ha
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "escalated");
+});
+
+test("gates.fanout.sequential: a .devloops merging it loads cleanly through the zod schema (#1726)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-seq-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    sequential: true",
+        "    maxConcurrent: 8",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.equal(result.config.gates.fanout.sequential, true);
+    assert.equal(resolveFanoutSequential(result.config), true);
+    assert.equal(resolveFanoutEffectiveConcurrency(result.config), 1);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });

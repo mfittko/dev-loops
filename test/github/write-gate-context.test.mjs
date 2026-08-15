@@ -4430,3 +4430,30 @@ test("#1507 parseWriteGateContextCliArgs rejects a non-integer / negative --avai
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "-1"]), /non-negative integer/);
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "nope"]), /non-negative integer/);
 });
+
+test("#1726 gates.fanout.sequential serializes the wave plan and records sequential/effectiveConcurrency in the fanout artifact", () => {
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: true, maxConcurrent: 8, maxAnglesPerGroup: 1 } } }, "draft", ["a", "b", "c"], {});
+  // per-angle → one dispatch unit per angle; serial forces one unit per wave.
+  assert.equal(plan.sequential, true);
+  assert.equal(plan.maxConcurrent, 8);
+  assert.equal(plan.effectiveConcurrency, 1);
+  assert.equal(plan.wavePlan.length, 3);
+  assert.ok(plan.wavePlan.every((w) => w.length === 1));
+  assert.equal(plan.pendingWavePlan.length, 3);
+  assert.ok(plan.pendingWavePlan.every((w) => w.length === 1));
+  // The artifact records the serial posture alongside the configured cap.
+  const artifact = buildGateContextArtifact({ repo: "a/b", pr: 5, gate: "draft_gate", headSha: "abc1234", angles: ["a", "b", "c"], fanoutDispatch: plan });
+  assert.equal(artifact.fanout.sequential, true);
+  assert.equal(artifact.fanout.maxConcurrent, 8);
+  assert.equal(artifact.fanout.effectiveConcurrency, 1);
+  assert.equal(artifact.fanout.wavePlan.length, 3);
+  assert.ok(artifact.fanout.wavePlan.every((w) => w.length === 1));
+});
+
+test("#1726 sequential:false keeps the maxConcurrent wave plan (no serialization)", () => {
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: false, maxConcurrent: 2 } } }, "draft", ["a", "b", "c"], {});
+  assert.equal(plan.sequential, false);
+  assert.equal(plan.effectiveConcurrency, 2);
+  // 3 units, cap 2 → 2 waves [2, 1].
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [2, 1]);
+});

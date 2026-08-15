@@ -19,6 +19,15 @@ gates:
   # the shipped default gates.fanout.groups table; it does not override it).
   # See skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
+  # Bounded fan-out concurrency (#1726): dispatch heavy reviewers ONE AT A TIME
+  # (serial) so each completes and writes its evidence artifact before the next
+  # starts — this repo's child-safe environment SIGTERMs heavy reviewers under
+  # parallel overload. Still a GENUINE distinct-reviewer fan-out (real fan-in /
+  # ledger / provenance), never inline single-agent; only dispatch concurrency is
+  # bounded. Shipped mechanism is gates.fanout.sequential (default false, so
+  # other repos/harnesses are unaffected — cross-harness non-regression #1086).
+  fanout:
+    sequential: true
   draft:
     dynamic:
       subtractive: true
