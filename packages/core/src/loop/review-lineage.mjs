@@ -417,13 +417,14 @@ export function lineageByteSize({ lineageBase, deltas = [] } = {}) {
     throw new Error("lineageByteSize requires a valid lineage base artifact");
   }
   if (!Array.isArray(deltas)) throw new Error("lineageByteSize deltas must be an array");
-  let total = canonicalJson(lineageBase).length;
+  const utf8Length = (v) => Buffer.byteLength(canonicalJson(v), "utf8");
+  let total = utf8Length(lineageBase);
   for (let i = 0; i < deltas.length; i++) {
     const d = deltas[i];
     if (!d || d.kind !== "round-delta" || !isSha256(d.deltaHash)) {
       throw new Error(`lineageByteSize deltas[${i}] must be a valid round-delta artifact`);
     }
-    total += canonicalJson(d).length;
+    total += utf8Length(d);
   }
   return total;
 }
@@ -448,6 +449,7 @@ export function checkLineageCompaction({ lineageBase, deltas = [], maxRounds = D
   if (maxLineageBytes != null && (!Number.isInteger(maxLineageBytes) || maxLineageBytes < 1)) {
     throw new Error(`checkLineageCompaction maxLineageBytes must be a positive integer, got ${JSON.stringify(maxLineageBytes)}`);
   }
+  if (!Array.isArray(deltas)) throw new Error("checkLineageCompaction deltas must be an array");
   const deltaCount = deltas.length;
   const lineageBytes = lineageByteSize({ lineageBase, deltas });
   let reason = null;
@@ -509,6 +511,9 @@ export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
     }
     if (!isSha256(d.deltaHash)) {
       throw new Error(`rebaseLineage deltas[${i}].deltaHash must be a valid sha256:<64hex>`);
+    }
+    if (!isHexSha(d.baseHead) || !isHexSha(d.reviewedHead)) {
+      throw new Error(`rebaseLineage deltas[${i}].baseHead/reviewedHead must be full hex SHAs`);
     }
     if (d.gate !== lineageBase.gate) {
       throw new Error("rebaseLineage deltas gate must match the lineage base gate");

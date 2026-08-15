@@ -363,6 +363,34 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     assert.equal(lineageByteSize({ lineageBase: base(), deltas: deltas(2) }), s2); // deterministic
   });
 
+  test("lineageByteSize measures UTF-8 bytes, not JS string length (in-gate byte-sizing finding)", () => {
+    // Multi-byte UTF-8 content: 100 × U+2014 (em dash, 3 bytes each in UTF-8)
+    // counts as 300 bytes, not 100 chars.
+    const wide = buildReviewLineageBase({
+      lineageId: "lin-1",
+      gate: GATE,
+      originalHead: BASE,
+      originalDiff: "\u2014".repeat(100),
+    });
+    const narrow = buildReviewLineageBase({
+      lineageId: "lin-1",
+      gate: GATE,
+      originalHead: BASE,
+      originalDiff: "x".repeat(300), // 300 ASCII bytes
+    });
+    const wideBytes = lineageByteSize({ lineageBase: wide });
+    const narrowBytes = lineageByteSize({ lineageBase: narrow });
+    // Both renderings are 300 bytes in UTF-8; a naive JS .length would count
+    // the wide one as ~100 (wrongly under-budgeting the provider context).
+    assert.equal(wideBytes, narrowBytes);
+  });
+
+  test("checkLineageCompaction fails closed on a non-array deltas input (in-gate nullable-deltas finding)", () => {
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: null }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: "not-an-array" }));
+    assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: null }));
+  });
+
   test("rebase preserves composition rules — compacted base resumes appending round-1 delta", () => {
     const ds = deltas(21);
     assert.equal(checkLineageCompaction({ lineageBase: base(), deltas: ds }).requiresCompaction, true);
@@ -419,6 +447,15 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     // The single compacted base + one delta is strictly smaller than the full
     // 21-delta append chain (unbounded growth prevented).
     assert.ok(after.length < before.length);
+  });
+
+  test("rebase validates full hex SHAs on every accumulated delta (in-gate hex-SHA chain finding)", () => {
+    // Builders already fail closed on abbreviated SHAs, so a full-hex-SHA
+    // malformed delta cannot reach rebaseLineage through the public path.
+    assert.throws(() => buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: GATE,
+      baseHead: "aaaaaaa", reviewedHead: R1, fixDiff: "x",
+    }));
   });
 
   test("rebase fails closed on a broken SHA chain, wrong gate, or foreign lineage", () => {
