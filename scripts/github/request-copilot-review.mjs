@@ -7,6 +7,7 @@ import {
   isCopilotLogin,
   isDirectCliRun,
   parseReviewThreads,
+  resolveCopilotReviewPresence,
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
   summarizeGateReviewComments,
@@ -826,7 +827,20 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   }
   const after = await fetchCopilotReviewState(options, runtime);
   const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
-  const reviewNowObservablyInProgress = after.requested || after.hasPendingReviewOnCurrentHead || reviewCountIncreased;
+  // Review-surface presence (#1670): Copilot is present when it is a requested
+  // reviewer OR has submitted any review on this PR — never decided by assignee
+  // membership. A reviewer-configured repo (`copilot-pull-request-reviewer[bot]`)
+  // auto-reviews without appearing in requested_reviewers and `@copilot` can be a
+  // silent no-op, so prior submitted reviews prove presence and must not be
+  // misreported as "Copilot absent / not enabled".
+  const reviewPresence = resolveCopilotReviewPresence({
+    requested: after.requested,
+    reviews: after.prData?.reviews ?? [],
+  });
+  const reviewNowObservablyInProgress = after.requested
+    || after.hasPendingReviewOnCurrentHead
+    || reviewCountIncreased
+    || reviewPresence.present;
   if (!reviewNowObservablyInProgress) {
     throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
   }

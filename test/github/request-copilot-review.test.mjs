@@ -261,6 +261,45 @@ test("request-copilot-review accepts an immediate Copilot review as proof the re
     });
 });
 
+test("request-copilot-review accepts review-surface presence (prior submitted Copilot review, unchanged after edit) as proof of an in-progress review — #1670 regression", async () => {
+  // Reviewer-configured repo where @copilot is a silent no-op: after `pr edit`
+  // the requested_reviewers stay empty, the review count does NOT increase (a
+  // submitted Copilot review was already present in the before-state), and there
+  // is no pending current-head review. The only signal preventing the
+  // "did not appear in requested reviewers or fresh/in-progress Copilot reviews"
+  // throw is the new reviewPresence.present branch (resolveCopilotReviewPresence).
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[{"id":"r-1","author":{"login":"copilot-pull-request-reviewer[bot]"}}]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[{"id":"r-1","author":{"login":"copilot-pull-request-reviewer[bot]"}}]}\n',
+    },
+  ]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+});
+
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
   const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
