@@ -278,6 +278,11 @@ workflow:
   # it on consumers' product phases (#846). Matches the code default; the dev-loops repo opts in
   # via its own repo-root .devloops (which takes precedence over these extension defaults).
   devModeDefault: false
+  # Agent-level stall detection (#1669): auto-bail to fresh-context dispatch
+  # when a dev-loop child shows no turn progress for the window.
+  stallDetection:
+    enabled: true
+    thresholdMinutes: 5
 
 # Light-mode threshold for small local changes.
 localImplementation:

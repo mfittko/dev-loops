@@ -427,6 +427,17 @@ const WorkflowConfig = z.strictObject({
   requireRetrospective: z.boolean().describe("Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
+  // Agent-level stall detection (#1669): when a dev-loop child shows no turn
+  // progress for `thresholdMinutes` with no pending request, the parent bails
+  // to a fresh-context recovery dispatch instead of waiting through a manual
+  // interrupt+resume. `enabled: false` disables the auto-bail and restores
+  // the old wait behavior.
+  stallDetection: z
+    .strictObject({
+      enabled: z.boolean().default(true).describe("Enable agent-level stall -> auto-fresh-dispatch."),
+      thresholdMinutes: z.number().int().min(1).default(5).describe("No-turn-progress window in minutes before a child is treated as stalled."),
+    })
+    .optional(),
   // No default here and absent from BUILT_IN_DEFAULTS — unset means "keep
   // auto-detecting the default branch" (see resolveBaseBranch), never a static
   // "main". Bare branch name; consumers add the `origin/` remote-ref prefix
@@ -795,6 +806,7 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     requireRetrospective: false,
     requireDraftFirst: false,
     devModeDefault: false,
+    stallDetection: Object.freeze({ enabled: true, thresholdMinutes: 5 }),
   }),
   localImplementation: Object.freeze({
     lightMode: Object.freeze({ enabled: false, maxFiles: 3, maxLines: 200, maxCopilotRounds: 1 }),
@@ -2529,6 +2541,15 @@ export function resolveWorkflowConfig(config, key) {
 
   if (key === "devModeDefault") {
     return config?.workflow?.devModeDefault ?? DEFAULT_WORKFLOW_CONFIG.devModeDefault;
+  }
+
+  if (key === "stallDetection") {
+    const configured = config?.workflow?.stallDetection;
+    const def = DEFAULT_WORKFLOW_CONFIG.stallDetection;
+    return {
+      enabled: configured?.enabled ?? def.enabled,
+      thresholdMinutes: configured?.thresholdMinutes ?? def.thresholdMinutes,
+    };
   }
 
   throw new Error(`Unknown workflow config key: ${key}`);

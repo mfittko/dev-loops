@@ -892,6 +892,23 @@
           "type": "boolean",
           "description": "Default new loops to dev mode."
         },
+        "stallDetection": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Enable agent-level stall -> auto-fresh-dispatch.",
+              "type": "boolean"
+            },
+            "thresholdMinutes": {
+              "default": 5,
+              "description": "No-turn-progress window in minutes before a child is treated as stalled.",
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
         "baseBranch": {
           "type": "string",
           "minLength": 1,

@@ -553,6 +553,24 @@ Release-on-death & dead-claim supersession (#1706):
   `subagent status`; never trust the claim heartbeat alone. Only genuinely-executing runs count as a
   live owner.
 
+### `scripts/loop/detect-agent-stall.mjs`
+
+Agent-level stall probe (#1669). Detects whether a dev-loop child has stalled — no turn progress for
+N minutes with no pending supervisor request — without falsely bailing a sanctioned long watch (an
+active tool call that heartbeats its runner claim).
+
+Required: `--repo <owner/name>`
+
+Optional: `--pr <n>` (read sanctioned-watch heartbeat from runner-coordination state), `--status <path>`
+(until `status.json` `lastActivityAt`/`lastUpdate`), `--session <path>` (session.jsonl mtime when no
+`--status`), `--threshold-min <n>` (default 5), `--pending-request`, `--pending-marker <path>`,
+`--run-id <id>`, `--cwd <path>`, `--last-action <text>`.
+
+Verdict statuses: `stalled` | `not_stalled` | `no_evidence`. Emits a structured verdict plus a
+recovery brief for a fresh-context dispatch. Pure detector lives in
+`@dev-loops/core/loop/agent-stall`; config surface is `workflow.stallDetection`. See
+`skills/docs/agent-stall-detection.md`.
+
 ### `scripts/loop/run-watch-cycle.mjs`
 
 Deterministic handoff → watch helper for one Copilot wait-cycle boundary.
