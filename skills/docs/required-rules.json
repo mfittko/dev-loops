@@ -236,6 +236,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-FANOUT-DISPATCH-KEY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-DEFERRAL-RECORD",
       "enforcement": "runtime"
     },

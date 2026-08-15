@@ -447,6 +447,26 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
 - produces a focused findings artifact PER ANGLE it covers, each with its own verdict (clean/findings_present) and file references, stamped per the head-stamp rule below — a grouped reviewer writes as many artifacts, at the existing per-angle paths, as it has angles, never one merged artifact for the group
 - completion is detected via the harness completion notification, or the reviewer's findings artifact(s) at their deterministic output paths; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
 
+<!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->
+`GATE-EXEC-FANOUT-DISPATCH-KEY`: Every `runs.all` / batch reviewer dispatch MUST carry a unique
+`key` field on EACH item (#1681). The Pi harness's `runs.all` workflowScript API requires each
+collection item to declare its own `key`; omitting it fails the whole dispatch with an `invalid
+key` validation error, which historically degraded a `requireFanoutEvidence` gate to a single
+inline reviewer. This rule encodes the fix so the conductor never drops the `key` and never lets
+a dispatch failure silently collapse fan-out:
+
+- Build each dispatch item with a distinct `key` (a per-angle or per-group slug), so the batch
+  validates on the harness; a missing or blank `key` on an item is a dispatch bug, not a harness
+  quirk to work around at fan-in.
+- When a fan-out dispatch fails for ANY reason (including `invalid key`), the conductor MUST
+  stop and report rather than degrading to an `inline_single_agent` verdict on a gate where
+  `gates.requireFanoutEvidence` is enabled. Merge-time and post-time enforcement both refuse an
+  inline verdict on such a gate through the shared `evaluateInlineFanoutMode` path
+  (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`, and `upsert-checkpoint-verdict.mjs`),
+  so a degraded gate fails closed rather than passing as fan-out evidence. The only inline
+  acceptance is the light-mode `scopeUnderThreshold` carve-out (or an explicit operator decision
+  per PR), never a silent fallback.
+
 **Grouped dispatch (default).** Before fanning out, the conductor resolves this round's
 dispatch units by calling `resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel })`
 (`@dev-loops/core/config`): configured `gates.fanout.groups` are matched first (an angle in
