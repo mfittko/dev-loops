@@ -9,6 +9,7 @@ import {
   normalizeTimestamp,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
+  resolveCopilotReviewPresence,
   resolveDraftGateRoundResetMs,
   sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
@@ -866,6 +867,48 @@ test("sanitizeCopilotSummonTokens leaves a double-backtick GFM span untouched", 
 test("containsBareCopilotSummon exempts occurrences inside a double-backtick GFM span", () => {
   assert.equal(containsBareCopilotSummon("quoting `` @copilot `` inside a double-backtick span"), false);
   assert.equal(containsBareCopilotSummon("nested literal `` `/copilot` `` quoted"), false);
+});
+
+test("resolveCopilotReviewPresence: reviewer-configured repo (submitted review) reports Copilot present — never assignee-based (#1670)", () => {
+  // Copilot is a REVIEWER on this repo, never an assignee. Presence must come
+  // from the review surface (submitted reviews / requested reviewers), so a
+  // repo with a submitted Copilot review reports PRESENT even though Copilot
+  // appears in no assignee list. An assignee-based proxy would falsely report
+  // absent here.
+  const presence = resolveCopilotReviewPresence({
+    requested: false,
+    reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED" }],
+  });
+  assert.equal(presence.present, true);
+  assert.deepEqual(presence.sources, ["submitted_review"]);
+  // Assignment is a disjoint surface and must never decide presence.
+  const withAssignees = resolveCopilotReviewPresence({
+    requested: false,
+    reviews: [],
+  });
+  // A human-only assignee list does not fabricate Copilot presence, nor does its
+  // absence erase a real submitted review already proven above.
+  assert.equal(withAssignees.present, false);
+});
+
+test("resolveCopilotReviewPresence: requested reviewer reports Copilot present", () => {
+  const presence = resolveCopilotReviewPresence({
+    requested: true,
+    reviews: [],
+  });
+  assert.equal(presence.present, true);
+  assert.deepEqual(presence.sources, ["requested_reviewer"]);
+});
+
+test("resolveCopilotReviewPresence: no requested reviewer and no submitted review reports absent", () => {
+  const presence = resolveCopilotReviewPresence({
+    requested: false,
+    reviews: [{ author: { login: "some-human" }, state: "APPROVED" }],
+  });
+  assert.equal(presence.present, false);
+  assert.deepEqual(presence.sources, []);
+  assert.equal(resolveCopilotReviewPresence({}).present, false);
+  assert.equal(resolveCopilotReviewPresence().present, false);
 });
 
 test("containsBareCopilotSummon detects a bare-text summon literal", () => {

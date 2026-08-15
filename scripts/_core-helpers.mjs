@@ -24,6 +24,7 @@ export {
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,
+  resolveCopilotReviewPresence,
   sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,

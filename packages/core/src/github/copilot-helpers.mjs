@@ -80,6 +80,37 @@ export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
 }
 
+/**
+ * Resolve whether Copilot is present as a reviewer on a PR from the REVIEW
+ * surface only — requested reviewers plus submitted reviews — never from
+ * assignees (#1670).
+ *
+ * Copilot review is configured in two ways: Copilot is either formally listed
+ * in the PR's `requested_reviewers`, or it is a configured auto-reviewer
+ * (`copilot-pull-request-reviewer[bot]`) that submits an actual review without
+ * ever appearing in `requested_reviewers`. Both are review-surface facts.
+ * Assignment is a disjoint surface and must never decide presence: on a
+ * reviewer-configured repo Copilot is never an assignee, so an assignee-based
+ * proxy would falsely report a fully-configured Copilot reviewer as absent and
+ * could let the gate skip the Copilot-convergence requirement on a false premise.
+ *
+ * @param {object} params
+ * @param {boolean} [params.requested] - Copilot is listed in the PR's requested_reviewers
+ * @param {Array<{author?: {login?: string}}>} [params.reviews] - PR review list
+ * @returns {{ present: boolean, sources: string[] }}
+ */
+export function resolveCopilotReviewPresence({ requested = false, reviews = [] } = {}) {
+  const list = Array.isArray(reviews) ? reviews : [];
+  const sources = [];
+  if (requested === true) {
+    sources.push("requested_reviewer");
+  }
+  if (list.some((review) => isCopilotLogin(review?.author?.login))) {
+    sources.push("submitted_review");
+  }
+  return { present: sources.length > 0, sources };
+}
+
 // Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command. Both
 // the write-side sanitizer and the read-side guard scan key off this shape so a
 // gate-evidence comment can quote the rule (inside a code span/fenced block)
