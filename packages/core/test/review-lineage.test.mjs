@@ -355,6 +355,30 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     assert.match(r.reason, /exceed maxLineageBytes 200/);
   });
 
+  test("checkLineageCompaction uses strict > boundary: exact-byte equality does not trigger (in-gate coverage finding)", () => {
+    const ds = deltas(2);
+    const exactBytes = lineageByteSize({ lineageBase: base(), deltas: ds });
+    // At exact equality (lineageBytes === maxLineageBytes) no compaction fires.
+    const eq = checkLineageCompaction({ lineageBase: base(), deltas: ds, maxLineageBytes: exactBytes });
+    assert.equal(eq.requiresCompaction, false);
+    // One byte over triggers.
+    const over = checkLineageCompaction({ lineageBase: base(), deltas: ds, maxLineageBytes: exactBytes - 1 });
+    assert.equal(over.requiresCompaction, true);
+  });
+
+  test("checkLineageCompaction rejects invalid maxLineageBytes (in-gate error-contract finding)", () => {
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: deltas(1), maxLineageBytes: 0 }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: deltas(1), maxLineageBytes: -5 }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: deltas(1), maxLineageBytes: 2.5 }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: deltas(1), maxLineageBytes: "10" }));
+  });
+
+  test("lineageByteSize rejects an invalid base / non-array deltas / malformed delta (in-gate error-contract finding)", () => {
+    assert.throws(() => lineageByteSize({ lineageBase: {}, deltas: [] }));
+    assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: "nope" }));
+    assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: [{ kind: "round-delta" }] }));
+  });
+
   test("lineageByteSize is deterministic and grows with each appended delta", () => {
     const s1 = lineageByteSize({ lineageBase: base(), deltas: deltas(1) });
     const s2 = lineageByteSize({ lineageBase: base(), deltas: deltas(2) });
@@ -389,6 +413,42 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: null }));
     assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: "not-an-array" }));
     assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: null }));
+  });
+
+  test("rebase honors an explicit currentDiff override (in-gate coverage finding)", () => {
+    const compacted = rebaseLineage({
+      lineageBase: base(),
+      deltas: [delta1()],
+      currentDiff: "custom cumulative diff text",
+    });
+    assert.equal(compacted.originalDiff, "custom cumulative diff text");
+    // Default (no currentDiff) still folds in the fix diffs.
+    const defaulted = rebaseLineage({ lineageBase: base(), deltas: [delta1()] });
+    assert.match(defaulted.originalDiff, /fix one/);
+  });
+
+  test("rebase with empty deltas folds nothing and keeps head/diff unchanged (in-gate coverage finding)", () => {
+    const compacted = rebaseLineage({ lineageBase: base(), deltas: [] });
+    assert.equal(compacted.compaction, true);
+    assert.equal(compacted.originalHead, base().originalHead);
+    assert.equal(compacted.originalDiff, base().originalDiff);
+    assert.equal(compacted.compactedRoundCount, 0);
+  });
+
+  test("rebasing an already-compacted base accumulates compactedRoundCount (in-gate coverage finding)", () => {
+    const first = rebaseLineage({ lineageBase: base(), deltas: deltas(2) });
+    assert.equal(first.compactedRoundCount, 2);
+    // Anchor a new delta chain to the compacted head.
+    const anchor = first.originalHead;
+    const chain = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: GATE,
+      baseHead: anchor,
+      reviewedHead: "f".repeat(64),
+      fixDiff: "diff --git a/src/a.mjs b/src/a.mjs\n+post-compact 1\n",
+    });
+    const second = rebaseLineage({ lineageBase: first, deltas: [chain] });
+    assert.equal(second.compactedRoundCount, 3); // 2 (prior) + 1 (new)
+    assert.equal(second.rebaseSourceBaseHash, first.baseHash);
   });
 
   test("rebase preserves composition rules — compacted base resumes appending round-1 delta", () => {

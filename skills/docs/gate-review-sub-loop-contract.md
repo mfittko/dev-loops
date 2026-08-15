@@ -1724,13 +1724,16 @@ breakpoint/lookback limits and the context window. A documented compaction
 `checkLineageCompaction({ lineageBase, deltas, maxRounds, maxLineageBytes })`
 returns `{ requiresCompaction, reason, ... }` (pure predicate — never mutates).
 
-**Rebase behaviour.** `rebaseLineage({ lineageBase, deltas })` folds the
-accumulated deltas into a new compacted `review-lineage-base`: `originalHead`
+**Rebase behaviour.** `rebaseLineage({ lineageBase, deltas, currentDiff? })` folds
+the accumulated deltas into a new compacted `review-lineage-base`: `originalHead`
 advances to the latest reviewed head and `originalDiff` becomes the cumulative
-diff (original full diff merged with every accepted fix diff, in order). The
+/ concatenated diff text (the original full diff joined with every accepted fix
+diff, in order — an accumulated text fold, not a patched merge). A caller may
+explicitly supply `currentDiff` to override that folded text outright. The
 compacted base keeps the same `lineageId`/`gate`, is itself a valid base that
 `composeRoundRequest` accepts unchanged, and records `rebaseSourceBaseHash` +
-`compactedRoundCount` for traceability. Subsequent rounds append fresh deltas
+`compactedRoundCount` (and sets the reserved `compaction: true` marker field)
+for traceability. Subsequent rounds append fresh deltas
 to the compacted base, so the composed request stays within the provider
 breakpoint/lookback + context budget. Composition rules are preserved: a new
 round-1 delta whose `baseHead` equals the compacted base's `originalHead`
