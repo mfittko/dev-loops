@@ -1040,10 +1040,15 @@ export async function listRepoAsyncRuns(
       continue;
     }
     record.runState = RUN_STATE.COMPLETED;
+    // Only assert childNonZeroExit when the underlying evidence proves the child
+    // actually exited non-zero (the meta exitCode path). A record reconstructed
+    // from a result-summary state label (scanAsyncResultRoot) never observed an
+    // exit code, so the flag would otherwise fabricate a fact we cannot prove.
+    const childExitCode = Number.isInteger(record.evidence?.exitCode) ? record.evidence.exitCode : null;
     record.evidence = {
       ...record.evidence,
       mergeSuccess: true,
-      childNonZeroExit: true,
+      ...(childExitCode !== null ? { childNonZeroExit: childExitCode !== 0 } : {}),
       warning: "run recorded a successful merge but the child exited non-zero post-merge; reported COMPLETED on clean merge — confirm the non-zero exit was post-merge verification noise (CI is authoritative for gate evidence), not a real post-merge regression",
     };
   }
@@ -1139,8 +1144,22 @@ function outputTextIndicatesSuccessfulMerge(text) {
   // parseArtifactState's `\bmerged\b` word check also matches negatives
   // ("artifacts not merged", "merge still pending") in the Status/artifact
   // lines and would false-downgrade a genuinely failed run.
-  return /\bPR merged:\s*#\d+\b/iu.test(text)
-    || /\bArtifact state:\s*merged\b/iu.test(text);
+  //
+  // Both signals are read as their own line and the extracted value must be
+  // exactly a positive merge signal: reversal/narrative phrasing
+  // ("PR merged: #X was then reverted", "was the PR merged: #X") or a bold
+  // `**Artifact state:** merged` recap cannot reshape a failed run into
+  // COMPLETED. This parallels the first-line semantics parseArtifactState uses.
+  const padded = `\n${text}`;
+  const prMergedLine = padded.match(/^\**PR merged:\**\s*([^\n]+)$/imu)?.[1];
+  if (prMergedLine !== undefined && /^#\s*\d+\s*$/iu.test(prMergedLine.trim())) {
+    return true;
+  }
+  const artifactStateValue = padded.match(/^\**Artifact state:\**\s*([^\n]+)$/imu)?.[1];
+  if (artifactStateValue !== undefined && stripFormatting(artifactStateValue).toLowerCase() === "merged") {
+    return true;
+  }
+  return false;
 }
 function parseLoopState(text) {
   const patterns = [

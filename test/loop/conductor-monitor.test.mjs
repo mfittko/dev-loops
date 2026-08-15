@@ -1823,6 +1823,49 @@ test("conductor-monitor decouples merge-success run-state from non-zero post-mer
       { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
     );
     assert.equal(runs2.find((run) => run.runId === "run-notmerged-1638").runState, "failed");
+
+    // Reversal/narrative phrasing must NOT false-downgrade a genuinely failed run
+    // (e.g. a post-merge-revert narrative that only mentions the merge as a recap).
+    await writeSessionRun({
+      sessionsRoot,
+      runId: "run-reverted-1638",
+      cwd: repoRoot,
+      timestampMs: 1700000099000,
+      exitCode: 1,
+      outputText: "Active PR: owner/repo#1664\nArtifact state: open\nPR merged: #1664 was then reverted due to CI failure\n",
+    });
+    const runs3 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    assert.equal(runs3.find((run) => run.runId === "run-reverted-1638").runState, "failed", "reversal narrative must stay FAILED");
+
+    // A merged run reconstructed from a result-summary state label (no meta
+    // exitCode observed) must downgrade to COMPLETED on clean merge but must NOT
+    // fabricate childNonZeroExit — the flag is only provable from the meta path.
+    await writeFile(
+      path.join(asyncResultsRoot, "run-result-merged-1638.json"),
+      `${JSON.stringify({
+        runId: "run-result-merged-1638",
+        state: "failed",
+        cwd: repoRoot,
+        timestamp: 1700000099000,
+        results: [{
+          agent: "dev-loop",
+          sessionFile: "x",
+          output: "Active PR: owner/repo#1666\nArtifact state: merged\nPR merged: #1666\n",
+        }],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const runs4 = await listRepoAsyncRuns(
+      { repo: "owner/repo" },
+      { repoRoot, sessionRoots: [sessionsRoot], asyncRunRoots: [asyncRunsRoot], asyncResultRoots: [asyncResultsRoot] },
+    );
+    const stateLabelMerged = runs4.find((run) => run.runId === "run-result-merged-1638");
+    assert.equal(stateLabelMerged.runState, "completed", "state-label merged run downgrades to COMPLETED");
+    assert.equal(stateLabelMerged.evidence.mergeSuccess, true);
+    assert.equal(stateLabelMerged.evidence.childNonZeroExit, undefined, "childNonZeroExit must not be fabricated without an exitCode");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
