@@ -1146,10 +1146,12 @@ function outputTextIndicatesSuccessfulMerge(text) {
   // lines and would false-downgrade a genuinely failed run.
   //
   // Both signals are read as their own line and the extracted value must be
-  // exactly a positive merge signal: reversal/narrative phrasing
-  // ("PR merged: #X was then reverted", "was the PR merged: #X") or a bold
-  // `**Artifact state:** merged` recap cannot reshape a failed run into
-  // COMPLETED. This parallels the first-line semantics parseArtifactState uses.
+  // exactly a positive merge signal: narrative/reversal phrasing
+  // ("PR merged: #X was then reverted", "was the PR merged: #X") can never
+  // match because extraction is line-anchored and value-exact. Markdown bold
+  // around the canonical label (`**Artifact state:**`, `**PR merged:**`) is
+  // tolerated as formatting, mirroring parseArtifactState's formatting
+  // tolerance. This parallels the first-line semantics parseArtifactState uses.
   const padded = `\n${text}`;
   const prMergedLine = padded.match(/^\**PR merged:\**\s*([^\n]+)$/imu)?.[1];
   if (prMergedLine !== undefined && /^#\s*\d+\s*$/iu.test(prMergedLine.trim())) {
