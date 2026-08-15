@@ -45,7 +45,7 @@ describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
     const lineageBase = buildReviewLineageBase({
       lineageId: "fixture-1",
       gate: FIXTURE.gate,
-      originalHead: FIXTURE.rounds[0].head,
+      originalHead: FIXTURE.baseHead,
       originalDiff: FIXTURE.originalDiff,
       stableContracts: "review agent instructions v1",
     });
@@ -119,7 +119,7 @@ describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
     const lineageBase = buildReviewLineageBase({
       lineageId: "fixture-1",
       gate: FIXTURE.gate,
-      originalHead: round1.head,
+      originalHead: FIXTURE.baseHead,
       originalDiff: FIXTURE.originalDiff,
       stableContracts: "review agent instructions v1",
     });
@@ -157,7 +157,7 @@ describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
     // Round 1 delta + round 2 delta compose append-only.
     const delta1 = buildFixRoundDelta({
       lineageId: "fixture-1", round: 1, gate: FIXTURE.gate,
-      baseHead: round1.head, reviewedHead: round1.head, fixDiff: round1.fixDiff,
+      baseHead: lineageBase.originalHead, reviewedHead: round1.head, fixDiff: round1.fixDiff,
       validationEvidence: round1.validation, findingsChecklist: round1.checklist,
     });
     const delta2 = buildFixRoundDelta({

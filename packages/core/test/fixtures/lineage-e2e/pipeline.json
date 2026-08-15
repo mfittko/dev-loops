@@ -1,6 +1,7 @@
 {
   "description": "Two-round cache-aware review pipeline fixture (issue #1468 slice 6 e2e): context build -> request plan -> primer -> fan-out -> fan-in -> lineage delta, then compaction.",
   "gate": "pre_approval_gate",
+  "baseHead": "0000000000000000000000000000000000000000000000000000000000000000",
   "model": "model-a",
   "angles": [
     "correctness",

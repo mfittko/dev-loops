@@ -533,6 +533,9 @@ export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
     if (d.round !== i + 1) {
       throw new Error(`rebaseLineage deltas must be contiguous from round 1; expected round ${i + 1}, got ${d.round}`);
     }
+    if (d.fixDiff == null || String(d.fixDiff).length === 0) {
+      throw new Error(`rebaseLineage deltas[${i}] requires a non-empty fixDiff (the actual fix diff)`);
+    }
   }
   // SHA-chain continuity across the accumulated deltas (keep the composed
   // request truthful — same rule `composeRoundRequest` enforces).
