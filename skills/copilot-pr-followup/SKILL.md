@@ -109,6 +109,20 @@ Required bundled runtime contract docs for installed copies of this skill:
 Read those bundled `../docs/` files from the installed skill layout instead of assuming the source repository checkout is present. If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.
 <!-- rule: ASSET-PATH-SOURCE-NO-REPO-LOCAL --> `ASSET-PATH-SOURCE-NO-REPO-LOCAL`: Agents MUST NOT assume `scripts/...` is repo-local to the target codebase they are operating on.
 
+### Stale-installed-CLI: prefer worktree-source verdict/ledger tooling (#1661)
+
+A stale installed dev-loops CLI (e.g. rc.1) lacks the gate-evidence CI exclusion that newer source (rc.4+) has, so posting a `pre_approval_gate` verdict through the stale script blocks on `WAITING_FOR_CI`. To keep the canonical gate path green regardless of install state, resolve where the verdict/ledger tooling should run from FIRST via the deterministic helper (issue #1661):
+
+```sh
+node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
+```
+
+- When `preferredSource` is `worktree`, run the verdict/ledger tooling (`upsert-checkpoint-verdict.mjs`, `write-gate-findings-log.mjs`, `detect-checkpoint-evidence.mjs`, and their gate helpers) from the worktree/source `scripts/` layout instead of the installed layout.
+- When `preferredSource` is `installed`, run them from the resolved skill-scripts layout (installed) as usual.
+- The helper compares the installed dev-loops CLI version against the current source/worktree version (bounded candidate detection); it never changes the gate-evidence CI-exclusion logic itself (`#1661` non-goal) and fails soft to the canonical installed layout when a version cannot be read.
+
+This is the canonical fix surface for `#1661`: prefer worktree-source scripts for verdict/ledger tooling when the installed CLI is stale, with no change to the gate path's own behavior.
+
 ### Source files under review vs. helper-script paths
 
 The rule above governs HELPER SCRIPT paths invoked as tooling (`scripts/...` you RUN). It does **not** govern SKILL/DOC SOURCE FILES you REVIEW as content. A gate reviewer citing a skill/doc file (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) in a finding is reviewing the PR's content, not invoking tooling — and installed copies of those source files lag the PR under review. Reading an installed copy (`.pi/skills/<name>/SKILL.md`, `~/.pi/agent/...`) produces false high-severity findings against text the PR already fixed (#1603).

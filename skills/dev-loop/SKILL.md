@@ -122,6 +122,16 @@ Use the fallback poster only when the full helper cannot be reached:
 
 When `@dev-loops/core` is available again, switch back to the full helper. The fallback poster is a degraded path, not a permanent replacement.
 
+### Stale-installed-CLI: prefer worktree-source verdict/ledger tooling (#1661)
+
+Before posting a `pre_approval_gate` (or `draft_gate`) verdict, resolve which layout the verdict/ledger tooling should run from via the deterministic helper (issue #1661):
+
+```sh
+node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
+```
+
+When `preferredSource` is `worktree` (installed dev-loops CLI older than the current source/worktree), run `upsert-checkpoint-verdict.mjs`, `write-gate-findings-log.mjs`, and `detect-checkpoint-evidence.mjs` from the worktree/source `scripts/` layout — the stale installed CLI lacks the gate-evidence CI exclusion and would otherwise block verdict posting on `WAITING_FOR_CI`. When `installed`, use the resolved skill-scripts (installed) layout as usual. The copilot-pr-followup skill's [Skill asset path resolution](../copilot-pr-followup/SKILL.md#skill-asset-path-resolution) owns the full rule; this is the entrypoint pointer.
+
 ## Read-only info shortcut
 
 Info/handoff requests can be served directly via `node <dev-loops-package-root>/cli/index.mjs loop info` (read-only; no full dev-loop run required):

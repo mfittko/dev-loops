@@ -74,6 +74,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/pre-write-remote-freshness-guard.mjs", "standalone — remote-freshness guard step, agent-invoked"],
   ["scripts/loop/run-conductor-cycle.mjs", "standalone — conductor cycle step (documented in scripts/README), agent-invoked"],
   ["scripts/loop/run-gate-validation.mjs", "standalone — CLI gate-suite runner, agent/operator invoked"],
+  ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
   ["scripts/loop/run-refinement-audit.mjs", "standalone — refinement audit step (documented in scripts/README), agent-invoked"],
   ["scripts/loop/validate-pr-body-spec.mjs", "delete or wire — CLI superseded by core validatePrBodySpec; its --expected-issue option has no caller (issue #1620 orphan)"],
   ["scripts/refine/refine-plan-file.mjs", "standalone — refine-flow phase-file step, agent-invoked"],
