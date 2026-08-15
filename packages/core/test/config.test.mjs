@@ -179,6 +179,47 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S10d: workflow.stallDetection parses and resolves (#1669)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      workflow: {
+        asyncStartMode: "required",
+        requireRetrospective: false,
+        requireDraftFirst: false,
+        devModeDefault: false,
+        stallDetection: { enabled: true, thresholdMinutes: 7 },
+      },
+    });
+    assert.ok(result.success);
+    assert.equal(result.data.workflow.stallDetection.enabled, true);
+    assert.equal(result.data.workflow.stallDetection.thresholdMinutes, 7);
+
+    // unknown key inside stallDetection rejected
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      workflow: {
+        requireRetrospective: false,
+        requireDraftFirst: false,
+        devModeDefault: false,
+        stallDetection: { enabled: true, bogus: 1 },
+      },
+    });
+    assert.ok(!bad.success);
+
+    // resolver returns defaults when unset
+    const resolved = resolveWorkflowConfig({}, "stallDetection");
+    assert.equal(resolved.enabled, true);
+    assert.equal(resolved.thresholdMinutes, 5);
+
+    // resolver honors explicit override
+    const overridden = resolveWorkflowConfig(
+      { workflow: { stallDetection: { enabled: false, thresholdMinutes: 9 } } },
+      "stallDetection"
+    );
+    assert.equal(overridden.enabled, false);
+    assert.equal(overridden.thresholdMinutes, 9);
+  });
+
   test("S11: strategy.default bad enum", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
@@ -580,6 +621,7 @@ describe("BUILT_IN_DEFAULTS", () => {
       requireRetrospective: false,
       requireDraftFirst: false,
       devModeDefault: false,
+      stallDetection: { enabled: true, thresholdMinutes: 5 },
     });
   });
 });
@@ -926,6 +968,7 @@ describe("loader — graceful degradation", () => {
         requireRetrospective: true,
         requireDraftFirst: true,
         devModeDefault: false,
+        stallDetection: { enabled: true, thresholdMinutes: 5 },
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -1416,6 +1459,7 @@ describe("loader — precedence", () => {
         requireRetrospective: true,
         requireDraftFirst: false,
         devModeDefault: true,
+        stallDetection: { enabled: true, thresholdMinutes: 5 },
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
