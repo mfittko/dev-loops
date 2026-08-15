@@ -427,6 +427,11 @@ export function lineageByteSize({ lineageBase, deltas = [] } = {}) {
     if (!d || d.kind !== "round-delta" || !isSha256(d.deltaHash)) {
       throw new Error(`lineageByteSize deltas[${i}] must be a valid round-delta artifact`);
     }
+    if (d.lineageId !== lineageBase.lineageId || d.gate !== lineageBase.gate) {
+      throw new Error(
+        `lineageByteSize deltas[${i}] must share the lineage base's lineageId and gate (parity with rebaseLineage/composeRoundRequest)`,
+      );
+    }
     total += utf8Length(d);
   }
   return total;
@@ -551,10 +556,11 @@ export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
 
   let diff;
   if (currentDiff != null) {
-    diff = normalizeText(currentDiff, "currentDiff");
-    if (diff.length === 0) {
+    const isEmpty = Buffer.isBuffer(currentDiff) ? currentDiff.length === 0 : String(currentDiff).length === 0;
+    if (isEmpty) {
       throw new Error("rebaseLineage currentDiff must be non-empty");
     }
+    diff = normalizeText(currentDiff, "currentDiff");
   } else if (deltas.length === 0) {
     diff = lineageBase.originalDiff;
   } else {

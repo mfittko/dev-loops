@@ -409,6 +409,17 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     assert.equal(wideBytes, narrowBytes);
   });
 
+  test("lineageByteSize rejects a foreign-lineage or wrong-gate delta (in-gate input-validation finding)", () => {
+    const foreign = buildFixRoundDelta({
+      lineageId: "lin-OTHER", round: 1, gate: GATE, baseHead: BASE, reviewedHead: R1, fixDiff: "x",
+    });
+    const wrongGate = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: "draft_gate", baseHead: BASE, reviewedHead: R1, fixDiff: "x",
+    });
+    assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: [foreign] }));
+    assert.throws(() => lineageByteSize({ lineageBase: base(), deltas: [wrongGate] }));
+  });
+
   test("checkLineageCompaction fails closed on a non-array deltas input (in-gate nullable-deltas finding)", () => {
     assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: null }));
     assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: "not-an-array" }));
@@ -545,6 +556,10 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     });
     const compacted = rebaseLineage({ lineageBase: base(), deltas: [mixed] });
     assert.equal(compacted.originalHead, "ab".repeat(32));
+  });
+
+  test("rebase rejects an empty-Buffer currentDiff (in-gate correctness finding)", () => {
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [delta1()], currentDiff: Buffer.alloc(0) }));
   });
 
   test("rebaseLineage rejects an invalid lineageBase and null/undefined delta elements (in-gate coverage finding)", () => {
