@@ -147,6 +147,22 @@ dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_s
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> --jq '.severityCounts'
 ```
 
+**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
+durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>`), dispatch
+the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
+linked issue's AC/DoD/non-goals, the PR's declared scope, and the prior-round judge ledgers — and
+await its verdict artifact at `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`
+(its only write). Then run the deterministic bridge to derive the fixer's act list for Phase 4:
+
+```sh
+dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path>
+```
+
+The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a `judge-pass` fail-closed
+(stale verdict head, malformed verdict, out-of-range index) means re-run the judge at the current head,
+never a silent severity-only fallback on a wired gate. See Gate Review Sub-Loop Contract Phase 3.5.
+
 The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md), [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) Phase 3) remain authoritative for the full refusal list and fail-closed cases; this inline emphasis exists so the sanctioned path is visible at the point of dispatch without following a link. A subagent that skipped the cross-ref and hand-rolled `Promise.all` + transcript-tailing burned ~189k tokens and had to be interrupted and restarted fresh — do not repeat that.
 
 **Bounded test runs (enforced — #1650):** Every `node --test` / `npm test` invocation an agent launches directly on a suite containing gh-mocking tests MUST be bounded by a hard timeout: `timeout 90 node --test <file>` (or wrap the run in `timeout`). Never invoke an unbounded `node --test` / `npm test` on such a suite. (Piping through `head` is NOT a substitute — it bounds output lines, not execution time; a hung test producing no output is never killed.) Failure mode: a gh-mocking test that hangs on a real `gh`/run-id call blocks the whole drive — #1526 stalled 65+ seconds on `upsert-checkpoint-verdict.test.mjs`, and a retrospective subagent hit the same hang re-running the gate suites. (#1639 stabilizes the environmental suites themselves; this guardrail bounds the run so a single hung test cannot stall a drive.) `npm run verify` already bounds its suites; this applies to ad-hoc / per-file test runs an agent launches directly.
