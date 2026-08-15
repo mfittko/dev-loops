@@ -5037,15 +5037,16 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
   try {
-    // requireFanoutEvidence: true; no explicit base-ref/label mock entry is
-    // staged below, so the light-facts fetch (the shipped default enables
-    // lightMode) gets an unusable response and scope stays un-derivable —
-    // fails closed exactly like an over-threshold PR would.
+    // requireFanoutEvidence: true; the light-facts fetch (the shipped default
+    // enables lightMode) is explicitly stubbed to fail below, so scope stays
+    // un-derivable — fails closed deterministically, exactly like an
+    // over-threshold PR would, without relying on repeat-last-on-overflow.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
 
     for (const verdict of ["clean", "findings_present", "blocked"]) {
       const env = await writeGhStub(tempDir, [
         ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], exitCode: 1, stderr: "gh: rate limited\n" },
       ]);
       const result = await runNode([
         "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
@@ -5313,6 +5314,7 @@ test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence
     // refuse to record it.
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], headSha: fixture.headSha }),
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], exitCode: 1, stderr: "gh: rate limited\n" },
     ]);
     const postTimeResult = await runNode([
       "--repo", fixture.repo, "--pr", String(fixture.pr), "--gate", fixture.gate, "--head-sha", fixture.headSha,
