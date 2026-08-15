@@ -518,6 +518,42 @@ describe("lineage compaction / rebase policy (issue #1468 slice 6)", () => {
     }));
   });
 
+  test("rebase enforces round contiguity from round 1 (in-gate correctness finding)", () => {
+    // A head-chaining but round-mislabeled list (starts at 5) is rejected.
+    const mislabeled = buildFixRoundDelta({
+      lineageId: "lin-1", round: 5, gate: GATE,
+      baseHead: BASE, reviewedHead: R1, fixDiff: "x",
+    });
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [mislabeled] }));
+    const skip = buildFixRoundDelta({
+      lineageId: "lin-1", round: 3, gate: GATE,
+      baseHead: R1, reviewedHead: R2, fixDiff: "x",
+    });
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [delta1(), skip] }));
+    // A well-ordered list passes.
+    assert.ok(rebaseLineage({ lineageBase: base(), deltas: [delta1(), delta2()] }));
+  });
+
+  test("rebase normalizes the extracted head and rejects an empty currentDiff (in-gate finding)", () => {
+    // currentDiff empty is rejected.
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [delta1()], currentDiff: "" }));
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [delta1()], currentDiff: [] }));
+    // Normalized head: mixed-case reviewedHead is lowercased in the compacted base.
+    const mixed = buildFixRoundDelta({
+      lineageId: "lin-1", round: 1, gate: GATE,
+      baseHead: BASE, reviewedHead: "AB".repeat(32), fixDiff: "x",
+    });
+    const compacted = rebaseLineage({ lineageBase: base(), deltas: [mixed] });
+    assert.equal(compacted.originalHead, "ab".repeat(32));
+  });
+
+  test("rebaseLineage rejects an invalid lineageBase and null/undefined delta elements (in-gate coverage finding)", () => {
+    assert.throws(() => rebaseLineage({ lineageBase: {}, deltas: [] }));
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: null }));
+    assert.throws(() => rebaseLineage({ lineageBase: base(), deltas: [null] }));
+    assert.throws(() => checkLineageCompaction({ lineageBase: base(), deltas: [undefined, delta1()] }));
+  });
+
   test("rebase fails closed on a broken SHA chain, wrong gate, or foreign lineage", () => {
     const badChain = [...deltas(2)];
     badChain[1] = buildFixRoundDelta({

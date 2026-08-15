@@ -518,6 +518,9 @@ export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
     if (d.gate !== lineageBase.gate) {
       throw new Error("rebaseLineage deltas gate must match the lineage base gate");
     }
+    if (d.round !== i + 1) {
+      throw new Error(`rebaseLineage deltas must be contiguous from round 1; expected round ${i + 1}, got ${d.round}`);
+    }
   }
   // SHA-chain continuity across the accumulated deltas (keep the composed
   // request truthful — same rule `composeRoundRequest` enforces).
@@ -537,11 +540,14 @@ export function rebaseLineage({ lineageBase, deltas = [], currentDiff } = {}) {
   }
 
   let newOriginalHead = lineageBase.originalHead;
-  if (deltas.length > 0) newOriginalHead = deltas[deltas.length - 1].reviewedHead;
+  if (deltas.length > 0) newOriginalHead = deltas[deltas.length - 1].reviewedHead.trim().toLowerCase();
 
   let diff;
   if (currentDiff != null) {
     diff = normalizeText(currentDiff, "currentDiff");
+    if (diff.length === 0) {
+      throw new Error("rebaseLineage currentDiff must be non-empty");
+    }
   } else if (deltas.length === 0) {
     diff = lineageBase.originalDiff;
   } else {
