@@ -142,10 +142,10 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted, EVERY of the PR's closing issue references is resolved and each linked issue's body is fetched — an umbrella PR resolves all of them, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
@@ -687,15 +687,20 @@ export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = 
 export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
 
 /**
- * Rendered when no PR body text reaches the prefix. The CLI resolves the live
- * body itself (resolvePrSpecContext) and fails closed when it cannot, so from
- * the CLI path this wording is reached only for a PR whose description is
- * genuinely empty on GitHub — it is a truthful statement, not the old
- * "(no PR body provided)" which described the CALLER's arguments and read as a
- * claim about the PR. Programmatic callers that pass no `prBody` still land
- * here; that is their explicit choice of a thin briefing.
+ * Rendered when no PR body text reaches the prefix. Deliberately SOURCE-NEUTRAL:
+ * it asserts only that no PR description is shown, never a GitHub-specific fact
+ * ("empty on GitHub") — because it is also rendered by the exported
+ * renderBriefingPrefix / writeGateContext programmatic path, which never
+ * contacts GitHub and therefore cannot truthfully claim anything about the
+ * live PR state. It is distinguishable from the old "(no PR body provided)",
+ * which described the CALLER's arguments and could read as a claim about the
+ * PR: the sentinel reads as an absence statement, not an argument audit. On
+ * the CLI path the live body is resolved (resolvePrSpecContext) and an
+ * unreadable PR fails closed, so the sentinel appears there only when a
+ * resolved source is genuinely empty; programmatic callers that pass no
+ * `prBody` land here by their explicit choice of a thin briefing.
  */
-export const PR_BODY_ABSENT_SENTINEL = "(this PR has an empty description on GitHub)";
+export const PR_BODY_ABSENT_SENTINEL = "(no PR description is shown)";
 
 /**
  * Rendered in place of an individual linked issue's body when that issue was
@@ -1160,9 +1165,13 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * present), the full diff at the reviewed head (inlined up to `capBytes`, else
  * a pointer to `diffPath`), and a changed-files/adjacent-code summary — in that
  * fixed order. Pure and
- * deterministic: identical input always renders identical bytes, so two builds
- * at the same head produce a byte-identical prefix (the fan-out's shared-prefix
- * requirement).
+ * deterministic: identical input always renders identical bytes — the pure
+ * function's guarantee. The CLI path resolves the live PR body and linked-issue
+ * bodies from GitHub and passes them in as input, so a same-head rebuild after
+ * a live description edit resolves DIFFERENT input and yields DIFFERENT prefix
+ * bytes; a conductor MUST NOT rebuild the context while reviewers for that head
+ * are still running (GATE-EXEC-BRIEFING-PREFIX in the gate-review sub-loop
+ * contract). Only byte-identity for identical input holds unconditionally.
  *
  * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
  * author or linked-issue author controlled) and are each wrapped in their own
