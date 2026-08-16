@@ -22,7 +22,7 @@ import { parseArgs } from "node:util";
 
 import { formatCliError, isDirectCliRun, summarizeGateReviewComments } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { fetchPrHeadRefOid } from "../lib/head-sha.mjs";
+import { fetchPrHeadRefOid, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -83,9 +83,15 @@ export function parseAuditGateEvidenceCliArgs(argv) {
   const pr = parsePrNumber(values.pr, parseError);
   let headSha = null;
   if (typeof values["head-sha"] === "string" && values["head-sha"].trim().length > 0) {
-    headSha = values["head-sha"].trim().toLowerCase();
-    if (!/^[0-9a-f]{7,64}$/.test(headSha)) {
-      throw parseError("--head-sha must be a hex commit sha (or omitted to auto-fetch)");
+    // --head-sha must be the FULL head SHA (40/64 hex), matching the shared
+    // head-sha.mjs convention (FULL_HEAD_SHA_ERROR). The audit compares the
+    // verdict-body head SHA against it by prefix, so an abbreviated annotation
+    // could never match a full-sha verdict body and would false-report
+    // "missing" (pre-approval dry / contradiction-lens findings). Auto-fetch
+    // (full oid) remains the default and is unaffected.
+    headSha = normalizeFullHeadSha(values["head-sha"]);
+    if (!headSha) {
+      throw parseError("--head-sha must be the FULL head commit SHA (40 or 64 hex chars), or omitted to auto-fetch");
     }
   }
   const out = { repo, pr, headSha };
@@ -127,12 +133,10 @@ export async function auditGateEvidence(options, { env = process.env, ghCommand 
   // Copilot head-match finding).
   if (draftGate.verdict !== "clean" || !draftGate.visible) missing.push("draft_gate");
   // Verdict-body head SHAs may be abbreviated (7-64 hex, e.g. the back-compat
-  // issue-comment surface), while currentHeadSha is always the FULL oid from
-  // gh pr view. Compare by prefix — the repo convention fetchDraftGateEvidence
-  // uses — so an abbreviated-but-current head never false-reports missing
-  // (issue #1729 contradiction-lens finding). This also means a short
-  // --head-sha annotation (line 87 accepts 7-64) is a valid prefix match
-  // rather than a value that can never equal the full oid.
+  // issue-comment surface), while currentHeadSha is always the FULL oid (from
+  // gh pr view, or a full --head-sha). Compare by prefix — the repo convention
+  // fetchDraftGateEvidence uses — so an abbreviated-but-current head never
+  // false-reports missing (pre-approval contradiction-lens finding).
   const preApprovalCurrentHead =
     preApprovalGate.verdict === "clean" &&
     preApprovalGate.visible &&

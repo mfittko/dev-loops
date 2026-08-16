@@ -124,7 +124,7 @@ test("audit-gate-evidence: abbreviated verdict-body head SHA counts as current-h
   // whose verdict body carries an abbreviated head SHA (7-64 hex prefix) must
   // still count as current-head evidence against the full oid from gh pr view.
   // Strict equality would false-report this as missing (issue #1729's core bug).
-  const FULL_OID = "3d4f0389d4f0389d4f0389d4f0389d4f0389d4f03";
+  const FULL_OID = "3d4f0389d4f0389dd4f0389dd4f0389dd4f0389d";
   const ABBREV = "3d4f0389";
   const PRE_APPROVAL_ABBREV = {
     ...PRE_APPROVAL_CLEAN,
@@ -244,6 +244,10 @@ test("audit-gate-evidence: CLI parse rejects malformed inputs (coverage regressi
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo"]), /pr/);
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo", "--pr", "abc"]), /pr/);
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo", "--pr", "1", "--head-sha", "zzz"]), /head-sha/);
+  // Abbreviated --head-sha is now rejected (must be the FULL 40/64 hex sha per
+  // head-sha.mjs convention) — prevents the abbreviated-CLI false-missing
+  // footgun (pre-approval contradiction-lens finding).
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo", "--pr", "1", "--head-sha", "3d4f0389"]), /head-sha/);
 });
 
 test("audit-gate-evidence: CLI parse normalizes --repo through parseRepoSlug (no repo.repo deref) (#1729 gate finding)", () => {
@@ -282,7 +286,7 @@ test("audit-gate-evidence spawned CLI: --silent exits 0 when both verdicts are p
       },
     ]);
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389d4f0389dd4f0389dd4f0389dd4f0389d", "--silent"],
       { env: gh.env },
     );
     assert.equal(result.code, 0, result.stderr);
@@ -306,7 +310,7 @@ test("audit-gate-evidence spawned CLI: --silent exits non-zero when a verdict is
       },
     ]);
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389d4f0389dd4f0389dd4f0389dd4f0389d", "--silent"],
       { env: gh.env },
     );
     assert.equal(result.code, 1, result.stderr);
@@ -330,7 +334,7 @@ test("audit-gate-evidence spawned CLI: --silent exits non-zero when pre_approval
       },
     ]);
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389d4f0389dd4f0389dd4f0389dd4f0389d", "--silent"],
       { env: gh.env },
     );
     assert.equal(result.code, 1, result.stderr);
@@ -354,7 +358,7 @@ test("audit-gate-evidence spawned CLI: verbose mode prints the JSON report and e
       },
     ]);
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389"],
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389d4f0389dd4f0389dd4f0389dd4f0389d"],
       { env: gh.env },
     );
     assert.equal(result.code, 0, result.stderr);
