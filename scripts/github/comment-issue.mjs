@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
@@ -16,6 +16,9 @@ Required:
   --body <text>                 Comment body as a single argument
   --body-file <path>            Read the comment body from a file (preserves
                                 newlines; alternative to --body; - reads stdin)
+  --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
+                                deliberate cross-references in the body (the
+                                no-ids-in-comments guard refuses any other #<digits>)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "issue": 17, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -36,6 +39,7 @@ export function parseCommentIssueCliArgs(argv) {
       issue: { type: "string" },
       body: { type: "string" },
       "body-file": { type: "string" },
+      "allowed-refs": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -48,6 +52,7 @@ export function parseCommentIssueCliArgs(argv) {
     issue: undefined,
     body: undefined,
     bodyFile: undefined,
+    allowedRefs: [],
     jq: undefined,
     silent: false,
   };
@@ -80,6 +85,10 @@ export function parseCommentIssueCliArgs(argv) {
         throw parseError("--body-file must be a non-empty path");
       }
       options.bodyFile = rawPath;
+      continue;
+    }
+    if (token.name === "allowed-refs") {
+      options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
-import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -22,6 +22,9 @@ Required:
   --body <text>                 New comment body as a single argument
   --body-file <path>            Read the new body from a file (preserves
                                 newlines; alternative to --body; - reads stdin)
+  --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
+                                deliberate cross-references in the body (the
+                                no-ids-in-comments guard refuses any other #<digits>)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "commentId": 123, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -42,6 +45,7 @@ export function parseEditCommentCliArgs(argv) {
       "comment-id": { type: "string" },
       body: { type: "string" },
       "body-file": { type: "string" },
+      "allowed-refs": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -54,6 +58,7 @@ export function parseEditCommentCliArgs(argv) {
     commentId: undefined,
     body: undefined,
     bodyFile: undefined,
+    allowedRefs: [],
     jq: undefined,
     silent: false,
   };
@@ -86,6 +91,10 @@ export function parseEditCommentCliArgs(argv) {
         throw parseError("--body-file must be a non-empty path");
       }
       options.bodyFile = rawPath;
+      continue;
+    }
+    if (token.name === "allowed-refs") {
+      options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -131,8 +140,9 @@ export async function editComment(options, { env = process.env, ghCommand = "gh"
   const body = await resolveBody(options);
   // ISSUE/PR-ID GUARD (#1731): a modified comment body must never carry a raw
   // issue/PR id (fail-closed unless explicitly allowlisted), mirroring
-  // commentIssue in issue-ops.mjs.
-  guardCommentBodyNoIssuePrIds(body, { ref: "edited comment body" });
+  // commentIssue in issue-ops.mjs. `allowedRefs` is the ONLY sanctioned escape
+  // for a deliberate cross-reference, threaded from the --allowed-refs option.
+  guardCommentBodyNoIssuePrIds(body, { ref: "edited comment body", allowedRefs: options.allowedRefs });
   const result = await run(
     ghCommand,
     ["api", "-X", "PATCH", `repos/${options.repo}/issues/comments/${options.commentId}`, "-f", `body=${body}`],

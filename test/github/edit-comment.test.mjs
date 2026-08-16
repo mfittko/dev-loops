@@ -35,6 +35,33 @@ test("parseEditCommentCliArgs: parses repo/comment-id/body", () => {
   assert.equal(out.body, "hi");
 });
 
+test("parseEditCommentCliArgs: parses --allowed-refs csv", () => {
+  const out = parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi", "--allowed-refs", "1670,9000"]);
+  assert.deepEqual(out.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseEditCommentCliArgs: rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi", "--allowed-refs", "abc"]),
+    /positive integers/,
+  );
+});
+
+test("editComment: an --allowed-refs deliberate cross-ref posts", async () => {
+  const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  const result = await editComment({ repo: "o/n", commentId: 123, body: "deliberate cross-ref to issue #1670", allowedRefs: ["1670"] }, { run });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ["api", "-X", "PATCH", "repos/o/n/issues/comments/123", "-f", "body=deliberate cross-ref to issue #1670"]);
+});
+
+test("editComment: a raw unallowlisted id still refuses even when another is allowed (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => editComment({ repo: "o/n", commentId: 7, body: "see #1670 but also #999", allowedRefs: ["1670"] }, { run }),
+    /#999/,
+  );
+});
+
 test("parseEditCommentCliArgs: requires repo + comment-id", () => {
   assert.throws(() => parseEditCommentCliArgs(["--repo", "o/n"]), /requires both/);
 });

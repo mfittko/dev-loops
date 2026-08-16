@@ -229,8 +229,10 @@ export async function resolveCommentBody(options) {
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
   const body = await resolveCommentBody(options);
   // ISSUE/PR-ID GUARD (#1731): a generated comment body must never emit a raw
-  // issue/PR id (fail-closed unless explicitly allowlisted).
-  guardCommentBodyNoIssuePrIds(body, { ref: "issue comment body" });
+  // issue/PR id (fail-closed unless explicitly allowlisted). `allowedRefs` is
+  // the ONLY sanctioned escape for a deliberate cross-reference, threaded from
+  // the generic CLI writers' --allowed-refs option.
+  guardCommentBodyNoIssuePrIds(body, { ref: "issue comment body", allowedRefs: options.allowedRefs });
   const result = await run(
     ghCommand,
     ["issue", "comment", String(options.issue), "--repo", options.repo, "--body", body],
