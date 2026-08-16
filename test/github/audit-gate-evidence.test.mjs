@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { auditGateEvidence, parseAuditGateEvidenceCliArgs } from "../../scripts/github/audit-gate-evidence.mjs";
+
+const scriptPath = path.resolve("scripts/github/audit-gate-evidence.mjs");
+const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries);
 
 // Build a runChild that routes each gh invocation by its first positional arg
 // after the verb: `pr view` -> head oid; `api ... issues/.../comments` ->
@@ -146,4 +154,86 @@ test("audit-gate-evidence: CLI parse normalizes --repo through parseRepoSlug (no
   assert.equal(parsed.pr, 1735);
   assert.equal(parsed.headSha, "f5c7161ce4cc76d04a1a7e84654c88a785908339");
   assert.equal(parsed.help, undefined);
+});
+
+// The CLI entrypoint main() and its --silent verdict-presence predicate were
+// previously only reachable through a spawned `node .../audit-gate-evidence.mjs`
+// run, which no direct-call test exercised — the gap raised by the draft-gate
+// coverage finding (#1729). These two tests spawn the real binary with a
+// stubbed `gh` on PATH and pin the documented exit-code contract (0 = all
+// verdicts posted under --silent; non-zero = at least one missing).
+
+test("audit-gate-evidence spawned CLI: --silent exits 0 when both verdicts are posted via the PR-review surface", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-audit-silent-ok-"));
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([[DRAFT_CLEAN, PRE_APPROVAL_CLEAN]])}\n`,
+      },
+    ]);
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("audit-gate-evidence spawned CLI: --silent exits non-zero when a verdict is missing (jq -e style predicate)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-audit-silent-missing-"));
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+    ]);
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 1, result.stderr);
+    assert.equal(result.stdout, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("audit-gate-evidence spawned CLI: verbose mode prints the JSON report and exits 0 even when a verdict is missing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-audit-verbose-"));
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+    ]);
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.allVerdictsPosted, false);
+    assert.deepEqual(output.missing, ["draft_gate", "pre_approval_gate"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
