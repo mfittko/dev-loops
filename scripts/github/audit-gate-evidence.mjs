@@ -119,7 +119,10 @@ function normalizeVerdict(summary) {
 export async function auditGateEvidence(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const { repo, pr } = options;
   const currentHeadSha = options.headSha ?? (await fetchPrHeadRefOid({ repo, pr }, { env, ghCommand, runChild }));
-  const comments = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild });
+  // Report which surfaces were actually read so `surfaces` never claims a
+  // review read that silently failed (fail-open degradation would otherwise
+  // reproduce the false-missing this audit exists to prevent).
+  const { comments, surfaces } = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild, reportSurfaces: true });
   const summary = summarizeGateReviewComments(comments);
   const draftGate = normalizeVerdict(summary.draft_gate);
   const preApprovalGate = normalizeVerdict(summary.pre_approval_gate);
@@ -149,7 +152,7 @@ export async function auditGateEvidence(options, { env = process.env, ghCommand 
     repo,
     pr,
     currentHeadSha,
-    surfaces: ["review", "issue_comment"],
+    surfaces,
     draftGate,
     preApprovalGate,
     allVerdictsPosted: missing.length === 0,

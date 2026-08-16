@@ -107,6 +107,36 @@ test("audit-gate-evidence: verdicts posted ONLY as PR reviews are reported poste
   assert.deepEqual(result.missing, []);
 });
 
+test("audit-gate-evidence: a failed reviews read is surfaced truthfully (surfaces excludes review) (#1729 contradiction-lens finding)", async () => {
+  // When the PR-review surface read fails (transient gh/api error), the
+  // fail-open reader continues on the issue-comment stream alone, but the
+  // audit must NOT claim it scanned the review surface — surfaces is the
+  // truthful list of successfully-read surfaces. This prevents the exact
+  // false 'missing' the fail-open degradation could otherwise reproduce.
+  const result = await auditGateEvidence(
+    { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
+    {
+      runChild: async function runChild(command, args) {
+        assert.equal(command, "gh");
+        const joined = args.join(" ");
+        if (joined.includes(`repos/owner/repo/issues/17/comments`)) {
+          return { code: 0, stdout: `${JSON.stringify([])}\n`, stderr: "" };
+        }
+        if (joined.includes(`repos/owner/repo/pulls/17/reviews`)) {
+          throw new Error(`gh api reviews failed (transient)`);
+        }
+        throw new Error(`Unexpected gh invocation: ${joined}`);
+      },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  // The review surface read failed, so the audit truthfully reports only the
+  // issue-comment surface was scanned.
+  assert.deepEqual(result.surfaces, ["issue_comment"]);
+  assert.equal(result.allVerdictsPosted, false);
+});
+
 test("audit-gate-evidence: missing verdicts are reported in the missing list", async () => {
   const result = await auditGateEvidence(
     { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
