@@ -20,7 +20,21 @@ No separate verdict issue comment, no separate findings review, and no deferred-
 is posted. Each finding's text appears exactly once across the round; the body's per-angle
 breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
 review body; a verdict posted as an ISSUE comment still validates and is still corrected on
-its own surface (back-compat read). The sanctioned poster never creates one. Two documented
+its own surface (back-compat read).
+
+<!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
+`GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
+scan BOTH verdict surfaces — the PR-review stream (`pulls/<n>/reviews`, the primary surface per
+GATE-COMMENT-SINGLE-SURFACE) and the visible issue-comment stream (`issues/<n>/comments`, the
+back-compat read). Scanning the issue-comment stream alone reports a legitimately-posted
+PR-review verdict as "missing": the post-drive audit that filed #1674 falsely concluded #1614's
+round-2 `draft_gate` and `pre_approval_gate` verdicts were unposted because it read only
+`issues/1614/comments`, where no verdict body lives (the verdicts existed as PR reviews at the
+merged head). The deterministic post-drive audit helper is
+`scripts/github/audit-gate-evidence.mjs` — it reads both surfaces through
+`fetchGateEvidenceComments` and reports each gate's verdict as visible regardless of which
+surface carries it, so a verdict posted only as a PR review is never reported missing. The
+sanctioned poster never creates one. Two documented
 exceptions exist: the opt-in findings comment (`gates.postFindingsComments`,
 `GATE-COMMENT-IDENTITY-DISJOINT` below) adds a sanctioned second visible surface when a repo
 opts in, and the zero-dep fallback poster
