@@ -142,10 +142,10 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference.
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted it resolves to the PR's closing issue reference. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture
-  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less.
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue.
+  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
+  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from the PR's closing issue reference, but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. Omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
@@ -361,7 +361,12 @@ export function parseWriteGateContextCliArgs(argv) {
       continue;
     }
     if (token.name === "acceptance-criteria") {
-      options.acceptanceCriteria = requireTokenValue(token, parseError).trim();
+      // Whitespace-only counts as absent (same as omitting the flag): a caller-
+      // provided pointer that carries no content must not suppress the GitHub
+      // spec-of-record resolution, or the artifact would record a false spec
+      // claim ("provided") with an empty pointer that still names the issue.
+      const trimmed = requireTokenValue(token, parseError).trim();
+      options.acceptanceCriteria = trimmed.length > 0 ? trimmed : null;
       continue;
     }
     if (token.name === "validation-posture") {
@@ -369,11 +374,21 @@ export function parseWriteGateContextCliArgs(argv) {
       continue;
     }
     if (token.name === "pr-body") {
-      options.prBody = requireTokenValue(token, parseError);
+      // Whitespace-only counts as absent: a whitespace value must not trigger
+      // the PR_BODY_ABSENT_SENTINEL render while short-circuiting the live-body
+      // read — the sentinel may only appear when the resolved source genuinely
+      // has no content.
+      const raw = requireTokenValue(token, parseError);
+      options.prBody = raw.trim().length > 0 ? raw : null;
       continue;
     }
     if (token.name === "issue-body") {
-      options.issueBody = requireTokenValue(token, parseError);
+      // Whitespace-only counts as absent: it must not drop the linked-issue
+      // section while the acceptance-criteria pointer still names the issue
+      // (the exact indistinguishability ISSUE_BODY_ABSENT_SENTINEL exists to
+      // prevent). Treating it as omitted lets resolution fetch the real body.
+      const raw = requireTokenValue(token, parseError);
+      options.issueBody = raw.trim().length > 0 ? raw : null;
       continue;
     }
     if (token.name === "prefix-file") {
