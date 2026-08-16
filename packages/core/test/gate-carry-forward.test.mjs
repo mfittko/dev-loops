@@ -54,6 +54,16 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(surface.kind, "kinds");
     assert.deepEqual([...surface.kinds], ["docs"]);
   });
+
+  // #1442: deslop's review surface is the `docs` kind — a clean deslop verdict
+  // carries forward across a delta with no docs file, and re-runs on any doc
+  // change (prose or not; non-prose docs never vote clean on deslop in the
+  // first place because PROSE_PRESENT is not armed).
+  test("deslop angle surface is docs (fail-closed carry-forward)", () => {
+    const surface = angleReviewSurface("deslop");
+    assert.equal(surface.kind, "kinds");
+    assert.deepEqual([...surface.kinds], ["docs"]);
+  });
 });
 
 describe("resolveAngleCarryForward — fail-closed decision", () => {

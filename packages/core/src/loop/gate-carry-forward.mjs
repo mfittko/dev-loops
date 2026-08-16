@@ -57,7 +57,10 @@ import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifie
  * @type {Record<string, string[]>}
  */
 const KIND_TO_CATEGORIES = {
-  docs: ["DOCS_ONLY"],
+  // #1442: a docs file is PROSE_PRESENT when it lands on the prose surface, so
+  // deslop's carry-forward surface is the `docs` kind (a non-docs delta never
+  // re-runs a clean deslop verdict).
+  docs: ["DOCS_ONLY", "PROSE_PRESENT"],
   config: ["CONFIG_ONLY"],
   test: ["TEST_ONLY"],
   ci: ["CI_ONLY"],

@@ -901,6 +901,7 @@ const BUILTIN_PERSONAS = Object.freeze({
   determinism:          { persona: "review", defaultModel: null },
   "acceptance-criteria": { persona: "review", defaultModel: null },
   "ac-dod":              { persona: "review", defaultModel: null },
+  deslop:                { persona: "review", defaultModel: null },
 });
 
 const DEFAULT_REVIEWER_PERSONA = "default-reviewer";
@@ -2448,11 +2449,13 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   let changedFiles;
   let filesChanged;
   let linesChanged;
+  let prosePresent = false;
   if (diff) {
     const { analyzeT0, analyzeT1 } = await import("../analysis/diff-analyzer.mjs");
     const t0 = analyzeT0(diff.nameStatusOutput);
     changedFiles = t0.files;
     filesChanged = changedFiles.length;
+    prosePresent = t0.prosePresent; // #1442: gate deslop on the prose surface
     if (diff.diffOutput) {
       const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
       linesChanged = lineStats.added + lineStats.deleted;
@@ -2461,10 +2464,18 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });
   if (tierResult.tier) {
     const configuredAngles = resolveGateAngles(config, gate) ?? [];
-    const tierAngleSet = new Set(tierResult.angles);
-    const skippedAngles = configuredAngles.filter((a) => !tierAngleSet.has(a));
+    let recommendedAngles = tierResult.angles;
+    // #1442 (ADR 0041 prose half): deslop is a prose-only angle. A docs-kind
+    // tier (e.g. this repo's docs-only/small-non-code) names it so prose diffs
+    // keep it, but that same kind matches exempt normative contracts
+    // (skills/docs/**). Strip deslop when the diff touches no prose surface so
+    // exemption holds even through the tier path.
+    if (recommendedAngles.includes("deslop") && prosePresent === false) {
+      recommendedAngles = recommendedAngles.filter((a) => a !== "deslop");
+    }
+    const skippedAngles = configuredAngles.filter((a) => !recommendedAngles.includes(a));
     return {
-      recommendedAngles: tierResult.angles,
+      recommendedAngles,
       skippedAngles,
       reasons: Object.fromEntries(skippedAngles.map((a) => [a, `tier:${tierResult.tier}`])),
       fallbackToAll: false,

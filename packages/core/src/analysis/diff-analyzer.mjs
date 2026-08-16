@@ -21,6 +21,31 @@
 // fails closed toward a full re-review, which is what a version bump needs.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
+// #1442 (ADR 0041 prose half): the prose surface that triggers the required
+// `deslop` gate angle. skills/docs/** is deliberately excluded — those are
+// normative contracts (owned by the contract style guide + contradiction
+// lens), not prose, and deslop's contrast-cutting must not fight RFC-2119
+// modality.
+const PROSE_PATH_RE = /^docs\/(articles|presentations)\//;
+const NARRATIVE_DOC_RE = /^docs\/[^/]+\.(md|markdown)$/;
+
+/**
+ * Whether a file path is on the prose surface (#1442): docs/articles/**,
+ * docs/presentations/**, README*, or a narrative direct-child docs/*.md.
+ * skills/docs/** is exempt (normative contracts, not prose).
+ *
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+export function isProsePath(filePath) {
+  const fp = normalizeSep(filePath);
+  if (PROSE_PATH_RE.test(fp)) return true;
+  if (NARRATIVE_DOC_RE.test(fp)) return true;
+  const base = fp.split("/").pop() ?? "";
+  if (base.startsWith("README")) return true;
+  return false;
+}
+
 /**
  * @typedef {object} T0Result
  * @property {string[]} files — flat file paths
@@ -76,6 +101,9 @@ export function analyzeT0(nameStatusOutput) {
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
+  // #1442: any changed file on the prose surface arms the PROSE_PRESENT
+  // category, driving the required `deslop` gate angle.
+  const prosePresent = files.some(isProsePath);
   // Derive from the shared classifier so this predicate can't drift from it: a
   // code/config/test file hosted under docs/ is not prose, so a mixed diff that
   // includes one is not docs-only (it still gets the code-review surface).
@@ -87,6 +115,7 @@ export function analyzeT0(nameStatusOutput) {
     directories: [...directories].sort(),
     renameOnly,
     allDocs,
+    prosePresent,
   };
 }
 
@@ -372,6 +401,7 @@ function t0FileCategories(t0) {
   const categories = [];
   if (t0.renameOnly) categories.push("RENAME_ONLY");
   if (t0.allDocs) categories.push("DOCS_ONLY");
+  if (t0.prosePresent) categories.push("PROSE_PRESENT");
   if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
@@ -392,6 +422,7 @@ function t0PresentSurfaceCategories(t0) {
   const categories = [];
   const cats = new Set(t0.files.map(classifyFile));
   if (cats.has("docs")) categories.push("DOCS_ONLY");
+  if (t0.prosePresent) categories.push("PROSE_PRESENT");
   if (cats.has("config")) categories.push("CONFIG_ONLY");
   if (cats.has("test")) categories.push("TEST_ONLY");
   if (cats.has("ci")) categories.push("CI_ONLY");

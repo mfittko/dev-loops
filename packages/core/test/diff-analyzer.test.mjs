@@ -7,6 +7,7 @@ import {
   analyzeT1,
   analyzeDiff,
   diffHasSecuritySeam,
+  isProsePath,
 } from "../src/analysis/diff-analyzer.mjs";
 import { resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
 
@@ -63,6 +64,57 @@ test("classifyFile: unknown for unrecognized", () => {
 test("classifyFile: docs for .markdown files", () => {
   assert.equal(classifyFile("docs/guide.markdown"), "docs");
   assert.equal(classifyFile("CHANGELOG.markdown"), "docs");
+});
+
+// #1442 (ADR 0041 prose half): prose-surface detection for the deslop angle.
+// ---------------------------------------------------------------------------
+
+test("isProsePath: prose surface — articles, presentations, README*, narrative docs/*.md", () => {
+  assert.equal(isProsePath("docs/articles/introducing-dev-loops.md"), true);
+  assert.equal(isProsePath("docs/articles/how-dev-loops-decided-itself.html"), true);
+  assert.equal(isProsePath("docs/presentations/process-observability-presentation.md"), true);
+  assert.equal(isProsePath("README.md"), true);
+  assert.equal(isProsePath("README-hi.md"), true);
+  assert.equal(isProsePath("docs/index.md"), true);
+  assert.equal(isProsePath("docs/migrating-to-dev-loops.md"), true);
+});
+
+test("isProsePath: NOT prose — skills/docs contracts, nested docs, code, config, other docs", () => {
+  assert.equal(isProsePath("skills/docs/ab-contrast-deslop-step.md"), false);
+  assert.equal(isProsePath("skills/docs/worktree-guidance.md"), false);
+  // Nested under docs/ (not a direct-child narrative doc, not articles/presentations)
+  assert.equal(isProsePath("docs/specs/foo.md"), false);
+  assert.equal(isProsePath("docs/decisions/0001.md"), false);
+  // Top-level non-README docs are NOT prose (root-level changelog)
+  assert.equal(isProsePath("CHANGELOG.md"), false);
+  assert.equal(isProsePath("CHANGELOG.markdown"), false);
+  // Unclassifiable / non-docs
+  assert.equal(isProsePath("src/foo.mjs"), false);
+  assert.equal(isProsePath(".devloops"), false);
+  assert.equal(isProsePath("assets/logo.png"), false);
+});
+
+// #1442: prose diffs arm PROSE_PRESENT → deslop; non-prose diffs do not.
+test("analyzeDiff: prose diff → PROSE_PRESENT category", () => {
+  const r = analyzeDiff({ nameStatusOutput: "M\tdocs/articles/foo.md" });
+  assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
+  const r2 = analyzeDiff({ nameStatusOutput: "M\tREADME.md" });
+  assert.ok(r2.t1.changeCategories.includes("PROSE_PRESENT"));
+});
+
+test("analyzeDiff: mixed code+prose diff keeps PROSE_PRESENT alongside LOGIC_CHANGE", () => {
+  const r = analyzeDiff({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/articles/foo.md",
+    diffOutput: "@@ -1,1 +1,1 @@\n+export const x = 1;\n",
+  });
+  assert.ok(r.t1.changeCategories.includes("LOGIC_CHANGE"));
+  assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
+});
+
+test("analyzeDiff: non-prose docs diff (skills/docs) does NOT get PROSE_PRESENT", () => {
+  const r = analyzeDiff({ nameStatusOutput: "M\tskills/docs/worktree-guidance.md" });
+  assert.ok(r.t1.changeCategories.includes("DOCS_ONLY"));
+  assert.ok(!r.t1.changeCategories.includes("PROSE_PRESENT"), "skills/docs is exempt from deslop");
 });
 
 test("classifyFile: config for allowlisted extensionless dotfiles", () => {
@@ -301,7 +353,8 @@ test("analyzeT1: detects COMMENT_ONLY from comment-only diff", () => {
 test("analyzeDiff: T0 unambiguous → no T1, not ambiguous", () => {
   const result = analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" });
   assert.ok(result.t0.allDocs);
-  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY"]);
+  // #1442: both paths are on the prose surface, so PROSE_PRESENT arms the deslop angle.
+  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY", "PROSE_PRESENT"]);
   assert.equal(result.ambiguous, false);
 });
 
@@ -338,7 +391,7 @@ test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous
 });
 
 test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
-  const result = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md" });
+  const result = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" });
   assert.deepEqual(result.t1.changeCategories, []);
   assert.equal(result.ambiguous, true);
 });
@@ -457,7 +510,7 @@ test("analyzeDiff: pure single-surface diffs keep exclusive semantics (no over-u
   );
   assert.deepEqual(
     analyzeDiff({ nameStatusOutput: "M\tdocs/guide.md" }).t1.changeCategories,
-    ["DOCS_ONLY"],
+    ["DOCS_ONLY", "PROSE_PRESENT"], // #1442: narrative docs/*.md is prose
   );
 });
 

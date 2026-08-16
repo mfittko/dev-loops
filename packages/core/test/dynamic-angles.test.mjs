@@ -151,6 +151,52 @@ test("resolveDynamicAngles: mixed logic + CI unions ci-guard into the core subse
 });
 
 // ---------------------------------------------------------------------------
+// #1442: PROSE_PRESENT → deslop angle selection
+// ---------------------------------------------------------------------------
+
+const PROSE_DRAFT_ANGLES = [...new Set([...DRAFT_ANGLES, ...PREAPPROVAL_ANGLES, "deslop"])];
+
+test("resolveDynamicAngles: PROSE_PRESENT selects deslop (configured)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: PROSE_DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.DOCS_ONLY, ChangeCategory.PROSE_PRESENT],
+  });
+  assert.equal(result.fallbackToAll, false);
+  assert.ok(result.recommendedAngles.includes("deslop"), "prose diff must run deslop");
+  assert.ok(!result.skippedAngles.includes("deslop"));
+});
+
+test("resolveDynamicAngles: PROSE_PRESENT adds deslop from the pool (additive mode)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES.filter((a) => a !== "deslop"),
+    changeCategories: [ChangeCategory.PROSE_PRESENT],
+    anglePool: PROSE_DRAFT_ANGLES,
+  });
+  assert.ok(result.addedAngles.includes("deslop"), "deslop pulled from the pool for a prose diff");
+  assert.match(result.addedReasons["deslop"], /PROSE_PRESENT/);
+});
+
+test("resolveDynamicAngles: a non-prose docs diff does NOT select deslop", () => {
+  // skills/docs/** (normative contracts) is exempt — DOCS_ONLY alone must not
+  // arm deslop.
+  const result = resolveDynamicAngles({
+    configuredAngles: PROSE_DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.DOCS_ONLY],
+  });
+  assert.ok(result.skippedAngles.includes("deslop"), "non-prose docs diff must skip deslop");
+  assert.ok(!result.recommendedAngles.includes("deslop"));
+});
+
+test("resolveDynamicAngles: a logic change does NOT select deslop (non-prose angle set unchanged)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: PROSE_DRAFT_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+  });
+  assert.ok(!result.recommendedAngles.includes("deslop"));
+  assert.ok(result.skippedAngles.includes("deslop"));
+});
+
+// ---------------------------------------------------------------------------
 // Always-include
 // ---------------------------------------------------------------------------
 

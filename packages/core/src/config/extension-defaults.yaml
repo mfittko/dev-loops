@@ -133,6 +133,28 @@ gates:
         mandatory: true
         persona: review
         prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+    # #1442 (ADR 0041 prose half): required fail-closed deslop angle for prose
+    # deliverables. Runs the A/B-contrast-removal deslop step (ab-contrast-
+    # deslop-step.md) — flag surviving binary-contrast constructions so the gate
+    # fails closed on them. One reviewer per document (the existing fan-out
+    # mechanism already does this). Only armed when the diff touches the prose
+    # surface (PROSE_PRESENT); skills/docs/** is exempt.
+      - name: deslop
+        persona: review
+        prompt: >-
+          Run the required deslop step (ab-contrast-deslop-step.md) on every
+          changed prose document in the diff (docs/articles/**, docs/presentations/**,
+          README*, narrative docs/*.md). Flag every surviving binary-contrast /
+          negation-by-contrast construction — "not X but Y", "X, not Y",
+          "rather than A, B", "it isn't A, it's B", dramatic antithesis pairs and
+          fragments ("where X, Y", "less A, more B", "not just A but B") — in
+          either ordering (A-then-B or B-then-A). For each instance report a line
+          ref, the exact quote, the pattern name, and a proposed rewrite that cuts
+          the scaffolding while keeping any load-bearing factual distinction stated
+          plainly. Do NOT flag genuine conditionals, real either/or behavior, or
+          RFC-2119 modality (MUST/SHOULD) in normative contracts; and do NOT touch
+          skills/docs/** (exempt). Be exhaustive — a missed instance is the failure
+          mode, and fail closed when any survives.
     required: true
     requireCi: true
     # Diff-class angle tiers (opt-in, ordered, first match wins). A matching tier
