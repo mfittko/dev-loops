@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 
 import { formatCliError, isDirectCliRun, summarizeGateReviewComments } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { fetchPrHeadRefOid } from "../lib/head-sha.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -96,32 +97,6 @@ export function parseAuditGateEvidenceCliArgs(argv) {
   return out;
 }
 
-/**
- * Read the PR head ref oid via `gh pr view` (used when --head-sha is omitted).
- * Mirrors detect-checkpoint-evidence's lightweight head read.
- */
-async function fetchHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
-  const res = await runChild(
-    ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"],
-    env,
-  );
-  if (res.code !== 0) {
-    throw new Error(`gh pr view failed: ${res.stderr.trim() || `exit code ${res.code}`}`);
-  }
-  let payload;
-  try {
-    payload = JSON.parse(res.stdout.trim());
-  } catch (e) {
-    throw new Error(`Invalid JSON from gh pr view: ${e.message}`);
-  }
-  const head = typeof payload?.headRefOid === "string" && payload.headRefOid.trim().length > 0
-    ? payload.headRefOid.trim().toLowerCase()
-    : null;
-  if (!head) throw new Error("gh pr view returned no headRefOid");
-  return head;
-}
-
 function normalizeVerdict(summary) {
   if (!summary) {
     return { visible: false, surface: null, verdict: null, headSha: null, commentId: null };
@@ -137,7 +112,7 @@ function normalizeVerdict(summary) {
 
 export async function auditGateEvidence(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const { repo, pr } = options;
-  const currentHeadSha = options.headSha ?? (await fetchHeadSha({ repo, pr }, { env, ghCommand, runChild }));
+  const currentHeadSha = options.headSha ?? (await fetchPrHeadRefOid({ repo, pr }, { env, ghCommand, runChild }));
   const comments = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild });
   const summary = summarizeGateReviewComments(comments);
   const draftGate = normalizeVerdict(summary.draft_gate);
