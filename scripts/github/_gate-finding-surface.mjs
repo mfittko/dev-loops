@@ -26,6 +26,7 @@ import { flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, ru
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 
 // Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
 // comment-stream shape the gate summarizers consume. Validity comes from the
@@ -655,6 +656,12 @@ function parseReviewMutationResponse(payload) {
  * empty body, so the caller must always pass a rendered body.
  */
 export async function createGateReview({ repo, pr, headSha, body, comments }, { env, ghCommand, runChild = defaultRunChild }) {
+  // ISSUE/PR-ID GUARD (#1731): refuse a verdict body or inline finding comment
+  // that emits a raw issue/PR id (fail-closed) unless explicitly allowlisted.
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body" });
+  for (const comment of comments ?? []) {
+    guardCommentBodyNoIssuePrIds(comment?.body, { ref: "gate review inline finding comment" });
+  }
   const payload = { commit_id: headSha, event: "COMMENT", body, comments };
   const result = await runChild(
     ghCommand,
@@ -673,6 +680,8 @@ export async function createGateReview({ repo, pr, headSha, body, comments }, { 
  * still-unposted finding on the update path.
  */
 export async function updateGateReview({ repo, pr, reviewId, body }, { env, ghCommand, runChild = defaultRunChild }) {
+  // ISSUE/PR-ID GUARD (#1731) — see createGateReview.
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body" });
   const result = await runChild(
     ghCommand,
     ["api", "-X", "PUT", `repos/${repo}/pulls/${pr}/reviews/${reviewId}`, "--input", "-"],

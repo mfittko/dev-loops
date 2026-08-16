@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 export const MIN_DISMISSAL_REASON_LENGTH = 30;
 export function hasCommitShaReference(text) {
   const trimmed = text.trim();
@@ -183,7 +184,11 @@ export async function replyAndMaybeResolve(
       repo,
       pr,
       commentId,
-      body: sanitizeCopilotSummonTokens(body),
+      // ISSUE/PR-ID GUARD (#1731): a generated review-thread reply must never
+      // emit a raw issue/PR id (fail-closed unless explicitly allowlisted).
+      body: guardCommentBodyNoIssuePrIds(sanitizeCopilotSummonTokens(body), {
+        ref: "review-thread reply body",
+      }),
     },
     { env, ghCommand },
   ));

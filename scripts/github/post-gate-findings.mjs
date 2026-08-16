@@ -8,6 +8,7 @@ import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape,
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -744,6 +745,9 @@ function parseCommentMutationResponse(payload) {
 }
 
 async function createComment({ repo, pr, body }, { env, ghCommand }) {
+  // ISSUE/PR-ID GUARD (#1731): refuse a generated comment body that emits a
+  // raw issue/PR id (fail-closed) unless explicitly allowlisted.
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
     ["api", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`],
     { env, ghCommand },
@@ -752,6 +756,8 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
 }
 
 async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
+  // ISSUE/PR-ID GUARD (#1731) — see createComment.
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
     { env, ghCommand },
