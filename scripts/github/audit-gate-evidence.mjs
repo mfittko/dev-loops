@@ -77,11 +77,8 @@ export function parseAuditGateEvidenceCliArgs(argv) {
     return { help: true };
   }
   if (!values.repo) throw parseError("Missing required argument: --repo <owner/name>");
-  const { owner, name } = parseRepoSlug(values.repo);
-  const repo = `${owner}/${name}`;
-  if (repo !== values.repo) {
-    throw parseError("--repo must be <owner/name> shape");
-  }
+  const repo = values.repo.trim();
+  parseRepoSlug(repo);
   const pr = parsePrNumber(values.pr, parseError);
   let headSha = null;
   if (typeof values["head-sha"] === "string" && values["head-sha"].trim().length > 0) {
@@ -147,8 +144,19 @@ export async function auditGateEvidence(options, { env = process.env, ghCommand 
   const preApprovalGate = normalizeVerdict(summary.pre_approval_gate);
 
   const missing = [];
+  // draft_gate is a one-time draft->ready transition gate: a clean verdict on
+  // an earlier head legitimately stands for that transition (mirrors
+  // detect-checkpoint-evidence). pre_approval_gate MUST be stamped on the
+  // current head — a clean verdict on an older head is not evidence for the
+  // current head and must not drive allVerdictsPosted=true (issue #1729 /
+  // Copilot head-match finding).
   if (draftGate.verdict !== "clean" || !draftGate.visible) missing.push("draft_gate");
-  if (preApprovalGate.verdict !== "clean" || !preApprovalGate.visible) missing.push("pre_approval_gate");
+  const preApprovalCurrentHead =
+    preApprovalGate.verdict === "clean" &&
+    preApprovalGate.visible &&
+    preApprovalGate.headSha !== null &&
+    preApprovalGate.headSha === currentHeadSha;
+  if (!preApprovalCurrentHead) missing.push("pre_approval_gate");
 
   return {
     ok: true,

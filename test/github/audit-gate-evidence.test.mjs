@@ -45,6 +45,25 @@ const DRAFT_CLEAN = {
   submitted_at: "2026-08-10T05:10:00Z",
 };
 
+const OLD_HEAD_SHA = "a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4";
+
+// A clean pre_approval_gate verdict stamped on an OLD head: all other fields
+// valid, but the head SHA differs from the current head. Must NOT count as
+// evidence for the current head (#1729 Copilot head-match finding).
+const PRE_APPROVAL_OLD_HEAD = {
+  id: 4894002824,
+  body: [
+    "Gate review: pre_approval_gate",
+    `Reviewed head SHA: ${OLD_HEAD_SHA}`,
+    "Verdict: clean",
+    "Findings summary: no issues found",
+    "Next action: await final human approval",
+  ].join("\n"),
+  html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-4894002824",
+  state: "COMMENTED",
+  submitted_at: "2026-08-10T05:30:00Z",
+};
+
 const PRE_APPROVAL_CLEAN = {
   id: 4894002823,
   body: [
@@ -100,6 +119,53 @@ test("audit-gate-evidence: missing verdicts are reported in the missing list", a
   assert.equal(result.preApprovalGate.visible, false);
 });
 
+test("audit-gate-evidence: clean pre_approval_gate on an OLD head is NOT current-head evidence (allVerdictsPosted=false) (#1729 Copilot finding)", async () => {
+  // The exact high-signal Copilot defect: summarizeGateReviewComments picks the
+  // newest gate comment regardless of head SHA, so a clean pre_approval_gate on
+  // an older head must not drive allVerdictsPosted=true for the current head.
+  const result = await auditGateEvidence(
+    { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
+    {
+      runChild: stubRunChild({
+        issueComments: [],
+        reviews: [DRAFT_CLEAN, PRE_APPROVAL_OLD_HEAD],
+      }),
+    },
+  );
+
+  assert.equal(result.currentHeadSha, "3d4f0389");
+  assert.equal(result.preApprovalGate.verdict, "clean");
+  assert.equal(result.preApprovalGate.visible, true);
+  assert.equal(result.preApprovalGate.headSha, OLD_HEAD_SHA);
+  assert.equal(result.draftGate.verdict, "clean");
+  assert.equal(result.allVerdictsPosted, false);
+  assert.deepEqual(result.missing, ["pre_approval_gate"]);
+});
+
+test("audit-gate-evidence: clean draft_gate on an OLD head still counts (one-time transition gate)", async () => {
+  // draft_gate is a one-time draft->ready transition gate, so a clean verdict on
+  // an earlier head legitimately stands (mirrors detect-checkpoint-evidence).
+  const DRAFT_OLD = {
+    ...DRAFT_CLEAN,
+    id: 4893963999,
+    body: DRAFT_CLEAN.body.replace("Reviewed head SHA: 3d4f0389", `Reviewed head SHA: ${OLD_HEAD_SHA}`),
+  };
+  const result = await auditGateEvidence(
+    { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
+    {
+      runChild: stubRunChild({
+        issueComments: [],
+        reviews: [DRAFT_OLD, PRE_APPROVAL_CLEAN],
+      }),
+    },
+  );
+
+  assert.equal(result.draftGate.headSha, OLD_HEAD_SHA);
+  assert.equal(result.preApprovalGate.verdict, "clean");
+  assert.equal(result.allVerdictsPosted, true);
+  assert.deepEqual(result.missing, []);
+});
+
 test("audit-gate-evidence: verdict present on BOTH surfaces is reported posted", async () => {
   const result = await auditGateEvidence(
     { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
@@ -116,24 +182,34 @@ test("audit-gate-evidence: verdict present on BOTH surfaces is reported posted",
 });
 
 test("audit-gate-evidence: auto-fetches head sha via pr view when --head-sha omitted", async () => {
+  const fetchSha = "abc1234";
+  // Verdicts must be stamped on the auto-fetched head to count as posted
+  // (pre_approval_gate head-match requires the verdict headSha === current head).
+  const draftOnFetch = { ...DRAFT_CLEAN, body: DRAFT_CLEAN.body.replace("3d4f0389", fetchSha) };
+  const preOnFetch = { ...PRE_APPROVAL_CLEAN, body: PRE_APPROVAL_CLEAN.body.replace("3d4f0389", fetchSha) };
   const result = await auditGateEvidence(
     { repo: "owner/repo", pr: 17 },
     {
       runChild: stubRunChild({
-        headRefOid: "abc1234",
+        headRefOid: fetchSha,
         issueComments: [],
-        reviews: [DRAFT_CLEAN, PRE_APPROVAL_CLEAN],
+        reviews: [draftOnFetch, preOnFetch],
       }),
     },
   );
 
-  assert.equal(result.currentHeadSha, "abc1234");
+  assert.equal(result.currentHeadSha, fetchSha);
   assert.equal(result.allVerdictsPosted, true);
   assert.deepEqual(result.missing, []);
 });
 
 test("audit-gate-evidence: CLI parse rejects malformed inputs (coverage regression)", () => {
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--pr", "1735"]), /repo/);
+  // Whitespace-padded-but-valid --repo is accepted (parseRepoSlug-trimmed), the
+  // nit finding raised by Copilot on audit-gate-evidence.mjs.
+  const padded = parseAuditGateEvidenceCliArgs(["--repo", "  owner/repo  ", "--pr", "17"]);
+  assert.equal(padded.repo, "owner/repo");
+  assert.equal(padded.pr, 17);
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/../x", "--pr", "1"]), /repo/);
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/name/extra", "--pr", "1"]), /repo/);
   assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo"]), /pr/);
@@ -198,6 +274,30 @@ test("audit-gate-evidence spawned CLI: --silent exits non-zero when a verdict is
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
         stdout: `[[]]\n`,
+      },
+    ]);
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--head-sha", "3d4f0389", "--silent"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 1, result.stderr);
+    assert.equal(result.stdout, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("audit-gate-evidence spawned CLI: --silent exits non-zero when pre_approval_gate is on an OLD head", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-audit-silent-oldhead-"));
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `[[]]\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([[DRAFT_CLEAN, PRE_APPROVAL_OLD_HEAD]])}\n`,
       },
     ]);
     const result = await runNode(
