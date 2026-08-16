@@ -126,6 +126,27 @@ export function parseIssueNumber(value, parseError = null) {
   return parsePositiveInteger(value, "--issue", parseError);
 }
 
+// Parse a comma-separated allowlist of numeric issue/PR ids (e.g. `1670,9000`
+// from an `--allowed-refs` CLI option). Returns the ids as deduped numeric
+// strings, empty array for an empty/whitespace-only input. Rejects any
+// non-numeric (or zero) entry so a typo can never silently allowlist nothing.
+export function parseAllowedRefsCsv(value, flag, parseError = null) {
+  const parts = String(value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const ids = [];
+  for (const part of parts) {
+    if (!/^\d+$/u.test(part) || Number(part) === 0) {
+      throw toCliError(`${flag} must be a comma-separated list of positive integers (got ${JSON.stringify(part)})`, parseError);
+    }
+    if (!ids.includes(part)) {
+      ids.push(part);
+    }
+  }
+  return ids;
+}
+
 // `stdinText` is optional and additive: omit it and stdin stays closed exactly
 // as before. Supply it (a `gh api ... --input -` payload) and it is piped in,
 // so a caller that needs stdin no longer has to reach for a second, separately

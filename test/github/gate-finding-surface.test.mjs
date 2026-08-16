@@ -11,6 +11,7 @@ import {
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   collectVerdictHeadShas,
+  createGateReview,
   fingerprintFinding,
   isDeferredAtRound,
   isLocatableFinding,
@@ -20,6 +21,7 @@ import {
   readGateFindingsLedger,
   renderInlineCommentBody,
   renderNonLocatableBlock,
+  updateGateReview,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -627,4 +629,41 @@ test("#1585: an empty-string login falls back to the marker-only fail-closed pro
 test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {
   assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes(null), /rawNodes must be an array/);
   assert.throws(() => countUnresolvedGateAuthoredThreadsFromRawNodes("not-an-array"), /rawNodes must be an array/);
+});
+
+// #1731 guard-refusal: the gate-review write surfaces must refuse a raw
+// issue/PR id in the verdict body or any inline finding comment BEFORE any gh
+// I/O. These pin the guard wiring (createGateReview 661/663, updateGateReview
+// 684) so a future drop/mis-wire ships red.
+test("#1731: createGateReview refuses a verdict body containing a raw issue/PR id (guard fires before gh)", async () => {
+  const runChild = async () => { throw new Error("guard must refuse before any gh I/O"); };
+  await assert.rejects(
+    () => createGateReview(
+      { repo: "o/r", pr: 9, headSha: HEAD_SHA, body: "clean verdict for #1734", comments: [] },
+      { ghCommand: "gh", runChild },
+    ),
+    /comment-id-guard refused to emit gate verdict comment body.*#1734/,
+  );
+});
+
+test("#1731: createGateReview refuses inline finding comments containing a raw issue/PR id", async () => {
+  const runChild = async () => { throw new Error("guard must refuse before any gh I/O"); };
+  await assert.rejects(
+    () => createGateReview(
+      { repo: "o/r", pr: 9, headSha: HEAD_SHA, body: "clean body", comments: [{ path: "a.mjs", line: 1, body: "references #1731" }] },
+      { ghCommand: "gh", runChild },
+    ),
+    /comment-id-guard refused to emit gate review inline finding comment.*#1731/,
+  );
+});
+
+test("#1731: updateGateReview refuses a verdict body containing a raw issue/PR id (guard fires before gh)", async () => {
+  const runChild = async () => { throw new Error("guard must refuse before any gh I/O"); };
+  await assert.rejects(
+    () => updateGateReview(
+      { repo: "o/r", pr: 9, reviewId: 5, body: "see #1731 for the diff" },
+      { ghCommand: "gh", runChild },
+    ),
+    /comment-id-guard refused to emit gate verdict comment body.*#1731/,
+  );
 });

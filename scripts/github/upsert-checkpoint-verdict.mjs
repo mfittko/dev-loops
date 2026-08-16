@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
@@ -2128,6 +2129,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable } : {}),
   });
+  // ISSUE/PR-ID GUARD (#1731): the rendered gate verdict body must never emit a
+  // raw issue/PR id (fail-closed unless explicitly allowlisted). Guarded here at
+  // the single desiredBody choke point so BOTH the review surface (create/update
+  // gate review) and the legacy issue-comment surface (updateComment below) are
+  // covered, in addition to the low-level guards in the write helpers.
+  guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body" });
   const findingSurfaceFields = findingSurface
     ? {
         round: findingSurface.round,

@@ -129,7 +129,7 @@ function windowReason(severity, mediumFixWindow) {
   if (severity === "nit") {
     return "nit findings are deferred immediately at gate close, with no fixer cycle";
   }
-  return "low findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer; #1585)";
+  return "low findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer)";
 }
 
 // Every deferral reply is distinct by construction through the thread's own

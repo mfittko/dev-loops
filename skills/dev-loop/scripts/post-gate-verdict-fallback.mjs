@@ -158,6 +158,31 @@ function collapseWhitespace(value) {
 // and get the whole comment mistaken for a machine artifact by the shared summarizers.
 // Hand-copied from scripts/github/upsert-checkpoint-verdict.mjs's
 // encodeMachineArtifactMarkerDelimiters — this fallback is zero-dep and cannot import it.
+// ISSUE/PR-ID GUARD (zero-dep inline copy of packages/core/src/github/comment-id-guard.mjs,
+// which this fallback cannot import — it ships in the plugin without @dev-loops/core). A
+// generated gate verdict body must never carry a raw `#<digits>` token: public comment
+// surfaces auto-link a bare `#<digits>` to that issue/PR, leaking internal cross-references.
+// Fail-closed: refuse to POST rather than strip — no `--allowed-refs` escape on this
+// guard because a gate verdict body is never a place for a deliberate cross-reference.
+const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
+function guardFallbackBodyNoIssuePrIds(body, ctx) {
+  if (typeof body !== "string") return body;
+  const found = [];
+  for (const m of String(body).matchAll(ISSUE_PR_ID_RE)) {
+    found.push(m[1]);
+  }
+  if (found.length > 0) {
+    const unique = [...new Set(found)].join(", #");
+    throw new Error(
+      `post-gate-verdict-fallback refused to post ${ctx}: rendered gate verdict body contains raw ` +
+        `issue/PR id reference(s) #${unique}. Bare #digits in generated comment bodies violate ` +
+        `the no-ids-in-comments rule (public leakage). Reword the findings summary / next action ` +
+        `to avoid a raw #<digits>.`,
+    );
+  }
+  return body;
+}
+
 function encodeMachineArtifactMarkerDelimiters(value) {
   return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
 }
@@ -392,6 +417,9 @@ export async function postGateVerdictViaGh({
   spawnImpl = defaultSpawn,
 }) {
   return new Promise((resolve, reject) => {
+    // Fail-closed id guard applied immediately before the POST: refuse to emit
+    // a rendered body that carries any raw #<digits> (see guardFallbackBodyNoIssuePrIds).
+    guardFallbackBodyNoIssuePrIds(body, "gate verdict comment");
     const payload = JSON.stringify({ body });
     const child = spawnImpl(
       ghCommand,

@@ -514,6 +514,93 @@ test("runCli posts via gh and emits a degraded-mode warning", async () => {
   }
 });
 
+test("runCli refuses to post a rendered body containing a raw #digits id (no id guard leak, #1731)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-gate-fallback-idguard-"));
+  try {
+    const stub = await writeGhStub(tempDir, [], {});
+    let caught = null;
+    try {
+      await runCli(
+        [
+          "--repo",
+          "owner/repo",
+          "--pr",
+          "17",
+          "--head-sha",
+          "abc1234000000000000000000000000000000000",
+          "--verdict",
+          "clean",
+          "--findings-summary",
+          "related to issue #1670",
+          "--next-action",
+          "go",
+        ],
+        {
+          env: stub.env,
+          spawn: spawn,
+          ghCommand: "gh",
+          stdoutSink: [],
+          stderrSink: [],
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught instanceof Error, "expected runCli to refuse a body carrying a raw #digits id");
+    assert.match(String(caught.message), /#1670/);
+    assert.match(String(caught.message), /no-ids-in-comments|raw issue\/PR id/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("runCli posts a clean rendered body with no id guard leak", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-gate-fallback-idguard-clean-"));
+  try {
+    const stub = await writeGhStub(
+      tempDir,
+      [
+        {
+          assertArgIncludes: ["api", "repos/owner/repo/issues/17/comments"],
+          assertStdinIncludes: ["### Gate review: `draft_gate`"],
+          stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-201"}\n',
+        },
+      ],
+      {},
+    );
+    const stdout = [];
+    const exitCode = await runCli(
+      [
+        "--repo",
+        "owner/repo",
+        "--pr",
+        "17",
+        "--head-sha",
+        "abc1234000000000000000000000000000000000",
+        "--verdict",
+        "clean",
+        "--findings-summary",
+        "no issues found",
+        "--next-action",
+        "go",
+      ],
+      {
+        env: stub.env,
+        spawn: spawn,
+        ghCommand: "gh",
+        stdoutSink: stdout,
+        stderrSink: [],
+      },
+    );
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(stdout.join(""));
+    assert.equal(result.ok, true);
+    assert.equal(result.commentId, 201);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("runCli fails closed (non-zero exit) when gh posting fails", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-gate-fallback-"));
   try {

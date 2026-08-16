@@ -43,6 +43,40 @@ test("parseCommentIssueCliArgs: requires a body source", () => {
   assert.throws(() => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7"]), /--body <text> or --body-file/);
 });
 
+test("parseCommentIssueCliArgs: parses --allowed-refs csv", () => {
+  const out = parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "1670, 9000"]);
+  assert.deepEqual(out.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseCommentIssueCliArgs: rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "1670,abc"]),
+    /positive integers/,
+  );
+  assert.throws(
+    () => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "0"]),
+    /positive integers/,
+  );
+});
+
+test("commentIssue: an --allowed-refs deliberate cross-ref posts", async () => {
+  const { run, calls } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+  const result = await commentIssue(
+    { repo: "o/n", issue: 7, body: "deliberate cross-ref to issue #1670", allowedRefs: ["1670"] },
+    { run },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ["issue", "comment", "7", "--repo", "o/n", "--body", "deliberate cross-ref to issue #1670"]);
+});
+
+test("commentIssue: a raw unallowlisted id still refuses (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => commentIssue({ repo: "o/n", issue: 7, body: "see #1670 but also #999", allowedRefs: ["1670"] }, { run }),
+    /#999/,
+  );
+});
+
 test("parseCommentIssueCliArgs: --body and --body-file are mutually exclusive", () => {
   assert.throws(
     () => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "x", "--body-file", "f"]),

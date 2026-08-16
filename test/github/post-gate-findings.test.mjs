@@ -1586,3 +1586,36 @@ test("renderFindingsCommentBody omits judge suffix when judgeDisposition absent 
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   assert.ok(!body.includes("judge:"), "no judge suffix when judgeDisposition absent");
 });
+
+// #1731 guard-refusal: the findings comment create/update write helpers must
+// refuse a rendered body carrying a raw issue/PR id BEFORE posting. Pin the
+// guard wiring in createComment/updateComment (post-gate-findings.mjs 750/760).
+test("postGateFindings refuses a findings body containing a raw issue/PR id (guard fires before POST)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-guard-"));
+  const repoRoot = await optedInRepoRoot();
+  try {
+    const rawIdFindings = JSON.stringify([
+      { severity: "must-fix", angle: "scope", summary: "Scope too broad - tracked as #1731", disposition: "accepted-for-fix", files: ["src/a.mjs:12"] },
+    ]);
+    const { env, ghPath, ghLogPath } = await writeGhStub(tmpDir, [
+      userEntry(),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"],
+        stdout: "[[]]\n",
+      },
+      // No comment-create entry: the guard must refuse before the POST.
+    ], { logCalls: true });
+    await assert.rejects(
+      () => postGateFindings(
+        { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234", findings: rawIdFindings },
+        { env, ghCommand: ghPath, repoRoot },
+      ),
+      /comment-id-guard refused to emit gate findings comment body.*#1731/,
+    );
+    const ghLog = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(ghLog.length, 2, "only user + list reads ran; no findings comment POST may be issued");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
