@@ -13,6 +13,8 @@
 //   3. PR_BODY_ABSENT_SENTINEL must be source-neutral (no GitHub-specific fact),
 //      because it is also rendered by the programmatic renderBriefingPrefix /
 //      writeGateContext path that never contacts GitHub.
+//   4. ISSUE_BODY_ABSENT_SENTINEL must be source-neutral for the same reason (it
+//      is also rendered by the programmatic path).
 //
 // These are doc/comment claims, so the pins are source reads of the module
 // (plus the exported sentinel value) rather than behavioral assertions.
@@ -21,7 +23,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { PR_BODY_ABSENT_SENTINEL } from "../../scripts/github/write-gate-context.mjs";
+import {
+  ISSUE_BODY_ABSENT_SENTINEL,
+  PR_BODY_ABSENT_SENTINEL,
+} from "../../scripts/github/write-gate-context.mjs";
 
 const srcUrl = new URL("../../scripts/github/write-gate-context.mjs", import.meta.url);
 
@@ -67,4 +72,12 @@ test("write-gate-context: PR_BODY_ABSENT_SENTINEL is source-neutral (no GitHub-s
   // must not assert a fact only a GitHub reader could know.
   assert.ok(!/GitHub/i.test(PR_BODY_ABSENT_SENTINEL), "sentinel must not assert a GitHub-specific fact");
   assert.match(PR_BODY_ABSENT_SENTINEL, /no PR description/i, "sentinel reads as a source-neutral absence statement");
+});
+
+test("write-gate-context: ISSUE_BODY_ABSENT_SENTINEL is source-neutral (no GitHub-specific fact) (#1541)", () => {
+  // ISSUE_BODY is rendered by the same exported programmatic path (lines 1279,
+  // 1434) whenever an issue-section body is absent, so it must not assert a
+  // fact only a GitHub reader could know — mirroring PR_BODY_ABSENT_SENTINEL.
+  assert.ok(!/GitHub/i.test(ISSUE_BODY_ABSENT_SENTINEL), "issue sentinel must not assert a GitHub-specific fact");
+  assert.match(ISSUE_BODY_ABSENT_SENTINEL, /no issue body/i, "issue sentinel reads as a source-neutral absence statement");
 });

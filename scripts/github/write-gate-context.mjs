@@ -142,7 +142,7 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted, EVERY of the PR's closing issue references is resolved and each linked issue's body is fetched — an umbrella PR resolves all of them, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
   --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
@@ -703,14 +703,18 @@ export const BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES = 200 * 1024;
 export const PR_BODY_ABSENT_SENTINEL = "(no PR description is shown)";
 
 /**
- * Rendered in place of an individual linked issue's body when that issue was
- * resolved (it has a closing reference) but its body is genuinely empty on
- * GitHub. Mirrors PR_BODY_ABSENT_SENTINEL: a resolved-but-empty body must read
- * as a truthful, distinguishable statement rather than silently collapsing the
- * `## Linked issue` section (which would then read identically to "the PR
- * closes no issue" — the exact indistinguishability #1511 targets).
+ * Rendered in place of an individual linked issue's body when that issue's
+ * body text is absent. Deliberately SOURCE-NEUTRAL like PR_BODY_ABSENT_SENTINEL:
+ * it asserts only that no issue body is shown, never a GitHub-specific fact
+ * ("empty on GitHub") — because it is also rendered by the exported
+ * renderBriefingPrefix / writeGateContext programmatic path, which never
+ * contacts GitHub and therefore cannot truthfully claim anything about the
+ * live issue state. A resolved-but-empty body must read as a truthful,
+ * distinguishable statement rather than silently collapsing the `## Linked
+ * issue` section (which would then read identically to "the PR closes no
+ * issue" — the exact indistinguishability #1511 targets).
  */
-export const ISSUE_BODY_ABSENT_SENTINEL = "(this issue has an empty body on GitHub)";
+export const ISSUE_BODY_ABSENT_SENTINEL = "(no issue body is shown)";
 
 /**
  * Pick a fenced-code-block delimiter that cannot be prematurely closed by the
