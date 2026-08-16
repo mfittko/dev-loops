@@ -503,8 +503,17 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // When t1 is null (unambiguous diff), infer categories from t0
   // so dynamic angle resolution can narrow for config-only / test-only etc.
   if (!t1) {
+    // #1442 Copilot finding: a genuinely MIXED diff whose T1 never ran (no
+    // diffOutput) must NOT get a T0-only PROSE_PRESENT category. Non-empty
+    // categories set ambiguous=false, so a mixed code+prose diff would
+    // under-select to just deslop + always-include and drop the code-review
+    // core. T0-only inference is only safe for unambiguous diffs (docs-only /
+    // single surface); a mixed diff without hunk content is unclassifiable, so
+    // return empty categories and let resolveDynamicAngles fall back to the
+    // full angle set (fail closed).
+    const changeCategories = t0Ambiguous ? [] : inferCategoriesFromT0(t0);
     t1 = {
-      changeCategories: inferCategoriesFromT0(t0),
+      changeCategories,
       hunkCount: 0,
       lineStats: { added: 0, deleted: 0 },
     };

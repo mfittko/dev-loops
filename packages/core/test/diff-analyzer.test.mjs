@@ -437,6 +437,17 @@ test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
   assert.equal(result.ambiguous, true);
 });
 
+test("analyzeDiff: mixed code+prose WITHOUT diff stays ambiguous (fail-closed, #1442)", () => {
+  // A prose file must not let a mixed code+prose diff under-select. With no
+  // diffOutput the hunk-level T1 never runs, and a T0-only PROSE_PRESENT would
+  // mark it "classified" -> ambiguous=false -> deslop + always-include only,
+  // dropping the code surface. It must instead stay ambiguous and fall back to
+  // the full angle set (deslop still runs there).
+  const r = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/articles/bar.md" });
+  assert.equal(r.t1.changeCategories.length, 0, "mixed no-diffOutput must not be PROSE_PRESENT-only");
+  assert.equal(r.ambiguous, true);
+});
+
 test("analyzeDiff: rename-only → unambiguous", () => {
   const result = analyzeDiff({ nameStatusOutput: "R100\told.mjs\tnew.mjs" });
   assert.ok(result.t0.renameOnly);
