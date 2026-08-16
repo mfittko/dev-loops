@@ -339,3 +339,27 @@ test("SubagentStop hook exempts an interactive session awaiting commit authoriza
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/worktrees/ (#1685)", () => {
+  // Every makeWorktree() fixture calls `git init`, so the hook always sees a valid git repo and
+  // the fail-safe-allow catch path (`execFileSync("git", ["status","--porcelain"], { timeout:
+  // 5000 })` throws → porcelain="" → allow the stop) is never exercised e2e. This test creates
+  // the dir with `mkdir` only (no `git init`) OUTSIDE any git repo — so `git status --porcelain`
+  // throws and the catch allows the stop: exit 0 + no block output. A dir under the repo's own
+  // tmp/worktrees/ is nested inside the surrounding git repo, so git status would succeed there
+  // and report the untracked dir as dirty instead of throwing; hosting the non-git dir under
+  // os.tmpdir() (outside every repo, like the existing outside-path test) makes git genuinely
+  // fail while the path still carries a tmp/worktrees/ segment so isUnderWorktreePath stays real.
+  // Non-goal: the fail-safe allow on git error/timeout is the correct behavior — this test pins
+  // it, it does not change it.
+  const dir = path.join(os.tmpdir(), "tmp", "worktrees", `subagent-stop-test-nongit-${process.pid}`);
+  // mkdir only — deliberately NO `git init` (and outside any git repo)
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 0, "non-git dir under tmp/worktrees/ must fail-safe allow the stop (exit 0)");
+    assert.equal(stderrJson, null, "fail-safe-allow path must not emit block output");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
