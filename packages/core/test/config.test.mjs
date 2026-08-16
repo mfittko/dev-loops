@@ -1907,7 +1907,7 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  test("R12: all 20 known angles resolve without fallback", () => {
+  test("R12: all 21 known angles resolve without fallback (deslop added in #1442)", () => {
     const expectedPersonas = {
       scope: "review",
       coverage: "review",
@@ -1929,6 +1929,7 @@ describe("role resolution", () => {
       "state-concurrency": "review",
       "renderer-security": "review",
       determinism: "review",
+      deslop: "review", // #1442 (ADR 0041 prose half)
     };
 
     for (const [angle, expectedPersona] of Object.entries(expectedPersonas)) {
@@ -1936,6 +1937,33 @@ describe("role resolution", () => {
       assert.equal(result.persona, expectedPersona, `angle ${angle}`);
       assert.equal(result.fallback, false, `angle ${angle}`);
     }
+  });
+
+  // #1442 review finding (coverage, AC2): AC2 — "a prose diff with a planted
+  // binary-contrast construction is BLOCKED; a clean prose diff passes" — is
+  // enforced entirely by the fail-closed deslop persona prompt. No test bound
+  // the shipped prompt to that directive, so a regression that softens or drops
+  // fail-closed would pass the whole suite. This binds it so it cannot silently
+  // regress (the fail-closed blocking behavior itself runs as an LLM over this
+  // exact prompt).
+  test("R11e: shipped deslop prompt retains the fail-closed directive (AC2 binding)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const sourceDefaults = await readFile(
+      path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"),
+      "utf8",
+    );
+    const deslopBlock = sourceDefaults.match(
+      /- name: deslop[\s\S]*?prompt: >-[\s\S]*?fail closed when any survives/,
+    );
+    assert.ok(deslopBlock, "deslop persona prompt must exist in shipped extension-defaults.yaml");
+    const prompt = deslopBlock[0];
+    // Every surviving binary-contrast construction must block (`fail closed when
+    // any survives`), a missed instance is the failure mode (`Be exhaustive`),
+    // and skills/docs on the diff still respected.
+    assert.match(prompt, /fail closed when any survives/);
+    assert.match(prompt, /Be exhaustive/);
+    assert.match(prompt, /skills\/docs/);
   });
 
   test("R13: known angle with model override applies override", () => {
@@ -2856,7 +2884,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "input-validation", "determinism", "no-op", "link-check",
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
-      "semantic-drift", "deslop", // #1442 (ADR 0041 prose half)
+      "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",

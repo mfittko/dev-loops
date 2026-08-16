@@ -82,6 +82,12 @@ test("isProsePath: prose surface — articles, presentations, README*, narrative
 test("isProsePath: NOT prose — skills/docs contracts, nested docs, code, config, other docs", () => {
   assert.equal(isProsePath("skills/docs/ab-contrast-deslop-step.md"), false);
   assert.equal(isProsePath("skills/docs/worktree-guidance.md"), false);
+  // #1442 review finding: the skills/docs/** exemption must hold for README-named
+  // contracts too (the README basename rule is the only path that could classify
+  // a skills/docs file as prose).
+  assert.equal(isProsePath("skills/docs/README.md"), false);
+  assert.equal(isProsePath("skills/docs/README-styleguide.md"), false);
+  assert.equal(isProsePath(".claude/skills/docs/README.md"), false);
   // Nested under docs/ (not a direct-child narrative doc, not articles/presentations)
   assert.equal(isProsePath("docs/specs/foo.md"), false);
   assert.equal(isProsePath("docs/decisions/0001.md"), false);
@@ -115,6 +121,24 @@ test("analyzeDiff: non-prose docs diff (skills/docs) does NOT get PROSE_PRESENT"
   const r = analyzeDiff({ nameStatusOutput: "M\tskills/docs/worktree-guidance.md" });
   assert.ok(r.t1.changeCategories.includes("DOCS_ONLY"));
   assert.ok(!r.t1.changeCategories.includes("PROSE_PRESENT"), "skills/docs is exempt from deslop");
+});
+
+// #1442 review finding: a pure deletion (`D` row) has no prose content for the
+// deslop reviewer to strip — it must NOT arm PROSE_PRESENT / deslop.
+test("analyzeDiff: a pure deletion of a prose file does NOT arm PROSE_PRESENT", () => {
+  const r = analyzeDiff({ nameStatusOutput: "D\tdocs/articles/retired-article.md" });
+  assert.ok(!r.t1.changeCategories.includes("PROSE_PRESENT"), "deletion-only prose diff must not select deslop");
+  assert.ok(r.t1.changeCategories.includes("DOCS_ONLY"), "a deleted docs file is still a docs change");
+});
+
+test("analyzeDiff: a modified prose file still arms PROSE_PRESENT", () => {
+  const r = analyzeDiff({ nameStatusOutput: "M\tdocs/articles/foo.md" });
+  assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
+});
+
+test("analyzeDiff: a deleted prose file among added/modified files does not block prose arming from the live ones", () => {
+  const r = analyzeDiff({ nameStatusOutput: "D\tdocs/articles/old.md\nM\tdocs/articles/new.md" });
+  assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"), "live modified prose file still arms deslop");
 });
 
 test("classifyFile: config for allowlisted extensionless dotfiles", () => {

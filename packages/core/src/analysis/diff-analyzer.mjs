@@ -28,17 +28,26 @@ const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 // modality.
 const PROSE_PATH_RE = /^docs\/(articles|presentations)\//;
 const NARRATIVE_DOC_RE = /^docs\/[^/]+\.(md|markdown)$/;
+// #1442 review finding: the skills/docs/** exemption must hold for the README
+// rule too. PROSE_PATH_RE / NARRATIVE_DOC_RE are anchored to `docs/` so
+// skills/docs files never match them; the README basename rule is the ONLY
+// path by which a skills/docs file could be classified prose (e.g. a future
+// `skills/docs/README-*.md`). Carve the normative-contract subtree out
+// explicitly so a README-named contract never arms deslop.
+const SKILLS_DOCS_EXEMPT_RE = /^(skills\/docs|\x2eclaude\/skills\/docs)\//;
 
 /**
  * Whether a file path is on the prose surface (#1442): docs/articles/**,
  * docs/presentations/**, README*, or a narrative direct-child docs/*.md.
- * skills/docs/** is exempt (normative contracts, not prose).
+ * skills/docs/** (and .claude/skills/docs/**) is exempt (normative
+ * contracts, not prose) across ALL rules, including the README basename rule.
  *
  * @param {string} filePath
  * @returns {boolean}
  */
 export function isProsePath(filePath) {
   const fp = normalizeSep(filePath);
+  if (SKILLS_DOCS_EXEMPT_RE.test(fp)) return false;
   if (PROSE_PATH_RE.test(fp)) return true;
   if (NARRATIVE_DOC_RE.test(fp)) return true;
   const base = fp.split("/").pop() ?? "";
@@ -81,6 +90,13 @@ export function analyzeT0(nameStatusOutput) {
   const extensions = new Set();
   const directories = new Set();
   let renameCount = 0;
+  // #1442 review finding: prose arming must be scoped to content-carrying
+  // rows. A pure deletion (`D` name-status row) has no prose content for the
+  // deslop reviewer to strip — arming deslop on it over-selects and re-runs
+  // the fan-out over a content-free delta. Added/modified/renamed-dest rows
+  // (A / M / M? / R-dest) carry content and still arm prose. Rename rows emit
+  // `R<score>\told\tnew` (rawPath = parts[2], the new content-bearing path).
+  let prosePresent = false;
 
   for (const line of lines) {
     const parts = line.split("\t");
@@ -98,12 +114,14 @@ export function analyzeT0(nameStatusOutput) {
     if (dir) directories.add(dir);
 
     if (status.startsWith("R")) renameCount++;
+    // #1442: a content-carrying prose file arms PROSE_PRESENT → deslop. Pure
+    // deletions (`D`) are excluded (no prose content to strip, avoids noise).
+    if (prosePresent) continue;
+    if (status === "D" || status.startsWith("D")) continue;
+    if (isProsePath(path)) prosePresent = true;
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
-  // #1442: any changed file on the prose surface arms the PROSE_PRESENT
-  // category, driving the required `deslop` gate angle.
-  const prosePresent = files.some(isProsePath);
   // Derive from the shared classifier so this predicate can't drift from it: a
   // code/config/test file hosted under docs/ is not prose, so a mixed diff that
   // includes one is not docs-only (it still gets the code-review surface).
