@@ -46,6 +46,10 @@ const SKILLS_DOCS_EXEMPT_RE = /^(skills\/docs|\x2eclaude\/skills\/docs)\//;
  * @returns {boolean}
  */
 export function isProsePath(filePath) {
+  // #1442 review finding (input-validation): exported trust-boundary guard.
+  // Fail closed (false) on a non-string/empty argument rather than crashing in
+  // normalizeSep(filePath).replaceAll(...).
+  if (typeof filePath !== "string" || filePath.length === 0) return false;
   const fp = normalizeSep(filePath);
   if (SKILLS_DOCS_EXEMPT_RE.test(fp)) return false;
   if (PROSE_PATH_RE.test(fp)) return true;
@@ -115,9 +119,14 @@ export function analyzeT0(nameStatusOutput) {
 
     if (status.startsWith("R")) renameCount++;
     // #1442: a content-carrying prose file arms PROSE_PRESENT → deslop. Pure
-    // deletions (`D`) are excluded (no prose content to strip, avoids noise).
+    // deletions (`D`) are excluded (no prose content to strip, avoids noise);
+    // a pure `R100` rename (git's 100% similarity score — no content changed)
+    // is likewise content-free and must not arm deslop. Renames with a score
+    // below 100 (`R<score>\told\tnew`, rawPath = the new content-bearing path)
+    // carry content and still arm prose.
     if (prosePresent) continue;
     if (status === "D" || status.startsWith("D")) continue;
+    if (status.startsWith("R") && status === "R100") continue;
     if (isProsePath(path)) prosePresent = true;
   }
 

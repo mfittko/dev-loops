@@ -131,6 +131,23 @@ test("analyzeDiff: a pure deletion of a prose file does NOT arm PROSE_PRESENT", 
   assert.ok(r.t1.changeCategories.includes("DOCS_ONLY"), "a deleted docs file is still a docs change");
 });
 
+test("isProsePath: NOT prose — non-string / empty argument fails closed", () => {
+  assert.equal(isProsePath(null), false);
+  assert.equal(isProsePath(undefined), false);
+  assert.equal(isProsePath(""), false);
+  assert.equal(isProsePath(42), false);
+});
+
+test("analyzeDiff: a pure R100 rename of a prose file does NOT arm PROSE_PRESENT", () => {
+  const r = analyzeDiff({ nameStatusOutput: "R100\tdocs/articles/old.md\tdocs/articles/new.md" });
+  assert.ok(!r.t1.changeCategories.includes("PROSE_PRESENT"), "pure R100 rename (no content change) must not select deslop");
+});
+
+test("analyzeDiff: a content-carrying rename (R<100) of a prose file arms PROSE_PRESENT", () => {
+  const r = analyzeDiff({ nameStatusOutput: "R090\tdocs/articles/old.md\tdocs/articles/new.md" });
+  assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"), "a below-100 rename carries content and must arm deslop");
+});
+
 test("analyzeDiff: a modified prose file still arms PROSE_PRESENT", () => {
   const r = analyzeDiff({ nameStatusOutput: "M\tdocs/articles/foo.md" });
   assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
