@@ -119,6 +119,35 @@ test("audit-gate-evidence: missing verdicts are reported in the missing list", a
   assert.equal(result.preApprovalGate.visible, false);
 });
 
+test("audit-gate-evidence: abbreviated verdict-body head SHA counts as current-head evidence (no false missing) (#1729 contradiction-lens finding)", async () => {
+  // The contradiction-lens finding: a legitimately-posted clean pre_approval_gate
+  // whose verdict body carries an abbreviated head SHA (7-64 hex prefix) must
+  // still count as current-head evidence against the full oid from gh pr view.
+  // Strict equality would false-report this as missing (issue #1729's core bug).
+  const FULL_OID = "3d4f0389d4f0389d4f0389d4f0389d4f0389d4f03";
+  const ABBREV = "3d4f0389";
+  const PRE_APPROVAL_ABBREV = {
+    ...PRE_APPROVAL_CLEAN,
+    body: PRE_APPROVAL_CLEAN.body.replace("Reviewed head SHA: 3d4f0389", `Reviewed head SHA: ${ABBREV}`),
+  };
+  const result = await auditGateEvidence(
+    { repo: "owner/repo", pr: 17, headSha: FULL_OID },
+    {
+      runChild: stubRunChild({
+        issueComments: [],
+        reviews: [DRAFT_CLEAN, PRE_APPROVAL_ABBREV],
+      }),
+    },
+  );
+
+  assert.equal(result.currentHeadSha, FULL_OID);
+  assert.equal(result.preApprovalGate.verdict, "clean");
+  assert.equal(result.preApprovalGate.visible, true);
+  assert.equal(result.preApprovalGate.headSha, ABBREV);
+  assert.equal(result.allVerdictsPosted, true);
+  assert.deepEqual(result.missing, []);
+});
+
 test("audit-gate-evidence: clean pre_approval_gate on an OLD head is NOT current-head evidence (allVerdictsPosted=false) (#1729 Copilot finding)", async () => {
   // The exact high-signal Copilot defect: summarizeGateReviewComments picks the
   // newest gate comment regardless of head SHA, so a clean pre_approval_gate on

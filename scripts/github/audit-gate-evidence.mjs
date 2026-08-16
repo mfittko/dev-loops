@@ -126,11 +126,18 @@ export async function auditGateEvidence(options, { env = process.env, ghCommand 
   // current head and must not drive allVerdictsPosted=true (issue #1729 /
   // Copilot head-match finding).
   if (draftGate.verdict !== "clean" || !draftGate.visible) missing.push("draft_gate");
+  // Verdict-body head SHAs may be abbreviated (7-64 hex, e.g. the back-compat
+  // issue-comment surface), while currentHeadSha is always the FULL oid from
+  // gh pr view. Compare by prefix — the repo convention fetchDraftGateEvidence
+  // uses — so an abbreviated-but-current head never false-reports missing
+  // (issue #1729 contradiction-lens finding). This also means a short
+  // --head-sha annotation (line 87 accepts 7-64) is a valid prefix match
+  // rather than a value that can never equal the full oid.
   const preApprovalCurrentHead =
     preApprovalGate.verdict === "clean" &&
     preApprovalGate.visible &&
     preApprovalGate.headSha !== null &&
-    preApprovalGate.headSha === currentHeadSha;
+    currentHeadSha.startsWith(preApprovalGate.headSha);
   if (!preApprovalCurrentHead) missing.push("pre_approval_gate");
 
   return {
