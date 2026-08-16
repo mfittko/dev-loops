@@ -480,6 +480,31 @@ test("parseWriteGateContextCliArgs rejects a whitespace-only --prefix-file (fail
   ]), /--prefix-file must not be empty/);
 });
 
+test("parseWriteGateContextCliArgs treats whitespace-only spec flags as absent, not provided (#1540)", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
+    "--angles", "[]",
+    "--pr-body", "   ",
+    "--issue-body", "  ",
+    "--acceptance-criteria", "   ",
+  ]);
+  assert.equal(result.prBody, null, "whitespace-only --pr-body is treated as absent");
+  assert.equal(result.issueBody, null, "whitespace-only --issue-body is treated as absent");
+  assert.equal(result.acceptanceCriteria, null, "whitespace-only --acceptance-criteria is treated as absent");
+});
+
+test("parseWriteGateContextCliArgs keeps real-content spec flags verbatim (#1540)", () => {
+  const result = parseWriteGateContextCliArgs([
+    "--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", "[]",
+    "--pr-body", " Fixes the thing ",
+    "--issue-body", " Has real content ",
+    "--acceptance-criteria", " #900 ",
+  ]);
+  assert.equal(result.prBody, " Fixes the thing ", "real content is kept untrimmed (body text is not modified)");
+  assert.equal(result.issueBody, " Has real content ", "real content is kept untrimmed");
+  assert.equal(result.acceptanceCriteria, "#900", "pointer is trimmed to its content");
+});
+
 // ---------------------------------------------------------------------------
 // Artifact shape
 // ---------------------------------------------------------------------------
@@ -3034,6 +3059,36 @@ test("resolvePrSpecContext: all three spec flags provided short-circuits before 
   assert.equal(options.issueBody, "flag issue");
   assert.equal(options.acceptanceCriteria, "docs/plan.md");
   assert.equal(options.acceptanceCriteriaSource, "provided");
+});
+
+test("main: whitespace-only spec flags resolve as if omitted — live body fetched, issue resolved, prefix rendered, never 'provided' (#1540)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-ws-"));
+  try {
+    await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+    // No --base: the diff-capture path is skipped, so no git fixture is needed.
+    await main([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890", "--angles", '["scope"]',
+      "--pr-body", "   ",
+      "--issue-body", "  ",
+      "--acceptance-criteria", "   ",
+    ], { repoRoot, run: specStubRun({ closing: [{ number: 42 }] }) });
+
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: "abc1234567890" }, { repoRoot });
+    assert.ok(artifact, "artifact written");
+    assert.equal(artifact.scope.acceptanceCriteria, "#42", "pointer resolves from the closing issue, not a whitespace '' stamp");
+    assert.notEqual(artifact.scope.acceptanceCriteriaSource, "provided", "whitespace is never recorded as caller-provided");
+    assert.equal(artifact.scope.acceptanceCriteriaSource, "linked-issue-unrefined");
+
+    const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: "abc1234567890" });
+    const prefix = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
+    assert.ok(prefix.includes("live PR body"), "live PR body is rendered, not PR_BODY_ABSENT_SENTINEL");
+    assert.ok(!prefix.includes(PR_BODY_ABSENT_SENTINEL), "absent sentinel must not render when live body is fetched");
+    assert.ok(prefix.includes("## Linked issue #42"), "linked-issue section rendered with resolved pointer");
+    assert.ok(prefix.includes("live issue body"), "resolved issue body is rendered, not dropped by whitespace");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("resolvePrSpecContext: --acceptance-criteria provided without --issue-body never fetches an issue body and keeps source=provided", async () => {
