@@ -92,6 +92,21 @@ test("audit-gate-evidence: missing verdicts are reported in the missing list", a
   assert.equal(result.preApprovalGate.visible, false);
 });
 
+test("audit-gate-evidence: verdict present on BOTH surfaces is reported posted", async () => {
+  const result = await auditGateEvidence(
+    { repo: "owner/repo", pr: 17, headSha: "3d4f0389" },
+    {
+      runChild: stubRunChild({
+        issueComments: [PRE_APPROVAL_CLEAN],
+        reviews: [DRAFT_CLEAN, PRE_APPROVAL_CLEAN],
+      }),
+    },
+  );
+
+  assert.equal(result.allVerdictsPosted, true);
+  assert.deepEqual(result.missing, []);
+});
+
 test("audit-gate-evidence: auto-fetches head sha via pr view when --head-sha omitted", async () => {
   const result = await auditGateEvidence(
     { repo: "owner/repo", pr: 17 },
@@ -107,6 +122,15 @@ test("audit-gate-evidence: auto-fetches head sha via pr view when --head-sha omi
   assert.equal(result.currentHeadSha, "abc1234");
   assert.equal(result.allVerdictsPosted, true);
   assert.deepEqual(result.missing, []);
+});
+
+test("audit-gate-evidence: CLI parse rejects malformed inputs (coverage regression)", () => {
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--pr", "1735"]), /repo/);
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/../x", "--pr", "1"]), /repo/);
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/name/extra", "--pr", "1"]), /repo/);
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo"]), /pr/);
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo", "--pr", "abc"]), /pr/);
+  assert.throws(() => parseAuditGateEvidenceCliArgs(["--repo", "owner/repo", "--pr", "1", "--head-sha", "zzz"]), /head-sha/);
 });
 
 test("audit-gate-evidence: CLI parse normalizes --repo through parseRepoSlug (no repo.repo deref) (#1729 gate finding)", () => {

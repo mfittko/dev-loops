@@ -178,7 +178,12 @@ async function main() {
   }
   try {
     const result = await auditGateEvidence(options);
-    return emitResult(result, { jq: options.jq, silent: options.silent, stdout: process.stdout, stderr: process.stderr });
+    // --silent is a verdict-presence predicate: exit non-zero when not all
+    // verdicts are posted (jq -e style), so a status check reflects the audit
+    // outcome rather than always exiting 0. Verbose mode always exits 0 (the
+    // audit completed and printed its report).
+    const ok = options.silent ? result.allVerdictsPosted : result.ok !== false;
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout: process.stdout, stderr: process.stderr, ok });
   } catch (err) {
     console.error(formatCliError(err));
     process.exit(1);
