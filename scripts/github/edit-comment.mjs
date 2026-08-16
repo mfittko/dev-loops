@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
@@ -128,6 +129,10 @@ async function resolveBody(options) {
 // single call covers editing either kind without needing to know which one it is.
 export async function editComment(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
   const body = await resolveBody(options);
+  // ISSUE/PR-ID GUARD (#1731): a modified comment body must never carry a raw
+  // issue/PR id (fail-closed unless explicitly allowlisted), mirroring
+  // commentIssue in issue-ops.mjs.
+  guardCommentBodyNoIssuePrIds(body, { ref: "edited comment body" });
   const result = await run(
     ghCommand,
     ["api", "-X", "PATCH", `repos/${options.repo}/issues/comments/${options.commentId}`, "-f", `body=${body}`],

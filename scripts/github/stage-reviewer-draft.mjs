@@ -8,6 +8,7 @@ import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs"
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 const HELP = `Usage: stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <path> [--local-state-output <path>]
 Stage a pending draft review on a GitHub pull request.
 Options:
@@ -131,6 +132,13 @@ function parseDraftReviewResponse(payload) {
   return { reviewId, reviewUrl, state, commitSha };
 }
 async function postDraftReview({ repo, pr, reviewPayload }, { env = process.env, ghCommand = "gh" } = {}) {
+  // ISSUE/PR-ID GUARD (#1731): a staged review body must never emit a raw
+  // issue/PR id (fail-closed unless explicitly allowlisted), mirroring the
+  // guarded gate-review write helpers.
+  guardCommentBodyNoIssuePrIds(reviewPayload?.body, { ref: "staged reviewer-draft review body" });
+  for (const comment of reviewPayload?.comments ?? []) {
+    guardCommentBodyNoIssuePrIds(comment?.body, { ref: "staged reviewer-draft inline comment" });
+  }
   const result = await runChild(
     ghCommand,
     ["api", "-X", "POST", `repos/${repo}/pulls/${pr}/reviews`, "--input", "-"],

@@ -107,6 +107,18 @@ test("editComment: rejects an empty --body", async () => {
   await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, body: "   " }, { run }), /--body must not be empty/);
 });
 
+test("editComment: refuses a body containing a raw issue/PR id (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => editComment({ repo: "o/n", commentId: 7, body: "see issue #1670" }, { run }),
+    /#1670/,
+  );
+  // a clean body still PATCHes
+  const { run: run2, calls: calls2 } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  await editComment({ repo: "o/n", commentId: 7, body: "clean edit" }, { run: run2 });
+  assert.deepEqual(calls2[0], ["api", "-X", "PATCH", "repos/o/n/issues/comments/7", "-f", "body=clean edit"]);
+});
+
 test("editComment: throws when gh fails", async () => {
   const { run } = stubGh([{ code: 1, stderr: "not found" }]);
   await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, body: "x" }, { run }), /gh api PATCH issues\/comments failed: not found/);
