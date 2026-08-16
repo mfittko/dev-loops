@@ -6729,3 +6729,30 @@ test("#1621: gate:full label is re-applied on a noop rerun (idempotent retry aft
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("#1731: upsertCheckpointVerdict refuses a verdict body containing a raw issue/PR id (guard fires before POST)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-verdict-guard-"));
+  try {
+    // Coordination reads resolve, but the rendered verdict body carries a raw
+    // `#1731` from the findings summary → the desiredBody guard (line ~2137)
+    // must refuse BEFORE any review POST is issued.
+    const { runChild } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ], { repeatLastOnOverflow: true });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: "abc1234000000000000000000000000000000000",
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+        findingsSummary: "all clean; tracked as #1731",
+        nextAction: "Mark ready for review",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot }),
+      /comment-id-guard refused to emit gate verdict comment body.*#1731/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

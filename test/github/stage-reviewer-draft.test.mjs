@@ -300,3 +300,37 @@ test("stage-reviewer-draft rejects malformed success payloads from gh determinis
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("#1731: stage-reviewer-draft refuses a review body containing a raw issue/PR id (guard fires before gh POST)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stage-reviewer-guard-"));
+  try {
+    const reviewFile = path.join(tempDir, "merged-review.json");
+    const localStatePath = path.join(tempDir, "local-state.json");
+
+    // The rendered body will carry the raw `#1731` from the summary finding —
+    // postDraftReview's guard must refuse BEFORE any gh POST.
+    await writeJson(reviewFile, {
+      headSha: "abc123",
+      verdict: "COMMENT",
+      totalFindings: 1,
+      runsMerged: 1,
+      inlineComments: [],
+      summaryFindings: [{ message: "See tracked issue #1731 for the follow-up", severity: "low" }],
+    });
+
+    // Zero gh entries: the guard must throw before runChild is ever invoked.
+    const gh = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17",
+      "--review-file", reviewFile,
+      "--local-state-output", localStatePath,
+    ], { env: gh.env });
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /comment-id-guard refused to emit staged reviewer-draft review body/);
+    // The guard fired before the POST, so no local "posted" state was written.
+    await assert.rejects(() => readFile(localStatePath, "utf8"), /ENOENT/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

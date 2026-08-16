@@ -168,6 +168,7 @@ export async function replyAndMaybeResolve(
     body,
     resolve = true,
     validatedSnapshot = null,
+    allowedRefs = [],
   },
   { env = process.env, ghCommand = "gh" } = {},
 ) {
@@ -188,6 +189,7 @@ export async function replyAndMaybeResolve(
       // emit a raw issue/PR id (fail-closed unless explicitly allowlisted).
       body: guardCommentBodyNoIssuePrIds(sanitizeCopilotSummonTokens(body), {
         ref: "review-thread reply body",
+        allowedRefs,
       }),
     },
     { env, ghCommand },

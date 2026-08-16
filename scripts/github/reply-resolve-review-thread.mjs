@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
+import { parsePositiveInteger, parseAllowedRefsCsv } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   replyAndMaybeResolve,
@@ -25,6 +25,11 @@ Required:
   --thread-id <id>         GraphQL node ID of the review thread
   --body-file <path>       Path to file containing the reply body text
 
+Optional:
+  --allowed-refs <csv>     Explicit allowlist of issue/PR ids a deliberate cross-ref
+                           may cite in this reply body (no-ids rule opens this door
+                           only for an explicit, deliberate reference)
+
 ${JQ_OUTPUT_USAGE}`;
 
 function parseError(message) {
@@ -42,6 +47,7 @@ function parseCliArgs(argv) {
         "comment-id": { type: "string" },
         "thread-id": { type: "string" },
         "body-file": { type: "string" },
+        "allowed-refs": { type: "string" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
@@ -73,6 +79,7 @@ function parseCliArgs(argv) {
     commentId,
     threadId: values["thread-id"],
     bodyFile: values["body-file"],
+    allowedRefs: values["allowed-refs"] ? parseAllowedRefsCsv(values["allowed-refs"], "--allowed-refs", parseError) : [],
     jq: values.jq,
     silent: values.silent === true,
   };
@@ -85,13 +92,13 @@ async function run(argv) {
     return 0;
   }
 
-  const { repo: repoSlug, pr, commentId, threadId, bodyFile } = parsed;
+  const { repo: repoSlug, pr, commentId, threadId, bodyFile, allowedRefs } = parsed;
   const rawBody = await readFile(bodyFile, "utf8");
   if (rawBody.trim().length === 0) throw new Error("--body-file must contain non-empty text");
   validateResolutionMessage(rawBody);
 
   const result = await replyAndMaybeResolve(
-    { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true },
+    { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true, allowedRefs },
     { env: process.env, ghCommand: "gh" },
   );
 
