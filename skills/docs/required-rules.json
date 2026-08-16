@@ -681,6 +681,10 @@
       "id": "WORKTREE-NO-STASH",
       "enforcement": "agent",
       "enforcementNote": "No-stash is agent discipline; no mechanical check."
+    },
+    {
+      "id": "GATE-EVIDENCE-AUDIT-TWO-SURFACES",
+      "enforcement": "doc"
     }
   ],
   "optOutRules": []

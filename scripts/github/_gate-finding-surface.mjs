@@ -466,20 +466,32 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
 /**
  * Read every comment-shaped body a gate verdict can live on: the issue-comment
  * stream (verdicts posted by earlier versions) plus the PR review stream (the
- * round's single visible surface today). The reviews read is FAIL-OPEN — a
- * legacy issue-comment verdict still validates on its own — while the
- * issue-comment read stays fail-closed, exactly as each caller behaved before
- * this became one function.
+ * round's single visible surface today). The reviews read is FAIL-OPEN by
+ * default — a legacy issue-comment verdict still validates on its own — while
+ * the issue-comment read stays fail-closed, exactly as each caller behaved
+ * before this became one function.
+ *
+ * When `reportSurfaces` is set, a consumer that must know WHICH surface it
+ * actually scanned (an audit tool that would otherwise overclaim a review read
+ * that silently failed) gets back `{ comments, surfaces }` listing exactly the
+ * surfaces successfully read — never a review surface whose gh read failed.
+ * This keeps the default fail-open behavior for all existing callers while
+ * giving the audit a truthful surface list (no silent false-missing).
  */
-export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild } = {}) {
+export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, reportSurfaces = false } = {}) {
   const comments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
+  const surfaces = [];
+  let reviewSurfaceRead = false;
   try {
     const reviews = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
     comments.push(...normalizePrReviewsPayload(reviews));
+    reviewSurfaceRead = true;
   } catch {
     // Non-fatal: continue on the issue-comment stream alone.
   }
-  return comments;
+  if (reviewSurfaceRead) surfaces.push("review");
+  surfaces.push("issue_comment");
+  return reportSurfaces ? { comments, surfaces } : comments;
 }
 
 /**
