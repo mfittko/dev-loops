@@ -77,8 +77,9 @@ export function parseAuditGateEvidenceCliArgs(argv) {
     return { help: true };
   }
   if (!values.repo) throw parseError("Missing required argument: --repo <owner/name>");
-  const repo = parseRepoSlug(values.repo);
-  if (values.repo && repo.repo !== values.repo) {
+  const { owner, name } = parseRepoSlug(values.repo);
+  const repo = `${owner}/${name}`;
+  if (repo !== values.repo) {
     throw parseError("--repo must be <owner/name> shape");
   }
   const pr = parsePrNumber(values.pr, parseError);
@@ -89,7 +90,7 @@ export function parseAuditGateEvidenceCliArgs(argv) {
       throw parseError("--head-sha must be a hex commit sha (or omitted to auto-fetch)");
     }
   }
-  const out = { repo: repo.repo, pr, headSha };
+  const out = { repo, pr, headSha };
   for (const token of tokens) {
     if (matchJqOutputToken(token, values, (t) => requireTokenValue(t, parseError))) continue;
   }

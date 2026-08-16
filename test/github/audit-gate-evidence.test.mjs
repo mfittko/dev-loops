@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { auditGateEvidence } from "../../scripts/github/audit-gate-evidence.mjs";
+import { auditGateEvidence, parseAuditGateEvidenceCliArgs } from "../../scripts/github/audit-gate-evidence.mjs";
 
 // Build a runChild that routes each gh invocation by its first positional arg
 // after the verb: `pr view` -> head oid; `api ... issues/.../comments` ->
@@ -107,4 +107,19 @@ test("audit-gate-evidence: auto-fetches head sha via pr view when --head-sha omi
   assert.equal(result.currentHeadSha, "abc1234");
   assert.equal(result.allVerdictsPosted, true);
   assert.deepEqual(result.missing, []);
+});
+
+test("audit-gate-evidence: CLI parse normalizes --repo through parseRepoSlug (no repo.repo deref) (#1729 gate finding)", () => {
+  const parsed = parseAuditGateEvidenceCliArgs([
+    "--repo",
+    "mfittko/dev-loops",
+    "--pr",
+    "1735",
+    "--head-sha",
+    "f5c7161ce4cc76d04a1a7e84654c88a785908339",
+  ]);
+  assert.equal(parsed.repo, "mfittko/dev-loops");
+  assert.equal(parsed.pr, 1735);
+  assert.equal(parsed.headSha, "f5c7161ce4cc76d04a1a7e84654c88a785908339");
+  assert.equal(parsed.help, undefined);
 });
