@@ -16,6 +16,7 @@ Required:
   --body <text>                 Comment body as a single argument
   --body-file <path>            Read the comment body from a file (preserves
                                 newlines; alternative to --body; - reads stdin)
+Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
