@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0-rc.6 - 2026-08-16
+
 ### Added
 - **create-pr refuses duplicate linked PRs; explicit replacement override + fail-closed ambiguity posture (#1629).** `scripts/github/create-pr.mjs` is the single chokepoint every sanctioned PR creation routes through, and it validated no linkage: nothing stopped opening a second PR against an issue that already had an open linked PR. The wrapper now runs a same-repo linked-PR probe (`detectLinkedIssuePr`) before `gh pr create` for any closing keyword/`--issue` and refuses a duplicate naming the prior PR — `FACADE-LINKED-PR-SINGLE-ARTIFACT`. A deliberate replacement records its intent via `--allow-replacement-pr <prior>` (consumed, never forwarded to `gh`), which must match the detected open linked-PR number; a mismatch is still refused. Issue-less `--lightweight` PRs carry no closing keyword and are exempt. This adds the first network call to an otherwise-offline wrapper; the defined posture when it cannot run (no `--repo`, or the GitHub API unavailable) is FAIL CLOSED on ambiguity rather than silently risking a duplicate. Each refusal names the rule it upholds. Tests in `test/github/create-pr.test.mjs` and `test/github/create-pr-board.test.mjs`; each behavior fails when reverted (refuse-duplicate, allow-match, mismatch-refuse, invalid-override, no-`--repo` fail-closed, API-unavailable fail-closed).
 
