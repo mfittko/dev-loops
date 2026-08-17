@@ -10,13 +10,21 @@ A sibling loop, the [Slides Content & Storytelling Review Loop](./slides-story-r
 - This review loop is an internal capability behind `dev-loop`; it does not introduce a second public workflow name.
 - The loop depends on the reusable harness from [UI Smoke Harness](./ui-smoke-harness.md) and the artifact contract from [UI Artifact Contract](./ui-artifact-contract.md).
 - The loop is a **consumer** of those earlier slices. It does not redefine browser capture, artifact naming, or when UI e2e is required (that is path-triggered and fail-closed — see [UI e2e scoping step](./ui-e2e-scoping-step.md)).
-- This loop is an **optional** design-review pass; it is distinct from the required, auto-scoped UI e2e gate.
+- This loop is a required, fail-closed **recorded-evidence** pass on the
+  rendered-HTML paths that already gate smoke (`docs/articles/*.html`,
+  `docs/presentations/*.html`): the review runs and records its existing
+  artifact bundle + review outcome (`ui_review_satisfied` among others), and the
+  gate blocks unless that evidence is present and the recorded outcome is the
+  satisfied state (ADR 0041, UI half — issue #1443). It is distinct from the
+  required, auto-scoped UI e2e gate. Light/spike relaxed-gate carve-outs still
+  exempt the recorded-evidence requirement.
 
 ## Purpose
 
 The designer-persona review loop turns deterministic UI artifacts into a repeatable next-iteration handoff.
 
-This contract now also defines an opt-in **vision-model** review mode behind the same `dev-loop` boundary for UI slices that request `uiReviewMode: vision`.
+For UI slices that request `uiReviewMode: vision`, this contract also defines
+the vision-model review mode behind the same `dev-loop` boundary.
 
 It exists for UI-heavy work where code correctness and smoke-test success are necessary but not sufficient to answer:
 - what visual or interaction problems remain

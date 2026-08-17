@@ -17,8 +17,12 @@ import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export { listOpenPrs };
-const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name>
+const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name> [--designer-review-evidence <path>]
 Poll all open PRs, detect state, and output an ordered action queue.
+
+--designer-review-evidence <path>  Optional JSON file of the loop's recorded
+  designer/vision review evidence (rendered-HTML gate, ADR 0041 UI half);
+  absent, a rendered-artifact change fails closed until evidence is supplied.
 
 ${JQ_OUTPUT_USAGE}`.trim();
 export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
@@ -36,11 +40,16 @@ export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
   [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL]: "await_approval",
   [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]: "resolve_conflicts",
   [PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE]: "run_ui_e2e",
+  [PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW]: "record_designer_review",
   [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]: "blocked",
   [PR_CHECKPOINT_ACTION.REPORT_DONE]: "done",
 });
 export const ACTION_PRIORITY = Object.freeze({
   merge: 100,
+  // Designer/vision recorded-evidence scoping fix work (#1443): a path-triggered
+  // fail-closed precondition, surfaced just under the UI e2e carve so recorded
+  // evidence is present before the gate proceeds.
+  record_designer_review: 94,
   // UI e2e auto-scoping fix work (#976): a path-triggered, fail-closed
   // precondition — surface it ahead of feedback/draft work so the rendered
   // artifact gets registered + covered before the gate proceeds.
@@ -75,12 +84,14 @@ export function parseCliArgs(argv) {
   const options = {
     help: false,
     repo: undefined,
+    designerReviewEvidence: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
+      "designer-review-evidence": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -100,6 +111,10 @@ export function parseCliArgs(argv) {
     }
     if (token.name === "repo") {
       options.repo = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "designer-review-evidence") {
+      options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -125,11 +140,12 @@ export async function detectPrState(
     detectGateImpl = detectPrGateCoordinationState,
     detectSnapshotImpl = autoDetectSnapshot,
     autonomyStopAt = ["merge"],
+    designerReviewEvidence,
   },
 ) {
   try {
     const gateState = await detectGateImpl(
-      { repo, pr: pr.number },
+      { repo, pr: pr.number, designerReviewEvidence },
       { env, ghCommand, repoRoot },
     );
     let snapshot = null;
@@ -246,7 +262,7 @@ export function buildSummary(actions) {
   return summary;
 }
 export async function runConductorCycle(
-  { repo, autonomyStopAt, gateConfig },
+  { repo, autonomyStopAt, gateConfig, designerReviewEvidence },
   {
     env = process.env,
     ghCommand = "gh",
@@ -265,6 +281,7 @@ export async function runConductorCycle(
       ghCommand,
       repoRoot,
       autonomyStopAt: stopAt,
+      designerReviewEvidence,
     });
     detectionResults.push(result);
   }

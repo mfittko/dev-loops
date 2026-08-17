@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -27,6 +27,7 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { parseArgs } from "node:util";
+import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing or
 // stopping (success OR stop). The runner-coordination lock is auto-released at these
@@ -61,6 +62,15 @@ Optional:
                   refinement.maxCopilotRounds) instead of using
                   refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
                   0 still disables Copilot rounds even with --lightweight.
+  --spike          This PR is a spike run: relax the required designer/vision
+                  recorded-evidence check like the other relaxed-gate
+                  carve-outs (#1443).
+  --designer-review-evidence <path>
+                  Path to the designer/vision loop's recorded evidence JSON
+                  (the existing outcome + artifact bundle, no new schema).
+                  Surfaces the recorded evidence so AC1's pass branch is
+                  reachable (#1443) — a rendered-HTML diff with satisfied
+                  recorded evidence passes; without recorded evidence it blocks.
   --expected-issue <n>  Declare the tracker issue this PR is expected to close
                   (ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS, #1628). For a draft PR
                   with no linked issue this switches the body-spec validation
@@ -127,6 +137,8 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     pr: undefined,
     lightweight: false,
     expectedIssue: undefined,
+    designerReviewEvidence: undefined,
+    spike: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -135,7 +147,9 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       lightweight: { type: "boolean" },
+      spike: { type: "boolean" },
       "expected-issue": { type: "string" },
+      "designer-review-evidence": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -165,8 +179,16 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       options.lightweight = true;
       continue;
     }
+    if (token.name === "spike") {
+      options.spike = true;
+      continue;
+    }
     if (token.name === "expected-issue") {
       options.expectedIssue = parsePositiveInteger(requireTokenValue(token, parseError), "--expected-issue", parseError);
+      continue;
+    }
+    if (token.name === "designer-review-evidence") {
+      options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -269,6 +291,89 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
     // SKIPPED = "not applicable to this run" (e.g. viewer-smoke when no viewer files changed) — not a failure.
     return conclusion === "SUCCESS" || conclusion === "SKIPPED" || state === "SUCCESS" || state === "SKIPPED";
   });
+}
+
+// Designer/vision recorded evidence for the touched rendered artifacts (#1443,
+// ADR 0041 UI half). Reuses the loop's existing outcome + artifact-bundle
+// record. The evidence source is the loop's recorded review outcome; absent any
+// recorded record this returns null, which the evaluator treats as missing and
+// fails closed for a rendered-artifact change (the required evidence must be
+// recorded). Light/spike carve-outs (designerReviewExempt) relax this.
+//
+// NOTE: the designer/vision loop currently records its outcome in its review
+// artifact, not a gate-detectable marker; this derivation defaults to null so
+// a rendered-artifact change without recorded evidence blocks. When the loop
+// gains a deterministic recorder, surface it here.
+export function deriveUiDesignerReviewEvidence(recordedEvidence, changedFiles) {
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // the loop records its outcome + artifact bundle, and the gate consumes that
+  // recorded evidence here via the --designer-review-evidence read seam. Absent
+  // recorded evidence, returns null (fails closed) so a rendered-artifact change
+  // without recorded evidence blocks; when recorded evidence is supplied with a
+  // satisfied recorded outcome, the required check passes (AC1). changedFiles is
+  // retained for forward-compat with a deterministic per-artifact recorder.
+  return recordedEvidence ?? null;
+}
+
+// Load the loop's recorded designer/vision evidence from a JSON file passed via
+// the --designer-review-evidence read seam. Returns null when the path is absent
+// (nothing recorded -> the evaluator fails closed); throws on an unreadable or
+// malformed file rather than silently treating it as absent.
+export async function loadRecordedDesignerEvidence(evidencePath) {
+  if (!evidencePath || typeof evidencePath !== "string" || evidencePath.length === 0) {
+    return null;
+  }
+  const text = await readFile(evidencePath, "utf8");
+  const parsed = JSON.parse(text);
+  // Reject a JSON value whose type cannot describe recorded evidence. A bare
+  // string/number/boolean parses fine but would surface downstream as a
+  // misleading "missing evidence" gate failure; report the malformed type
+  // directly instead of silently falling through to a confusing verdict.
+  if (parsed !== null && typeof parsed !== "object") {
+    throw new Error(
+      `--designer-review-evidence file must contain a JSON object or array, got ${typeof parsed}`,
+    );
+  }
+  return parsed;
+}
+
+// Total changed lines across a PR's changed files (additions + deletions),
+// mirroring the canonical light-mode line dimension (resolveGateDispatchMode's
+// scope.linesChanged). Returns 0 when no line data is available.
+export function countPrChangedLines(prData) {
+  const files = Array.isArray(prData?.files) ? prData.files : [];
+  let total = 0;
+  for (const f of files) {
+    const additions = Number(f?.additions);
+    const deletions = Number(f?.deletions);
+    total += (Number.isFinite(additions) ? additions : 0) + (Number.isFinite(deletions) ? deletions : 0);
+  }
+  return total;
+}
+
+// Whether a light/spike relaxed-gate carve-out exempts the required
+// designer/vision recorded-evidence check (#1443). Mirrors the existing
+// relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// or a change under the configured light-mode threshold (files AND lines)
+// exempts. When changed-lines data is unavailable the line dimension is
+// treated as within threshold, preserving files-only behavior for callers
+// that lack it.
+export function deriveUiDesignerReviewExempt({
+  lightweight = false,
+  spike = false,
+  changedFiles = [],
+  changedLines,
+  config = {},
+} = {}) {
+  if (lightweight || spike) return true;
+  const threshold = resolveLightMode(config);
+  if (!threshold) return false;
+  const filesExempt = Array.isArray(changedFiles) && changedFiles.length <= threshold.maxFiles;
+  if (!filesExempt) return false;
+  if (typeof changedLines === "number" && Number.isFinite(changedLines)) {
+    return changedLines <= threshold.maxLines;
+  }
+  return true;
 }
 
 // Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
@@ -786,6 +891,8 @@ export function buildGateCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   postConvergenceSignificantChange,
+  designerReviewExempt = false,
+  designerReviewEvidence = null,
 }) {
   return {
     repo: context.repo,
@@ -801,6 +908,12 @@ export function buildGateCoordinationEvaluatorInput({
     // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
     changedFiles: extractChangedFiles(context.prData),
     uiE2ePassed: deriveUiE2ePassed(context.prData),
+    // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half):
+    // path-triggered + fail-closed, modeled on the UI e2e precondition above.
+    // The recorded evidence flows through the --designer-review-evidence read
+    // seam (AC1's reachable pass branch); absent it, fails closed (null).
+    designerReviewEvidence: deriveUiDesignerReviewEvidence(designerReviewEvidence ?? null, extractChangedFiles(context.prData)),
+    designerReviewExempt,
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,
     ciStatus: context.snapshot?.ciStatus ?? null,
@@ -851,6 +964,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount,
     maxCopilotRounds,
   });
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // load the loop's recorded evidence (if the operator supplied
+  // --designer-review-evidence) so AC1's pass branch is reachable end-to-end;
+  // absent it, the evaluator fails closed (a rendered-artifact change blocks
+  // until recorded evidence is supplied).
+  const designerReviewEvidence = await loadRecordedDesignerEvidence(options.designerReviewEvidence);
   const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
     {
       repo: context.repo,
@@ -869,6 +988,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftGateConfig,
     preApprovalGateConfig,
     postConvergenceSignificantChange,
+    designerReviewExempt: deriveUiDesignerReviewExempt({
+      lightweight: options.lightweight,
+      spike: options.spike === true,
+      changedFiles: extractChangedFiles(context.prData),
+      changedLines: countPrChangedLines(context.prData),
+      config,
+    }),
+    designerReviewEvidence,
   }));
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.
