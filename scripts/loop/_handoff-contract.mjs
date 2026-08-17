@@ -29,6 +29,7 @@ const SUBAGENT_ACTIONS = new Set([
   "rerequest_review",
   "run_pre_approval",
   "run_ui_e2e",
+  "record_designer_review",
 ]);
 function normalizeContractValue(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : null;

@@ -6,12 +6,13 @@ import test, { describe, it } from "node:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
+import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
@@ -2063,6 +2064,96 @@ test("deriveUiDesignerReviewExempt honors light/spike relaxed-gate carve-outs", 
   assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
   // Over threshold → not exempt.
   assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b", "c"], config }), false);
+});
+
+// #1443: the designer evidence read seam passes recorded evidence through and
+// fails closed (null) when no recorded evidence is supplied.
+test("deriveUiDesignerReviewEvidence surfaces recorded evidence and fails closed when absent (#1443)", () => {
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  assert.equal(deriveUiDesignerReviewEvidence(evidence, ["docs/articles/foo.html"]), evidence);
+  assert.equal(deriveUiDesignerReviewEvidence(null, ["docs/articles/foo.html"]), null);
+  assert.equal(deriveUiDesignerReviewEvidence(undefined, []), null);
+});
+
+// #1443: the CLI read-seam flags parse into the detector options.
+test("parseDetectPrGateCoordinationCliArgs parses --designer-review-evidence and --spike (#1443)", () => {
+  const opts = parseDetectPrGateCoordinationCliArgs([
+    "--repo", "owner/repo", "--pr", "1740",
+    "--spike",
+    "--designer-review-evidence", "tmp/evidence.json",
+  ]);
+  assert.equal(opts.spike, true);
+  assert.equal(opts.designerReviewEvidence, "tmp/evidence.json");
+});
+
+// #1443 AC1 end-to-end: a rendered-HTML diff with recorded designer/vision
+// evidence (satisfied outcome) PASSES the required recorded-evidence check
+// through the builder wiring (the reachable pass branch), while one without
+// evidence fails closed.
+test("AC1: rendered-HTML diff with satisfied recorded evidence passes the builder, without it blocks (#1443)", () => {
+  const context = {
+    repo: "owner/repo",
+    pr: 1740,
+    currentHeadSha: "021ac63deadbeef",
+    interpretation: { state: "pr_draft" },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: {},
+    gateEvidence: { draftGate: {}, preApprovalGate: {}, draftGateMarker: {}, preApprovalGateMarker: {} },
+    prData: {
+      isDraft: true,
+      state: "OPEN",
+      title: "t",
+      files: [{ path: "docs/articles/foo.html" }],
+      closingIssuesReferences: [],
+    },
+  };
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  const input = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 2,
+    draftGateConfig: {},
+    preApprovalGateConfig: {},
+    postConvergenceSignificantChange: false,
+    designerReviewEvidence: evidence,
+  });
+  assert.deepEqual(input.designerReviewEvidence, evidence);
+  const scoping = evaluateUiDesignerReviewScoping(extractChangedFiles(context.prData), {
+    designerReviewEvidence: input.designerReviewEvidence,
+    designerReviewExempt: false,
+  });
+  assert.equal(scoping.required, true);
+  assert.equal(scoping.satisfied, true);
+  assert.equal(scoping.missing.length, 0);
+  assert.equal(scoping.unsatisfied.length, 0);
+
+  // Fail-closed path: no recorded evidence -> blocks naming the artifact.
+  const blocked = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 2,
+    draftGateConfig: {},
+    preApprovalGateConfig: {},
+    postConvergenceSignificantChange: false,
+    designerReviewEvidence: null,
+  });
+  const blockedScoping = evaluateUiDesignerReviewScoping(extractChangedFiles(context.prData), {
+    designerReviewEvidence: blocked.designerReviewEvidence,
+    designerReviewExempt: false,
+  });
+  assert.equal(blockedScoping.satisfied, false);
+  assert.ok(blockedScoping.missing.includes("docs/articles/foo.html"));
+});
+
+// #1443: loadRecordedDesignerEvidence reads a recorded evidence file and
+// returns null when no path is supplied.
+test("loadRecordedDesignerEvidence reads a recorded evidence file / null when absent (#1443)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dr-1443-"));
+  const evidencePath = path.join(dir, "evidence.json");
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  await writeFile(evidencePath, JSON.stringify(evidence));
+  assert.deepEqual(await loadRecordedDesignerEvidence(evidencePath), evidence);
+  assert.equal(await loadRecordedDesignerEvidence(undefined), null);
+  assert.equal(await loadRecordedDesignerEvidence(""), null);
+  await rm(dir, { recursive: true, force: true });
 });
 
 // #1472: buildGateCoordinationEvaluatorInput is the exact function

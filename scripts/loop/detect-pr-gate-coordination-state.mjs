@@ -27,6 +27,7 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { parseArgs } from "node:util";
+import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing or
 // stopping (success OR stop). The runner-coordination lock is auto-released at these
@@ -61,6 +62,15 @@ Optional:
                   refinement.maxCopilotRounds) instead of using
                   refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
                   0 still disables Copilot rounds even with --lightweight.
+  --spike          This PR is a spike run: relax the required designer/vision
+                  recorded-evidence check like the other relaxed-gate
+                  carve-outs (#1443).
+  --designer-review-evidence <path>
+                  Path to the designer/vision loop's recorded evidence JSON
+                  (the existing outcome + artifact bundle, no new schema).
+                  Surfaces the recorded evidence so AC1's pass branch is
+                  reachable (#1443) — a rendered-HTML diff with satisfied
+                  recorded evidence passes; without recorded evidence it blocks.
   --expected-issue <n>  Declare the tracker issue this PR is expected to close
                   (ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS, #1628). For a draft PR
                   with no linked issue this switches the body-spec validation
@@ -127,6 +137,8 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     pr: undefined,
     lightweight: false,
     expectedIssue: undefined,
+    designerReviewEvidence: undefined,
+    spike: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -135,7 +147,9 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       lightweight: { type: "boolean" },
+      spike: { type: "boolean" },
       "expected-issue": { type: "string" },
+      "designer-review-evidence": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -165,8 +179,16 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       options.lightweight = true;
       continue;
     }
+    if (token.name === "spike") {
+      options.spike = true;
+      continue;
+    }
     if (token.name === "expected-issue") {
       options.expectedIssue = parsePositiveInteger(requireTokenValue(token, parseError), "--expected-issue", parseError);
+      continue;
+    }
+    if (token.name === "designer-review-evidence") {
+      options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -282,10 +304,27 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
 // artifact, not a gate-detectable marker; this derivation defaults to null so
 // a rendered-artifact change without recorded evidence blocks. When the loop
 // gains a deterministic recorder, surface it here.
-export function deriveUiDesignerReviewEvidence(context, changedFiles) {
-  // User-injected recorded evidence (e.g. --designer-review-evidence <p>)
-  // would surface here; no recorder exists yet, so return null (fails closed).
-  return null;
+export function deriveUiDesignerReviewEvidence(recordedEvidence, changedFiles) {
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // the loop records its outcome + artifact bundle, and the gate consumes that
+  // recorded evidence here via the --designer-review-evidence read seam. Absent
+  // recorded evidence, returns null (fails closed) so a rendered-artifact change
+  // without recorded evidence blocks; when recorded evidence is supplied with a
+  // satisfied recorded outcome, the required check passes (AC1). changedFiles is
+  // retained for forward-compat with a deterministic per-artifact recorder.
+  return recordedEvidence ?? null;
+}
+
+// Load the loop's recorded designer/vision evidence from a JSON file passed via
+// the --designer-review-evidence read seam. Returns null when the path is absent
+// (nothing recorded -> the evaluator fails closed); throws on an unreadable or
+// malformed file rather than silently treating it as absent.
+export async function loadRecordedDesignerEvidence(evidencePath) {
+  if (!evidencePath || typeof evidencePath !== "string" || evidencePath.length === 0) {
+    return null;
+  }
+  const text = await readFile(evidencePath, "utf8");
+  return JSON.parse(text);
 }
 
 // Whether a light/spike relaxed-gate carve-out exempts the required
@@ -820,6 +859,7 @@ export function buildGateCoordinationEvaluatorInput({
   preApprovalGateConfig,
   postConvergenceSignificantChange,
   designerReviewExempt = false,
+  designerReviewEvidence = null,
 }) {
   return {
     repo: context.repo,
@@ -837,7 +877,9 @@ export function buildGateCoordinationEvaluatorInput({
     uiE2ePassed: deriveUiE2ePassed(context.prData),
     // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half):
     // path-triggered + fail-closed, modeled on the UI e2e precondition above.
-    designerReviewEvidence: deriveUiDesignerReviewEvidence(context, extractChangedFiles(context.prData)),
+    // The recorded evidence flows through the --designer-review-evidence read
+    // seam (AC1's reachable pass branch); absent it, fails closed (null).
+    designerReviewEvidence: deriveUiDesignerReviewEvidence(designerReviewEvidence ?? null, extractChangedFiles(context.prData)),
     designerReviewExempt,
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,
@@ -889,6 +931,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount,
     maxCopilotRounds,
   });
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // load the loop's recorded evidence (if the operator supplied
+  // --designer-review-evidence) so AC1's pass branch is reachable end-to-end;
+  // absent it, the evaluator fails closed (a rendered-artifact change blocks
+  // until recorded evidence is supplied).
+  const designerReviewEvidence = await loadRecordedDesignerEvidence(options.designerReviewEvidence);
   const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
     {
       repo: context.repo,
@@ -909,9 +957,11 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     postConvergenceSignificantChange,
     designerReviewExempt: deriveUiDesignerReviewExempt({
       lightweight: options.lightweight,
+      spike: options.spike === true,
       changedFiles: extractChangedFiles(context.prData),
       config,
     }),
+    designerReviewEvidence,
   }));
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.
