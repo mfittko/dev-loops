@@ -102,3 +102,24 @@ test("multi-artifact: every touched rendered artifact must carry satisfied evide
   assert.equal(r.satisfied, false);
   assert.deepEqual(r.missing, ["docs/articles/introducing-dev-loops.html"]);
 });
+
+test("viewer model: source-only change does not require designer evidence (#1443 regression)", () => {
+  // The shared classifier recognizes the headless viewer source as a "viewer"
+  // artifact; the designer requirement applies only to rendered HTML, so a
+  // viewer-source-only change must not demand designer/vision evidence.
+  const r = evaluateUiDesignerReviewScoping(["scripts/loop/inspect-run-viewer.mjs", "README.md"]);
+  assert.equal(r.required, false);
+  assert.equal(r.satisfied, true);
+  assert.deepEqual(r.artifacts, []);
+});
+
+test("viewer model: viewer + rendered artifact change still requires designer evidence for the rendered one", () => {
+  const r = evaluateUiDesignerReviewScoping(
+    ["scripts/loop/inspect-run-viewer.mjs", "docs/articles/new-page.html"],
+    { designerReviewEvidence: null },
+  );
+  assert.equal(r.required, true);
+  assert.equal(r.satisfied, false);
+  assert.deepEqual(r.missing, ["docs/articles/new-page.html"]);
+  assert.deepEqual(r.artifacts.map((a) => a.kind), ["article"]);
+});

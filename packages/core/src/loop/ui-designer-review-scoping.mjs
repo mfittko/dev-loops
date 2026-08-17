@@ -97,7 +97,12 @@ export function evaluateUiDesignerReviewScoping(changedPaths = [], {
   const seen = new Set();
   for (const p of Array.isArray(changedPaths) ? changedPaths : []) {
     const descriptor = classifyRenderedArtifactPath(p);
-    if (descriptor && !seen.has(descriptor.path)) {
+    // The designer/vision recorded-evidence requirement applies ONLY to
+    // rendered HTML deliverables (docs/articles|presentations/*.html). The
+    // shared classifier also recognizes the headless viewer source path
+    // (kind "viewer"), which is a runtime script, not a rendered artifact -
+    // exclude it so a viewer-source change does not demand designer evidence.
+    if (descriptor && descriptor.kind !== "viewer" && !seen.has(descriptor.path)) {
       seen.add(descriptor.path);
       artifacts.push(descriptor);
     }
