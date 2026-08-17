@@ -368,10 +368,6 @@ function parseWorktreeList(porcelain) {
   return entries;
 }
 
-// Installed at the primary checkout, never in the worktree we just created: the
-// guard exists to catch a commit that happens in the WRONG tree. Best-effort by
-// design — a repo whose hooks directory is unwritable (or managed by another
-// tool) must still get its worktree.
 /** Branch name from a base ref like "origin/develop" → "develop". */
 function branchFromBase(base) {
   const slash = base.indexOf("/");
@@ -432,7 +428,9 @@ function remoteAdvertisedDefaultBranch(gitCommand, remote, cwd) {
  * silently succeeds while `guard.ok` still reads true.
  *
  * So this always guards the repo's OWN default — resolved fresh from git's
- * advertised `<remote>/HEAD` on every call, never from a guess — and
+ * advertised `origin/HEAD` (origin hardcoded below: the repo default must not
+ * move just because a call's --base names a different remote) on every call,
+ * never from a guess — and
  * ADDITIONALLY guards an EXPLICIT `--base` (an operator's flag, or the
  * .devloops workflow.baseBranch the resolver injects as one) when it differs.
  * An auto-detected base that was never given explicitly is never trusted for
