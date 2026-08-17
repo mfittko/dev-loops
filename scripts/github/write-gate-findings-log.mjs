@@ -465,12 +465,25 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // the same normalizeVerdict path the CLI parse normally canonicalizes it
     // through, so a canonical-value wrapper never false-rejects a
     // differently-cased/whitespaced but semantically equal caller verdict.
-    const callerVerdict = normalizeVerdict(options.verdict);
+    // Validate options.verdict's own domain first (same message the CLI parse
+    // path throws for --verdict) so a null/undefined/non-string/out-of-domain
+    // value is reported as an invalid verdict, not misattributed as a
+    // contradiction with the wrapper. typeof is checked before normalizeVerdict
+    // runs because normalizeVerdict coerces via String(), which would otherwise
+    // let a non-string (e.g. an array) silently pass as its stringified form.
+    const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
+    if (!callerVerdict) {
+      throw parseError("--verdict must be clean, findings_present, or blocked");
+    }
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(options.verdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
       );
     }
+    // Persist the canonical (normalized) verdict, not the raw caller value, so
+    // the durable ledger never records a differently-cased/whitespaced verdict
+    // beside the canonical overallVerdict it was just checked against.
+    options.verdict = callerVerdict;
   }
   let provenance;
   if (options.provenance === undefined) {

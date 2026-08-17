@@ -58,14 +58,15 @@ test("consolidate-fanin emits overallVerdict (the value the enforcement reads) i
 
 test("write-gate-findings-log rejects a --verdict contradicting the wrapper overallVerdict and cites GATE-COMMENT-VERDICT-VALUES", async () => {
   const src = await readFile(WRITE_GATE_FINDINGS_SCRIPT, "utf8");
-  // Producer-side refusal mirrors the consumer's: it cites the rule ID and the
-  // contract doc path so both sides of the seam point at the same rule.
-  assert.match(src, /GATE-COMMENT-VERDICT-VALUES/);
-  assert.match(src, /skills\/docs\/gate-review-comment-contract\.md/);
-  // The refusal names both the passed --verdict and the wrapper's overallVerdict,
-  // so a contradicting caller can identify the mismatch from the error alone.
-  assert.match(src, /--verdict/);
-  assert.match(src, /"overallVerdict"/);
+  // Distinctive refusal literal (not just the standalone tokens "--verdict" or
+  // "overallVerdict", which also match the CLI usage text and the unrelated
+  // #1616 malformed-wrapper message) — mirrors the upsert-side pin above: the
+  // producer-side refusal phrase must be followed, within a bounded window, by
+  // both the rule ID and the contract doc path, so the citation actually
+  // belongs to this refusal and not to an unrelated mention elsewhere in the
+  // file.
+  assert.match(src, /contradicts the wrapper's "overallVerdict"[\s\S]{0,160}GATE-COMMENT-VERDICT-VALUES/);
+  assert.match(src, /contradicts the wrapper's "overallVerdict"[\s\S]{0,160}skills\/docs\/gate-review-comment-contract\.md/);
 });
 
 test("upsert-checkpoint-verdict derives the verdict from the ledger's overallVerdict by default (#1616 AC: no --verdict is valid)", async () => {
