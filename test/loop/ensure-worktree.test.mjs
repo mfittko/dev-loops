@@ -1200,6 +1200,21 @@ test("ensure: refusal reason JSON-escapes a special-character core.hooksPath val
       /weird\\"path\\\\here/u,
       "core.hooksPath value must appear JSON-escaped (quote-derived `\\\"` and backslash `\\\\`), not raw",
     );
+    // The refusal is recorded on BOTH surfaces: the top-level `reason` above AND
+    // the per-hook `skipped[].reason` built from `skipReason`. The survivor notes
+    // pin both, so assert the escaped value on the per-hook reasons too — a revert
+    // that only re-breaks the per-hook string must still fail the suite.
+    assert.ok(
+      Array.isArray(res.guard.skipped) && res.guard.skipped.length > 0,
+      "refusal reports a per-hook skipped entry",
+    );
+    for (const entry of res.guard.skipped) {
+      assert.match(
+        entry.reason,
+        /weird\\"path\\\\here/u,
+        "per-hook skipped reason must also carry the JSON-escaped core.hooksPath value",
+      );
+    }
     assert.ok(
       !existsSync(path.join(repo.root, ".git", "hooks", "pre-commit")),
       "no hook written where git would never read it",
