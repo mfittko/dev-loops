@@ -1317,6 +1317,11 @@ consolidator's computed verdict) into the durable ledger, so
 `GATE-COMMENT-VERDICT-VALUES`): a `--verdict` that contradicts the ledger's
 `overallVerdict` is refused, and when the ledger carries `overallVerdict` the
 verdict is derived from it by default (passing no `--verdict` is valid).
+`write-gate-findings-log.mjs` itself now fails closed the same way at write
+time: when the `--findings`/`--findings-file` wrapper carries `overallVerdict`,
+a caller-passed `--verdict` that contradicts it is refused before any ledger
+is written, so a contradicting pair never reaches the durable log in the first
+place.
 `post-gate-findings.mjs` unwraps and ignores `overallVerdict`. A finding with severity
 `low` or `nit` (or a legacy spelling, normalized on read) and no
 `disposition` gets `deferred` derived automatically by both tools. A
