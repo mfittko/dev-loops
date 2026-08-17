@@ -24,6 +24,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const CONTRACT_DOC = path.join(REPO_ROOT, "skills/docs/gate-review-comment-contract.md");
 const UPSERT_SCRIPT = path.join(REPO_ROOT, "scripts/github/upsert-checkpoint-verdict.mjs");
 const CONSOLIDATE_SCRIPT = path.join(REPO_ROOT, "scripts/loop/consolidate-fanin.mjs");
+const WRITE_GATE_FINDINGS_SCRIPT = path.join(REPO_ROOT, "scripts/github/write-gate-findings-log.mjs");
 
 test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the consolidator computes", async () => {
   const doc = await readFile(CONTRACT_DOC, "utf8");
@@ -53,6 +54,18 @@ test("consolidate-fanin emits overallVerdict (the value the enforcement reads) i
   // ...and embeds it in the --ledger-out wrapper that write-gate-findings-log
   // threads into the durable ledger upsert-checkpoint-verdict enforces against.
   assert.match(src, /JSON\.stringify\(\{ overallVerdict: consolidated\.verdict, findings \}/);
+});
+
+test("write-gate-findings-log rejects a --verdict contradicting the wrapper overallVerdict and cites GATE-COMMENT-VERDICT-VALUES", async () => {
+  const src = await readFile(WRITE_GATE_FINDINGS_SCRIPT, "utf8");
+  // Producer-side refusal mirrors the consumer's: it cites the rule ID and the
+  // contract doc path so both sides of the seam point at the same rule.
+  assert.match(src, /GATE-COMMENT-VERDICT-VALUES/);
+  assert.match(src, /skills\/docs\/gate-review-comment-contract\.md/);
+  // The refusal names both the passed --verdict and the wrapper's overallVerdict,
+  // so a contradicting caller can identify the mismatch from the error alone.
+  assert.match(src, /--verdict/);
+  assert.match(src, /"overallVerdict"/);
 });
 
 test("upsert-checkpoint-verdict derives the verdict from the ledger's overallVerdict by default (#1616 AC: no --verdict is valid)", async () => {

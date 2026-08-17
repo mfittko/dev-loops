@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1362,6 +1362,74 @@ test("#1616: writeGateFindingsLog persists overallVerdict from the {overallVerdi
     assert.equal(parsed.overallVerdict, "findings_present");
     assert.equal(parsed.findings.length, 1);
     assert.equal(parsed.findings[0].severity, "high"); // "must-fix" normalizes to canonical "high"
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog rejects a --verdict contradicting the wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-conflict-"));
+  try {
+    // Direction 1: --verdict clean vs wrapper findings_present
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "clean"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        assert.match(err.message, /GATE-COMMENT-VERDICT-VALUES/);
+        assert.match(err.message, /skills\/docs\/gate-review-comment-contract\.md/);
+        return true;
+      },
+    );
+    // No ledger must be written on the rejection.
+    const leaked = (await readdir(tmpDir)).filter((f) => f.endsWith(".json"));
+    assert.equal(leaked.length, 0, "a contradicting pair must not write a ledger before failing");
+
+    // Direction 2: --verdict findings_present vs wrapper clean
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 8,
+        gate: "draft_gate",
+        headSha: "b2".repeat(20),
+        verdict: "findings_present",
+        findings: JSON.stringify({ overallVerdict: "clean", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "findings_present"/);
+        assert.match(err.message, /"overallVerdict" "clean"/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog accepts a matching --verdict + wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-match-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.verdict, "findings_present");
+    assert.equal(parsed.overallVerdict, "findings_present");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
