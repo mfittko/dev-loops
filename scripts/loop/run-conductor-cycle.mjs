@@ -17,8 +17,12 @@ import { listOpenPrs } from "./_loop-pr-aggregation.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 export { listOpenPrs };
-const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name>
+const USAGE = `Usage: run-conductor-cycle.mjs --repo <owner/name> [--designer-review-evidence <path>]
 Poll all open PRs, detect state, and output an ordered action queue.
+
+--designer-review-evidence <path>  Optional JSON file of the loop's recorded
+  designer/vision review evidence (rendered-HTML gate, ADR 0041 UI half);
+  absent, a rendered-artifact change fails closed until evidence is supplied.
 
 ${JQ_OUTPUT_USAGE}`.trim();
 export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
@@ -80,12 +84,14 @@ export function parseCliArgs(argv) {
   const options = {
     help: false,
     repo: undefined,
+    designerReviewEvidence: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
+      "designer-review-evidence": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -105,6 +111,10 @@ export function parseCliArgs(argv) {
     }
     if (token.name === "repo") {
       options.repo = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "designer-review-evidence") {
+      options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -130,11 +140,12 @@ export async function detectPrState(
     detectGateImpl = detectPrGateCoordinationState,
     detectSnapshotImpl = autoDetectSnapshot,
     autonomyStopAt = ["merge"],
+    designerReviewEvidence,
   },
 ) {
   try {
     const gateState = await detectGateImpl(
-      { repo, pr: pr.number },
+      { repo, pr: pr.number, designerReviewEvidence },
       { env, ghCommand, repoRoot },
     );
     let snapshot = null;
@@ -251,7 +262,7 @@ export function buildSummary(actions) {
   return summary;
 }
 export async function runConductorCycle(
-  { repo, autonomyStopAt, gateConfig },
+  { repo, autonomyStopAt, gateConfig, designerReviewEvidence },
   {
     env = process.env,
     ghCommand = "gh",
@@ -270,6 +281,7 @@ export async function runConductorCycle(
       ghCommand,
       repoRoot,
       autonomyStopAt: stopAt,
+      designerReviewEvidence,
     });
     detectionResults.push(result);
   }

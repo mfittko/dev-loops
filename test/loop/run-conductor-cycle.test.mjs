@@ -495,6 +495,16 @@ test("parseCliArgs accepts valid repo slug", () => {
   assert.equal(opts.help, false);
 });
 
+test("parseCliArgs parses --designer-review-evidence (#1443)", () => {
+  const opts = parseCliArgs(["--repo", "owner/repo", "--designer-review-evidence", "tmp/evidence.json"]);
+  assert.equal(opts.designerReviewEvidence, "tmp/evidence.json");
+});
+
+test("parseCliArgs leaves designerReviewEvidence undefined when flag absent (#1443)", () => {
+  const opts = parseCliArgs(["--repo", "owner/repo"]);
+  assert.equal(opts.designerReviewEvidence, undefined);
+});
+
 test("parseCliArgs handles --help", () => {
   const opts = parseCliArgs(["--help"]);
   assert.equal(opts.help, true);
@@ -748,6 +758,86 @@ test("runConductorCycle passes autonomyStopAt to detectPrState", async () => {
   );
 
   assert.deepEqual(capturedStopAt, ["merge", "draft-pr"]);
+});
+
+test("runConductorCycle passes designerReviewEvidence to detectPrState", async () => {
+  let capturedEvidence = null;
+  const mockDetectPr = async (_pr, opts) => {
+    capturedEvidence = opts.designerReviewEvidence;
+    return { pr: 1, action: "watch", priority: 30, requiresSubagent: false, requiresApproval: false };
+  };
+
+  await runConductorCycle(
+    { repo: "test/repo", designerReviewEvidence: "tmp/evidence.json" },
+    {
+      listPrsImpl: async () => [{ number: 1, title: "T", url: "u", isDraft: false, headRefName: "f" }],
+      detectPrStateImpl: mockDetectPr,
+    },
+  );
+
+  assert.equal(capturedEvidence, "tmp/evidence.json");
+});
+
+test("detectPrState passes designerReviewEvidence to detectGateImpl", async () => {
+  const pr = { number: 7, title: "D", url: "u", isDraft: false, headRefName: "f" };
+  let passedEvidence = null;
+  const mockGateState = {
+    lifecycleState: "pr_draft",
+    loopDisposition: "action_required",
+    gateBoundary: PR_CHECKPOINT.DRAFT_REVIEW,
+    nextAction: PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    reason: "draft gate needed",
+    allowedNextActions: [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE],
+    forbiddenActions: [],
+    draftGate: null,
+    preApprovalGate: null,
+    mergeStateStatus: null,
+    conflictFiles: [],
+    currentHeadSha: null,
+  };
+
+  const result = await detectPrState(pr, {
+    repo: "r",
+    designerReviewEvidence: "tmp/evidence.json",
+    detectGateImpl: async (opts) => {
+      passedEvidence = opts.designerReviewEvidence;
+      return mockGateState;
+    },
+    detectSnapshotImpl: async () => null,
+  });
+
+  assert.equal(passedEvidence, "tmp/evidence.json");
+  assert.equal(result.action, "draft_gate");
+});
+
+test("detectPrState omits designerReviewEvidence (fails closed) when none supplied", async () => {
+  const pr = { number: 8, title: "D", url: "u", isDraft: false, headRefName: "f" };
+  let passedEvidence = "unset";
+  const mockGateState = {
+    lifecycleState: "pr_draft",
+    loopDisposition: "action_required",
+    gateBoundary: PR_CHECKPOINT.DRAFT_REVIEW,
+    nextAction: PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    reason: null,
+    allowedNextActions: [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE],
+    forbiddenActions: [],
+    draftGate: null,
+    preApprovalGate: null,
+    mergeStateStatus: null,
+    conflictFiles: [],
+    currentHeadSha: null,
+  };
+
+  await detectPrState(pr, {
+    repo: "r",
+    detectGateImpl: async (opts) => {
+      passedEvidence = opts.designerReviewEvidence;
+      return mockGateState;
+    },
+    detectSnapshotImpl: async () => null,
+  });
+
+  assert.equal(passedEvidence, undefined);
 });
 
 test("runConductorCycle uses default stopAt [merge] when none provided", async () => {
