@@ -1899,7 +1899,15 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  test("R12: all 20 known angles resolve without fallback", () => {
+  // #1442: the required deslop gate angle resolves to the review persona.
+  test("R11d: deslop angle resolves to review persona (ADR 0041 prose half)", () => {
+    const result = resolveReviewerRole({}, "deslop");
+    assert.equal(result.persona, "review");
+    assert.equal(result.model, null);
+    assert.equal(result.fallback, false);
+  });
+
+  test("R12: all 21 known angles resolve without fallback (deslop added in #1442)", () => {
     const expectedPersonas = {
       scope: "review",
       coverage: "review",
@@ -1921,6 +1929,7 @@ describe("role resolution", () => {
       "state-concurrency": "review",
       "renderer-security": "review",
       determinism: "review",
+      deslop: "review", // #1442 (ADR 0041 prose half)
     };
 
     for (const [angle, expectedPersona] of Object.entries(expectedPersonas)) {
@@ -1928,6 +1937,33 @@ describe("role resolution", () => {
       assert.equal(result.persona, expectedPersona, `angle ${angle}`);
       assert.equal(result.fallback, false, `angle ${angle}`);
     }
+  });
+
+  // #1442 review finding (coverage, AC2): AC2 — "a prose diff with a planted
+  // binary-contrast construction is BLOCKED; a clean prose diff passes" — is
+  // enforced entirely by the fail-closed deslop persona prompt. No test bound
+  // the shipped prompt to that directive, so a regression that softens or drops
+  // fail-closed would pass the whole suite. This binds it so it cannot silently
+  // regress (the fail-closed blocking behavior itself runs as an LLM over this
+  // exact prompt).
+  test("R11e: shipped deslop prompt retains the fail-closed directive (AC2 binding)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const sourceDefaults = await readFile(
+      path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"),
+      "utf8",
+    );
+    const deslopBlock = sourceDefaults.match(
+      /- name: deslop[\s\S]*?prompt: >-[\s\S]*?fail closed when any survives/,
+    );
+    assert.ok(deslopBlock, "deslop persona prompt must exist in shipped extension-defaults.yaml");
+    const prompt = deslopBlock[0];
+    // Every surviving binary-contrast construction must block (`fail closed when
+    // any survives`), a missed instance is the failure mode (`Be exhaustive`),
+    // and skills/docs on the diff still respected.
+    assert.match(prompt, /fail closed when any survives/);
+    assert.match(prompt, /Be exhaustive/);
+    assert.match(prompt, /skills\/docs/);
   });
 
   test("R13: known angle with model override applies override", () => {
@@ -2848,7 +2884,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "input-validation", "determinism", "no-op", "link-check",
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
-      "semantic-drift",
+      "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
@@ -4561,7 +4597,7 @@ describe("resolveGateAnglesDynamic", () => {
       gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
     };
     const result = await resolveGateAnglesDynamic(config, "draft", {
-      diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/bar.md" },
+      diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" },
     });
     assert.equal(result.dynamicAnglesActive, true);
     assert.equal(result.fallbackToAll, true);
@@ -4756,6 +4792,34 @@ describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
       gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
     });
     assert.equal(result.success, false);
+  });
+
+  // #1442: the prose-only deslop angle is gated on the prose surface even when
+  // a docs-kind tier names it — a prose docs diff keeps it, an exempt
+  // skills/docs contract diff drops it.
+  test("tier with deslop: prose diff keeps deslop, skills/docs contract drops it", async () => {
+    const { resolveGateAnglesDynamic } = await import("../src/config/config.mjs");
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          dynamicAngles: true,
+          angles: ["link-check", "contract-surface", "gate-evidence", "deslop"],
+          tiers: [{ name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["link-check", "contract-surface", "gate-evidence", "deslop"] }],
+        },
+      },
+    };
+    // Prose docs-only diff (< 300 lines) matches the docs-only tier and keeps deslop.
+    const prose = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/articles/foo.md", diffOutput: "@@ -1,1 +1,1 @@\n+not X. Y." },
+    });
+    assert.ok(prose.recommendedAngles.includes("deslop"), "prose diff must keep deslop through the docs tier");
+    // Exempt normative contract (skills/docs) matches the same docs tier but is
+    // NOT prose → deslop is stripped.
+    const contract = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tskills/docs/worktree-guidance.md", diffOutput: "@@ -1,1 +1,1 @@\n+M" },
+    });
+    assert.ok(!contract.recommendedAngles.includes("deslop"), "skills/docs contract diff must drop deslop");
   });
 });
 

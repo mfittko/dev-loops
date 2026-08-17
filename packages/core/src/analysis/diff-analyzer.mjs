@@ -21,6 +21,44 @@
 // fails closed toward a full re-review, which is what a version bump needs.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
+// #1442 (ADR 0041 prose half): the prose surface that triggers the required
+// `deslop` gate angle. skills/docs/** is deliberately excluded — those are
+// normative contracts (owned by the contract style guide + contradiction
+// lens), not prose, and deslop's contrast-cutting must not fight RFC-2119
+// modality.
+const PROSE_PATH_RE = /^docs\/(articles|presentations)\//;
+const NARRATIVE_DOC_RE = /^docs\/[^/]+\.(md|markdown)$/;
+// #1442 review finding: the skills/docs/** exemption must hold for the README
+// rule too. PROSE_PATH_RE / NARRATIVE_DOC_RE are anchored to `docs/` so
+// skills/docs files never match them; the README basename rule is the ONLY
+// path by which a skills/docs file could be classified prose (e.g. a future
+// `skills/docs/README-*.md`). Carve the normative-contract subtree out
+// explicitly so a README-named contract never arms deslop.
+const SKILLS_DOCS_EXEMPT_RE = /^(skills\/docs|\x2eclaude\/skills\/docs)\//;
+
+/**
+ * Whether a file path is on the prose surface (#1442): docs/articles/**,
+ * docs/presentations/**, README*, or a narrative direct-child docs/*.md.
+ * skills/docs/** (and .claude/skills/docs/**) is exempt (normative
+ * contracts, not prose) across ALL rules, including the README basename rule.
+ *
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+export function isProsePath(filePath) {
+  // #1442 review finding (input-validation): exported trust-boundary guard.
+  // Fail closed (false) on a non-string/empty argument rather than crashing in
+  // normalizeSep(filePath).replaceAll(...).
+  if (typeof filePath !== "string" || filePath.length === 0) return false;
+  const fp = normalizeSep(filePath);
+  if (SKILLS_DOCS_EXEMPT_RE.test(fp)) return false;
+  if (PROSE_PATH_RE.test(fp)) return true;
+  if (NARRATIVE_DOC_RE.test(fp)) return true;
+  const base = fp.split("/").pop() ?? "";
+  if (base.startsWith("README")) return true;
+  return false;
+}
+
 /**
  * @typedef {object} T0Result
  * @property {string[]} files — flat file paths
@@ -56,6 +94,13 @@ export function analyzeT0(nameStatusOutput) {
   const extensions = new Set();
   const directories = new Set();
   let renameCount = 0;
+  // #1442 review finding: prose arming must be scoped to content-carrying
+  // rows. A pure deletion (`D` name-status row) has no prose content for the
+  // deslop reviewer to strip — arming deslop on it over-selects and re-runs
+  // the fan-out over a content-free delta. Added/modified/renamed-dest rows
+  // (A / M / M? / R-dest) carry content and still arm prose. Rename rows emit
+  // `R<score>\told\tnew` (rawPath = parts[2], the new content-bearing path).
+  let prosePresent = false;
 
   for (const line of lines) {
     const parts = line.split("\t");
@@ -73,6 +118,16 @@ export function analyzeT0(nameStatusOutput) {
     if (dir) directories.add(dir);
 
     if (status.startsWith("R")) renameCount++;
+    // #1442: a content-carrying prose file arms PROSE_PRESENT → deslop. Pure
+    // deletions (`D`) are excluded (no prose content to strip, avoids noise);
+    // a pure `R100` rename (git's 100% similarity score — no content changed)
+    // is likewise content-free and must not arm deslop. Renames with a score
+    // below 100 (`R<score>\told\tnew`, rawPath = the new content-bearing path)
+    // carry content and still arm prose.
+    if (prosePresent) continue;
+    if (status === "D" || status.startsWith("D")) continue;
+    if (status.startsWith("R") && status === "R100") continue;
+    if (isProsePath(path)) prosePresent = true;
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
@@ -87,6 +142,7 @@ export function analyzeT0(nameStatusOutput) {
     directories: [...directories].sort(),
     renameOnly,
     allDocs,
+    prosePresent,
   };
 }
 
@@ -372,6 +428,7 @@ function t0FileCategories(t0) {
   const categories = [];
   if (t0.renameOnly) categories.push("RENAME_ONLY");
   if (t0.allDocs) categories.push("DOCS_ONLY");
+  if (t0.prosePresent) categories.push("PROSE_PRESENT");
   if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
   if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
@@ -392,6 +449,7 @@ function t0PresentSurfaceCategories(t0) {
   const categories = [];
   const cats = new Set(t0.files.map(classifyFile));
   if (cats.has("docs")) categories.push("DOCS_ONLY");
+  if (t0.prosePresent) categories.push("PROSE_PRESENT");
   if (cats.has("config")) categories.push("CONFIG_ONLY");
   if (cats.has("test")) categories.push("TEST_ONLY");
   if (cats.has("ci")) categories.push("CI_ONLY");
@@ -445,8 +503,17 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // When t1 is null (unambiguous diff), infer categories from t0
   // so dynamic angle resolution can narrow for config-only / test-only etc.
   if (!t1) {
+    // #1442 Copilot finding: a genuinely MIXED diff whose T1 never ran (no
+    // diffOutput) must NOT get a T0-only PROSE_PRESENT category. Non-empty
+    // categories set ambiguous=false, so a mixed code+prose diff would
+    // under-select to just deslop + always-include and drop the code-review
+    // core. T0-only inference is only safe for unambiguous diffs (docs-only /
+    // single surface); a mixed diff without hunk content is unclassifiable, so
+    // return empty categories and let resolveDynamicAngles fall back to the
+    // full angle set (fail closed).
+    const changeCategories = t0Ambiguous ? [] : inferCategoriesFromT0(t0);
     t1 = {
-      changeCategories: inferCategoriesFromT0(t0),
+      changeCategories,
       hunkCount: 0,
       lineStats: { added: 0, deleted: 0 },
     };

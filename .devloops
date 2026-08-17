@@ -38,10 +38,10 @@ gates:
     tiers:
       - name: docs-only
         match: { kinds: [docs], maxLines: 300 }
-        angles: [link-check, contract-surface, gate-evidence]
+        angles: [link-check, contract-surface, gate-evidence, deslop] # #1442: prose must run the required deslop angle
       - name: small-non-code
         match: { kinds: [docs, test, config], maxLines: 50 }
-        angles: [correctness, gate-evidence, link-check]
+        angles: [correctness, gate-evidence, link-check, deslop]
     # Only per-layer DELTAS live here — angles that merely restate an
     # extension-defaults.yaml draft-pool entry byte-for-byte are a no-op under
     # merge-by-name (D3) and have been trimmed. This repo's draft gate keeps

@@ -1,6 +1,6 @@
 # A/B contrast removal — a standard deslop step
 
-A repeatable editorial step for written deliverables (articles, decks, docs, READMEs). It targets one antipattern: the **binary-contrast / negation-by-contrast** construction, the strongest single AI tell in generated prose. Run it as part of the deslop pass before any approval gate. This is the first documented sub-step of the broader deslop step tracked in #936.
+A repeatable editorial step for written deliverables (articles, decks, docs, READMEs). It targets one antipattern: the **binary-contrast / negation-by-contrast** construction, the strongest single AI tell in generated prose. Since **ADR 0041** this step is a **required, fail-closed gate angle**: a prose diff (`docs/articles/**`, `docs/presentations/**`, `README*`, narrative `docs/*.md`) arms the `deslop` gate angle, which runs this step per document (one reviewer per document; the existing fan-out mechanism already does that) and blocks on any surviving binary-contrast construction. Normative contracts under `skills/docs/**` are exempt — they are governed by the contract style guide and contradiction lens, and deslop's contrast-cutting must not fight required RFC-2119 modality. The existing light-mode and spike-mode relaxed gate carve-outs apply to this angle as they do to other gates. This is the first documented sub-step of the broader deslop step tracked in [#936](https://github.com/mfittko/dev-loops/issues/936).
 
 ## The antipattern (both orderings)
 
