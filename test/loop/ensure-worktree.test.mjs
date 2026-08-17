@@ -1177,3 +1177,49 @@ test("ensure: refuses to install when core.hooksPath points git elsewhere", asyn
     repo.cleanup();
   }
 });
+
+// PR 1506 survivor: the JSON.stringify escaping of core.hooksPath inside the
+// two refusal reasons has no regression pin. Reverting to a plain template
+// interpolation (dropping the `\"` and `\\` escapes) leaves the suite green.
+// This pins the ESCAPED form, so an unescaped raw value is the failure mode.
+test("ensure: refusal reason JSON-escapes a special-character core.hooksPath value", async () => {
+  const repo = makeRepo();
+  try {
+    // A value that JSON.stringify must escape in BOTH directions: a double
+    // quote (needs `\"`) and a backslash (needs `\\`).
+    const evilPath = `weird"path\\here`;
+    repo.git("config", "core.hooksPath", evilPath);
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 1452 });
+    assert.equal(res.ok, true, "worktree still created — the guard is best-effort");
+    assert.equal(res.guard.ok, false);
+    assert.match(res.guard.reason, /core\.hooksPath/);
+    // The reason must carry the JSON.stringify-escaped form (`weird\"path\\here`),
+    // proving the value is stringified rather than interpolated raw.
+    assert.match(
+      res.guard.reason,
+      /weird\\"path\\\\here/u,
+      "core.hooksPath value must appear JSON-escaped (quote-derived `\\\"` and backslash `\\\\`), not raw",
+    );
+    // The refusal is recorded on BOTH surfaces: the top-level `reason` above AND
+    // the per-hook `skipped[].reason` built from `skipReason`. The survivor notes
+    // pin both, so assert the escaped value on the per-hook reasons too — a revert
+    // that only re-breaks the per-hook string must still fail the suite.
+    assert.ok(
+      Array.isArray(res.guard.skipped) && res.guard.skipped.length > 0,
+      "refusal reports a per-hook skipped entry",
+    );
+    for (const entry of res.guard.skipped) {
+      assert.match(
+        entry.reason,
+        /weird\\"path\\\\here/u,
+        "per-hook skipped reason must also carry the JSON-escaped core.hooksPath value",
+      );
+    }
+    assert.ok(
+      !existsSync(path.join(repo.root, ".git", "hooks", "pre-commit")),
+      "no hook written where git would never read it",
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
