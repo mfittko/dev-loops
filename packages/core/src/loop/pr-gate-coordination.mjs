@@ -734,8 +734,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const changedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : [];
   const uiE2ePassed = input.uiE2ePassed === true ? true : (input.uiE2ePassed === false ? false : null);
   // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half). See
-  // buildUI designer block below. Evidence reuses the loop's existing outcome +
-  // artifact-bundle record; exempt when a light/spike relaxed-gate carve-out applies.
+  // the designer-review scoping block below. Evidence reuses the loop's
+  // existing outcome + artifact-bundle record; exempt when a light/spike
+  // relaxed-gate carve-out applies.
   const designerReviewEvidence = input.designerReviewEvidence ?? null;
   const designerReviewExempt = input.designerReviewExempt === true;
   const refinementArtifact = input.refinementArtifact && typeof input.refinementArtifact === "object"

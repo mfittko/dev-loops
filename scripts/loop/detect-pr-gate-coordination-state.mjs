@@ -324,23 +324,56 @@ export async function loadRecordedDesignerEvidence(evidencePath) {
     return null;
   }
   const text = await readFile(evidencePath, "utf8");
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  // Reject a JSON value whose type cannot describe recorded evidence. A bare
+  // string/number/boolean parses fine but would surface downstream as a
+  // misleading "missing evidence" gate failure; report the malformed type
+  // directly instead of silently falling through to a confusing verdict.
+  if (parsed !== null && typeof parsed !== "object") {
+    throw new Error(
+      `--designer-review-evidence file must contain a JSON object or array, got ${typeof parsed}`,
+    );
+  }
+  return parsed;
+}
+
+// Total changed lines across a PR's changed files (additions + deletions),
+// mirroring the canonical light-mode line dimension (resolveGateDispatchMode's
+// scope.linesChanged). Returns 0 when no line data is available.
+export function countPrChangedLines(prData) {
+  const files = Array.isArray(prData?.files) ? prData.files : [];
+  let total = 0;
+  for (const f of files) {
+    const additions = Number(f?.additions);
+    const deletions = Number(f?.deletions);
+    total += (Number.isFinite(additions) ? additions : 0) + (Number.isFinite(deletions) ? deletions : 0);
+  }
+  return total;
 }
 
 // Whether a light/spike relaxed-gate carve-out exempts the required
-// designer/vision recorded-evidence check (#1443). Honored exactly like the
-// existing relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched,
-// spike, or under the configured light-mode threshold exempts.
+// designer/vision recorded-evidence check (#1443). Mirrors the existing
+// relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// or a change under the configured light-mode threshold (files AND lines)
+// exempts. When changed-lines data is unavailable the line dimension is
+// treated as within threshold, preserving files-only behavior for callers
+// that lack it.
 export function deriveUiDesignerReviewExempt({
   lightweight = false,
   spike = false,
   changedFiles = [],
+  changedLines,
   config = {},
 } = {}) {
   if (lightweight || spike) return true;
   const threshold = resolveLightMode(config);
   if (!threshold) return false;
-  return Array.isArray(changedFiles) && changedFiles.length <= threshold.maxFiles;
+  const filesExempt = Array.isArray(changedFiles) && changedFiles.length <= threshold.maxFiles;
+  if (!filesExempt) return false;
+  if (typeof changedLines === "number" && Number.isFinite(changedLines)) {
+    return changedLines <= threshold.maxLines;
+  }
+  return true;
 }
 
 // Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
@@ -959,6 +992,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       lightweight: options.lightweight,
       spike: options.spike === true,
       changedFiles: extractChangedFiles(context.prData),
+      changedLines: countPrChangedLines(context.prData),
       config,
     }),
     designerReviewEvidence,

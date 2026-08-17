@@ -2062,8 +2062,14 @@ test("deriveUiDesignerReviewExempt honors light/spike relaxed-gate carve-outs", 
   // Under configured light threshold → exempt.
   const config = { localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } } };
   assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
-  // Over threshold → not exempt.
+  // Over file threshold → not exempt.
   assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b", "c"], config }), false);
+  // Line threshold honored when line data is supplied (mirrors the canonical
+  // light-mode rule's maxLines dimension).
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], changedLines: 15, config }), true);
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], changedLines: 25, config }), false);
+  // Files-only callers (no line data) keep the files-only behavior.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
 });
 
 // #1443: the designer evidence read seam passes recorded evidence through and
@@ -2153,6 +2159,12 @@ test("loadRecordedDesignerEvidence reads a recorded evidence file / null when ab
   assert.deepEqual(await loadRecordedDesignerEvidence(evidencePath), evidence);
   assert.equal(await loadRecordedDesignerEvidence(undefined), null);
   assert.equal(await loadRecordedDesignerEvidence(""), null);
+  // A JSON value whose type cannot describe recorded evidence (e.g. a bare
+  // string) must throw a clear error, not surface a misleading "missing
+  // evidence" verdict downstream.
+  const badPath = path.join(dir, "bad.json");
+  await writeFile(badPath, JSON.stringify("not-an-object"));
+  await assert.rejects(() => loadRecordedDesignerEvidence(badPath), /must contain a JSON object or array/);
   await rm(dir, { recursive: true, force: true });
 });
 
