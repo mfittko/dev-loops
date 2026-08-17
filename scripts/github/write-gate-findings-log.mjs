@@ -459,10 +459,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict, mirroring the consumer-side refusal in
-    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES). Both
-    // values are already canonical here (--verdict normalized at parse time,
-    // overallVerdict normalized above), so strict string equality is correct.
-    if (options.verdict !== normalizedOverallVerdict) {
+    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES).
+    // Normalize options.verdict here so the comparison is symmetric for every
+    // caller — a direct programmatic caller passes a non-canonical verdict by
+    // the same normalizeVerdict path the CLI parse normally canonicalizes it
+    // through, so a canonical-value wrapper never false-rejects a
+    // differently-cased/whitespaced but semantically equal caller verdict.
+    const callerVerdict = normalizeVerdict(options.verdict);
+    if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(options.verdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
       );

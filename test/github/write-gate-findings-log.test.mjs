@@ -10,6 +10,9 @@ import {
   parseWriteGateFindingsLogCliArgs,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
+import { runNode as runNodeHelper } from "../_helpers.mjs";
+
+const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -1430,6 +1433,33 @@ test("#1641: writeGateFindingsLog accepts a matching --verdict + wrapper overall
     const parsed = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(parsed.verdict, "findings_present");
     assert.equal(parsed.overallVerdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: CLI path — a direct write-gate-findings-log.mjs with a contradicting pair exits 1 with {ok:false,error} and writes no ledger", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-cli-conflict-"));
+  try {
+    // Wrapper overallVerdict findings_present contradicts --verdict clean.
+    const result = await runNodeHelper(writeGateFindingsLogScript, [
+      "--repo", "owner/repo",
+      "--pr", "42",
+      "--gate", "draft_gate",
+      "--head-sha", "945391c0abcdef1234567890abcdef1234567890",
+      "--verdict", "clean",
+      "--findings", JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+      "--tmp-root", tmpDir,
+    ], { cwd: tmpDir });
+
+    assert.notEqual(result.code, 0, "a contradicting pair must exit non-zero");
+    assert.match(result.stderr, /\{"ok":false,"error"/);
+    assert.match(result.stderr, /contradicts the wrapper/);
+    assert.match(result.stderr, /GATE-COMMENT-VERDICT-VALUES/);
+
+    // No ledger must be written on the rejection.
+    const leaked = (await readdir(tmpDir)).filter((f) => f.endsWith(".json"));
+    assert.equal(leaked.length, 0, "a contradicting CLI pair must not write a ledger before failing");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
