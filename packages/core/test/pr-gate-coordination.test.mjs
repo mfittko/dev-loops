@@ -2515,7 +2515,7 @@ test("draft PR with a WIP title is NOT blocked by the title guard (#842 AC2 — 
 });
 
 // UI e2e auto-scoping precondition (#976) — path-triggered + fail-closed.
-test("UI e2e: rendered-artifact change with passing coverage does not block", () => {
+test("UI e2e: rendered-artifact change with passing coverage + designer evidence does not block", () => {
   const result = evaluatePrGateCoordination({
     pr: 11,
     currentHeadSha: "abc123456789",
@@ -2524,11 +2524,15 @@ test("UI e2e: rendered-artifact change with passing coverage does not block", ()
     loopDisposition: DISPOSITION.ACTION_REQUIRED,
     changedFiles: ["docs/presentations/introducing-dev-loops.html"],
     uiE2ePassed: true,
+    designerReviewEvidence: [
+      { artifact: "docs/presentations/introducing-dev-loops.html", outcome: "ui_review_satisfied" },
+    ],
     mergeable: "MERGEABLE",
     draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
   });
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 });
 
@@ -2578,6 +2582,64 @@ test("UI e2e fail-closed: registered artifact without passing coverage blocks", 
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
   assert.match(result.reason, /not passed for this head/);
+});
+
+// Designer/vision recorded-evidence precondition (#1443, ADR 0041 UI half) —
+// path-triggered + fail-closed, an independent seam alongside UI e2e scoping.
+test("designer review: rendered-artifact change w/ e2e passing but NO recorded evidence blocks", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    mergeable: "MERGEABLE",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DESIGNER_REVIEW_SCOPING);
+  assert.match(result.reason, /Designer\/vision review evidence is required/);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
+test("designer review: recorded evidence present but unsatisfied outcome blocks", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    designerReviewEvidence: [
+      { artifact: "docs/presentations/introducing-dev-loops.html", outcome: "continue_ui_fix_loop" },
+    ],
+    mergeable: "MERGEABLE",
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.match(result.reason, /not satisfied/);
+});
+
+test("designer review: light/spike relaxed-gate carve-out exempts the requirement", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    designerReviewExempt: true,
+    ciStatus: "success",
+    mergeable: "MERGEABLE",
+  });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.DESIGNER_REVIEW_SCOPING);
+  // The designer carve-out lets the draft flow continue to its normal next action.
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
 });
 
 test("preApproval requireCi:false + zero-check CI (none) reaches the pre_approval boundary instead of waiting", () => {

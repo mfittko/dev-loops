@@ -6,7 +6,7 @@ import test, { describe, it } from "node:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -2048,6 +2048,21 @@ test("deriveUiE2ePassed reads UI e2e checks from statusCheckRollup", () => {
     true,
     "SKIPPED check should not block the gate",
   );
+});
+
+// #1443: designer/vision recorded-evidence carve-out derives from light/spike relaxed-gate profiles.
+test("deriveUiDesignerReviewExempt honors light/spike relaxed-gate carve-outs", () => {
+  // Light-dispatched → exempt regardless of scope.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: true, changedFiles: ["a"], config: {} }), true);
+  // Spike → exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ spike: true, changedFiles: ["a"], config: {} }), true);
+  // Light mode disabled (no threshold) → not exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a"], config: {} }), false);
+  // Under configured light threshold → exempt.
+  const config = { localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } } };
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
+  // Over threshold → not exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b", "c"], config }), false);
 });
 
 // #1472: buildGateCoordinationEvaluatorInput is the exact function

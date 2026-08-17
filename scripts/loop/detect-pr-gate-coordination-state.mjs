@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -269,6 +269,39 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
     // SKIPPED = "not applicable to this run" (e.g. viewer-smoke when no viewer files changed) — not a failure.
     return conclusion === "SUCCESS" || conclusion === "SKIPPED" || state === "SUCCESS" || state === "SKIPPED";
   });
+}
+
+// Designer/vision recorded evidence for the touched rendered artifacts (#1443,
+// ADR 0041 UI half). Reuses the loop's existing outcome + artifact-bundle
+// record. The evidence source is the loop's recorded review outcome; absent any
+// recorded record this returns null, which the evaluator treats as missing and
+// fails closed for a rendered-artifact change (the required evidence must be
+// recorded). Light/spike carve-outs (designerReviewExempt) relax this.
+//
+// NOTE: the designer/vision loop currently records its outcome in its review
+// artifact, not a gate-detectable marker; this derivation defaults to null so
+// a rendered-artifact change without recorded evidence blocks. When the loop
+// gains a deterministic recorder, surface it here.
+export function deriveUiDesignerReviewEvidence(context, changedFiles) {
+  // User-injected recorded evidence (e.g. --designer-review-evidence <p>)
+  // would surface here; no recorder exists yet, so return null (fails closed).
+  return null;
+}
+
+// Whether a light/spike relaxed-gate carve-out exempts the required
+// designer/vision recorded-evidence check (#1443). Honored exactly like the
+// existing relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched,
+// spike, or under the configured light-mode threshold exempts.
+export function deriveUiDesignerReviewExempt({
+  lightweight = false,
+  spike = false,
+  changedFiles = [],
+  config = {},
+} = {}) {
+  if (lightweight || spike) return true;
+  const threshold = resolveLightMode(config);
+  if (!threshold) return false;
+  return Array.isArray(changedFiles) && changedFiles.length <= threshold.maxFiles;
 }
 
 // Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
@@ -786,6 +819,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   postConvergenceSignificantChange,
+  designerReviewExempt = false,
 }) {
   return {
     repo: context.repo,
@@ -801,6 +835,10 @@ export function buildGateCoordinationEvaluatorInput({
     // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
     changedFiles: extractChangedFiles(context.prData),
     uiE2ePassed: deriveUiE2ePassed(context.prData),
+    // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half):
+    // path-triggered + fail-closed, modeled on the UI e2e precondition above.
+    designerReviewEvidence: deriveUiDesignerReviewEvidence(context, extractChangedFiles(context.prData)),
+    designerReviewExempt,
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,
     ciStatus: context.snapshot?.ciStatus ?? null,
@@ -869,6 +907,11 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftGateConfig,
     preApprovalGateConfig,
     postConvergenceSignificantChange,
+    designerReviewExempt: deriveUiDesignerReviewExempt({
+      lightweight: options.lightweight,
+      changedFiles: extractChangedFiles(context.prData),
+      config,
+    }),
   }));
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.

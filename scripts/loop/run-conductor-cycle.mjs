@@ -36,11 +36,16 @@ export const CHECKPOINT_ACTION_TO_CONDUCTOR_ACTION = Object.freeze({
   [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL]: "await_approval",
   [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]: "resolve_conflicts",
   [PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE]: "run_ui_e2e",
+  [PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW]: "record_designer_review",
   [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]: "blocked",
   [PR_CHECKPOINT_ACTION.REPORT_DONE]: "done",
 });
 export const ACTION_PRIORITY = Object.freeze({
   merge: 100,
+  // Designer/vision recorded-evidence scoping fix work (#1443): a path-triggered
+  // fail-closed precondition, surfaced just under the UI e2e carve so recorded
+  // evidence is present before the gate proceeds.
+  record_designer_review: 94,
   // UI e2e auto-scoping fix work (#976): a path-triggered, fail-closed
   // precondition — surface it ahead of feedback/draft work so the rendered
   // artifact gets registered + covered before the gate proceeds.
