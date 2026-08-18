@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **SubagentStop guard's `maxBuffer` raised to 10MB; block reason's dirty-path enumeration capped at 50 (#1686).** `.claude/hooks/subagent-stop-uncommitted-guard.mjs`'s `git status --porcelain` capture used Node's default 1MB `maxBuffer`, so a heavily dirty worktree could overflow it, throw, and fail-safe allow the stop — defeating the guard exactly when the most work is at risk. `execFileSync` now allows up to 10MB. The block reason from `decideSubagentStopGuard` (`@dev-loops/core/claude/hook-decisions`) now lists at most 50 dirty paths plus a summary line naming the remaining count (the reported total is always the full count), so a very dirty worktree still produces a bounded, consumable reason instead of an unbounded one. Tests in `packages/core/test/claude-hook-decisions.test.mjs` (cap boundary at 50/51, order preservation) and `test/contracts/claude-hooks-settings.test.mjs` (e2e >1MB fixture).
+
 ## 1.0.0-rc.6 - 2026-08-16
 
 ### Added
