@@ -34,8 +34,12 @@ let porcelain = "";
 try {
   // Bounded: a stalled `git status` (slow/networked FS, held index lock) must not hang the
   // subagent stop. On timeout git is killed and execFileSync throws → caught → porcelain=""
-  // → fail-safe allow (better than blocking the exit with no message). #1619 review finding.
-  porcelain = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", timeout: 5000 });
+  // → fail-safe allow (better than blocking the exit with no message).
+  // maxBuffer is raised to 10MB: the Node default (1MB) makes execFileSync throw on a
+  // dirty worktree with ~4000+ status lines, which the catch would turn into a fail-safe
+  // allow — defeating the guard exactly when the most work is at risk. Beyond 10MB
+  // (~40k+ dirty paths) the fail-safe allow is the documented ceiling.
+  porcelain = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 10 * 1024 * 1024 });
 } catch {
   // Not a git repo / git unavailable / status timed out — nothing to guard, allow the stop.
   porcelain = "";

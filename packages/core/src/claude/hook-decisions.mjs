@@ -422,6 +422,15 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
+  // The reason is fed back to the stopping subagent as context, so the path
+  // enumeration is capped: an unbounded list on a very dirty worktree produces a
+  // multi-megabyte reason that consumers truncate or choke on, burying the one
+  // actionable line. The count always reports the full total.
+  const MAX_LISTED_DIRTY_PATHS = 50;
+  const listed = dirty.slice(0, MAX_LISTED_DIRTY_PATHS).map((p) => "  " + p);
+  if (dirty.length > MAX_LISTED_DIRTY_PATHS) {
+    listed.push(`  … and ${dirty.length - MAX_LISTED_DIRTY_PATHS} more (run \`git status --porcelain\` for the full list)`);
+  }
   return {
     decision: "block",
     reason:
@@ -429,6 +438,6 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
       "to prevent silent data loss from post-merge worktree cleanup (cleanup-worktree.mjs runs " +
       "`git worktree remove --force`). Commit your work before stopping. " +
       `Dirty paths (${dirty.length}):\n` +
-      dirty.map((p) => "  " + p).join("\n"),
+      listed.join("\n"),
   };
 }

@@ -363,3 +363,29 @@ test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/wo
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node default maxBuffer (#1686)", () => {
+  // With Node's default execFileSync maxBuffer (1MB), ~4000+ dirty paths make
+  // `git status --porcelain` throw ERR_CHILD_PROCESS_STDIO_MAXBUFFER, and the catch
+  // turns that into a fail-safe allow — defeating the guard on exactly the worktrees
+  // with the most uncommitted work. The hook raises maxBuffer to 10MB; this test
+  // creates enough long-named untracked files to push porcelain past 1MB and asserts
+  // the guard still blocks. Beyond 10MB the fail-safe allow is the documented ceiling.
+  const dir = makeWorktree("maxbuffer", false);
+  try {
+    const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
+    // ~4600 files x ~240-byte porcelain lines ≈ 1.1MB of status output.
+    for (let i = 0; i < 4600; i++) {
+      fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
+    }
+    const porcelainBytes = spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout.length;
+    assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

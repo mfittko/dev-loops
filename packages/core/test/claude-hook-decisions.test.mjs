@@ -541,6 +541,16 @@ test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", 
   assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });
 
+test("decideSubagentStopGuard caps the enumerated dirty paths at 50 and reports the full count", () => {
+  const lines = Array.from({ length: 120 }, (_, i) => `?? file-${String(i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(120\):/);
+  assert.match(d.reason, /file-049\.txt/);
+  assert.doesNotMatch(d.reason, /file-050\.txt/);
+  assert.match(d.reason, /… and 70 more/);
+});
+
 // ---------------------------------------------------------------------------
 // decideBashGate — the six guard rules enforced at one seam (#1622)
 // ---------------------------------------------------------------------------
