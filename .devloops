@@ -160,3 +160,12 @@ queue:
   maxAutoFiledIssues: 10
   reDispatchMaxRetries: 1
   archiveOlderThanDays: 7
+
+# Operator override (mfittko, 2026-08-18, ADR 0050): lifts the repo-level bar on
+# agent-executed merges so the per-run authorization signal is honored again. The
+# operator's standing instruction supplies that authorization for PRs whose full
+# gate pipeline passes (draft_gate + pre_approval_gate clean at current head, zero
+# unresolved threads, evidence audit green); stopAt and the resolver chain are
+# unchanged, so the config alone clears nothing.
+autonomy:
+  humanMergeOnly: false
