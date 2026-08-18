@@ -50,7 +50,7 @@ Before merge, ALL of the following MUST hold:
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
 4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule
 5. ✅ All review threads resolved
-6. ✅ Explicit merge authorization from operator
+6. ✅ Merge authorization from the operator — explicit for the active scope, or a recorded standing authorization (see [Merge authorization](#merge-authorization))
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
 8. ✅ PR **title** free of merge-blocking markers — see [Title markers](#title-markers) for the exact constructions that count
 
@@ -202,6 +202,11 @@ A standing authorization is valid only when all of the following hold:
 - the gate pass is complete at the current head; a gate-incomplete PR stays unauthorized
 
 Absent a recorded standing authorization, the per-scope explicit rule above governs.
+
+A standing authorization is surfaced through the same per-run authorization signal the
+rest of the loop already consumes (`resolveEffectiveMergeAuthorized`); sibling contracts
+that require "explicit merge authorization for the active scope" are satisfied by that
+signal and need no separate carve-out.
 
 ### `autonomy.humanMergeOnly` — fixed human-only merge (non-overridable)
 
