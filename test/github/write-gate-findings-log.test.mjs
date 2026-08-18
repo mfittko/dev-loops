@@ -5,11 +5,15 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  buildLogPath,
   checkProvenanceAngleCoverage,
   parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
+import { runNode as runNodeHelper } from "../_helpers.mjs";
+
+const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -1362,6 +1366,177 @@ test("#1616: writeGateFindingsLog persists overallVerdict from the {overallVerdi
     assert.equal(parsed.overallVerdict, "findings_present");
     assert.equal(parsed.findings.length, 1);
     assert.equal(parsed.findings[0].severity, "high"); // "must-fix" normalizes to canonical "high"
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog rejects a --verdict contradicting the wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-conflict-"));
+  try {
+    // Direction 1: --verdict clean vs wrapper findings_present
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "clean"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        assert.match(err.message, /GATE-COMMENT-VERDICT-VALUES/);
+        assert.match(err.message, /skills\/docs\/gate-review-comment-contract\.md/);
+        return true;
+      },
+    );
+    // No ledger must be written on the rejection. A non-recursive readdir of
+    // tmpDir would only ever see the "gate-findings" directory (buildLogPath
+    // nests the ledger three levels below tmpRoot), so it can never observe a
+    // leak; assert the actual write target is absent instead.
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: "a1".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "a contradicting pair must not write a ledger before failing",
+    );
+
+    // Direction 2: --verdict findings_present vs wrapper clean
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 8,
+        gate: "draft_gate",
+        headSha: "b2".repeat(20),
+        verdict: "findings_present",
+        findings: JSON.stringify({ overallVerdict: "clean", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "findings_present"/);
+        assert.match(err.message, /"overallVerdict" "clean"/);
+        return true;
+      },
+    );
+
+    // Direction 3: --verdict blocked vs wrapper findings_present (issue's
+    // Domain bullet names this pair explicitly).
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 9,
+        gate: "draft_gate",
+        headSha: "c3".repeat(20),
+        verdict: "blocked",
+        findings: JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "blocked"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog rejects an invalid or non-string caller --verdict as a domain error, not a contradiction", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-invalid-"));
+  try {
+    for (const badVerdict of ["bogus", undefined, ["clean"]]) {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "o/n",
+          pr: 7,
+          gate: "draft_gate",
+          headSha: "a1".repeat(20),
+          verdict: badVerdict,
+          findings: JSON.stringify({ overallVerdict: "clean", findings: [] }),
+          tmpRoot: tmpDir,
+        }),
+        (err) => {
+          assert.match(err.message, /--verdict must be clean, findings_present, or blocked/);
+          assert.doesNotMatch(err.message, /contradicts/);
+          return true;
+        },
+      );
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog accepts a matching --verdict + wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-match-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: "findings_present",
+      findings: JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.verdict, "findings_present");
+    assert.equal(parsed.overallVerdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: writeGateFindingsLog accepts a non-canonical caller --verdict and persists the canonical value", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-noncanonical-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: " Clean ",
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [] }),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.verdict, "clean", "the ledger must persist the canonical verdict, not the raw caller casing/whitespace");
+    assert.equal(parsed.overallVerdict, "clean");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("#1641: CLI path — a direct write-gate-findings-log.mjs with a contradicting pair exits 1 with {ok:false,error} and writes no ledger", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-cli-conflict-"));
+  try {
+    // Wrapper overallVerdict findings_present contradicts --verdict clean.
+    const result = await runNodeHelper(writeGateFindingsLogScript, [
+      "--repo", "owner/repo",
+      "--pr", "42",
+      "--gate", "draft_gate",
+      "--head-sha", "945391c0abcdef1234567890abcdef1234567890",
+      "--verdict", "clean",
+      "--findings", JSON.stringify({ overallVerdict: "findings_present", findings: [] }),
+      "--tmp-root", tmpDir,
+    ], { cwd: tmpDir });
+
+    assert.equal(result.code, 1, "a contradicting pair must exit 1");
+    assert.match(result.stderr, /\{"ok":false,"error"/);
+    assert.match(result.stderr, /contradicts the wrapper/);
+    assert.match(result.stderr, /GATE-COMMENT-VERDICT-VALUES/);
+
+    // No ledger must be written on the rejection. Same non-recursive-readdir
+    // caveat as the programmatic-path test above: assert the actual write
+    // target is absent instead of scanning tmpDir's top level.
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "945391c0abcdef1234567890abcdef1234567890", tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "a contradicting CLI pair must not write a ledger before failing",
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

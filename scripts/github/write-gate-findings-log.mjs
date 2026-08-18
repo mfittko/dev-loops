@@ -449,6 +449,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // malformed wrapper cannot silently record an invalid verdict as the
   // consolidator's truth (#1616).
   let normalizedOverallVerdict;
+  let persistedVerdict = options.verdict;
   if (overallVerdict !== undefined) {
     const verdict = normalizeVerdict(overallVerdict);
     if (!verdict) {
@@ -457,6 +458,35 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
     normalizedOverallVerdict = verdict;
+    // Fail closed on a caller-passed --verdict that contradicts the
+    // consolidator's computed verdict, mirroring the consumer-side refusal in
+    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES).
+    // Normalize options.verdict here so the comparison is symmetric for every
+    // caller — a direct programmatic caller passes a non-canonical verdict by
+    // the same normalizeVerdict path the CLI parse normally canonicalizes it
+    // through, so a canonical-value wrapper never false-rejects a
+    // differently-cased/whitespaced but semantically equal caller verdict.
+    // Validate options.verdict's own domain first (same message the CLI parse
+    // path throws for --verdict) so a null/undefined/non-string/out-of-domain
+    // value is reported as an invalid verdict, not misattributed as a
+    // contradiction with the wrapper. typeof is checked before normalizeVerdict
+    // runs because normalizeVerdict coerces via String(), which would otherwise
+    // let a non-string (e.g. an array) silently pass as its stringified form.
+    const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
+    if (!callerVerdict) {
+      throw parseError("--verdict must be clean, findings_present, or blocked");
+    }
+    if (callerVerdict !== normalizedOverallVerdict) {
+      throw parseError(
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
+      );
+    }
+    // Persist the canonical (normalized) verdict, not the raw caller value, so
+    // the durable ledger never records a differently-cased/whitespaced verdict
+    // beside the canonical overallVerdict it was just checked against. Kept in
+    // a local instead of mutating the caller-provided options object, which
+    // programmatic callers may reuse across calls.
+    persistedVerdict = callerVerdict;
   }
   let provenance;
   if (options.provenance === undefined) {
@@ -497,7 +527,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
-    verdict: options.verdict,
+    verdict: persistedVerdict,
     loggedAt: new Date().toISOString(),
     findings,
   };

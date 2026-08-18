@@ -24,6 +24,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const CONTRACT_DOC = path.join(REPO_ROOT, "skills/docs/gate-review-comment-contract.md");
 const UPSERT_SCRIPT = path.join(REPO_ROOT, "scripts/github/upsert-checkpoint-verdict.mjs");
 const CONSOLIDATE_SCRIPT = path.join(REPO_ROOT, "scripts/loop/consolidate-fanin.mjs");
+const WRITE_GATE_FINDINGS_SCRIPT = path.join(REPO_ROOT, "scripts/github/write-gate-findings-log.mjs");
 
 test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the consolidator computes", async () => {
   const doc = await readFile(CONTRACT_DOC, "utf8");
@@ -53,6 +54,19 @@ test("consolidate-fanin emits overallVerdict (the value the enforcement reads) i
   // ...and embeds it in the --ledger-out wrapper that write-gate-findings-log
   // threads into the durable ledger upsert-checkpoint-verdict enforces against.
   assert.match(src, /JSON\.stringify\(\{ overallVerdict: consolidated\.verdict, findings \}/);
+});
+
+test("write-gate-findings-log rejects a --verdict contradicting the wrapper overallVerdict and cites GATE-COMMENT-VERDICT-VALUES", async () => {
+  const src = await readFile(WRITE_GATE_FINDINGS_SCRIPT, "utf8");
+  // Distinctive refusal literal (not just the standalone tokens "--verdict" or
+  // "overallVerdict", which also match the CLI usage text and the unrelated
+  // #1616 malformed-wrapper message) — mirrors the upsert-side pin above: the
+  // producer-side refusal phrase must be followed, within a bounded window, by
+  // both the rule ID and the contract doc path, so the citation actually
+  // belongs to this refusal and not to an unrelated mention elsewhere in the
+  // file.
+  assert.match(src, /contradicts the wrapper's "overallVerdict"[\s\S]{0,160}GATE-COMMENT-VERDICT-VALUES/);
+  assert.match(src, /contradicts the wrapper's "overallVerdict"[\s\S]{0,160}skills\/docs\/gate-review-comment-contract\.md/);
 });
 
 test("upsert-checkpoint-verdict derives the verdict from the ledger's overallVerdict by default (#1616 AC: no --verdict is valid)", async () => {
