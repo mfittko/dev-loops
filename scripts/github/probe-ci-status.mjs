@@ -329,7 +329,8 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
     !(nonLoopDerivedPrVisibleNames?.length > 0);
   // Zero-allocation stall (#1631): at least one real check-run, ALL of them
   // still `queued` (no runner allocated / no job picked up), and no other
-  // provider actively progressing (commit-status not pending). A commit-status
+  // provider actively progressing — the stall qualifies only when the
+  // commit-status is absent or already terminal (never pending). A commit-status
   // that already reached a terminal state (success/failure) or is absent means
   // nobody is making progress while GitHub Actions sits unallocated, so the
   // watcher bails after ZERO_ALLOCATION_STALL_BAIL_MS of observing this
