@@ -328,15 +328,17 @@ async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, g
     !(nonLoopDerivedPrVisibleNames?.length > 0);
   // Zero-allocation stall (#1631): at least one real check-run, ALL of them
   // still `queued` (no runner allocated / no job picked up), and no other
-  // provider reporting activity (commit-status none). The watcher bails after
-  // ZERO_ALLOCATION_STALL_BAIL_MS of observing this instead of burning its
-  // full budget on a stuck GitHub Actions queue. A run with any job
-  // in_progress/completed, or another provider pending, never qualifies.
+  // provider actively progressing (commit-status not pending). A commit-status
+  // that already reached a terminal state (success/failure) or is absent means
+  // nobody is making progress while GitHub Actions sits unallocated, so the
+  // watcher bails after ZERO_ALLOCATION_STALL_BAIL_MS of observing this
+  // instead of burning its full budget on a stuck queue. A run with any job
+  // in_progress/completed, or another provider still pending, never qualifies.
   const allCheckRunsQueued =
     !fetchError &&
     checkRunsCount > 0 &&
     checkRunsSignal?.allQueued === true &&
-    commitStatus === "none";
+    commitStatus !== "pending";
   return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails, allCheckRunsQueued };
 }
 

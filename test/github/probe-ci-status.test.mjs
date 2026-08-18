@@ -903,6 +903,33 @@ test("watch-ci does NOT bail stuck when another provider is pending (commit-stat
   );
 });
 
+test("watch-ci bails stuck when check-runs are queued and another provider already succeeded (#1665)", async () => {
+  // Mixed-provider stall: every check-run stays queued (zero allocation) while a
+  // commit-status provider (e.g. CircleCI) already reported success — nobody is
+  // actively progressing, so the watcher bails "stuck" after the stall window
+  // instead of burning the full budget waiting on an unallocated queue.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build", "lint"]) },
+        { match: ["check-runs"], stdout: checkRuns([
+          { status: "queued", conclusion: null, name: "build" },
+          { status: "queued", conclusion: null, name: "lint" },
+        ]) },
+        { match: ["/status"], stdout: statuses([{ state: "success", context: "ci/circleci: build" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 10_000, stallBailMs: 50 },
+        advancingDeps(env),
+      );
+      assert.equal(result.status, "stuck");
+      assert.equal(result.settled, false);
+    },
+  );
+});
+
 test("watch-ci resets the stall when a stuck run starts progressing and settles success (#1631)", async () => {
   // Polls 1-2: all queued (stall accumulates but under the bail window). Poll 3:
   // the run starts progressing and completes success. Must settle success, NOT
