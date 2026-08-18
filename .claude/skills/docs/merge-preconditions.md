@@ -185,9 +185,23 @@ A marker is allowed only while the PR is still in draft; it must be removed befo
 
 ## Merge authorization
 
-- Merge authorization MUST be explicit for the active issue/PR scope
+- Merge authorization MUST be explicit for the active issue/PR scope, OR supplied by a recorded standing authorization (below)
 - `"Merge authorized if gates green"` is valid explicit authorization
-- Implied approval from prior turns MUST NOT be treated as sufficient
+- Implied approval from prior turns MUST NOT be treated as sufficient; only a recorded standing authorization carries across scopes
+
+### Recorded standing authorization (ADR 0050)
+
+An operator MAY record a standing merge authorization that applies to every PR whose
+full gate pipeline passes: clean `draft_gate` and `pre_approval_gate` verdicts at the
+current head, zero unresolved review threads, a green gate-evidence audit, and green CI.
+A standing authorization is valid only when all of the following hold:
+
+- the repo config sets `autonomy.humanMergeOnly: false` (the config alone authorizes nothing)
+- the authorization is recorded in a durable artifact (an accepted decision record naming
+  the condition), not only in a chat turn
+- the gate pass is complete at the current head; a gate-incomplete PR stays unauthorized
+
+Absent a recorded standing authorization, the per-scope explicit rule above governs.
 
 ### `autonomy.humanMergeOnly` — fixed human-only merge (non-overridable)
 
