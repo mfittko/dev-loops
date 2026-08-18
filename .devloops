@@ -160,3 +160,10 @@ queue:
   maxAutoFiledIssues: 10
   reDispatchMaxRetries: 1
   archiveOlderThanDays: 7
+
+# Operator override (mfittko, 2026-08-18): merges are agent-executed once the full
+# gate pipeline passes (draft_gate + pre_approval_gate clean at current head, zero
+# unresolved threads, evidence audit green). Supersedes the shipped human-merge-only
+# default; the human approval checkpoint remains the standing authorization itself.
+autonomy:
+  humanMergeOnly: false
