@@ -380,7 +380,7 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
     for (let i = 0; i < 4600; i++) {
       fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
     }
-    const porcelainBytes = spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout.length;
+    const porcelainBytes = Buffer.byteLength(spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout, "utf8");
     assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
     const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
