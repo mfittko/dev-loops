@@ -363,3 +363,35 @@ test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/wo
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node default maxBuffer (#1686)", () => {
+  // With Node's default execFileSync maxBuffer (1MB), `git status --porcelain` throws
+  // ERR_CHILD_PROCESS_STDIO_MAXBUFFER once the output crosses that size, and the catch
+  // turns that into a fail-safe allow — defeating the guard on exactly the worktrees
+  // with the most uncommitted work. The hook raises maxBuffer to 10MB; this test
+  // creates enough long-named untracked files to push porcelain past 1MB and asserts
+  // the guard still blocks. Using this fixture's long (~245-byte) porcelain lines, that
+  // takes ~4300+ files; real (much shorter) paths need far more to hit the same bound.
+  // Beyond 10MB (~43k+ such long-line paths) the fail-safe allow is the documented ceiling.
+  const dir = makeWorktree("maxbuffer", false);
+  try {
+    const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
+    // ~4600 files x ~240-byte porcelain lines ≈ 1.1MB of status output.
+    for (let i = 0; i < 4600; i++) {
+      fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
+    }
+    const porcelainBytes = Buffer.byteLength(spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout, "utf8");
+    assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    // The reason itself stays bounded (the 50-path cap), not merely parseable off stderr —
+    // pins the cap end to end rather than relying on runHook's own maxBuffer as an incidental
+    // proxy for it.
+    assert.match(stderrJson.reason, /… and 4550 more/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

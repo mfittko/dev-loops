@@ -541,6 +541,42 @@ test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", 
   assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });
 
+test("decideSubagentStopGuard caps the enumerated dirty paths at 50, reports the full count, and preserves porcelain order", () => {
+  // Descending index order (not ascending/sorted) so the assertions can tell "preserves
+  // porcelain order" apart from "sorts the paths" — git porcelain lists tracked
+  // staged/modified paths before untracked ones, and a sort creeping into the decider would
+  // displace the higher-data-loss-risk entries out of the first 50 shown.
+  const lines = Array.from({ length: 120 }, (_, i) => `?? file-${String(119 - i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(120\):/);
+  assert.match(d.reason, /file-119\.txt/);
+  assert.match(d.reason, /file-070\.txt/);
+  assert.doesNotMatch(d.reason, /file-069\.txt/);
+  assert.match(d.reason, /… and 70 more/);
+  const firstListedPath = d.reason.split("\n")[1].trim();
+  assert.equal(firstListedPath, lines[0], "first listed path must be the first porcelain line verbatim (order preserved, not sorted)");
+});
+
+test("decideSubagentStopGuard lists all paths with no truncation summary at exactly the 50-path cap", () => {
+  const lines = Array.from({ length: 50 }, (_, i) => `?? file-${String(i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(50\):/);
+  assert.match(d.reason, /file-049\.txt/);
+  assert.doesNotMatch(d.reason, /… and/);
+});
+
+test("decideSubagentStopGuard adds a one-more truncation summary at 51 dirty paths (smallest over-cap input)", () => {
+  const lines = Array.from({ length: 51 }, (_, i) => `?? file-${String(i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(51\):/);
+  assert.match(d.reason, /file-049\.txt/);
+  assert.doesNotMatch(d.reason, /file-050\.txt/);
+  assert.match(d.reason, /… and 1 more/);
+});
+
 // ---------------------------------------------------------------------------
 // decideBashGate — the six guard rules enforced at one seam (#1622)
 // ---------------------------------------------------------------------------
