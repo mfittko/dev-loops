@@ -449,6 +449,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // malformed wrapper cannot silently record an invalid verdict as the
   // consolidator's truth (#1616).
   let normalizedOverallVerdict;
+  let persistedVerdict = options.verdict;
   if (overallVerdict !== undefined) {
     const verdict = normalizeVerdict(overallVerdict);
     if (!verdict) {
@@ -482,8 +483,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     }
     // Persist the canonical (normalized) verdict, not the raw caller value, so
     // the durable ledger never records a differently-cased/whitespaced verdict
-    // beside the canonical overallVerdict it was just checked against.
-    options.verdict = callerVerdict;
+    // beside the canonical overallVerdict it was just checked against. Kept in
+    // a local instead of mutating the caller-provided options object, which
+    // programmatic callers may reuse across calls.
+    persistedVerdict = callerVerdict;
   }
   let provenance;
   if (options.provenance === undefined) {
@@ -524,7 +527,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
-    verdict: options.verdict,
+    verdict: persistedVerdict,
     loggedAt: new Date().toISOString(),
     findings,
   };
