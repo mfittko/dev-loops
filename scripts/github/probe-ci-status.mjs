@@ -46,8 +46,9 @@ Statuses:
   changed    Head SHA advanced during the wait; caller must re-baseline
   stuck      Zero-allocation stall bail (#1631): every check-run stayed QUEUED
              with zero jobs allocated (no runner picked up) and no other provider
-             reporting activity for ~5 min; treated as a stuck GitHub Actions
-             queue and bailed early instead of burning the full watch budget
+             actively progressing (commit-status absent or already terminal, i.e.
+             not pending) for ~5 min; treated as a stuck GitHub Actions queue and
+             bailed early instead of burning the full watch budget
 No-checks rule (grace, race-safe):
   Zero check-runs AND zero commit-statuses is NOT settled green on the first
   poll — a provider (CircleCI/Actions) may post its first check a beat after a
@@ -384,10 +385,10 @@ export const NO_CHECKS_GRACE_POLLS = 2;
 
 /** Zero-allocation stall bail budget (#1631): when a CI run is QUEUED with zero
  *  jobs allocated (no runner picked up — every check-run still `queued`, no other
- *  provider reporting activity), the watcher bails after ~5 min instead of burning
- *  the full 30-min watch budget on a stuck GitHub Actions queue. A run that IS
- *  progressing (any check-run in_progress/completed, or another provider pending)
- *  is never bailed early. */
+ *  provider actively progressing: commit-status absent or already terminal), the
+ *  watcher bails after ~5 min instead of burning the full 30-min watch budget on
+ *  a stuck GitHub Actions queue. A run that IS progressing (any check-run
+ *  in_progress/completed, or another provider pending) is never bailed early. */
 export const ZERO_ALLOCATION_STALL_BAIL_MS = 300_000; // ~5 minutes
 
 /**
@@ -427,8 +428,9 @@ export async function watchCiStatus(
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
   let consecutiveNoChecks = 0;
   // Zero-allocation stall bail (#1631): track the first poll that observed a
-  // zero-allocation stall (all check-runs queued, no provider activity). The
-  // watcher bails once the stall has persisted for stallBailMs instead of
+  // zero-allocation stall (all check-runs queued, no provider actively
+  // progressing — commit-status absent or already terminal). The watcher
+  // bails once the stall has persisted for stallBailMs instead of
   // burning the full watch budget on a stuck GitHub Actions queue.
   const stallBailMs = options.stallBailMs ?? ZERO_ALLOCATION_STALL_BAIL_MS;
   let stallStartedAtMs = null;

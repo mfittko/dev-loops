@@ -926,6 +926,34 @@ test("watch-ci bails stuck when check-runs are queued and another provider alrea
       );
       assert.equal(result.status, "stuck");
       assert.equal(result.settled, false);
+      assert.equal(result.ciStatus, "pending");
+      // attempt 1 @ t=0 (stall starts), attempt 2 @ t=30, attempt 3 @ t=60 -> bail.
+      assert.equal(result.attempts, 3);
+    },
+  );
+});
+
+test("watch-ci settles failure, not stuck, when check-runs are queued and another provider failed (#1665)", async () => {
+  // Failure variant of the mixed-provider case: a terminal failure commit-status
+  // beside an unallocated queue settles the combined CI status as failure before
+  // the stall branch is ever consulted — the watcher reports the failure rather
+  // than a stall bail.
+  await withGhStub(
+    {
+      routes: [
+        { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+        { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+        { match: ["/status"], stdout: statuses([{ state: "failure", context: "ci/circleci: build" }]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 30, timeoutMs: 10_000, stallBailMs: 50 },
+        advancingDeps(env),
+      );
+      assert.equal(result.ciStatus, "failure");
+      assert.equal(result.settled, true);
+      assert.notEqual(result.status, "stuck");
     },
   );
 });
