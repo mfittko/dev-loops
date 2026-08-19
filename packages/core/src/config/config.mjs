@@ -219,12 +219,26 @@ const GateDynamicConfig = z.strictObject({
 // accepted but INERT for spike (a findings-doc deliverable has no "clean
 // verdict" escalation path and no additive dynamic pool) rather than being
 // split into a second schema.
-// Canonical defect-severity vocabulary for blockCleanOnFindingSeverities:
-// the post-normalization form of the schema enum below (legacy spellings
-// normalize into these three). resolveGateConfig fails closed against this
-// set so a config that bypassed schema validation cannot reach severity
-// consumers with an unknown value.
-const BLOCKING_SEVERITY_VOCABULARY = new Set(["high", "medium", "low"]);
+// Single source for the blockCleanOnFindingSeverities vocabulary: the schema
+// enum below consumes the spellings verbatim, and the fail-closed set in
+// resolveGateConfig derives from the same list through normalizeSeverity, so
+// widening the enum can never leave the runtime guard behind (drift would
+// have refused configs that pass schema validation).
+const BLOCKING_SEVERITY_SPELLINGS = ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"];
+const BLOCKING_SEVERITY_VOCABULARY = new Set(BLOCKING_SEVERITY_SPELLINGS.map((s) => normalizeSeverity(s)));
+
+// Render an offending config value for a refusal message without letting the
+// renderer itself throw: JSON.stringify raises on BigInt and circular
+// structures and returns undefined for undefined/symbol/function, so those
+// fall back to String().
+function formatConfigValue(value) {
+  try {
+    const rendered = JSON.stringify(value);
+    return rendered === undefined ? String(value) : rendered;
+  } catch {
+    return String(value);
+  }
+}
 
 const GateConfig = z.strictObject({
   angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier."),
@@ -238,7 +252,7 @@ const GateConfig = z.strictObject({
   // admitting either here would let a config block on a severity the
   // disposition pass simultaneously auto-resolves.
   blockCleanOnFindingSeverities: z
-    .array(z.enum(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]))
+    .array(z.enum(/** @type {[string, ...string[]]} */ (BLOCKING_SEVERITY_SPELLINGS)))
     .min(1)
     .default(["high"])
     .describe("Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
@@ -1846,25 +1860,47 @@ export function resolveRefinement(config) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
- * @throws {Error} when a configured `blockCleanOnFindingSeverities` entry is
- *   outside the defect vocabulary after normalization — such a value can only
- *   arrive through a config that failed schema validation (the schema's enum
- *   rejects it), and passing it through would make the gate silently block on
- *   nothing. Refusing here, at the one resolve boundary every severity
- *   consumer shares, keeps unvalidated vocabulary out of every gate verdict
- *   path. Absent keys still fall back to the defaults unchanged.
+ * @throws {Error} when a PRESENT `blockCleanOnFindingSeverities` key is any
+ *   schema-invalid shape: a non-array value, an empty array, or an entry
+ *   outside the defect vocabulary after normalization. Every such shape can
+ *   only arrive through a config that failed schema validation (the schema
+ *   requires a min-1 array of the enum spellings), and passing it through
+ *   would make the gate block on the wrong severities or on nothing at all.
+ *   The refusal deliberately reaches EVERY caller of this resolver — including
+ *   ones reading unrelated fields (resolveRefinement's requireCi read, angle
+ *   and tier resolution, state detection) — because no gate operation should
+ *   proceed on a config whose verdict-semantics key failed validation. This
+ *   is the stated boundary with the module's degrade-to-default convention
+ *   (resolveMaxAnglesPerGroup, resolveFanoutGroups): keys that only shape
+ *   dispatch ergonomics degrade quietly; the key that decides what blocks a
+ *   clean verdict refuses. An ABSENT key still falls back to the default
+ *   unchanged.
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
   const rawBlocking = gateConfig?.blockCleanOnFindingSeverities;
   let blockCleanOnFindingSeverities = ["high"];
-  if (rawBlocking && Array.isArray(rawBlocking)) {
+  if (rawBlocking !== undefined) {
+    if (!Array.isArray(rawBlocking)) {
+      throw new Error(
+        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities must be an array ` +
+        `of defect severities, got ${formatConfigValue(rawBlocking)}. ` +
+        `Fix the config before gate operations can proceed.`
+      );
+    }
     blockCleanOnFindingSeverities = [...new Set(rawBlocking.map((s) => normalizeSeverity(s)))];
+    if (blockCleanOnFindingSeverities.length === 0) {
+      throw new Error(
+        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities is empty; ` +
+        `the schema requires at least one blocking severity, and an empty list would make the gate block on nothing. ` +
+        `Fix the config before gate operations can proceed.`
+      );
+    }
     const invalid = blockCleanOnFindingSeverities.filter((s) => !BLOCKING_SEVERITY_VOCABULARY.has(s));
     if (invalid.length > 0) {
       throw new Error(
         `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities contains ` +
-        `out-of-vocabulary severity value(s) after normalization: ${invalid.map((s) => JSON.stringify(s)).join(", ")}. ` +
+        `out-of-vocabulary severity value(s) after normalization: ${invalid.map((s) => formatConfigValue(s)).join(", ")}. ` +
         `Allowed: high, medium, low (legacy spellings must-fix, worth-fixing-now, nice-to-have, defer normalize to these). ` +
         `Fix the config before gate operations can proceed.`
       );

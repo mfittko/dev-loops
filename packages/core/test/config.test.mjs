@@ -2613,6 +2613,62 @@ describe("role resolution", () => {
       );
     });
 
+    test("resolveGateConfig names every out-of-vocabulary value when several are invalid", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: ["critical", "blocker", "high"] } },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) => err.message.includes('"critical"') && err.message.includes('"blocker"') && !err.message.includes('"high"'),
+      );
+    });
+
+    test("resolveGateConfig refuses an entry JSON.stringify cannot render instead of crashing the renderer", () => {
+      const circular = {};
+      circular.self = circular;
+      for (const entry of [10n, circular]) {
+        assert.throws(
+          () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [entry] } } }, "draft"),
+          /out-of-vocabulary/,
+        );
+      }
+    });
+
+    // The schema requires min 1; an empty list reaches this resolver only
+    // through a config that failed validation, and passing it through would
+    // make the gate block on nothing (and severity consumers diverge on it).
+    test("resolveGateConfig throws on an explicitly-empty blockCleanOnFindingSeverities array", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: [] } },
+      };
+      assert.throws(() => resolveGateConfig(config, "draft"), /is empty/);
+    });
+
+    // The schema requires an array; a scalar or mapping here is the same
+    // failed-validation channel and previously fell back to the high default
+    // silently, under-blocking relative to the author's intent.
+    test("resolveGateConfig throws on a present-but-non-array blockCleanOnFindingSeverities value", () => {
+      for (const value of ["medium", { medium: true }, 3, null]) {
+        assert.throws(
+          () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: value } } }, "draft"),
+          /must be an array/,
+          String(value),
+        );
+      }
+    });
+
+    // Parity pin for the derived vocabulary: every spelling the schema enum
+    // accepts must resolve without refusal, so the guard can never drift
+    // ahead of the schema.
+    test("resolveGateConfig accepts every schema-enum blockCleanOnFindingSeverities spelling", () => {
+      for (const spelling of ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]) {
+        const result = resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [spelling] } } }, "draft");
+        assert.equal(result.blockCleanOnFindingSeverities.length, 1, spelling);
+      }
+    });
+
     // Case-sensitivity is deliberate (normalizeSeverity never lowercases):
     // a mixed-case spelling is out of vocabulary and must refuse, not coerce.
     test("resolveGateConfig throws on a mixed-case blockCleanOnFindingSeverities spelling", () => {
