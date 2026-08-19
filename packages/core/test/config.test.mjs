@@ -2577,6 +2577,52 @@ describe("role resolution", () => {
       assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium"]);
     });
 
+    // Fail-closed posture: an out-of-vocabulary blocking severity can only
+    // arrive through a config that failed schema validation (the schema enum
+    // rejects it; loadDevLoopConfig returns the raw merged config alongside
+    // its errors). Passing it through would make the gate silently block on
+    // nothing, so the resolve boundary refuses instead.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value, naming the value and the gate key", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["high", "critical"],
+          },
+        },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.draft.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
+    test("resolveGateConfig throws on a non-string blockCleanOnFindingSeverities entry", () => {
+      const config = {
+        version: 1,
+        gates: { preApproval: { blockCleanOnFindingSeverities: ["high", 3] } },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "preApproval"),
+        (err) => err instanceof Error && err.message.includes("gates.preApproval.blockCleanOnFindingSeverities"),
+      );
+    });
+
+    // Case-sensitivity is deliberate (normalizeSeverity never lowercases):
+    // a mixed-case spelling is out of vocabulary and must refuse, not coerce.
+    test("resolveGateConfig throws on a mixed-case blockCleanOnFindingSeverities spelling", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: ["HIGH"] } },
+      };
+      assert.throws(() => resolveGateConfig(config, "draft"), /out-of-vocabulary/);
+    });
+
     test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
       const config = {
         version: 1,

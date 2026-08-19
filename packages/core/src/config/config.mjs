@@ -219,6 +219,13 @@ const GateDynamicConfig = z.strictObject({
 // accepted but INERT for spike (a findings-doc deliverable has no "clean
 // verdict" escalation path and no additive dynamic pool) rather than being
 // split into a second schema.
+// Canonical defect-severity vocabulary for blockCleanOnFindingSeverities:
+// the post-normalization form of the schema enum below (legacy spellings
+// normalize into these three). resolveGateConfig fails closed against this
+// set so a config that bypassed schema validation cannot reach severity
+// consumers with an unknown value.
+const BLOCKING_SEVERITY_VOCABULARY = new Set(["high", "medium", "low"]);
+
 const GateConfig = z.strictObject({
   angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier."),
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
@@ -1839,9 +1846,30 @@ export function resolveRefinement(config) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
+ * @throws {Error} when a configured `blockCleanOnFindingSeverities` entry is
+ *   outside the defect vocabulary after normalization — such a value can only
+ *   arrive through a config that failed schema validation (the schema's enum
+ *   rejects it), and passing it through would make the gate silently block on
+ *   nothing. Refusing here, at the one resolve boundary every severity
+ *   consumer shares, keeps unvalidated vocabulary out of every gate verdict
+ *   path. Absent keys still fall back to the defaults unchanged.
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
+  const rawBlocking = gateConfig?.blockCleanOnFindingSeverities;
+  let blockCleanOnFindingSeverities = ["high"];
+  if (rawBlocking && Array.isArray(rawBlocking)) {
+    blockCleanOnFindingSeverities = [...new Set(rawBlocking.map((s) => normalizeSeverity(s)))];
+    const invalid = blockCleanOnFindingSeverities.filter((s) => !BLOCKING_SEVERITY_VOCABULARY.has(s));
+    if (invalid.length > 0) {
+      throw new Error(
+        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities contains ` +
+        `out-of-vocabulary severity value(s) after normalization: ${invalid.map((s) => JSON.stringify(s)).join(", ")}. ` +
+        `Allowed: high, medium, low (legacy spellings must-fix, worth-fixing-now, nice-to-have, defer normalize to these). ` +
+        `Fix the config before gate operations can proceed.`
+      );
+    }
+  }
   const entries = normalizeAngleEntries(gateConfig?.angles);
   // An explicitly-empty (or all-garbage/malformed) array is a real configured
   // "no angles" — distinct from the key being absent entirely, which callers
@@ -1855,12 +1883,11 @@ export function resolveGateConfig(config, gate) {
     requireCi: gateConfig?.requireCi ?? true,
     dynamicAngles: gateConfig?.dynamic?.subtractive ?? true,
     additiveAngles: gateConfig?.dynamic?.additive ?? false,
-    // Normalized + deduped at the resolve boundary so every consumer (envelope,
-    // verdict poster, fan-in, viewer) sees canonical spellings only; a
-    // half-migrated ["must-fix","low","defer"] collapses to two entries.
-    blockCleanOnFindingSeverities: gateConfig?.blockCleanOnFindingSeverities && Array.isArray(gateConfig.blockCleanOnFindingSeverities)
-      ? [...new Set(gateConfig.blockCleanOnFindingSeverities.map((s) => normalizeSeverity(s)))]
-      : ["high"],
+    // Normalized + deduped at the resolve boundary (above) so every consumer
+    // (envelope, verdict poster, fan-in, viewer) sees canonical spellings
+    // only; a half-migrated ["must-fix","low","defer"] collapses to two
+    // entries, and anything outside the vocabulary has already thrown.
+    blockCleanOnFindingSeverities,
     // `mediumFixWindow` wins; `worthFixingNowFixWindow` is the deprecated
     // pre-rename key, still honored so an unmigrated config keeps its
     // configured window rather than silently reverting to the default.
