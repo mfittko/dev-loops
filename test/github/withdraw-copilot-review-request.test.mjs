@@ -207,11 +207,192 @@ describe("withdraw-copilot-review-request", () => {
       // A wrong reviewer identity exits 0 and removes nothing. Without the
       // post-verify re-read the operator would be told the deadlock is cleared
       // while the PR stays stuck — the one lie this tool must never tell.
+      // Stubbed delayImpl keeps this fast: the request stays pending on every
+      // attempt, so the helper exhausts the full bounded retry window.
       const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], removeIsNoop: true });
       await assert.rejects(
-        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild }),
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, delayImpl: async () => {} }),
         /still pending after/,
       );
+    });
+  });
+
+  // Race regressions on the post-verify read, mirroring
+  // test/github/request-copilot-review.test.mjs: the requested-reviewers read
+  // that confirms a `gh pr edit --remove-reviewer` landed is eventually
+  // consistent, so it is retried on the same bounded backoff the request path
+  // uses. A custom runChild scripts the exact requested_reviewers response
+  // sequence (the before-state check, then the initial post-edit read, then
+  // one entry per bounded retry) independent of the removal call itself, so
+  // each test pins the exact race it exercises.
+  describe("the post-verify read race (mirrors request-copilot-review.mjs)", () => {
+    function raceRunChild(requestedReviewersSequence) {
+      const calls = [];
+      let index = 0;
+      const runChild = async (_cmd, argv) => {
+        calls.push(argv);
+        if (argv.some((a) => typeof a === "string" && a.includes("requested_reviewers"))) {
+          const step = requestedReviewersSequence[index];
+          index += 1;
+          if (!step) throw new Error("raceRunChild: requested_reviewers read beyond scripted sequence");
+          if (step.throws) {
+            return { code: 1, stdout: "", stderr: step.message };
+          }
+          return {
+            code: 0,
+            stdout: JSON.stringify({ users: step.requested ? [{ login: "copilot-pull-request-reviewer[bot]" }] : [], teams: [] }),
+            stderr: "",
+          };
+        }
+        if (argv.includes("--remove-reviewer")) {
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv.includes("graphql")) {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: JSON.stringify({ headRefOid: "currentsha", reviews: SUBMITTED_COPILOT_REVIEW }), stderr: "" };
+      };
+      return { calls, runChild };
+    }
+
+    it("verification succeeds on a later attempt after a stale-pending-then-cleared race", async () => {
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check: request is pending
+        { requested: true }, // initial post-edit read: still stale
+        { requested: false }, // retry read: the removal has now landed
+      ]);
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl });
+      assert.equal(result.status, "withdrawn");
+      assert.deepEqual(delayCalls, [5000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("a throwing read consumes a delay and a later read succeeds", async () => {
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { requested: true }, // initial post-edit read: stale
+        { throws: true, message: "rate limited" }, // attempt 0: transient gh failure
+        { requested: false }, // attempt 1: recovers, removal confirmed
+      ]);
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl });
+      assert.equal(result.status, "withdrawn");
+      assert.deepEqual(delayCalls, [5000, 10000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("fails closed with the byte-identical exhaustion message when every bounded retry stays pending", async () => {
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { requested: true }, // initial post-edit read
+        { requested: true }, // attempt 0
+        { requested: true }, // attempt 1
+        { requested: true }, // attempt 2
+      ]);
+      await assert.rejects(
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl }),
+        (error) => {
+          // Exact match, not a substring: this is a claimed byte-identical
+          // contract with pre-retry-loop behavior, so any drift must fail.
+          assert.equal(
+            error.message,
+            "Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.",
+          );
+          return true;
+        },
+      );
+      assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("recovers when the INITIAL post-edit read throws and a later read succeeds", async () => {
+      // The initial post-edit read sits inside the retry window: a throw there
+      // consumes the first scheduled delay and re-probes instead of
+      // propagating, so a transient blip immediately after a successful
+      // removal self-heals. This also pins the fail-closed `stillRequested`
+      // initializer — an initial throw never touches `stillRequested`, so it
+      // must start `true` for the loop below to run at all.
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { throws: true, message: "rate limited (initial read)" }, // initial post-edit read: throws
+        { requested: false }, // attempt 0: recovers, removal confirmed
+      ]);
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl });
+      assert.equal(result.status, "withdrawn");
+      assert.deepEqual(delayCalls, [5000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("fails closed with the byte-identical exhaustion message when a mid-window throw recovers into a still-pending read", async () => {
+      // Mixed window: a non-final attempt throws, later attempts succeed but
+      // stay pending. The recovery clears the recorded read error, so
+      // exhaustion yields the generic still-pending message, never the stale
+      // mid-window error.
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { requested: true }, // initial post-edit read: stale
+        { throws: true, message: "rate limited (attempt 1)" }, // attempt 0: throws mid-window
+        { requested: true }, // attempt 1: recovers but still pending
+        { requested: true }, // attempt 2: still pending
+      ]);
+      await assert.rejects(
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl }),
+        (error) => {
+          assert.equal(
+            error.message,
+            "Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.",
+          );
+          return true;
+        },
+      );
+      assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("propagates the final attempt's raw read error when every bounded retry read throws", async () => {
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { requested: true }, // initial post-edit read: stale, not a throw
+        { throws: true, message: "rate limited (attempt 1)" },
+        { throws: true, message: "rate limited (attempt 2)" },
+        { throws: true, message: "rate limited (attempt 3, final)" },
+      ]);
+      await assert.rejects(
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl }),
+        (error) => {
+          assert.equal(error.message, "gh command failed: rate limited (attempt 3, final)");
+          return true;
+        },
+      );
+      assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
     });
   });
 

@@ -281,6 +281,13 @@ function isReviewNowObservablyInProgress(before, after) {
     || reviewCountIncreased
     || reviewPresence.present;
 }
+// Shared verification-read step: re-fetch review state and check presence in
+// one call, so the initial post-edit read and every in-loop retry read below
+// share one implementation instead of two copies that could drift.
+async function checkReviewObservablyInProgress(options, runtime, before) {
+  const after = await fetchCopilotReviewState(options, runtime);
+  return isReviewNowObservablyInProgress(before, after);
+}
 
 async function fetchCopilotReviewState(options, runtime) {
   const requestedReviewers = await fetchRequestedReviewers(options, runtime);
@@ -868,25 +875,22 @@ export async function performCopilotReviewRequest(
   // the window also throws, in which case that last error is what the caller
   // sees (not the generic empty-result message below, which is reserved for
   // the case where every read succeeds but the review never shows up).
-  let after = null;
   let reviewNowObservablyInProgress = false;
   let lastReadError = null;
   try {
-    after = await fetchCopilotReviewState(options, runtime);
-    reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
+    reviewNowObservablyInProgress = await checkReviewObservablyInProgress(options, runtime, before);
   } catch (error) {
     lastReadError = error;
   }
   for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
     await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
     try {
-      after = await fetchCopilotReviewState(options, runtime);
+      reviewNowObservablyInProgress = await checkReviewObservablyInProgress(options, runtime, before);
       lastReadError = null;
     } catch (error) {
       lastReadError = error;
       continue;
     }
-    reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
   }
   if (!reviewNowObservablyInProgress) {
     if (lastReadError) {
