@@ -445,9 +445,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // the fan-in actually computed for this head/gate — not whatever a caller
   // hand-passed to `--verdict`. Optional and additive: a bare-array input
   // (legacy `--findings-file`, hand-authored `--findings`) leaves it
-  // undefined and the ledger writes exactly as before. Validated here so a
-  // malformed wrapper cannot silently record an invalid verdict as the
-  // consolidator's truth (#1616).
+  // undefined and the ledger writes exactly as before. Validated in the
+  // wrapper branch below (not by the caller-verdict guard immediately
+  // following this comment) so a malformed wrapper cannot silently record an
+  // invalid verdict as the consolidator's truth (#1616).
+
   // Validate the caller's own --verdict domain (same message the CLI parse
   // path throws for --verdict) BEFORE any wrapper comparison, so the guard
   // covers BOTH input paths — a bare-array input (no wrapper) never persists a
@@ -466,12 +468,12 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   if (!callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");
   }
+  let normalizedOverallVerdict;
   // Persist the canonical (normalized) verdict, not the raw caller value, on
   // BOTH input paths, so the durable ledger never records a differently-cased/
   // whitespaced verdict. Kept in a local instead of mutating the
   // caller-provided options object, which programmatic callers may reuse
   // across calls.
-  let normalizedOverallVerdict;
   let persistedVerdict = callerVerdict;
   if (overallVerdict !== undefined) {
     // The wrapper's overallVerdict must itself be a string BEFORE

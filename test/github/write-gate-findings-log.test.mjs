@@ -1544,8 +1544,11 @@ test("#1641: CLI path — a direct write-gate-findings-log.mjs with a contradict
 
 // The contradiction-refusal tests above all drive the wrapper through inline
 // --findings; this one drives the SAME refusal through --findings-file (a
-// wrapper-shaped file), since the guard lives in resolveFindings/resolveFindingsInput
-// shared plumbing both flags route through, not in either flag's own parsing.
+// wrapper-shaped file). The refusal itself (both the caller-verdict domain
+// check and the wrapper-contradiction check) lives in writeGateFindingsLog,
+// not in resolveFindingsInput — resolveFindingsInput's shared plumbing only
+// parses and unwraps the wrapper identically for both flags, which is why the
+// same refusal reaches the findings-file path too.
 test("writeGateFindingsLog rejects a --verdict contradicting a --findings-file wrapper overallVerdict", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-file-conflict-"));
   try {
@@ -1624,6 +1627,58 @@ test("writeGateFindingsLog rejects an invalid --verdict on a bare-array input (n
       /ENOENT/,
       "an invalid bare-array verdict must not write a ledger before failing",
     );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The bare-array path (no overallVerdict wrapper) is the one the canonical-
+// persistence acceptance criterion actually changed: before this change the
+// ledger persisted the raw --verdict string unchanged on this path. Pinning
+// canonicalization only through a wrapper-shaped payload (as the test above
+// does) leaves this half unasserted — a regression that dropped the hoisted
+// normalization while keeping the hoisted rejection would still pass every
+// other test in this suite.
+test("#1641: writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a bare-array input (no wrapper)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bare-noncanonical-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: " Clean ",
+      findings: "[]",
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.verdict, "clean", "a bare-array write must persist the canonical verdict, not the raw caller casing/whitespace");
+    assert.ok(!("overallVerdict" in parsed), "a bare-array input must not synthesize an overallVerdict");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The no-mutation clause: writeGateFindingsLog persists the canonical verdict
+// into the ledger without mutating the caller-supplied options object, since
+// a programmatic caller may reuse one options object across calls. A snapshot
+// comparison catches an in-place mutant (e.g. options.verdict = callerVerdict)
+// that would otherwise pass every other test in this suite unnoticed.
+test("#1641: writeGateFindingsLog does not mutate the caller-supplied options object", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mutate-"));
+  try {
+    const options = {
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: " Clean ",
+      findings: "[]",
+      tmpRoot: tmpDir,
+    };
+    const snapshot = structuredClone(options);
+    await writeGateFindingsLog(options);
+    assert.deepEqual(options, snapshot, "writeGateFindingsLog must not mutate the caller-supplied options object");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
