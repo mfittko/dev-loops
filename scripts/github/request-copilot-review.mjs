@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   buildParseError,
   containsBareCopilotSummon,
@@ -28,6 +29,13 @@ const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
 const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
 const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
+// The requested-reviewer / review-list reads that verify a `gh pr edit` request
+// landed are eventually consistent: an immediate read can still see stale
+// (empty) state even though the request already succeeded. Re-read on this
+// fixed backoff before declaring failure — bounded, not open-ended, so a
+// genuine failure (Copilot truly unavailable on the repo) still fails closed
+// after ~30s total instead of hanging indefinitely.
+const VERIFICATION_RETRY_DELAYS_MS = [5000, 10000, 15000];
 const USAGE = `Usage: request-copilot-review.mjs --repo <owner/name> --pr <number>
 Request Copilot as a reviewer on a GitHub pull request.
 Required:
@@ -41,6 +49,12 @@ Optional:
                             composed round cap min(localImplementation.lightMode.
                             maxCopilotRounds ?? 1, refinement.maxCopilotRounds)
                             instead of refinement.maxCopilotRounds alone.
+Verification:
+  After requesting Copilot as a reviewer, the requested-reviewer/review-list
+  read is retried on a fixed backoff (~30s total) before declaring failure,
+  because that read is eventually consistent and can briefly still show stale
+  (empty) state right after a genuinely successful request. The request
+  itself is issued exactly once and never re-issued per probe.
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
@@ -248,6 +262,24 @@ async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCo
   } catch {
     return before.completedCopilotReviewRounds ?? 0;
   }
+}
+
+// Review-surface presence: Copilot is present when it is a requested reviewer
+// OR has submitted any review on this PR — never decided by assignee
+// membership. A reviewer-configured repo (`copilot-pull-request-reviewer[bot]`)
+// auto-reviews without appearing in requested_reviewers and `@copilot` can be a
+// silent no-op, so prior submitted reviews prove presence and must not be
+// misreported as "Copilot absent / not enabled".
+function isReviewNowObservablyInProgress(before, after) {
+  const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
+  const reviewPresence = resolveCopilotReviewPresence({
+    requested: after.requested,
+    reviews: after.prData?.reviews ?? [],
+  });
+  return after.requested
+    || after.hasPendingReviewOnCurrentHead
+    || reviewCountIncreased
+    || reviewPresence.present;
 }
 
 async function fetchCopilotReviewState(options, runtime) {
@@ -569,7 +601,10 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
     violationCommentIds,
   };
 }
-export async function performCopilotReviewRequest(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function performCopilotReviewRequest(
+  options,
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, delayImpl = delay } = {},
+) {
   const runtime = { env, ghCommand, runChild };
   const before = await fetchCopilotReviewState(options, runtime);
   if (before.prData?.isDraft) {
@@ -825,23 +860,38 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   if (requestResult.status === "already-requested") {
     return withConfigWarning(requestResult);
   }
-  const after = await fetchCopilotReviewState(options, runtime);
-  const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
-  // Review-surface presence (#1670): Copilot is present when it is a requested
-  // reviewer OR has submitted any review on this PR — never decided by assignee
-  // membership. A reviewer-configured repo (`copilot-pull-request-reviewer[bot]`)
-  // auto-reviews without appearing in requested_reviewers and `@copilot` can be a
-  // silent no-op, so prior submitted reviews prove presence and must not be
-  // misreported as "Copilot absent / not enabled".
-  const reviewPresence = resolveCopilotReviewPresence({
-    requested: after.requested,
-    reviews: after.prData?.reviews ?? [],
-  });
-  const reviewNowObservablyInProgress = after.requested
-    || after.hasPendingReviewOnCurrentHead
-    || reviewCountIncreased
-    || reviewPresence.present;
+  // Bounded retry against the read-after-write race documented above: only the
+  // verification READ repeats here, never the `gh pr edit` request itself. A
+  // transient throw from ANY verification read — the initial post-edit read
+  // included — consumes the next scheduled delay and re-probes instead of
+  // aborting immediately; the error only propagates if the final attempt in
+  // the window also throws, in which case that last error is what the caller
+  // sees (not the generic empty-result message below, which is reserved for
+  // the case where every read succeeds but the review never shows up).
+  let after = null;
+  let reviewNowObservablyInProgress = false;
+  let lastReadError = null;
+  try {
+    after = await fetchCopilotReviewState(options, runtime);
+    reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
+  } catch (error) {
+    lastReadError = error;
+  }
+  for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
+    await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
+    try {
+      after = await fetchCopilotReviewState(options, runtime);
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      continue;
+    }
+    reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
+  }
   if (!reviewNowObservablyInProgress) {
+    if (lastReadError) {
+      throw lastReadError;
+    }
     throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
   }
   return withConfigWarning({

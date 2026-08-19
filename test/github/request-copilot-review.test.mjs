@@ -20,17 +20,41 @@ const EMPTY_REVIEW_STREAM_ENTRY = {
   stdout: "[[]]\n",
 };
 
+// Full gh argv for owner/repo#17's verification/request calls, reused by the
+// retry-window tests below to pin the exact gh call sequence (not just the
+// delay schedule) — including that `pr edit` is issued exactly once.
+const REQUESTED_REVIEWERS_ARGS = ["api", "repos/owner/repo/pulls/17/requested_reviewers"];
+const PR_VIEW_ARGS = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
+const PR_EDIT_ARGS = ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"];
+
 // In-process run: replay the same gh entries via makeGhMock and call the exported
 // entry fn directly, so the CLI logic runs without a node subprocess per gh call.
 // GH_SEQUENCE_PATH is set by default to preserve the production skip of the
 // copilot-comment check (the CLI treats it as the "under stub harness" signal);
 // pass `env: {}` to exercise that check end to end. Config is loaded from the
 // worktree cwd, matching the no-cwd spawn tests.
-async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" } } = {}) {
+// Fail-fast default: every non-race test proves it never enters the
+// verification retry window (zero delays consumed). A test that needs the
+// retry window supplies its own recording delayImpl (see the six race tests
+// below); anything else that starts sleeping here is a regression pushing a
+// case onto the retry path, so throw instead of silently waiting ~30s.
+async function unexpectedDelay(ms) {
+  throw new Error(`runInProcess: unexpected delay(${ms}ms) — this test path must not enter the verification retry loop`);
+}
+
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay } = {}) {
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
-  const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild });
-  return { result, calls };
+  try {
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl });
+    return { result, calls };
+  } catch (error) {
+    // Attach the recorded gh calls to a rejection too, so a test asserting
+    // via `assert.rejects` can still pin the exact gh call sequence that led
+    // to the failure (not just the delay schedule).
+    error.calls = calls;
+    throw error;
+  }
 }
 
 async function writeGhStub(tempDir, entries) {
@@ -298,6 +322,363 @@ test("request-copilot-review accepts review-surface presence (prior submitted Co
     pr: 17,
     reviewer: "Copilot",
   });
+});
+
+test("request-copilot-review retries the post-edit verification read on an empty-then-populated race and succeeds", async () => {
+  // The requested-reviewer/review-list reads that verify a `gh pr edit` request
+  // landed are eventually consistent: this replays a first verification read
+  // that still sees stale (empty) state, followed by a retry read that sees the
+  // request landed. delayImpl is stubbed to resolve immediately so the test
+  // stays fast while still exercising the real retry loop and delay schedule.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    {
+      // First post-edit verification read: still stale/empty.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      // Retry read: the request has now landed.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ], { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  assert.deepEqual(delayCalls, [5000]);
+  // Pin the gh call sequence itself, not just the delay schedule: exactly one
+  // `pr edit` (never re-issued per probe) and exactly the expected number of
+  // verification reads (before-state check, stale post-edit read, landed
+  // retry read) — `repeatLastOnOverflow` would otherwise silently mask a
+  // surplus read past this exact sequence.
+  assert.deepEqual(calls.map((call) => call.args), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    PR_EDIT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+});
+
+test("request-copilot-review fails closed after the bounded verification retries stay empty", async () => {
+  // Genuine failure: every verification read (initial + all bounded retries)
+  // stays empty, so the helper must still throw the existing error after
+  // exhausting the fixed retry schedule instead of retrying forever.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const emptyRequestedReviewersEntry = {
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    stdout: '{"users":[],"teams":[]}\n',
+  };
+  const emptyReviewsEntry = {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    stdout: '{"reviews":[]}\n',
+  };
+  const entries = [
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    // Initial post-edit verification read, plus one per bounded retry — all stale.
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+  ];
+
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
+    (error) => {
+      // Exact match, not a substring: the message is a claimed byte-identical
+      // contract with pre-retry-loop behavior, so any drift (a prefix/suffix
+      // like an appended "after N retries") must fail this assertion.
+      assert.equal(
+        error.message,
+        "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit",
+      );
+      // Pin the gh call sequence too: exactly one `pr edit` and exactly the
+      // expected number of verification reads (before-state check, plus one
+      // initial post-edit read and one per bounded retry, all stale) —
+      // `repeatLastOnOverflow` would otherwise silently mask a surplus read
+      // past this exact sequence.
+      assert.deepEqual(error.calls.map((call) => call.args), [
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        PR_EDIT_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+      ]);
+      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      return true;
+    },
+  );
+  assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+});
+
+test("request-copilot-review retries a throwing verification read inside the bounded window and recovers", async () => {
+  // A transient gh failure (rate limit, 5xx, network) during the retry window
+  // must not abort the helper outright: the request already landed by this
+  // point, so a throwing read consumes its scheduled delay and re-probes on
+  // the next attempt, exactly like the empty-result case, instead of
+  // propagating immediately.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    {
+      // Initial post-edit read (pre-loop): still stale/empty.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      // Loop attempt 0: the read itself throws (transient gh failure). The
+      // second call inside fetchCopilotReviewState (pr view) is never reached.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      exitCode: 1,
+      stderr: "rate limited\n",
+    },
+    {
+      // Loop attempt 1: recovers.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ], { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  assert.deepEqual(delayCalls, [5000, 10000]);
+  assert.deepEqual(calls.map((call) => call.args), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    PR_EDIT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUESTED_REVIEWERS_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+});
+
+test("request-copilot-review propagates the final attempt's error when every bounded retry read throws", async () => {
+  // Every attempt in the retry window throws (persistent transient failure,
+  // never a genuine empty-result). The generic "did not appear in requested
+  // reviewers..." message is reserved for the case where reads succeed but
+  // never observe the review; here the caller needs the underlying gh error
+  // instead, so the last attempt's raw error propagates verbatim.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const throwingRequestedReviewersEntry = (label) => ({
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    exitCode: 1,
+    stderr: `rate limited (${label})\n`,
+  });
+  const entries = [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    {
+      // Initial post-edit read (pre-loop): stale/empty, not a throw.
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    throwingRequestedReviewersEntry("attempt 1"),
+    throwingRequestedReviewersEntry("attempt 2"),
+    throwingRequestedReviewersEntry("attempt 3, final"),
+  ];
+
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
+    (error) => {
+      assert.equal(error.message, "gh command failed: rate limited (attempt 3, final)");
+      assert.deepEqual(error.calls.map((call) => call.args), [
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        PR_EDIT_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS,
+        REQUESTED_REVIEWERS_ARGS,
+        REQUESTED_REVIEWERS_ARGS,
+      ]);
+      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      return true;
+    },
+  );
+  assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+});
+
+test("request-copilot-review fails closed with the empty-result message when a mid-window throw recovers into empty reads", async () => {
+  // Mixed window: a non-final attempt throws, later attempts succeed but stay
+  // empty. The recovery clears the recorded read error, so exhaustion yields
+  // the generic empty-result message, never the stale mid-window error.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const emptyVerificationPair = [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ];
+  const entries = [
+    ...emptyVerificationPair,
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    // Initial post-edit read: empty.
+    ...emptyVerificationPair,
+    // Attempt 1: throws mid-window.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      exitCode: 1,
+      stderr: "rate limited (attempt 1)\n",
+    },
+    // Attempts 2 and 3: recover but stay empty.
+    ...emptyVerificationPair,
+    ...emptyVerificationPair,
+  ];
+
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
+    (error) => {
+      assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
+      assert.deepEqual(error.calls.map((call) => call.args), [
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        PR_EDIT_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+      ]);
+      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      return true;
+    },
+  );
+  assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+});
+
+test("request-copilot-review recovers when the INITIAL post-edit read throws and a later read succeeds", async () => {
+  // The initial post-edit read sits inside the retry window: a throw there
+  // consumes the first scheduled delay and re-probes instead of propagating,
+  // so a transient blip immediately after a successful edit self-heals.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const entries = [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    // Initial post-edit read: throws.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      exitCode: 1,
+      stderr: "rate limited (initial read)\n",
+    },
+    // Attempt 1: recovers, review observable.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ];
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl });
+  assert.equal(result.status, "requested");
+  assert.deepEqual(delayCalls, [5000]);
+  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
 });
 
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
