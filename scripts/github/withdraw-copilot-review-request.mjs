@@ -47,6 +47,7 @@
 // re-requesting — reusing the existing `suppressed_post_convergence_docs_only`
 // status rather than inventing a parallel mechanism. Any further push
 // invalidates the marker (new head no longer matches).
+import { setTimeout as delay } from "node:timers/promises";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 // SUBMITTED_REVIEW_STATES is shared with the loop-state reader on purpose:
@@ -60,6 +61,15 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "./request-copilot-review.mjs";
 import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
+
+// The requested-reviewers read that verifies a `gh pr edit --remove-reviewer`
+// request landed is eventually consistent, mirroring the identical race
+// request-copilot-review.mjs guards against on its own request path: an
+// immediate read can still see stale (still-requested) state even though the
+// removal already succeeded. Re-read on this fixed backoff before declaring
+// failure — bounded, not open-ended, so a genuine failure still fails closed
+// after ~30s total instead of hanging indefinitely.
+const VERIFICATION_RETRY_DELAYS_MS = [5000, 10000, 15000];
 
 const USAGE = `Usage: node scripts/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> [--reason <text>]
 
@@ -94,6 +104,13 @@ Options:
   --reason <text>         Recorded in the output for the audit trail.
   --dry-run               Report what would happen; withdraw nothing.
   --help, -h              Show this help.
+
+Verification:
+  After removing the reviewer, the requested-reviewers read is retried on a
+  fixed backoff (~30s total) before declaring failure, because that read is
+  eventually consistent and can briefly still show the request as pending
+  right after a genuinely successful removal. The removal itself is issued
+  exactly once and never re-issued per probe.
 
 Output (stdout, JSON):
   { ok, withdrawn, status: "withdrawn"|"refused"|"not-requested"|"dry-run", reason,
@@ -232,7 +249,7 @@ async function collectState(args, { env, runChild }) {
   };
 }
 
-async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir } = {}) {
+async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir, delayImpl = delay } = {}) {
   const state = await collectState(args, { env, runChild });
 
   if (!state.copilotRequested) {
@@ -319,7 +336,37 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
   // unsticking a deadlock must never report a withdrawal it did not perform.
   // Only the request flag matters here — re-reading reviews and threads would
   // be two more API calls to answer a question neither can change.
-  if (await fetchCopilotRequested(args, { env, runChild })) {
+  //
+  // Bounded retry against the read-after-write race documented above: only the
+  // verification READ repeats here, never the `gh pr edit --remove-reviewer`
+  // itself. A transient throw from ANY verification read — the initial
+  // post-edit read included — consumes the next scheduled delay and re-probes
+  // instead of aborting immediately; the error only propagates if the final
+  // attempt in the window also throws, in which case that last error is what
+  // the caller sees (not the generic still-pending message below, which is
+  // reserved for the case where every read succeeds but the request never
+  // clears).
+  let stillRequested = true;
+  let lastReadError = null;
+  try {
+    stillRequested = await fetchCopilotRequested(args, { env, runChild });
+  } catch (error) {
+    lastReadError = error;
+  }
+  for (let attempt = 0; stillRequested && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
+    await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
+    try {
+      stillRequested = await fetchCopilotRequested(args, { env, runChild });
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      continue;
+    }
+  }
+  if (stillRequested) {
+    if (lastReadError) {
+      throw lastReadError;
+    }
     throw new Error("Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.");
   }
 
