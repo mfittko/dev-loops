@@ -107,7 +107,7 @@ Contract:
 - enforces a round cap (default: 5, configurable via `maxCopilotRounds` in settings); clean round-cap PRs with new commits, resolved threads, and green current GitHub CI automatically re-open for a normal re-request, while `--force-rerequest-review` remains the operator override for other new-commit cases
 - should be paired with a fresh unresolved-thread check after Copilot posts again; requesting review alone does not complete the loop
 - verifies the result through `gh api repos/<owner>/<name>/pulls/<pr>/requested_reviewers`
-- the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the `gh pr edit` request itself is issued exactly once and never re-issued per probe
+- the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the `gh pr edit` request itself is issued exactly once and never re-issued per probe. A verification read that throws (transient gh failure) also consumes a scheduled retry instead of failing immediately; only a throw on the final attempt propagates, as the raw underlying error
 - does **not** rely on `gh pr view --json reviewRequests`, which can be incomplete for Copilot reviewer state
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 
