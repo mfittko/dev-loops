@@ -49,6 +49,12 @@ Optional:
                             composed round cap min(localImplementation.lightMode.
                             maxCopilotRounds ?? 1, refinement.maxCopilotRounds)
                             instead of refinement.maxCopilotRounds alone.
+Verification:
+  After requesting Copilot as a reviewer, the requested-reviewer/review-list
+  read is retried on a fixed backoff (~30s total) before declaring failure,
+  because that read is eventually consistent and can briefly still show stale
+  (empty) state right after a genuinely successful request. The request
+  itself is issued exactly once and never re-issued per probe.
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
@@ -857,13 +863,29 @@ export async function performCopilotReviewRequest(
   let after = await fetchCopilotReviewState(options, runtime);
   let reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
   // Bounded retry against the read-after-write race documented above: only the
-  // verification READ repeats here, never the `gh pr edit` request itself.
+  // verification READ repeats here, never the `gh pr edit` request itself. A
+  // transient throw from the read (rate limit, 5xx, network blip) during this
+  // window consumes its delay and re-probes on the next attempt instead of
+  // aborting immediately; the error only propagates if the final attempt in
+  // the window also throws, in which case that last error is what the caller
+  // sees (not the generic empty-result message below, which is reserved for
+  // the case where every read succeeds but the review never shows up).
+  let lastReadError = null;
   for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
     await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
-    after = await fetchCopilotReviewState(options, runtime);
+    try {
+      after = await fetchCopilotReviewState(options, runtime);
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      continue;
+    }
     reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
   }
   if (!reviewNowObservablyInProgress) {
+    if (lastReadError) {
+      throw lastReadError;
+    }
     throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
   }
   return withConfigWarning({
