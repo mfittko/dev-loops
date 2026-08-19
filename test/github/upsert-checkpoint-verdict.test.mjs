@@ -2308,6 +2308,10 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /findings-json.*own per-angle findings show unresolved findings/);
     assert.match(payload.error, /high/);
+    // Parseable-only refusal: the UNPARSEABLE sentence must be absent, pinning
+    // that the shared scan reports unparseableBlocking only for genuinely
+    // unparseable entries.
+    assert.doesNotMatch(payload.error, /UNPARSEABLE/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -6262,6 +6266,12 @@ test("#1621: a findings_present draft_gate verdict DERIVES the next action, igno
     const body = JSON.parse(postCall.stdinText).body;
     assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
     assert.doesNotMatch(body, /\*\*Next action:\*\* merge/);
+    // requireFanoutEvidence:false (stageConfigRepoRoot(false)) opts this repo
+    // out of gate:full escalation even though the round carries a blocking
+    // (high) severity: no label call fires and gateFullLabelApplied is unset.
+    assert.equal(result.gateFullLabelApplied, undefined);
+    assert.equal(calls.some((c) => c.args[0] === "label" && c.args[1] === "create"), false);
+    assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label")), false);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

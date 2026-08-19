@@ -1538,6 +1538,34 @@ function deriveEffectiveNextAction(verdict, gate) {
   return gate === "draft_gate" ? "stay draft and fix" : "rerun gate";
 }
 
+// Shared per-angle blocking-severity scan over structuredFindings, used by both
+// roundCarriesBlockingSeverity's escalation check and the clean-verdict
+// refusal's structured-findings cross-check. The RESOLVED_DISPOSITIONS skip
+// applies only to parseable findings; an angle.unparseable entry carries no
+// disposition to resolve against and is judged on severity alone. Returns the
+// subset of `blocking` actually observed (in `blocking`'s order, so a caller
+// can render it directly into a message) plus whether any observed hit came
+// from an unparseable finding.
+function scanBlockingFindings(structuredFindings, blocking) {
+  const observed = new Set();
+  let unparseableBlocking = false;
+  for (const angle of structuredFindings) {
+    for (const f of angle.findings) {
+      if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
+      const sev = /** @type {string} */ (normalizeSeverity(f.severity));
+      if (blocking.includes(sev)) observed.add(sev);
+    }
+    for (const u of angle.unparseable ?? []) {
+      const sev = /** @type {string} */ (normalizeSeverity(u.severity));
+      if (blocking.includes(sev)) {
+        observed.add(sev);
+        unparseableBlocking = true;
+      }
+    }
+  }
+  return { blockingObserved: blocking.filter((sev) => observed.has(sev)), unparseableBlocking };
+}
+
 // GATE-EXEC-LIGHT-ESCALATION (#1621): does this round carry a finding at a
 // blocking severity? A `findings_present` verdict is DEFINED as "found issues
 // at blocking severities" (GATE-COMMENT-VERDICT-VALUES), so it always carries
@@ -1551,21 +1579,7 @@ function roundCarriesBlockingSeverity({ verdict, structuredFindings, findingsSev
     return false;
   }
   if (structuredFindings) {
-    for (const angle of structuredFindings) {
-      for (const f of angle.findings) {
-        if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
-        if (blocking.includes(/** @type {string} */ (normalizeSeverity(f.severity)))) return true;
-      }
-      // An unparseable finding carries no disposition to resolve against, so
-      // it is judged on its severity alone — the same representation the
-      // clean-verdict tally uses, so an inline round that surfaces an
-      // unparseable blocking finding escalates gate:full just as it would
-      // block a clean verdict (#1526).
-      for (const u of angle.unparseable ?? []) {
-        if (blocking.includes(/** @type {string} */ (normalizeSeverity(u.severity)))) return true;
-      }
-    }
-    return false;
+    return scanBlockingFindings(structuredFindings, blocking).blockingObserved.length > 0;
   }
   if (findingsSeverityCounts && typeof findingsSeverityCounts === "object") {
     return blocking.some((sev) => (findingsSeverityCounts[sev] ?? 0) > 0);
@@ -1936,31 +1950,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {
-    const observedCounts = Object.fromEntries(SEVERITY_ORDER.map((sev) => [sev, 0]));
-    // Track whether any blocking-severity hit came from an UNPARSEABLE finding,
-    // so the refusal message can name the real cause (#1526): a finding the
-    // normalizer dropped used to pass this cross-check silently; now it is
-    // tallied from the section's `unparseable` list and fails the verdict
-    // exactly as a parseable blocking finding would. An unparseable finding
-    // carries no disposition to resolve against, so it is judged on its
-    // severity alone — a blocking severity fails, any other value (including
-    // none at all) is reported explicitly as unparseable in the rendered
-    // comment rather than blocking the clean verdict.
-    let unparseableBlocking = false;
-    for (const angle of structuredFindings) {
-      for (const f of angle.findings) {
-        if (RESOLVED_DISPOSITIONS.has(f.disposition)) continue;
-        const sev = /** @type {string} */ (normalizeSeverity(f.severity));
-        if (Object.hasOwn(observedCounts, sev)) observedCounts[sev] += 1;
-      }
-      for (const u of angle.unparseable ?? []) {
-        const sev = /** @type {string} */ (normalizeSeverity(u.severity));
-        if (Object.hasOwn(observedCounts, sev)) observedCounts[sev] += 1;
-        if (activeGateConfig.blockCleanOnFindingSeverities.includes(sev)) unparseableBlocking = true;
-      }
-    }
-    const blockingObserved = activeGateConfig.blockCleanOnFindingSeverities.filter(
-      (sev) => (observedCounts[sev] ?? 0) > 0,
+    // An unparseable finding carries no disposition to resolve against, so it
+    // is judged on its severity alone — a blocking severity fails, any other
+    // value (including none at all) is reported explicitly as unparseable in
+    // the rendered comment rather than blocking the clean verdict. The
+    // `unparseableBlocking` flag lets the refusal message name the real cause
+    // (a finding the normalizer dropped used to pass this cross-check
+    // silently; now it fails the verdict exactly as a parseable blocking
+    // finding would).
+    const { blockingObserved, unparseableBlocking } = scanBlockingFindings(
+      structuredFindings,
+      activeGateConfig.blockCleanOnFindingSeverities,
     );
     if (blockingObserved.length > 0) {
       throw new Error(
