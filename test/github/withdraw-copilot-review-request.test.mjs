@@ -259,7 +259,7 @@ describe("withdraw-copilot-review-request", () => {
       return { calls, runChild };
     }
 
-    it("verification succeeds on a later attempt after an empty-then-populated race", async () => {
+    it("verification succeeds on a later attempt after a stale-pending-then-cleared race", async () => {
       const delayCalls = [];
       const delayImpl = async (ms) => {
         delayCalls.push(ms);

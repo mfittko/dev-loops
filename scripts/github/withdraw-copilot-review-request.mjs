@@ -63,7 +63,7 @@ import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "./req
 import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
 
 // The requested-reviewers read that verifies a `gh pr edit --remove-reviewer`
-// request landed is eventually consistent, mirroring the identical race
+// request landed is eventually consistent, mirroring the identical race that
 // request-copilot-review.mjs guards against on its own request path: an
 // immediate read can still see stale (still-requested) state even though the
 // removal already succeeded. Re-read on this fixed backoff before declaring
