@@ -1635,7 +1635,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // immediate and side-effect free.
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   if (Array.isArray(configErrors) && configErrors.length > 0) {
-    throw new Error(`This worktree's config (--repo-root ${JSON.stringify(repoRoot)}) could not be fully loaded/validated; refusing to post a gate verdict: ${JSON.stringify(configErrors)}`);
+    throw new Error(`This worktree's config (repoRoot ${JSON.stringify(repoRoot)}) could not be fully loaded/validated; refusing to post a gate verdict: ${JSON.stringify(configErrors)}`);
   }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
