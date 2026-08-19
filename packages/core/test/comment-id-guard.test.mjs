@@ -42,6 +42,20 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.throws(() => guardCommentBodyNoIssuePrIds("a #1670 b #999", { allowedRefs: ["1670"] }), /#999/);
   });
 
+  test("a CSV-string allowedRefs is comma-split, not character-split", () => {
+    const body = "Deliberate cross-ref to issue #1670, approved.";
+    // Array.from over a bare string would character-split "1670" into
+    // ["1","6","7","0"], silently allowlisting every single-digit ref while
+    // still refusing 1670 itself — the opposite of the caller's intent.
+    assert.equal(guardCommentBodyNoIssuePrIds(body, { allowedRefs: "1670" }), body);
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("cross-refs #1670 and #9000 both allowed", { allowedRefs: "1670, 9000" }),
+      "cross-refs #1670 and #9000 both allowed",
+    );
+    // a single-digit ref is NOT silently allowed as a side effect of the split
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see #1", { allowedRefs: "1670" }), /#1\b/);
+  });
+
   test("does not match #digits inside an HTML numeric character reference", () => {
     assert.deepEqual(extractIssuePrIds("entity-encoded bracket: &#91;checkbox&#93;"), []);
     assert.equal(
@@ -53,6 +67,22 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
       () => guardCommentBodyNoIssuePrIds("&#91;see #123&#93;"),
       /#123/,
     );
+  });
+
+  test("the numeric-character-reference exclusion requires BOTH the leading `&` AND the terminating `;` (well-formed &#<digits>; only)", () => {
+    // Well-formed entity: excluded.
+    assert.deepEqual(extractIssuePrIds("&#91;"), []);
+    // No terminating `;`: not a well-formed entity, still a refused auto-link
+    // candidate — even though it happens to be `&`-preceded.
+    assert.deepEqual(extractIssuePrIds("&#91 no semicolon"), ["91"]);
+    // Bare `#<digits>`, no `&` at all: still refused.
+    assert.deepEqual(extractIssuePrIds("bare #123"), ["123"]);
+    // An `&`-preceded, issue-length digit run with no terminating `;` reads
+    // exactly like a real auto-link candidate that happens to sit after an
+    // ampersand (e.g. a query-string fragment) — the exclusion must not
+    // swallow it just because it starts with `&#`.
+    assert.deepEqual(extractIssuePrIds("A&#123 forms"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("A&#123 forms"), /#123/);
   });
 
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {

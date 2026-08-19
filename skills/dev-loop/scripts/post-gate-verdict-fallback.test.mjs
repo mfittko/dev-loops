@@ -554,6 +554,61 @@ test("runCli refuses to post a rendered body containing a raw #digits id (no id 
   }
 });
 
+test("runCli's id guard does not mistake a well-formed HTML numeric character reference for an issue/PR id, but still refuses a non-semicolon-terminated or bare digit run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-gate-fallback-idguard-entity-"));
+  try {
+    const stub = await writeGhStub(
+      tempDir,
+      [
+        {
+          assertArgIncludes: ["api", "repos/owner/repo/issues/17/comments"],
+          assertStdinIncludes: ["entity-encoded bracket: &#91;checkbox&#93;"],
+          stdout: '{"id":202,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-202"}\n',
+        },
+      ],
+      {},
+    );
+    const stdout = [];
+    const exitCode = await runCli(
+      [
+        "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+        "--verdict", "clean", "--findings-summary", "entity-encoded bracket: &#91;checkbox&#93;", "--next-action", "go",
+      ],
+      { env: stub.env, spawn: spawn, ghCommand: "gh", stdoutSink: stdout, stderrSink: [] },
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(JSON.parse(stdout.join("")).ok, true);
+
+    // Not a well-formed entity (no terminating `;`): still refused.
+    const stubNoSemicolon = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "malformed &#91 reference", "--next-action", "go",
+        ],
+        { env: stubNoSemicolon.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#91/,
+    );
+
+    // A genuine bare id (no `&` at all) is still refused even next to an entity.
+    const stubBareId = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "&#91;see #123&#93;", "--next-action", "go",
+        ],
+        { env: stubBareId.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#123/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("runCli posts a clean rendered body with no id guard leak", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loop-gate-fallback-idguard-clean-"));
   try {
