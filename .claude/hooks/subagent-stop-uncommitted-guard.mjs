@@ -6,8 +6,9 @@
  * uncommitted changes in a worktree are destroyed with no warning — the only data-loss gap in
  * the enforcement audit. `LOCAL-COMMIT-BEFORE-EXIT` existed only as prose; this hook makes it
  * mechanical: when a subagent stops with a dirty worktree under `tmp/worktrees/`, refuse the
- * stop (exit code 2 + stderr JSON naming `LOCAL-COMMIT-BEFORE-EXIT` and up to 50 dirty paths,
- * plus a summary line with the full count when there are more) so the subagent commits before
+ * stop (exit code 2 + stderr JSON naming `LOCAL-COMMIT-BEFORE-EXIT`; a `Dirty paths (N):` header
+ * with the full dirty count, up to 50 listed paths, and — when there are more than 50 — a
+ * trailing `… and X more` line with the remaining count) so the subagent commits before
  * exiting. Post-merge cleanup that force-removes worktrees can no longer destroy uncommitted
  * work silently.
  *

@@ -370,18 +370,22 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
   // turns that into a fail-safe allow — defeating the guard on exactly the worktrees
   // with the most uncommitted work. The hook raises maxBuffer to 10MB; this test
   // creates enough long-named untracked files to push porcelain past 1MB and asserts
-  // the guard still blocks. Using this fixture's long (~245-byte) porcelain lines, that
-  // takes ~4300+ files; real (much shorter) paths need far more to hit the same bound.
-  // Beyond 10MB (~43k+ such long-line paths) the fail-safe allow is the documented ceiling.
+  // the guard still blocks. Each fixture file's porcelain line is the `?? ` status prefix
+  // (3 bytes) + the filename + a newline (1 byte); with the 241-byte filename below that's
+  // 245 bytes/line, so ~4600 files (~1.1MB) clears the 1MB bound while real (much shorter)
+  // paths need far more to hit the same bound. Beyond 10MB (~43k+ such long-line paths) the
+  // fail-safe allow is the documented ceiling.
   const dir = makeWorktree("maxbuffer", false);
   try {
     const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
-    // ~4600 files x ~240-byte porcelain lines ≈ 1.1MB of status output.
-    for (let i = 0; i < 4600; i++) {
+    const fileCount = 4600;
+    for (let i = 0; i < fileCount; i++) {
       fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
     }
-    const porcelainBytes = Buffer.byteLength(spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout, "utf8");
+    const porcelain = spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const porcelainBytes = Buffer.byteLength(porcelain, "utf8");
     assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
+    const dirtyLineCount = porcelain.split("\n").filter((l) => l.trim() !== "").length;
     const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
     assert.ok(stderrJson, "block reason JSON on stderr");
@@ -389,8 +393,11 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
     assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
     // The reason itself stays bounded (the 50-path cap), not merely parseable off stderr —
     // pins the cap end to end rather than relying on runHook's own maxBuffer as an incidental
-    // proxy for it.
-    assert.match(stderrJson.reason, /… and 4550 more/);
+    // proxy for it. The remainder is derived from the actual porcelain line count so a fixture
+    // change (e.g. a different fileCount) cannot silently desync this assertion.
+    const MAX_LISTED_DIRTY_PATHS = 50;
+    const expectedRemainder = dirtyLineCount - MAX_LISTED_DIRTY_PATHS;
+    assert.match(stderrJson.reason, new RegExp(`… and ${expectedRemainder} more`));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
