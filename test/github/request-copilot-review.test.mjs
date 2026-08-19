@@ -35,7 +35,7 @@ const PR_EDIT_ARGS = ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewe
 // worktree cwd, matching the no-cwd spawn tests.
 // Fail-fast default: every non-race test proves it never enters the
 // verification retry window (zero delays consumed). A test that needs the
-// retry window supplies its own recording delayImpl (see the two race tests
+// retry window supplies its own recording delayImpl (see the six race tests
 // below); anything else that starts sleeping here is a regression pushing a
 // case onto the retry path, so throw instead of silently waiting ~30s.
 async function unexpectedDelay(ms) {
@@ -623,11 +623,62 @@ test("request-copilot-review fails closed with the empty-result message when a m
     () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
     (error) => {
       assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
+      assert.deepEqual(error.calls.map((call) => call.args), [
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        PR_EDIT_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+      ]);
       assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
       return true;
     },
   );
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+});
+
+test("request-copilot-review recovers when the INITIAL post-edit read throws and a later read succeeds", async () => {
+  // The initial post-edit read sits inside the retry window: a throw there
+  // consumes the first scheduled delay and re-probes instead of propagating,
+  // so a transient blip immediately after a successful edit self-heals.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const entries = [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    // Initial post-edit read: throws.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      exitCode: 1,
+      stderr: "rate limited (initial read)\n",
+    },
+    // Attempt 1: recovers, review observable.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ];
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl });
+  assert.equal(result.status, "requested");
+  assert.deepEqual(delayCalls, [5000]);
+  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
 });
 
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
