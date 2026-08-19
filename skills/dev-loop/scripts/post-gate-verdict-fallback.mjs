@@ -162,8 +162,10 @@ function collapseWhitespace(value) {
 // which this fallback cannot import — it ships in the plugin without @dev-loops/core). A
 // generated gate verdict body must never carry a raw `#<digits>` token: public comment
 // surfaces auto-link a bare `#<digits>` to that issue/PR, leaking internal cross-references.
-// Fail-closed: refuse to POST rather than strip — no `--allowed-refs` escape on this
-// guard because a gate verdict body is never a place for a deliberate cross-reference.
+// Fail-closed: refuse to POST rather than strip. The full helper offers an
+// allowed-refs escape for deliberate cross-references; this degraded fallback
+// deliberately omits it — an emergency posting path should stay maximally
+// strict, and a body needing a cross-reference can use the full helper.
 // A match is excluded only when it forms a well-formed HTML numeric character
 // reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
 // the entity-encoded form of `[`) — mirroring comment-id-guard.mjs's own

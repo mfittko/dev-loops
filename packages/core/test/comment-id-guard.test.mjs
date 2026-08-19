@@ -67,6 +67,14 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
       () => guardCommentBodyNoIssuePrIds("&#91;see #123&#93;"),
       /#123/,
     );
+    // the SAME digit run as a well-formed entity AND as a bare id in one body:
+    // the entity occurrence is excluded, the bare occurrence still refuses —
+    // exclusion is per-occurrence, never per-id.
+    assert.deepEqual(extractIssuePrIds("&#91; and bare #91 too"), ["91"]);
+    assert.throws(
+      () => guardCommentBodyNoIssuePrIds("&#91; and bare #91 too"),
+      /#91/,
+    );
   });
 
   test("the numeric-character-reference exclusion requires BOTH the leading `&` AND the terminating `;` (well-formed &#<digits>; only)", () => {
@@ -83,6 +91,10 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     // swallow it just because it starts with `&#`.
     assert.deepEqual(extractIssuePrIds("A&#123 forms"), ["123"]);
     assert.throws(() => guardCommentBodyNoIssuePrIds("A&#123 forms"), /#123/);
+    // Third non-entity shape from the docblock: `;`-followed with no leading
+    // `&` — a bare id that happens to precede a semicolon still refuses.
+    assert.deepEqual(extractIssuePrIds("see #456; details follow"), ["456"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see #456; details follow"), /#456/);
   });
 
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
