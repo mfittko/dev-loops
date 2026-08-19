@@ -425,7 +425,9 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
   // The reason is fed back to the stopping subagent as context, so the path
   // enumeration is capped: an unbounded list on a very dirty worktree produces a
   // multi-megabyte reason that consumers truncate or choke on, burying the one
-  // actionable line. The count always reports the full total.
+  // actionable line. The "Dirty paths (N):" header below always carries the full
+  // dirty count; the trailing "… and X more" line (when present) carries the
+  // remaining count past the cap, not the full total.
   const MAX_LISTED_DIRTY_PATHS = 50;
   const listed = dirty.slice(0, MAX_LISTED_DIRTY_PATHS).map((p) => "  " + p);
   if (dirty.length > MAX_LISTED_DIRTY_PATHS) {
