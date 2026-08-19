@@ -120,6 +120,79 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.throws(() => guardCommentBodyNoIssuePrIds("see &#035;321 there"), /#321/);
   });
 
+  test("the HTML5 named entity for the hash character followed by a digit run is treated as a bare id", () => {
+    // &num; is a real HTML5 named entity for the hash code point; GitHub
+    // decodes it, so &num;123 renders as the #123 auto-link.
+    assert.deepEqual(extractIssuePrIds("see &num;123 there"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see &num;123 there"), /#123/);
+    // Case-variants do not decode on GitHub, but the guard over-refuses them
+    // deliberately (fail-closed on a suspicious near-miss).
+    assert.deepEqual(extractIssuePrIds("see &NUM;456 there"), ["456"]);
+    // The named entity with no digit run after it stays inert.
+    assert.deepEqual(extractIssuePrIds("a literal hash: &num; alone"), []);
+    // A different named entity followed by digits does not match.
+    assert.deepEqual(extractIssuePrIds("&nbsp;123 stays"), []);
+    // An allowlisted id is still allowed through the named form.
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("see &num;123 there", { allowedRefs: ["123"] }),
+      "see &num;123 there",
+    );
+  });
+
+  // Decode-aware extraction on the DIGIT side: GitHub decodes entity-encoded
+  // digits too, so an id assembled from entity pieces still renders as a live
+  // auto-link and must refuse. A double-encoded form renders as inert literal
+  // text (the renderer decodes once) and must NOT refuse.
+  test("an id assembled from entity-encoded digits is treated as a bare id", () => {
+    // literal hash + encoded first digit
+    assert.deepEqual(extractIssuePrIds("see #&#49;23 there"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see #&#49;23 there"), /#123/);
+    // encoded hash + mixed literal/encoded digits (hex form included)
+    assert.deepEqual(extractIssuePrIds("see &#35;&#49;2&#x33; there"), ["123"]);
+    // named hash entity + encoded digit
+    assert.deepEqual(extractIssuePrIds("see &num;&#52;2 there"), ["42"]);
+    // cmark-gfm decodes numeric references up to 8 digits (decimal or hex):
+    // maximally padded hash forms still refuse.
+    assert.deepEqual(extractIssuePrIds("see &#00000035;77 there"), ["77"]);
+    assert.deepEqual(extractIssuePrIds("see &#x00000023;88 there"), ["88"]);
+    // allowlist still works through the assembled form
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("see #&#49;23 there", { allowedRefs: ["123"] }),
+      "see #&#49;23 there",
+    );
+  });
+
+  // The entity exclusion applies only to the raw scan: after the renderer's
+  // one decode, an ampersand-wrapped shape in decoded text is plain text —
+  // wrapping an encoded hash-digit assembly in ampersand-and-semicolon must
+  // refuse, not hide (this exact shape escaped both scans once).
+  test("an ampersand-wrapped encoded hash-digit assembly still refuses", () => {
+    assert.deepEqual(extractIssuePrIds("x &&#35;123; y"), ["123"]);
+    assert.deepEqual(extractIssuePrIds("x &&num;123; y"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("x &&#35;123; y"), /#123/);
+  });
+
+  // Exclusion bound parity with cmark's 8-digit entity parser: a 9-digit
+  // wrapped run is not decoded by the renderer, renders literally, and must
+  // not be excluded as a spent entity. An 8-digit reference whose code point
+  // cannot decode becomes the replacement character (as on GitHub) and stays
+  // inert.
+  test("a 9-digit ampersand-wrapped run refuses; an undecodable 8-digit reference stays inert", () => {
+    assert.deepEqual(extractIssuePrIds("see &#123456789; there"), ["123456789"]);
+    assert.deepEqual(extractIssuePrIds("see &#99999999; there"), []);
+  });
+
+  test("the single-pass decode never manufactures a refusal from a double-encoded form", () => {
+    // Both forms render as inert literal entity text (the renderer decodes
+    // once). The named double-encoded form extracts nothing. The numeric
+    // double-encoded form was already over-refused BEFORE the decode pass —
+    // the raw scan sees the inner hash-digit run in a non-entity context
+    // (preceded by the semicolon of the outer entity) — and stays refused:
+    // pre-existing fail-closed behavior, not a decode regression.
+    assert.deepEqual(extractIssuePrIds("see &amp;num;123 there"), []);
+    assert.deepEqual(extractIssuePrIds("see &amp;#35;123 there"), ["35"]);
+  });
+
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
     // Representative of renderGateReviewCommentBody output for a clean gate:
     // gate name, head SHA (hex), verdict, severity/angle labels — never a #digit.

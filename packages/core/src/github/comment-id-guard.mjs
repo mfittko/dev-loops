@@ -25,9 +25,21 @@
  * reference (`&#<digits>;`, e.g. `&#91;` for `[`) — each such OCCURRENCE is
  * skipped; the same digit run appearing elsewhere as a bare token still
  * refuses — this is the ONLY sanctioned way a generated comment body may
- * carry a `#<digits>` token. An entity that itself decodes to the hash
- * character followed by a digit run is treated as a bare id (it renders as
- * an auto-link). Keep the allowlist small and deliberate.
+ * carry a `#<digits>` token. Extraction is decode-aware on BOTH sides of the
+ * token: the body is also scanned after a single left-to-right decode of the
+ * entity forms GitHub's renderer resolves (numeric character references,
+ * zero-padding and hex included at cmark-gfm's 8-digit bound, plus the named
+ * hash entity),
+ * so a hash or any digit of the id smuggled as an entity — `&#35;123`,
+ * `&num;123`, `#&#49;23`, any mix — still refuses. The decode is single-pass
+ * like the renderer's: a double-encoded form (`&amp;#35;123`) renders as
+ * inert literal text and the decode pass never manufactures a refusal of its
+ * INNER id — though the raw scan still refuses the outer digit run of the
+ * numeric form as a pre-existing fail-closed near-miss (the outer entity's
+ * semicolon sits before the hash, so the well-formed-entity exclusion does
+ * not apply). Case-variants of the named hash entity are decoded too even
+ * where GitHub would not (`&NUM;`): deliberate over-refusal, keeping the
+ * guard fail-closed. Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
@@ -41,31 +53,62 @@
 const ISSUE_PR_ID_RE = /#(\d{1,9})/g;
 
 function isNumericCharacterReference(body, match) {
-  return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+  // The digit bound mirrors cmark-gfm's 8-digit entity parser: a 9-digit
+  // ampersand-wrapped run is NOT decoded by the renderer, so it renders
+  // literally and must not be excluded as a spent entity.
+  return match[1].length <= 8
+    && body[match.index - 1] === "&"
+    && body[match.index + match[0].length] === ";";
 }
 
-// An entity that DECODES to the hash character (`&#35;` decimal or `&#x23;`
-// hex, case-insensitive, zero-padding accepted — CommonMark decodes padded
-// forms too), immediately followed by an issue-length digit run, renders as a
-// bare `#<digits>` auto-link on GitHub even though no literal hash-digit token
-// exists in the raw body. Treated as a bare-id occurrence so the encoded form
-// cannot smuggle a reference past the guard.
-const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/gi;
+// Entity forms the renderer resolves that can participate in assembling a
+// rendered `#<digits>` auto-link: numeric character references (any code
+// point — the hash AND the digits themselves are smuggleable) plus the named
+// hash entity. The digit bounds match cmark-gfm's numeric-entity parser
+// (up to 8 digits, decimal or hex) so nothing GitHub decodes escapes the
+// pass. Single non-rescanning replace = one decode, like the renderer, so a
+// double-encoded form's output is never re-read as a fresh entity.
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,8}|x[0-9a-f]{1,8})|num);/gi;
+
+function decodeRenderedText(body) {
+  return body.replace(DECODABLE_ENTITY_RE, (entity) => {
+    const inner = entity.slice(1, -1).toLowerCase();
+    if (inner === "num") return "#";
+    const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      // cmark substitutes the replacement character for a reference it cannot
+      // decode; mirroring that keeps decodable-shaped text from lingering in
+      // the decoded scan, where it could masquerade as a spent entity.
+      return "�";
+    }
+  });
+}
+
+function collectBareIds(text, found, { excludeEntities }) {
+  for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
+    if (excludeEntities && isNumericCharacterReference(text, m)) continue;
+    found.add(m[1]);
+  }
+}
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
- * Returns [] for non-string input (and for a body with no `#<digits>`).
+ * Scans the body as written AND after a single renderer-like entity decode,
+ * so an id assembled from entity-encoded pieces is still found. The entity
+ * exclusion applies only to the RAW scan: in decoded text the renderer's one
+ * decode is already spent, so an ampersand-then-digits-then-semicolon shape
+ * there is plain text a wrapper cannot re-protect (an ampersand-wrapped
+ * encoded hash plus digits must refuse, not hide). Returns [] for non-string
+ * input (and for a body with no `#<digits>`).
  */
 export function extractIssuePrIds(body) {
   if (typeof body !== "string" || body.length === 0) return [];
   const found = new Set();
-  for (const m of body.matchAll(ISSUE_PR_ID_RE)) {
-    if (isNumericCharacterReference(body, m)) continue;
-    found.add(m[1]);
-  }
-  for (const m of body.matchAll(ENCODED_HASH_ID_RE)) {
-    found.add(m[1]);
-  }
+  collectBareIds(body, found, { excludeEntities: true });
+  const decoded = decodeRenderedText(body);
+  if (decoded !== body) collectBareIds(decoded, found, { excludeEntities: false });
   return [...found];
 }
 
