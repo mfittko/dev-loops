@@ -441,31 +441,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   }
   // The consolidator's computed verdict (consolidate-fanin.mjs's
   // `overallVerdict`) threads through `--ledger-out`'s `{overallVerdict,
-  // findings}` wrapper into here, so the durable ledger records the verdict
-  // the fan-in actually computed for this head/gate — not whatever a caller
-  // hand-passed to `--verdict`. Optional and additive: a bare-array input
-  // (legacy `--findings-file`, hand-authored `--findings`) leaves it
-  // undefined, so the ledger never gains an `overallVerdict` key — but the
-  // recorded `verdict` itself is still the canonical (normalized) caller
-  // verdict on this path, same as the wrapper path below, not a byte-identical
-  // echo of a non-canonical raw `--verdict` (e.g. " Clean "). Validated in the
-  // wrapper branch below (not by the caller-verdict guard immediately
-  // following this comment) so a malformed wrapper cannot silently record an
-  // invalid verdict as the consolidator's truth (#1616).
+  // findings}` wrapper into here, recording the verdict fan-in actually
+  // computed rather than whatever a caller hand-passed to `--verdict`. A
+  // bare-array input (legacy `--findings-file`, hand-authored `--findings`)
+  // has no wrapper, so `overallVerdict` stays undefined and the ledger gains
+  // no `overallVerdict` key — but the persisted `verdict` below is still the
+  // canonical (normalized) caller verdict on both paths (#1616).
 
-  // Validate the caller's own --verdict domain (same message the CLI parse
-  // path throws for --verdict) BEFORE any wrapper comparison, so the guard
-  // covers BOTH input paths — a bare-array input (no wrapper) never persists a
-  // null/undefined/non-string/out-of-domain verdict un-normalized into the
-  // ledger, and a wrapper input still compares against an already-validated
-  // caller verdict rather than misattributing a domain failure as a
-  // contradiction. Normalizing here also makes the wrapper comparison below
-  // symmetric for every caller — a direct programmatic caller passes a
-  // non-canonical verdict by the same normalizeVerdict path the CLI parse
-  // normally canonicalizes it through, so a canonical-value wrapper never
-  // false-rejects a differently-cased/whitespaced but semantically equal
-  // caller verdict. typeof is checked before normalizeVerdict runs because
-  // normalizeVerdict coerces via String(), which would otherwise let a
+  // Validate the caller's own --verdict domain up front, before any wrapper
+  // comparison: a bare-array input never persists a null/undefined/
+  // non-string/out-of-domain verdict un-normalized, and a wrapper input
+  // compares against an already-normalized caller verdict so a domain failure
+  // is never misattributed as a contradiction. typeof is checked before
+  // normalizeVerdict, which coerces via String() and would otherwise let a
   // non-string (e.g. an array) silently pass as its stringified form.
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
   if (!callerVerdict) {
@@ -543,10 +531,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
-  // The consolidator's computed verdict, threaded from `--ledger-out`'s
-  // wrapper. Optional and additive: when absent (a bare-array input or an
-  // older producer) the ledger writes byte-identically to before, so inline
-  // and fallback paths are unaffected (#1616 AC: absent ledger unchanged).
+  // `overallVerdict` is optional and additive: absent on a bare-array input
+  // (no wrapper) or an older producer, so the ledger gains no `overallVerdict`
+  // key — but `verdict` above is always the canonical, normalized caller
+  // value regardless (#1616).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
   }

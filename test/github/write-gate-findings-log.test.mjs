@@ -1639,7 +1639,7 @@ test("writeGateFindingsLog rejects an invalid --verdict on a bare-array input (n
 // does) leaves this half unasserted — a regression that dropped the hoisted
 // normalization while keeping the hoisted rejection would still pass every
 // other test in this suite.
-test("#1641: writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a bare-array input (no wrapper)", async () => {
+test("writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a bare-array input (no wrapper)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bare-noncanonical-"));
   try {
     const result = await writeGateFindingsLog({
@@ -1664,7 +1664,7 @@ test("#1641: writeGateFindingsLog canonicalizes a non-canonical caller --verdict
 // a programmatic caller may reuse one options object across calls. A snapshot
 // comparison catches an in-place mutant (e.g. options.verdict = callerVerdict)
 // that would otherwise pass every other test in this suite unnoticed.
-test("#1641: writeGateFindingsLog does not mutate the caller-supplied options object", async () => {
+test("writeGateFindingsLog does not mutate the caller-supplied options object", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mutate-"));
   try {
     const options = {
