@@ -659,6 +659,46 @@ test("runCli's id guard does not mistake a well-formed HTML numeric character re
       ),
       /#123/,
     );
+
+    // Over-refusal parity with the shared copy: a non-decoding case-variant of
+    // the named form is refused deliberately (fail-closed near-miss).
+    const stubNamedCaseVariant = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "see &NUM;456 there", "--next-action", "go",
+        ],
+        { env: stubNamedCaseVariant.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#456/,
+    );
+
+    // Non-match parity with the shared copy: the named entity with no digit
+    // run stays inert, and a different named entity followed by digits does
+    // not match — both bodies must POST successfully.
+    for (const inertSummary of ["a literal hash: &num; alone", "&nbsp;123 stays"]) {
+      const stubInert = await writeGhStub(
+        tempDir,
+        [
+          {
+            assertArgIncludes: ["api", "repos/owner/repo/issues/17/comments"],
+            stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-301"}\n',
+          },
+        ],
+        {},
+      );
+      const inertStdout = [];
+      const inertExit = await runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", inertSummary, "--next-action", "go",
+        ],
+        { env: stubInert.env, spawn: spawn, ghCommand: "gh", stdoutSink: inertStdout, stderrSink: [] },
+      );
+      assert.equal(inertExit, 0, inertSummary);
+      assert.equal(JSON.parse(inertStdout.join("")).ok, true, inertSummary);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
