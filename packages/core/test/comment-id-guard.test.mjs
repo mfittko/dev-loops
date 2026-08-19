@@ -42,6 +42,19 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.throws(() => guardCommentBodyNoIssuePrIds("a #1670 b #999", { allowedRefs: ["1670"] }), /#999/);
   });
 
+  test("does not match #digits inside an HTML numeric character reference", () => {
+    assert.deepEqual(extractIssuePrIds("entity-encoded bracket: &#91;checkbox&#93;"), []);
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("summary: &#91;x&#93; done", { ref: "inline finding" }),
+      "summary: &#91;x&#93; done",
+    );
+    // a genuine bare id right next to an entity is still refused
+    assert.throws(
+      () => guardCommentBodyNoIssuePrIds("&#91;see #123&#93;"),
+      /#123/,
+    );
+  });
+
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
     // Representative of renderGateReviewCommentBody output for a clean gate:
     // gate name, head SHA (hex), verdict, severity/angle labels — never a #digit.

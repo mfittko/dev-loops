@@ -667,12 +667,12 @@ function parseReviewMutationResponse(payload) {
  * comment per locatable finding. GitHub 422s a COMMENT-event review with an
  * empty body, so the caller must always pass a rendered body.
  */
-export async function createGateReview({ repo, pr, headSha, body, comments }, { env, ghCommand, runChild = defaultRunChild }) {
-  // ISSUE/PR-ID GUARD (#1731): refuse a verdict body or inline finding comment
+export async function createGateReview({ repo, pr, headSha, body, comments, allowedRefs }, { env, ghCommand, runChild = defaultRunChild }) {
+  // ISSUE/PR-ID GUARD: refuse a verdict body or inline finding comment
   // that emits a raw issue/PR id (fail-closed) unless explicitly allowlisted.
-  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body" });
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body", allowedRefs });
   for (const comment of comments ?? []) {
-    guardCommentBodyNoIssuePrIds(comment?.body, { ref: "gate review inline finding comment" });
+    guardCommentBodyNoIssuePrIds(comment?.body, { ref: "gate review inline finding comment", allowedRefs });
   }
   const payload = { commit_id: headSha, event: "COMMENT", body, comments };
   const result = await runChild(
@@ -691,9 +691,9 @@ export async function createGateReview({ repo, pr, headSha, body, comments }, { 
  * already-submitted review — which is exactly why the caller body-files every
  * still-unposted finding on the update path.
  */
-export async function updateGateReview({ repo, pr, reviewId, body }, { env, ghCommand, runChild = defaultRunChild }) {
-  // ISSUE/PR-ID GUARD (#1731) — see createGateReview.
-  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body" });
+export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }, { env, ghCommand, runChild = defaultRunChild }) {
+  // ISSUE/PR-ID GUARD — see createGateReview.
+  guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body", allowedRefs });
   const result = await runChild(
     ghCommand,
     ["api", "-X", "PUT", `repos/${repo}/pulls/${pr}/reviews/${reviewId}`, "--input", "-"],

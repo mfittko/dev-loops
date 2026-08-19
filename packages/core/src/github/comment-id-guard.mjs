@@ -27,7 +27,10 @@
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
 // 1..9 digits to avoid absurd ids while covering the full GitHub id space.
-const ISSUE_PR_ID_RE = /#(\d{1,9})/g;
+// Excludes a `#<digits>` preceded by `&`, since that's a numeric character
+// reference (e.g. `&#91;`, the entity-encoded form of `[`) rather than an
+// issue/PR auto-link.
+const ISSUE_PR_ID_RE = /(?<!&)#(\d{1,9})/g;
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).

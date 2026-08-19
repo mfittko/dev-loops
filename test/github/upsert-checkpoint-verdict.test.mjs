@@ -6766,3 +6766,120 @@ test("#1731: upsertCheckpointVerdict refuses a verdict body containing a raw iss
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("parseUpsertCheckpointVerdictCliArgs parses --allowed-refs csv", () => {
+  const parsed = parseUpsertCheckpointVerdictCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "17",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234000000000000000000000000000000000",
+    "--verdict", "clean",
+    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+    "--findings-summary", "no issues found",
+    "--next-action", "mark ready for review",
+    "--inline-reason", "tiny docs change",
+    "--allowed-refs", "1670, 9000",
+  ]);
+  assert.deepEqual(parsed.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseUpsertCheckpointVerdictCliArgs rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--allowed-refs", "1670,abc",
+    ]),
+    /positive integers/,
+  );
+});
+
+test("upsertCheckpointVerdict posts a verdict body whose findings summary carries a deliberate cross-reference id via allowedRefs, while an unallowlisted id in the same body still refuses", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-verdict-allowed-refs-"));
+  try {
+    const { runChild } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["deliberate cross-ref to issue #1670"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+      findingsSummary: "deliberate cross-ref to issue #1670",
+      nextAction: "Mark ready for review",
+      allowedRefs: ["1670"],
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+    assert.equal(result.ok, true);
+
+    const { runChild: runChildBlocked } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ], { repeatLastOnOverflow: true });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: "abc1234000000000000000000000000000000000",
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+        findingsSummary: "allowlisted #1670 but also unallowlisted #999",
+        nextAction: "Mark ready for review",
+        allowedRefs: ["1670"],
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChildBlocked, repoRoot: fanoutDisabledRepoRoot }),
+      /#999/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict posts a --findings-json finding whose summary carries a markdown bracket (entity-encoded by the structured render's sanitizer) without the id guard mistaking the numeric character reference for an issue/PR id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-entity-bracket-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "rename the [id] route segment to [slug]" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["&#91;id] route segment to &#91;slug]"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix before merge", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
