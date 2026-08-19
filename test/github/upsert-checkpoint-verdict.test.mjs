@@ -338,6 +338,36 @@ test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed fr
   assert.equal(missingFieldInput.postConvergenceReviewSuppressed, false);
 });
 
+// The poster is the artifact that WRITES the verdict; like its sibling
+// severity consumers (consolidate-fanin, close-gate-findings,
+// detect-checkpoint-evidence) it must fail closed on a config that failed
+// schema validation instead of resolving gate config from the raw merged
+// object. The refusal happens before any gh read, so no stub is needed.
+test("upsert refuses to post when the worktree config failed schema validation", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-invalid-config-"));
+  try {
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverity:\n      - high\n",
+      "utf8",
+    );
+    const result = await runNodeHelper(scriptPath, [
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-summary", "no issues found",
+      "--next-action", "n/a",
+      "--inline-reason", "config refusal test",
+    ], { cwd: tempDir, env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }) });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /could not be fully loaded\/validated; refusing to post a gate verdict/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([]),
@@ -5261,6 +5291,8 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
     // lightMode disabled so the lazy light-facts fetch does not fire (no fetch
     // needed to prove the marker is evaluated); requireFanoutEvidence on so the
     // pre_approval_gate candidate marker IS evaluated by enforcePostTimeFanoutMode.
+    // maxFiles/maxLines are schema-required on a present lightMode object, and
+    // the poster now refuses outright on a schema-invalid config.
     await writeFile(path.join(tempDir, ".devloops"), [
       "version: 1",
       "gates:",
@@ -5268,6 +5300,8 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
       "localImplementation:",
       "  lightMode:",
       "    enabled: false",
+      "    maxFiles: 5",
+      "    maxLines: 200",
       "",
     ].join("\n"), "utf8");
     const env = await writeGhStub(tempDir, [
