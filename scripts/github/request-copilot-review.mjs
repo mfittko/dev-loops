@@ -860,17 +860,23 @@ export async function performCopilotReviewRequest(
   if (requestResult.status === "already-requested") {
     return withConfigWarning(requestResult);
   }
-  let after = await fetchCopilotReviewState(options, runtime);
-  let reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
   // Bounded retry against the read-after-write race documented above: only the
   // verification READ repeats here, never the `gh pr edit` request itself. A
-  // transient throw from the read (rate limit, 5xx, network blip) during this
-  // window consumes its delay and re-probes on the next attempt instead of
+  // transient throw from ANY verification read — the initial post-edit read
+  // included — consumes the next scheduled delay and re-probes instead of
   // aborting immediately; the error only propagates if the final attempt in
   // the window also throws, in which case that last error is what the caller
   // sees (not the generic empty-result message below, which is reserved for
   // the case where every read succeeds but the review never shows up).
+  let after = null;
+  let reviewNowObservablyInProgress = false;
   let lastReadError = null;
+  try {
+    after = await fetchCopilotReviewState(options, runtime);
+    reviewNowObservablyInProgress = isReviewNowObservablyInProgress(before, after);
+  } catch (error) {
+    lastReadError = error;
+  }
   for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
     await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
     try {

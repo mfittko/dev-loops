@@ -582,6 +582,54 @@ test("request-copilot-review propagates the final attempt's error when every bou
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
 });
 
+test("request-copilot-review fails closed with the empty-result message when a mid-window throw recovers into empty reads", async () => {
+  // Mixed window: a non-final attempt throws, later attempts succeed but stay
+  // empty. The recovery clears the recorded read error, so exhaustion yields
+  // the generic empty-result message, never the stale mid-window error.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const emptyVerificationPair = [
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      stdout: '{"users":[],"teams":[]}\n',
+    },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+      stdout: '{"reviews":[]}\n',
+    },
+  ];
+  const entries = [
+    ...emptyVerificationPair,
+    {
+      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      stdout: "https://github.com/owner/repo/pull/17\n",
+    },
+    // Initial post-edit read: empty.
+    ...emptyVerificationPair,
+    // Attempt 1: throws mid-window.
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+      exitCode: 1,
+      stderr: "rate limited (attempt 1)\n",
+    },
+    // Attempts 2 and 3: recover but stay empty.
+    ...emptyVerificationPair,
+    ...emptyVerificationPair,
+  ];
+
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
+    (error) => {
+      assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
+      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      return true;
+    },
+  );
+  assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+});
+
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
   const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
