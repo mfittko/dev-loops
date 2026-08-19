@@ -113,6 +113,11 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.deepEqual(extractIssuePrIds("literal hash: &#35; alone"), []);
     // an unrelated entity whose code STARTS with the hash code point does not match
     assert.deepEqual(extractIssuePrIds("&#3512; is one character"), []);
+    // zero-padded forms decode identically and are refused too
+    assert.deepEqual(extractIssuePrIds("see &#035;321 there"), ["321"]);
+    assert.deepEqual(extractIssuePrIds("see &#0035;654 there"), ["654"]);
+    assert.deepEqual(extractIssuePrIds("see &#x0023;987 there"), ["987"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see &#035;321 there"), /#321/);
   });
 
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {

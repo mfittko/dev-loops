@@ -173,7 +173,7 @@ function collapseWhitespace(value) {
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
 // An entity decoding to the hash character followed by a digit run renders as
 // a bare auto-link; treated as a bare-id occurrence (mirrors the shared copy).
-const ENCODED_HASH_ID_RE = /&#(?:35|x23);(\d{1,9})/giu;
+const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/giu;
 function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }

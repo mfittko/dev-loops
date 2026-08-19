@@ -45,11 +45,12 @@ function isNumericCharacterReference(body, match) {
 }
 
 // An entity that DECODES to the hash character (`&#35;` decimal or `&#x23;`
-// hex, case-insensitive), immediately followed by an issue-length digit run,
-// renders as a bare `#<digits>` auto-link on GitHub even though no literal
-// hash-digit token exists in the raw body. Treated as a bare-id occurrence so
-// the encoded form cannot smuggle a reference past the guard.
-const ENCODED_HASH_ID_RE = /&#(?:35|x23);(\d{1,9})/gi;
+// hex, case-insensitive, zero-padding accepted — CommonMark decodes padded
+// forms too), immediately followed by an issue-length digit run, renders as a
+// bare `#<digits>` auto-link on GitHub even though no literal hash-digit token
+// exists in the raw body. Treated as a bare-id occurrence so the encoded form
+// cannot smuggle a reference past the guard.
+const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/gi;
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
