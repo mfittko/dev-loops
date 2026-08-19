@@ -120,6 +120,25 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.throws(() => guardCommentBodyNoIssuePrIds("see &#035;321 there"), /#321/);
   });
 
+  test("the HTML5 named entity for the hash character followed by a digit run is treated as a bare id", () => {
+    // &num; is a real HTML5 named entity for the hash code point; GitHub
+    // decodes it, so &num;123 renders as the #123 auto-link.
+    assert.deepEqual(extractIssuePrIds("see &num;123 there"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see &num;123 there"), /#123/);
+    // Case-variants do not decode on GitHub, but the guard over-refuses them
+    // deliberately (fail-closed on a suspicious near-miss).
+    assert.deepEqual(extractIssuePrIds("see &NUM;456 there"), ["456"]);
+    // The named entity with no digit run after it stays inert.
+    assert.deepEqual(extractIssuePrIds("a literal hash: &num; alone"), []);
+    // A different named entity followed by digits does not match.
+    assert.deepEqual(extractIssuePrIds("&nbsp;123 stays"), []);
+    // An allowlisted id is still allowed through the named form.
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("see &num;123 there", { allowedRefs: ["123"] }),
+      "see &num;123 there",
+    );
+  });
+
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
     // Representative of renderGateReviewCommentBody output for a clean gate:
     // gate name, head SHA (hex), verdict, severity/angle labels — never a #digit.

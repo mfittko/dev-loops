@@ -171,9 +171,11 @@ function collapseWhitespace(value) {
 // the entity-encoded form of `[`) — mirroring comment-id-guard.mjs's own
 // entity exclusion so the two copies stay behaviorally identical.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
-// An entity decoding to the hash character followed by a digit run renders as
-// a bare auto-link; treated as a bare-id occurrence (mirrors the shared copy).
-const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/giu;
+// An entity decoding to the hash character (numeric forms, or the HTML5 named
+// entity form) followed by a digit run renders as a bare auto-link; treated
+// as a bare-id occurrence (mirrors the shared copy, including its deliberate
+// case-insensitive over-refusal of non-decoding variants of the named form).
+const ENCODED_HASH_ID_RE = /&(?:#(?:0*35|x0*23)|num);(\d{1,9})/giu;
 function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }

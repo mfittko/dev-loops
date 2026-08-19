@@ -26,8 +26,9 @@
  * skipped; the same digit run appearing elsewhere as a bare token still
  * refuses — this is the ONLY sanctioned way a generated comment body may
  * carry a `#<digits>` token. An entity that itself decodes to the hash
- * character followed by a digit run is treated as a bare id (it renders as
- * an auto-link). Keep the allowlist small and deliberate.
+ * character — numeric (`&#35;`/`&#x23;`, zero-padded variants included) or
+ * the named `&num;` — followed by a digit run is treated as a bare id (it
+ * renders as an auto-link). Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
@@ -44,13 +45,17 @@ function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }
 
-// An entity that DECODES to the hash character (`&#35;` decimal or `&#x23;`
-// hex, case-insensitive, zero-padding accepted — CommonMark decodes padded
-// forms too), immediately followed by an issue-length digit run, renders as a
-// bare `#<digits>` auto-link on GitHub even though no literal hash-digit token
+// An entity that DECODES to the hash character (`&#35;` decimal, `&#x23;`
+// hex — case-insensitive, zero-padding accepted, CommonMark decodes padded
+// forms too — or the HTML5 named entity `&num;`, which GitHub also decodes),
+// immediately followed by an issue-length digit run, renders as a bare
+// `#<digits>` auto-link on GitHub even though no literal hash-digit token
 // exists in the raw body. Treated as a bare-id occurrence so the encoded form
-// cannot smuggle a reference past the guard.
-const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/gi;
+// cannot smuggle a reference past the guard. The `i` flag makes the named
+// form match case-variants like `&NUM;` too; only lowercase `&num;` actually
+// decodes, so that is deliberate over-refusal on a suspicious near-miss,
+// keeping the guard fail-closed.
+const ENCODED_HASH_ID_RE = /&(?:#(?:0*35|x0*23)|num);(\d{1,9})/gi;
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).

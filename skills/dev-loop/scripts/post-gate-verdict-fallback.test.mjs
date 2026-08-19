@@ -618,6 +618,47 @@ test("runCli's id guard does not mistake a well-formed HTML numeric character re
       ),
       /#123/,
     );
+
+    // Semicolon with no leading `&` is not a well-formed entity: still refused.
+    const stubNoAmpersand = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "malformed #91; reference", "--next-action", "go",
+        ],
+        { env: stubNoAmpersand.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#91/,
+    );
+
+    // The entity exclusion is per-OCCURRENCE: the same digit run well-formed
+    // in one place and bare in another still refuses.
+    const stubPerOccurrence = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "&#91;ok&#93; but bare #91 too", "--next-action", "go",
+        ],
+        { env: stubPerOccurrence.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#91/,
+    );
+
+    // The HTML5 named entity for the hash character followed by digits decodes
+    // to a bare auto-link: refused (mirrors the shared guard copy).
+    const stubNamedEntity = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "see &num;123 there", "--next-action", "go",
+        ],
+        { env: stubNamedEntity.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#123/,
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
