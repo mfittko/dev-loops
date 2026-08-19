@@ -674,6 +674,20 @@ test("runCli's id guard does not mistake a well-formed HTML numeric character re
       /#456/,
     );
 
+    // Decoded-scan exclusion parity with the shared copy: wrapping an encoded
+    // hash-digit assembly in ampersand-and-semicolon must refuse, not hide.
+    const stubWrappedAssembly = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "x &&#35;123; y", "--next-action", "go",
+        ],
+        { env: stubWrappedAssembly.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#123/,
+    );
+
     // Decode-aware digit-side parity with the shared copy: an id assembled
     // from entity-encoded digits still refuses.
     const stubEncodedDigit = await writeGhStub(tempDir, [], {});

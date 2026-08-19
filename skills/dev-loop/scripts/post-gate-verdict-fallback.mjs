@@ -168,12 +168,15 @@ function collapseWhitespace(value) {
 // strict, and a body needing a cross-reference can use the full helper.
 // A match is excluded only when it forms a well-formed HTML numeric character
 // reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
-// the entity-encoded form of `[`). Extraction mirrors the shared copy's
-// decode-aware behavior: the body is also scanned after a single
-// renderer-like entity decode (numeric references at cmark-gfm's 8-digit
-// bound, plus the named hash entity; named case-variants decoded as
-// deliberate over-refusal), so a hash or digit smuggled as an entity still
-// refuses, while a double-encoded form's output is never re-read.
+// the entity-encoded form of `[`), bounded at cmark-gfm's 8 digits (a longer
+// wrapped run is not decoded, renders literally, and must refuse). Extraction
+// mirrors the shared copy's decode-aware behavior: the body is also scanned
+// after a single renderer-like entity decode (numeric references at the same
+// 8-digit bound, plus the named hash entity; undecodable references become
+// the replacement character as on GitHub; named case-variants decoded as
+// deliberate over-refusal). The entity exclusion applies only to the raw
+// scan — in decoded text the renderer's one decode is spent, so an
+// ampersand-wrapped assembled id refuses rather than hides.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
 const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,8}|x[0-9a-f]{1,8})|num);/giu;
 function decodeRenderedText(body) {
@@ -184,25 +187,27 @@ function decodeRenderedText(body) {
     try {
       return String.fromCodePoint(code);
     } catch {
-      return entity;
+      return "�";
     }
   });
 }
 function isNumericCharacterReference(body, match) {
-  return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+  return match[1].length <= 8
+    && body[match.index - 1] === "&"
+    && body[match.index + match[0].length] === ";";
 }
-function collectBareIds(text, found) {
+function collectBareIds(text, found, { excludeEntities }) {
   for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
-    if (isNumericCharacterReference(text, m)) continue;
+    if (excludeEntities && isNumericCharacterReference(text, m)) continue;
     found.push(m[1]);
   }
 }
 function guardFallbackBodyNoIssuePrIds(body, ctx) {
   if (typeof body !== "string") return body;
   const found = [];
-  collectBareIds(String(body), found);
+  collectBareIds(String(body), found, { excludeEntities: true });
   const decoded = decodeRenderedText(String(body));
-  if (decoded !== String(body)) collectBareIds(decoded, found);
+  if (decoded !== String(body)) collectBareIds(decoded, found, { excludeEntities: false });
   if (found.length > 0) {
     const unique = [...new Set(found)].join(", #");
     throw new Error(

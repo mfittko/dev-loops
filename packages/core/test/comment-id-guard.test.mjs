@@ -162,6 +162,26 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     );
   });
 
+  // The entity exclusion applies only to the raw scan: after the renderer's
+  // one decode, an ampersand-wrapped shape in decoded text is plain text —
+  // wrapping an encoded hash-digit assembly in ampersand-and-semicolon must
+  // refuse, not hide (this exact shape escaped both scans once).
+  test("an ampersand-wrapped encoded hash-digit assembly still refuses", () => {
+    assert.deepEqual(extractIssuePrIds("x &&#35;123; y"), ["123"]);
+    assert.deepEqual(extractIssuePrIds("x &&num;123; y"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("x &&#35;123; y"), /#123/);
+  });
+
+  // Exclusion bound parity with cmark's 8-digit entity parser: a 9-digit
+  // wrapped run is not decoded by the renderer, renders literally, and must
+  // not be excluded as a spent entity. An 8-digit reference whose code point
+  // cannot decode becomes the replacement character (as on GitHub) and stays
+  // inert.
+  test("a 9-digit ampersand-wrapped run refuses; an undecodable 8-digit reference stays inert", () => {
+    assert.deepEqual(extractIssuePrIds("see &#123456789; there"), ["123456789"]);
+    assert.deepEqual(extractIssuePrIds("see &#99999999; there"), []);
+  });
+
   test("the single-pass decode never manufactures a refusal from a double-encoded form", () => {
     // Both forms render as inert literal entity text (the renderer decodes
     // once). The named double-encoded form extracts nothing. The numeric

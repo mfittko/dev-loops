@@ -53,7 +53,12 @@
 const ISSUE_PR_ID_RE = /#(\d{1,9})/g;
 
 function isNumericCharacterReference(body, match) {
-  return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+  // The digit bound mirrors cmark-gfm's 8-digit entity parser: a 9-digit
+  // ampersand-wrapped run is NOT decoded by the renderer, so it renders
+  // literally and must not be excluded as a spent entity.
+  return match[1].length <= 8
+    && body[match.index - 1] === "&"
+    && body[match.index + match[0].length] === ";";
 }
 
 // Entity forms the renderer resolves that can participate in assembling a
@@ -73,14 +78,17 @@ function decodeRenderedText(body) {
     try {
       return String.fromCodePoint(code);
     } catch {
-      return entity;
+      // cmark substitutes the replacement character for a reference it cannot
+      // decode; mirroring that keeps decodable-shaped text from lingering in
+      // the decoded scan, where it could masquerade as a spent entity.
+      return "�";
     }
   });
 }
 
-function collectBareIds(text, found) {
+function collectBareIds(text, found, { excludeEntities }) {
   for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
-    if (isNumericCharacterReference(text, m)) continue;
+    if (excludeEntities && isNumericCharacterReference(text, m)) continue;
     found.add(m[1]);
   }
 }
@@ -88,15 +96,19 @@ function collectBareIds(text, found) {
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
  * Scans the body as written AND after a single renderer-like entity decode,
- * so an id assembled from entity-encoded pieces is still found. Returns []
- * for non-string input (and for a body with no `#<digits>`).
+ * so an id assembled from entity-encoded pieces is still found. The entity
+ * exclusion applies only to the RAW scan: in decoded text the renderer's one
+ * decode is already spent, so an ampersand-then-digits-then-semicolon shape
+ * there is plain text a wrapper cannot re-protect (an ampersand-wrapped
+ * encoded hash plus digits must refuse, not hide). Returns [] for non-string
+ * input (and for a body with no `#<digits>`).
  */
 export function extractIssuePrIds(body) {
   if (typeof body !== "string" || body.length === 0) return [];
   const found = new Set();
-  collectBareIds(body, found);
+  collectBareIds(body, found, { excludeEntities: true });
   const decoded = decodeRenderedText(body);
-  if (decoded !== body) collectBareIds(decoded, found);
+  if (decoded !== body) collectBareIds(decoded, found, { excludeEntities: false });
   return [...found];
 }
 
