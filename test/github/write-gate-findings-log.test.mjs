@@ -1542,6 +1542,46 @@ test("#1641: CLI path — a direct write-gate-findings-log.mjs with a contradict
   }
 });
 
+// The contradiction-refusal tests above all drive the wrapper through inline
+// --findings; this one drives the SAME refusal through --findings-file (a
+// wrapper-shaped file). The refusal itself (both the caller-verdict domain
+// check and the wrapper-contradiction check) lives in writeGateFindingsLog,
+// not in resolveFindingsInput — resolveFindingsInput's shared plumbing only
+// parses and unwraps the wrapper identically for both flags, which is why the
+// same refusal reaches the findings-file path too.
+test("writeGateFindingsLog rejects a --verdict contradicting a --findings-file wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-file-conflict-"));
+  try {
+    const findingsFile = path.join(tmpDir, "findings.json");
+    await writeFile(findingsFile, JSON.stringify({ overallVerdict: "findings_present", findings: [] }), "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findingsFile,
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "clean"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        assert.match(err.message, /GATE-COMMENT-VERDICT-VALUES/);
+        return true;
+      },
+    );
+    // No ledger must be written on the rejection.
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: "a1".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "a contradicting --findings-file pair must not write a ledger before failing",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-bad-"));
   try {
@@ -1553,6 +1593,112 @@ test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", a
         headSha: "a1".repeat(20),
         verdict: "clean",
         findings: JSON.stringify({ overallVerdict: "bogus", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      /"overallVerdict" must be one of: clean, findings_present, or blocked/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The verdict domain guard previously lived only inside the wrapper branch —
+// a bare-array input (no overallVerdict) skipped it entirely and would have
+// persisted an invalid/non-string --verdict straight into the ledger.
+test("writeGateFindingsLog rejects an invalid --verdict on a bare-array input (no wrapper) as a domain error", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bare-invalid-verdict-"));
+  try {
+    for (const badVerdict of ["bogus", undefined, ["clean"]]) {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "o/n",
+          pr: 7,
+          gate: "draft_gate",
+          headSha: "a1".repeat(20),
+          verdict: badVerdict,
+          findings: "[]",
+          tmpRoot: tmpDir,
+        }),
+        /--verdict must be clean, findings_present, or blocked/,
+      );
+    }
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: "a1".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "an invalid bare-array verdict must not write a ledger before failing",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The bare-array path (no overallVerdict wrapper) is the one the canonical-
+// persistence acceptance criterion actually changed: before this change the
+// ledger persisted the raw --verdict string unchanged on this path. Pinning
+// canonicalization only through a wrapper-shaped payload (as the test above
+// does) leaves this half unasserted — a regression that dropped the hoisted
+// normalization while keeping the hoisted rejection would still pass every
+// other test in this suite.
+test("writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a bare-array input (no wrapper)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bare-noncanonical-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: " Clean ",
+      findings: "[]",
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.verdict, "clean", "a bare-array write must persist the canonical verdict, not the raw caller casing/whitespace");
+    assert.ok(!("overallVerdict" in parsed), "a bare-array input must not synthesize an overallVerdict");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The no-mutation clause: writeGateFindingsLog persists the canonical verdict
+// into the ledger without mutating the caller-supplied options object, since
+// a programmatic caller may reuse one options object across calls. A snapshot
+// comparison catches an in-place mutant (e.g. options.verdict = callerVerdict)
+// that would otherwise pass every other test in this suite unnoticed.
+test("writeGateFindingsLog does not mutate the caller-supplied options object", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mutate-"));
+  try {
+    const options = {
+      repo: "o/n",
+      pr: 7,
+      gate: "draft_gate",
+      headSha: "a1".repeat(20),
+      verdict: " Clean ",
+      findings: "[]",
+      tmpRoot: tmpDir,
+    };
+    const snapshot = structuredClone(options);
+    await writeGateFindingsLog(options);
+    assert.deepEqual(options, snapshot, "writeGateFindingsLog must not mutate the caller-supplied options object");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// normalizeVerdict coerces via String(), so an array-wrapped wrapper verdict
+// like ["clean"] stringifies to the bare string "clean" — without a typeof
+// guard BEFORE normalization this would silently pass as a valid wrapper
+// instead of being rejected as malformed.
+test("writeGateFindingsLog rejects an array-wrapped wrapper overallVerdict instead of string-coercing it", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-array-"));
+  try {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: ["clean"], findings: [] }),
         tmpRoot: tmpDir,
       }),
       /"overallVerdict" must be one of: clean, findings_present, or blocked/,

@@ -441,17 +441,38 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   }
   // The consolidator's computed verdict (consolidate-fanin.mjs's
   // `overallVerdict`) threads through `--ledger-out`'s `{overallVerdict,
-  // findings}` wrapper into here, so the durable ledger records the verdict
-  // the fan-in actually computed for this head/gate — not whatever a caller
-  // hand-passed to `--verdict`. Optional and additive: a bare-array input
-  // (legacy `--findings-file`, hand-authored `--findings`) leaves it
-  // undefined and the ledger writes exactly as before. Validated here so a
-  // malformed wrapper cannot silently record an invalid verdict as the
-  // consolidator's truth (#1616).
+  // findings}` wrapper into here, recording the verdict fan-in actually
+  // computed rather than whatever a caller hand-passed to `--verdict`. A
+  // bare-array input (legacy `--findings-file`, hand-authored `--findings`)
+  // has no wrapper, so `overallVerdict` stays undefined and the ledger gains
+  // no `overallVerdict` key — but the persisted `verdict` below is still the
+  // canonical (normalized) caller verdict on both paths (#1616).
+
+  // Validate the caller's own --verdict domain up front, before any wrapper
+  // comparison: a bare-array input never persists a null/undefined/
+  // non-string/out-of-domain verdict un-normalized, and a wrapper input
+  // compares against an already-normalized caller verdict so a domain failure
+  // is never misattributed as a contradiction. typeof is checked before
+  // normalizeVerdict, which coerces via String() and would otherwise let a
+  // non-string (e.g. an array) silently pass as its stringified form.
+  const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
+  if (!callerVerdict) {
+    throw parseError("--verdict must be clean, findings_present, or blocked");
+  }
   let normalizedOverallVerdict;
-  let persistedVerdict = options.verdict;
+  // Persist the canonical (normalized) verdict, not the raw caller value, on
+  // BOTH input paths, so the durable ledger never records a differently-cased/
+  // whitespaced verdict. Kept in a local instead of mutating the
+  // caller-provided options object, which programmatic callers may reuse
+  // across calls.
+  let persistedVerdict = callerVerdict;
   if (overallVerdict !== undefined) {
-    const verdict = normalizeVerdict(overallVerdict);
+    // The wrapper's overallVerdict must itself be a string BEFORE
+    // normalization runs — normalizeVerdict coerces via String(), which would
+    // otherwise let an array-wrapped wrapper verdict (e.g. ["clean"], whose
+    // String() form is the bare string "clean") silently pass as a valid
+    // wrapper instead of being rejected as malformed.
+    const verdict = typeof overallVerdict === "string" ? normalizeVerdict(overallVerdict) : null;
     if (!verdict) {
       throw parseError(
         `--${options.findingsFile ? "findings-file" : "findings"} "${options.findingsFile ?? "<inline>"}" wrapper "overallVerdict" must be one of: clean, findings_present, or blocked (got: ${JSON.stringify(overallVerdict)})`,
@@ -461,32 +482,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict, mirroring the consumer-side refusal in
     // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES).
-    // Normalize options.verdict here so the comparison is symmetric for every
-    // caller — a direct programmatic caller passes a non-canonical verdict by
-    // the same normalizeVerdict path the CLI parse normally canonicalizes it
-    // through, so a canonical-value wrapper never false-rejects a
-    // differently-cased/whitespaced but semantically equal caller verdict.
-    // Validate options.verdict's own domain first (same message the CLI parse
-    // path throws for --verdict) so a null/undefined/non-string/out-of-domain
-    // value is reported as an invalid verdict, not misattributed as a
-    // contradiction with the wrapper. typeof is checked before normalizeVerdict
-    // runs because normalizeVerdict coerces via String(), which would otherwise
-    // let a non-string (e.g. an array) silently pass as its stringified form.
-    const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
-    if (!callerVerdict) {
-      throw parseError("--verdict must be clean, findings_present, or blocked");
-    }
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
       );
     }
-    // Persist the canonical (normalized) verdict, not the raw caller value, so
-    // the durable ledger never records a differently-cased/whitespaced verdict
-    // beside the canonical overallVerdict it was just checked against. Kept in
-    // a local instead of mutating the caller-provided options object, which
-    // programmatic callers may reuse across calls.
-    persistedVerdict = callerVerdict;
   }
   let provenance;
   if (options.provenance === undefined) {
@@ -531,10 +531,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
-  // The consolidator's computed verdict, threaded from `--ledger-out`'s
-  // wrapper. Optional and additive: when absent (a bare-array input or an
-  // older producer) the ledger writes byte-identically to before, so inline
-  // and fallback paths are unaffected (#1616 AC: absent ledger unchanged).
+  // `overallVerdict` is optional and additive: absent on a bare-array input
+  // (no wrapper) or an older producer, so the ledger gains no `overallVerdict`
+  // key — but `verdict` above is always the canonical, normalized caller
+  // value regardless (#1616).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
   }
