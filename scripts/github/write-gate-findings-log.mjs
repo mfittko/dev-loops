@@ -445,7 +445,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // the fan-in actually computed for this head/gate — not whatever a caller
   // hand-passed to `--verdict`. Optional and additive: a bare-array input
   // (legacy `--findings-file`, hand-authored `--findings`) leaves it
-  // undefined and the ledger writes exactly as before. Validated in the
+  // undefined, so the ledger never gains an `overallVerdict` key — but the
+  // recorded `verdict` itself is still the canonical (normalized) caller
+  // verdict on this path, same as the wrapper path below, not a byte-identical
+  // echo of a non-canonical raw `--verdict` (e.g. " Clean "). Validated in the
   // wrapper branch below (not by the caller-verdict guard immediately
   // following this comment) so a malformed wrapper cannot silently record an
   // invalid verdict as the consolidator's truth (#1616).
