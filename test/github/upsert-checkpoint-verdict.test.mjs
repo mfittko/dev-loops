@@ -2308,6 +2308,10 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /findings-json.*own per-angle findings show unresolved findings/);
     assert.match(payload.error, /high/);
+    // Parseable-only refusal: the UNPARSEABLE sentence must be absent, pinning
+    // that the shared scan reports unparseableBlocking only for genuinely
+    // unparseable entries.
+    assert.doesNotMatch(payload.error, /UNPARSEABLE/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
