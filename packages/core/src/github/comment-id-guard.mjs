@@ -22,10 +22,12 @@
  *
  * Deliberate cross-reference mechanism: pass the id(s) to allow as
  * `allowedRefs: ["1670"]`. Aside from a genuine HTML numeric character
- * reference (`&#<digits>;`, e.g. `&#91;` for `[`), which is never an
- * issue/PR auto-link and so is excluded from the scan entirely, this is the
- * ONLY sanctioned way a generated comment body may carry a `#<digits>` token.
- * Keep the allowlist small and deliberate.
+ * reference (`&#<digits>;`, e.g. `&#91;` for `[`) — each such OCCURRENCE is
+ * skipped; the same digit run appearing elsewhere as a bare token still
+ * refuses — this is the ONLY sanctioned way a generated comment body may
+ * carry a `#<digits>` token. An entity that itself decodes to the hash
+ * character followed by a digit run is treated as a bare id (it renders as
+ * an auto-link). Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
@@ -42,6 +44,13 @@ function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }
 
+// An entity that DECODES to the hash character (`&#35;` decimal or `&#x23;`
+// hex, case-insensitive), immediately followed by an issue-length digit run,
+// renders as a bare `#<digits>` auto-link on GitHub even though no literal
+// hash-digit token exists in the raw body. Treated as a bare-id occurrence so
+// the encoded form cannot smuggle a reference past the guard.
+const ENCODED_HASH_ID_RE = /&#(?:35|x23);(\d{1,9})/gi;
+
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
  * Returns [] for non-string input (and for a body with no `#<digits>`).
@@ -51,6 +60,9 @@ export function extractIssuePrIds(body) {
   const found = new Set();
   for (const m of body.matchAll(ISSUE_PR_ID_RE)) {
     if (isNumericCharacterReference(body, m)) continue;
+    found.add(m[1]);
+  }
+  for (const m of body.matchAll(ENCODED_HASH_ID_RE)) {
     found.add(m[1]);
   }
   return [...found];

@@ -579,6 +579,20 @@ test("runCli's id guard does not mistake a well-formed HTML numeric character re
     assert.equal(exitCode, 0);
     assert.equal(JSON.parse(stdout.join("")).ok, true);
 
+    // An entity decoding to the hash character followed by a digit run renders
+    // as a bare auto-link and is refused (mirrors the shared guard copy).
+    const stubHashEntity = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "smuggled &#35;123 reference", "--next-action", "go",
+        ],
+        { env: stubHashEntity.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#123/,
+    );
+
     // Not a well-formed entity (no terminating `;`): still refused.
     const stubNoSemicolon = await writeGhStub(tempDir, [], {});
     await assert.rejects(

@@ -97,6 +97,24 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.throws(() => guardCommentBodyNoIssuePrIds("see #456; details follow"), /#456/);
   });
 
+  test("an entity decoding to the hash character followed by a digit run is treated as a bare id (renders as an auto-link)", () => {
+    // decimal form
+    assert.deepEqual(extractIssuePrIds("see &#35;123 there"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see &#35;123 there"), /#123/);
+    // hex form, case-insensitive
+    assert.deepEqual(extractIssuePrIds("see &#x23;456 there"), ["456"]);
+    assert.deepEqual(extractIssuePrIds("see &#X23;789 there"), ["789"]);
+    // an allowlisted id is still allowed through the encoded form
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("see &#35;123 there", { allowedRefs: ["123"] }),
+      "see &#35;123 there",
+    );
+    // a hash-entity with no digit run after it stays inert
+    assert.deepEqual(extractIssuePrIds("literal hash: &#35; alone"), []);
+    // an unrelated entity whose code STARTS with the hash code point does not match
+    assert.deepEqual(extractIssuePrIds("&#3512; is one character"), []);
+  });
+
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
     // Representative of renderGateReviewCommentBody output for a clean gate:
     // gate name, head SHA (hex), verdict, severity/angle labels — never a #digit.

@@ -171,6 +171,9 @@ function collapseWhitespace(value) {
 // the entity-encoded form of `[`) — mirroring comment-id-guard.mjs's own
 // entity exclusion so the two copies stay behaviorally identical.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
+// An entity decoding to the hash character followed by a digit run renders as
+// a bare auto-link; treated as a bare-id occurrence (mirrors the shared copy).
+const ENCODED_HASH_ID_RE = /&#(?:35|x23);(\d{1,9})/giu;
 function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }
@@ -179,6 +182,9 @@ function guardFallbackBodyNoIssuePrIds(body, ctx) {
   const found = [];
   for (const m of String(body).matchAll(ISSUE_PR_ID_RE)) {
     if (isNumericCharacterReference(body, m)) continue;
+    found.push(m[1]);
+  }
+  for (const m of String(body).matchAll(ENCODED_HASH_ID_RE)) {
     found.push(m[1]);
   }
   if (found.length > 0) {
