@@ -481,10 +481,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict, mirroring the consumer-side refusal in
-    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES).
+    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES). This
+    // comparison runs unconditionally against the wrapper's overallVerdict —
+    // whether or not --judge-verdict was supplied above. The judge only
+    // enriches findings with act/defer/reject dispositions; it never revises
+    // the consolidator's round verdict, so a --judge-verdict run is held to
+    // the exact same contradiction check as a run without one (#1745).
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,
       );
     }
   }

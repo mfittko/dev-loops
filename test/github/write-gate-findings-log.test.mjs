@@ -1769,3 +1769,78 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// #1745: a wrapper carrying overallVerdict PLUS --judge-verdict on the same
+// call. The judge only enriches findings with act/defer/reject dispositions
+// (applyJudgeDispositions); it never revises the round verdict, so the
+// write-time contradiction refusal ALWAYS compares --verdict against the
+// wrapper's overallVerdict — regardless of what the judge artifact says (a
+// judge that flags every finding "reject" still leaves overallVerdict, and
+// this check, untouched).
+test("#1745: writeGateFindingsLog with wrapper overallVerdict + --judge-verdict: matching --verdict succeeds with enrichment, contradicting --verdict refuses against the wrapper regardless of the judge artifact", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-verdict-conflict-"));
+  try {
+    const headSha = "c3".repeat(20);
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+      ],
+    }), "utf8");
+    const findings = JSON.stringify({
+      overallVerdict: "findings_present",
+      findings: [
+        { severity: "must-fix", angle: "correctness", summary: "null deref", disposition: "accepted-for-fix" },
+      ],
+    });
+
+    // (a) A matching --verdict succeeds and judge enrichment is applied.
+    const result = await writeGateFindingsLog({
+      repo: "o/n",
+      pr: 21,
+      gate: "draft_gate",
+      headSha,
+      verdict: "findings_present",
+      findings,
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+    assert.equal(result.ok, true);
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.overallVerdict, "findings_present");
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+
+    // (b) A contradicting --verdict refuses, naming the wrapper's
+    // overallVerdict as the consolidator's authoritative round verdict, even
+    // though the same judge artifact is attached (a judge verdict never
+    // overrides the round verdict).
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 22,
+        gate: "draft_gate",
+        headSha: "d4".repeat(20),
+        verdict: "clean",
+        findings,
+        judgeVerdict: judgeVerdictPath,
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "clean"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        assert.match(err.message, /consolidator's computed round verdict/);
+        assert.match(err.message, /GATE-COMMENT-VERDICT-VALUES/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 22, gate: "draft_gate", headSha: "d4".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "a contradicting pair must not write a ledger before failing, even with --judge-verdict attached",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
