@@ -139,6 +139,36 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     );
   });
 
+  // Decode-aware extraction on the DIGIT side: GitHub decodes entity-encoded
+  // digits too, so an id assembled from entity pieces still renders as a live
+  // auto-link and must refuse. A double-encoded form renders as inert literal
+  // text (the renderer decodes once) and must NOT refuse.
+  test("an id assembled from entity-encoded digits is treated as a bare id", () => {
+    // literal hash + encoded first digit
+    assert.deepEqual(extractIssuePrIds("see #&#49;23 there"), ["123"]);
+    assert.throws(() => guardCommentBodyNoIssuePrIds("see #&#49;23 there"), /#123/);
+    // encoded hash + mixed literal/encoded digits (hex form included)
+    assert.deepEqual(extractIssuePrIds("see &#35;&#49;2&#x33; there"), ["123"]);
+    // named hash entity + encoded digit
+    assert.deepEqual(extractIssuePrIds("see &num;&#52;2 there"), ["42"]);
+    // allowlist still works through the assembled form
+    assert.equal(
+      guardCommentBodyNoIssuePrIds("see #&#49;23 there", { allowedRefs: ["123"] }),
+      "see #&#49;23 there",
+    );
+  });
+
+  test("the single-pass decode never manufactures a refusal from a double-encoded form", () => {
+    // Both forms render as inert literal entity text (the renderer decodes
+    // once). The named double-encoded form extracts nothing. The numeric
+    // double-encoded form was already over-refused BEFORE the decode pass —
+    // the raw scan sees the inner hash-digit run in a non-entity context
+    // (preceded by the semicolon of the outer entity) — and stays refused:
+    // pre-existing fail-closed behavior, not a decode regression.
+    assert.deepEqual(extractIssuePrIds("see &amp;num;123 there"), []);
+    assert.deepEqual(extractIssuePrIds("see &amp;#35;123 there"), ["35"]);
+  });
+
   test("a generated gate verdict body (the production render) contains no issue/PR id", () => {
     // Representative of renderGateReviewCommentBody output for a clean gate:
     // gate name, head SHA (hex), verdict, severity/angle labels — never a #digit.

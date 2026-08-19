@@ -25,10 +25,17 @@
  * reference (`&#<digits>;`, e.g. `&#91;` for `[`) — each such OCCURRENCE is
  * skipped; the same digit run appearing elsewhere as a bare token still
  * refuses — this is the ONLY sanctioned way a generated comment body may
- * carry a `#<digits>` token. An entity that itself decodes to the hash
- * character — numeric (`&#35;`/`&#x23;`, zero-padded variants included) or
- * the named `&num;` — followed by a digit run is treated as a bare id (it
- * renders as an auto-link). Keep the allowlist small and deliberate.
+ * carry a `#<digits>` token. Extraction is decode-aware on BOTH sides of the
+ * token: the body is also scanned after a single left-to-right decode of the
+ * entity forms GitHub's renderer resolves (numeric character references,
+ * zero-padding and hex included, plus the named hash and ampersand entities),
+ * so a hash or any digit of the id smuggled as an entity — `&#35;123`,
+ * `&num;123`, `#&#49;23`, any mix — still refuses. The decode is single-pass
+ * like the renderer's, so a double-encoded form (`&amp;#35;123`), which
+ * renders as inert literal text, is NOT refused. Case-variants of the named
+ * entities are decoded too even where GitHub would not (`&NUM;`): deliberate
+ * over-refusal on a suspicious near-miss, keeping the guard fail-closed.
+ * Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
@@ -45,32 +52,47 @@ function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
 }
 
-// An entity that DECODES to the hash character (`&#35;` decimal, `&#x23;`
-// hex — case-insensitive, zero-padding accepted, CommonMark decodes padded
-// forms too — or the HTML5 named entity `&num;`, which GitHub also decodes),
-// immediately followed by an issue-length digit run, renders as a bare
-// `#<digits>` auto-link on GitHub even though no literal hash-digit token
-// exists in the raw body. Treated as a bare-id occurrence so the encoded form
-// cannot smuggle a reference past the guard. The `i` flag makes the named
-// form match case-variants like `&NUM;` too; only lowercase `&num;` actually
-// decodes, so that is deliberate over-refusal on a suspicious near-miss,
-// keeping the guard fail-closed.
-const ENCODED_HASH_ID_RE = /&(?:#(?:0*35|x0*23)|num);(\d{1,9})/gi;
+// Entity forms the renderer resolves that can participate in assembling a
+// rendered `#<digits>` auto-link: numeric character references (any code
+// point — the hash AND the digits themselves are smuggleable) plus the named
+// hash and ampersand entities. `&amp;` is decoded (consumed) precisely so a
+// double-encoded form's output is never re-read as a fresh entity opener —
+// one pass, like the renderer.
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,7}|x[0-9a-f]{1,6})|num|amp);/gi;
+
+function decodeRenderedText(body) {
+  return body.replace(DECODABLE_ENTITY_RE, (entity) => {
+    const inner = entity.slice(1, -1).toLowerCase();
+    if (inner === "num") return "#";
+    if (inner === "amp") return "&";
+    const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return entity;
+    }
+  });
+}
+
+function collectBareIds(text, found) {
+  for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
+    if (isNumericCharacterReference(text, m)) continue;
+    found.add(m[1]);
+  }
+}
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
- * Returns [] for non-string input (and for a body with no `#<digits>`).
+ * Scans the body as written AND after a single renderer-like entity decode,
+ * so an id assembled from entity-encoded pieces is still found. Returns []
+ * for non-string input (and for a body with no `#<digits>`).
  */
 export function extractIssuePrIds(body) {
   if (typeof body !== "string" || body.length === 0) return [];
   const found = new Set();
-  for (const m of body.matchAll(ISSUE_PR_ID_RE)) {
-    if (isNumericCharacterReference(body, m)) continue;
-    found.add(m[1]);
-  }
-  for (const m of body.matchAll(ENCODED_HASH_ID_RE)) {
-    found.add(m[1]);
-  }
+  collectBareIds(body, found);
+  const decoded = decodeRenderedText(body);
+  if (decoded !== body) collectBareIds(decoded, found);
   return [...found];
 }
 

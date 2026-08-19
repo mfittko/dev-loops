@@ -168,30 +168,42 @@ function collapseWhitespace(value) {
 // strict, and a body needing a cross-reference can use the full helper.
 // A match is excluded only when it forms a well-formed HTML numeric character
 // reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
-// the entity-encoded form of `[`) — mirroring comment-id-guard.mjs's own
-// entity exclusion so the two copies stay behaviorally identical.
+// the entity-encoded form of `[`). Extraction mirrors the shared copy's
+// decode-aware behavior: the body is also scanned after a single
+// renderer-like entity decode (numeric references, the named hash and
+// ampersand entities — `&amp;` consumed so double-encoded forms stay inert;
+// named-entity case-variants decoded as deliberate over-refusal), so a hash
+// or digit smuggled as an entity still refuses.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
-// An entity decoding to the hash character (`&#35;`/`&#x23;`, zero-padding
-// accepted, or the HTML5 named entity `&num;`) followed by a digit run
-// renders as a bare auto-link; treated as a bare-id occurrence. The `i` flag
-// mirrors the shared copy's deliberate over-refusal: it also matches
-// case-variants of the named form (e.g. `&NUM;`) even though only lowercase
-// `&num;` actually decodes, keeping this fallback fail-closed on that
-// suspicious near-miss.
-const ENCODED_HASH_ID_RE = /&(?:#(?:0*35|x0*23)|num);(\d{1,9})/giu;
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,7}|x[0-9a-f]{1,6})|num|amp);/giu;
+function decodeRenderedText(body) {
+  return body.replace(DECODABLE_ENTITY_RE, (entity) => {
+    const inner = entity.slice(1, -1).toLowerCase();
+    if (inner === "num") return "#";
+    if (inner === "amp") return "&";
+    const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return entity;
+    }
+  });
+}
 function isNumericCharacterReference(body, match) {
   return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+}
+function collectBareIds(text, found) {
+  for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
+    if (isNumericCharacterReference(text, m)) continue;
+    found.push(m[1]);
+  }
 }
 function guardFallbackBodyNoIssuePrIds(body, ctx) {
   if (typeof body !== "string") return body;
   const found = [];
-  for (const m of String(body).matchAll(ISSUE_PR_ID_RE)) {
-    if (isNumericCharacterReference(body, m)) continue;
-    found.push(m[1]);
-  }
-  for (const m of String(body).matchAll(ENCODED_HASH_ID_RE)) {
-    found.push(m[1]);
-  }
+  collectBareIds(String(body), found);
+  const decoded = decodeRenderedText(String(body));
+  if (decoded !== String(body)) collectBareIds(decoded, found);
   if (found.length > 0) {
     const unique = [...new Set(found)].join(", #");
     throw new Error(

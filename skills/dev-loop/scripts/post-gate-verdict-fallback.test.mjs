@@ -674,6 +674,20 @@ test("runCli's id guard does not mistake a well-formed HTML numeric character re
       /#456/,
     );
 
+    // Decode-aware digit-side parity with the shared copy: an id assembled
+    // from entity-encoded digits still refuses.
+    const stubEncodedDigit = await writeGhStub(tempDir, [], {});
+    await assert.rejects(
+      () => runCli(
+        [
+          "--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000",
+          "--verdict", "clean", "--findings-summary", "see #&#49;23 there", "--next-action", "go",
+        ],
+        { env: stubEncodedDigit.env, spawn: spawn, ghCommand: "gh", stdoutSink: [], stderrSink: [] },
+      ),
+      /#123/,
+    );
+
     // Non-match parity with the shared copy: the named entity with no digit
     // run stays inert, and a different named entity followed by digits does
     // not match — both bodies must POST successfully.
