@@ -162,13 +162,29 @@ function collapseWhitespace(value) {
 // which this fallback cannot import — it ships in the plugin without @dev-loops/core). A
 // generated gate verdict body must never carry a raw `#<digits>` token: public comment
 // surfaces auto-link a bare `#<digits>` to that issue/PR, leaking internal cross-references.
-// Fail-closed: refuse to POST rather than strip — no `--allowed-refs` escape on this
-// guard because a gate verdict body is never a place for a deliberate cross-reference.
+// Fail-closed: refuse to POST rather than strip. The full helper offers an
+// allowed-refs escape for deliberate cross-references; this degraded fallback
+// deliberately omits it — an emergency posting path should stay maximally
+// strict, and a body needing a cross-reference can use the full helper.
+// A match is excluded only when it forms a well-formed HTML numeric character
+// reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
+// the entity-encoded form of `[`) — mirroring comment-id-guard.mjs's own
+// entity exclusion so the two copies stay behaviorally identical.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
+// An entity decoding to the hash character followed by a digit run renders as
+// a bare auto-link; treated as a bare-id occurrence (mirrors the shared copy).
+const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/giu;
+function isNumericCharacterReference(body, match) {
+  return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+}
 function guardFallbackBodyNoIssuePrIds(body, ctx) {
   if (typeof body !== "string") return body;
   const found = [];
   for (const m of String(body).matchAll(ISSUE_PR_ID_RE)) {
+    if (isNumericCharacterReference(body, m)) continue;
+    found.push(m[1]);
+  }
+  for (const m of String(body).matchAll(ENCODED_HASH_ID_RE)) {
     found.push(m[1]);
   }
   if (found.length > 0) {

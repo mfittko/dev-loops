@@ -21,13 +21,36 @@
  * helpers cannot emit an issue/PR id without an explicit allowlist entry.
  *
  * Deliberate cross-reference mechanism: pass the id(s) to allow as
- * `allowedRefs: ["1670"]`. This is the ONLY sanctioned way a generated comment
- * body may reference an issue/PR id. Keep the allowlist small and deliberate.
+ * `allowedRefs: ["1670"]`. Aside from a genuine HTML numeric character
+ * reference (`&#<digits>;`, e.g. `&#91;` for `[`) — each such OCCURRENCE is
+ * skipped; the same digit run appearing elsewhere as a bare token still
+ * refuses — this is the ONLY sanctioned way a generated comment body may
+ * carry a `#<digits>` token. An entity that itself decodes to the hash
+ * character followed by a digit run is treated as a bare id (it renders as
+ * an auto-link). Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
 // 1..9 digits to avoid absurd ids while covering the full GitHub id space.
+// A match is excluded only when it forms a well-formed HTML numeric character
+// reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
+// the entity-encoded form of `[`). Any other shape (a bare `#123`, an
+// `&`-preceded run with no terminating `;`, or a `;`-followed run with no
+// preceding `&`) is not a well-formed entity and still refuses as a genuine
+// auto-link candidate.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/g;
+
+function isNumericCharacterReference(body, match) {
+  return body[match.index - 1] === "&" && body[match.index + match[0].length] === ";";
+}
+
+// An entity that DECODES to the hash character (`&#35;` decimal or `&#x23;`
+// hex, case-insensitive, zero-padding accepted — CommonMark decodes padded
+// forms too), immediately followed by an issue-length digit run, renders as a
+// bare `#<digits>` auto-link on GitHub even though no literal hash-digit token
+// exists in the raw body. Treated as a bare-id occurrence so the encoded form
+// cannot smuggle a reference past the guard.
+const ENCODED_HASH_ID_RE = /&#(?:0*35|x0*23);(\d{1,9})/gi;
 
 /**
  * Extract the raw issue/PR id tokens found in a body (as strings, deduped).
@@ -37,9 +60,29 @@ export function extractIssuePrIds(body) {
   if (typeof body !== "string" || body.length === 0) return [];
   const found = new Set();
   for (const m of body.matchAll(ISSUE_PR_ID_RE)) {
+    if (isNumericCharacterReference(body, m)) continue;
+    found.add(m[1]);
+  }
+  for (const m of body.matchAll(ENCODED_HASH_ID_RE)) {
     found.add(m[1]);
   }
   return [...found];
+}
+
+// A caller-supplied allowlist is normally already an array (or other
+// iterable) of ids. Guard the one mis-shaped input that would otherwise
+// silently produce the wrong set: a plain CSV string. `Array.from` over a
+// string character-splits it ("1670" -> ["1","6","7","0"]), which would
+// spuriously allowlist single-digit refs while still refusing the id the
+// caller meant to allow. Mirrors parseAllowedRefsCsv's comma-split (trim,
+// drop empties) — deliberately without its numeric validation, since this is
+// a permissive low-level guard, not the CLI arg parser.
+function normalizeAllowedRefs(allowedRefs) {
+  if (allowedRefs == null) return [];
+  if (typeof allowedRefs === "string") {
+    return allowedRefs.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  }
+  return Array.from(allowedRefs, (id) => String(id));
 }
 
 /**
@@ -50,13 +93,15 @@ export function extractIssuePrIds(body) {
  * @param {string} body - the generated comment body to guard.
  * @param {object} [opts]
  * @param {string} [opts.ref] - human label for the guarded surface (error context).
- * @param {Iterable<number|string>} [opts.allowedRefs] - explicit allowlist of
- *   deliberate cross-reference ids permitted to appear in the body.
+ * @param {Iterable<number|string>|string} [opts.allowedRefs] - explicit
+ *   allowlist of deliberate cross-reference ids permitted to appear in the
+ *   body. A plain string is treated as a comma-separated list (like a CLI
+ *   `--allowed-refs` value), never character-split.
  * @returns {string} the (unchanged, since no stripping) body.
  */
 export function guardCommentBodyNoIssuePrIds(body, { ref = "generated comment body", allowedRefs = [] } = {}) {
   if (typeof body !== "string") return body;
-  const allow = new Set(Array.from(allowedRefs ?? [], (id) => String(id)));
+  const allow = new Set(normalizeAllowedRefs(allowedRefs));
   const offending = extractIssuePrIds(body).filter((id) => !allow.has(id));
   if (offending.length > 0) {
     throw new Error(

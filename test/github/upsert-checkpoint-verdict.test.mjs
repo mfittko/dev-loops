@@ -6766,3 +6766,240 @@ test("#1731: upsertCheckpointVerdict refuses a verdict body containing a raw iss
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("parseUpsertCheckpointVerdictCliArgs parses --allowed-refs csv", () => {
+  const parsed = parseUpsertCheckpointVerdictCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "17",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234000000000000000000000000000000000",
+    "--verdict", "clean",
+    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+    "--findings-summary", "no issues found",
+    "--next-action", "mark ready for review",
+    "--inline-reason", "tiny docs change",
+    "--allowed-refs", "1670, 9000",
+  ]);
+  assert.deepEqual(parsed.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseUpsertCheckpointVerdictCliArgs rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--allowed-refs", "1670,abc",
+    ]),
+    /positive integers/,
+  );
+});
+
+test("upsertCheckpointVerdict posts a verdict body whose findings summary carries a deliberate cross-reference id via allowedRefs, while an unallowlisted id in the same body still refuses", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-verdict-allowed-refs-"));
+  try {
+    const { runChild } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["deliberate cross-ref to issue #1670"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+      findingsSummary: "deliberate cross-ref to issue #1670",
+      nextAction: "Mark ready for review",
+      allowedRefs: ["1670"],
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+    assert.equal(result.ok, true);
+    // Pins that the review POST stub entry actually fired (not a vacuous pass
+    // if the flow ever short-circuited before posting).
+    assert.equal(result.action, "created");
+
+    const { runChild: runChildBlocked } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ], { repeatLastOnOverflow: true });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: "abc1234000000000000000000000000000000000",
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+        findingsSummary: "allowlisted #1670 but also unallowlisted #999",
+        nextAction: "Mark ready for review",
+        allowedRefs: ["1670"],
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChildBlocked, repoRoot: fanoutDisabledRepoRoot }),
+      /#999/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upsert-checkpoint-verdict posts a --findings-json finding whose summary carries a markdown bracket (entity-encoded by the structured render's sanitizer) without the id guard mistaking the numeric character reference for an issue/PR id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-entity-bracket-"));
+  try {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "rename the [id] route segment to [slug]" }] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["&#91;id] route segment to &#91;slug]"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--next-action", "fix before merge", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    // Pins that the review POST stub entry actually fired (not a vacuous pass
+    // if the flow ever short-circuited before posting).
+    assert.equal(payload.action, "created");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The above test's finding carries no file/line, so it is body-filed rather
+// than posted as an inline review comment — it never reaches
+// renderInlineCommentBody or createGateReview's per-comment id-guard loop
+// (guardCommentBodyNoIssuePrIds over `comments`), which is the exact surface
+// the reported production symptom (an inline finding quoting a literal `[`)
+// went through. A locatable finding here, carrying BOTH the entity-encoded
+// bracket AND a genuine deliberate cross-reference id, pins the inline path
+// and the guard loop running with a non-empty allowedRefs in the same call.
+const ENTITY_AND_ALLOWED_REF_FINDING = {
+  severity: "nice-to-have",
+  angle: "coverage",
+  summary: "rename the [id] route segment to [slug]; deliberate cross-ref to issue #1670",
+  files: ["src/db.mjs"],
+  line: 2,
+};
+
+test("upsert-checkpoint-verdict --findings-ledger posts a LOCATABLE finding as an inline comment whose entity-encoded bracket is not mistaken for an issue/PR id, and whose deliberate cross-reference id is threaded through allowedRefs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-entity-allowedrefs-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [ENTITY_AND_ALLOWED_REF_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["&#91;id] route segment to &#91;slug]", "deliberate cross-ref to issue #1670"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsLedger: ledgerPath,
+      findingsSummary: "1 finding, inline",
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+      allowedRefs: ["1670"],
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 1);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 1);
+    // The entity-encoded bracket survives, unmangled, on the inline comment
+    // this finding actually renders on (not the review body).
+    assert.match(posted.comments[0].body, /&#91;id] route segment to &#91;slug]/);
+    // The allowlisted id rides through unstripped on that same inline comment
+    // — the guard loop over `comments` ran with a non-empty allowedRefs and
+    // did not refuse it.
+    assert.match(posted.comments[0].body, /#1670/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// AC4 + the update-path guard surface: updateGateReview must thread
+// allowedRefs the same as createGateReview, or a same-head correction whose
+// findings summary carries a deliberate cross-reference id would wrongly
+// refuse on the SECOND round even though the first round's create allowed it.
+test("upsert-checkpoint-verdict --findings-ledger threads allowedRefs into the update-path PUT (updateGateReview) when correcting an existing same-head review", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-update-allowedrefs-"));
+  try {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING]);
+    const existingReview = {
+      id: 705,
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-705",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }),
+    };
+    const entries = [
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/705", "--input", "-"],
+        assertStdinIncludes: ["deliberate cross-ref to issue #1670"],
+        stdout: '{"id":705,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-705"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "deliberate cross-ref to issue #1670",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+      allowedRefs: ["1670"],
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "updated");
+    assert.equal(result.commentId, 705);
+    assert.equal(calls.filter((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/705")).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

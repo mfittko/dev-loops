@@ -6,7 +6,7 @@ import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, re
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
@@ -199,6 +199,12 @@ Optional:
                                             --execution-mode nor --inline-reason
                                             errors. Optional and ignored (dropped)
                                             for --execution-mode fanout_fanin.
+  --allowed-refs <csv>                      Comma-separated numeric issue/PR ids to
+                                            allow as deliberate cross-references in
+                                            the posted verdict body and any inline/
+                                            body-filed finding text (the
+                                            no-ids-in-comments guard refuses any
+                                            other bare #<digits>).
 Output (stdout, JSON):
   {
     "ok": true,
@@ -429,6 +435,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
       "inline-reason": { type: "string" },
+      "allowed-refs": { type: "string" },
       lightweight: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -451,6 +458,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsSeverityCounts: undefined,
     executionMode: undefined,
     inlineReason: undefined,
+    allowedRefs: [],
     lightweight: false,
     jq: undefined,
     silent: false,
@@ -571,6 +579,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         throw parseError("--inline-reason must be a non-empty string");
       }
       options.inlineReason = enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason");
+      continue;
+    }
+    if (token.name === "allowed-refs") {
+      options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -2134,7 +2146,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // the single desiredBody choke point so BOTH the review surface (create/update
   // gate review) and the legacy issue-comment surface (updateComment below) are
   // covered, in addition to the low-level guards in the write helpers.
-  guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body" });
+  guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body", allowedRefs: options.allowedRefs });
   const findingSurfaceFields = findingSurface
     ? {
         round: findingSurface.round,
@@ -2227,7 +2239,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // review, which is why resolveFindingSurface body-files everything on this
     // path.
     const updated = existing.surface === "review"
-      ? await updateGateReview({ repo: options.repo, pr: options.pr, reviewId: existing.commentId, body: desiredBody }, gh)
+      ? await updateGateReview({ repo: options.repo, pr: options.pr, reviewId: existing.commentId, body: desiredBody, allowedRefs: options.allowedRefs }, gh)
         .then((r) => ({ commentId: r.reviewId, commentUrl: r.reviewUrl ?? existing.commentUrl }))
       : await updateComment({ repo: options.repo, commentId: existing.commentId, body: desiredBody }, gh);
     // Post-update verification: verify the updated surface is retrievable via a
@@ -2278,6 +2290,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       side: "RIGHT",
       body: renderInlineCommentBody(finding, { round: findingSurface.round }),
     })),
+    allowedRefs: options.allowedRefs,
   }, gh);
   const created = { commentId: createdReview.reviewId, commentUrl: createdReview.reviewUrl };
   // Post-creation verification: verify the review is retrievable before returning.
