@@ -2627,12 +2627,34 @@ describe("role resolution", () => {
     test("resolveGateConfig refuses an entry JSON.stringify cannot render instead of crashing the renderer", () => {
       const circular = {};
       circular.self = circular;
-      for (const entry of [10n, circular]) {
+      const nullProtoCycle = Object.create(null);
+      nullProtoCycle.self = nullProtoCycle;
+      for (const entry of [10n, circular, nullProtoCycle]) {
         assert.throws(
           () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [entry] } } }, "draft"),
-          /out-of-vocabulary/,
+          /outside the schema's severity vocabulary/,
         );
       }
+    });
+
+    // JSON.stringify returns undefined (without throwing) for symbol values;
+    // the formatter's String() fallback must render a real token so the
+    // refusal message never carries an empty slot.
+    test("resolveGateConfig renders a non-empty token for a symbol entry in the refusal message", () => {
+      assert.throws(
+        () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [Symbol("oops")] } } }, "draft"),
+        (err) => err.message.includes("Symbol(oops)"),
+      );
+    });
+
+    // The guard's accept set is exact-spelling parity with the schema enum:
+    // a whitespace-varied entry fails schema validation, so it must refuse
+    // here too rather than being trim-normalized into acceptance.
+    test("resolveGateConfig refuses a whitespace-varied spelling the schema rejects", () => {
+      assert.throws(
+        () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: ["high "] } } }, "draft"),
+        /outside the schema's severity vocabulary/,
+      );
     });
 
     // The schema requires min 1; an empty list reaches this resolver only
@@ -2676,7 +2698,7 @@ describe("role resolution", () => {
         version: 1,
         gates: { draft: { blockCleanOnFindingSeverities: ["HIGH"] } },
       };
-      assert.throws(() => resolveGateConfig(config, "draft"), /out-of-vocabulary/);
+      assert.throws(() => resolveGateConfig(config, "draft"), /outside the schema's severity vocabulary/);
     });
 
     test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {

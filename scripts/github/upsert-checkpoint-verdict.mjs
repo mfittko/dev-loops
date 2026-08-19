@@ -1626,6 +1626,17 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
 
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
+  // loadDevLoopConfig never throws: on a validation failure it returns the raw
+  // merged config alongside its errors. Every other severity consumer
+  // (consolidate-fanin, close-gate-findings, detect-checkpoint-evidence) fails
+  // closed on a non-empty errors array; the poster that WRITES the verdict
+  // must not be the one place a schema-invalid config still resolves gate
+  // config and posts. Checked before any GitHub read so the refusal is
+  // immediate and side-effect free.
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+  if (Array.isArray(configErrors) && configErrors.length > 0) {
+    throw new Error(`This worktree's config (--repo-root ${JSON.stringify(repoRoot)}) could not be fully loaded/validated; refusing to post a gate verdict: ${JSON.stringify(configErrors)}`);
+  }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
@@ -1647,7 +1658,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
   const evidence = coordinationContext.gateEvidence;
   const canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
-  const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   const maxCopilotRounds = options.lightweight === true
