@@ -1542,6 +1542,43 @@ test("#1641: CLI path — a direct write-gate-findings-log.mjs with a contradict
   }
 });
 
+// The contradiction-refusal tests above all drive the wrapper through inline
+// --findings; this one drives the SAME refusal through --findings-file (a
+// wrapper-shaped file), since the guard lives in resolveFindings/resolveFindingsInput
+// shared plumbing both flags route through, not in either flag's own parsing.
+test("writeGateFindingsLog rejects a --verdict contradicting a --findings-file wrapper overallVerdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-file-conflict-"));
+  try {
+    const findingsFile = path.join(tmpDir, "findings.json");
+    await writeFile(findingsFile, JSON.stringify({ overallVerdict: "findings_present", findings: [] }), "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findingsFile,
+        tmpRoot: tmpDir,
+      }),
+      (err) => {
+        assert.match(err.message, /--verdict "clean"/);
+        assert.match(err.message, /"overallVerdict" "findings_present"/);
+        assert.match(err.message, /GATE-COMMENT-VERDICT-VALUES/);
+        return true;
+      },
+    );
+    // No ledger must be written on the rejection.
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: "a1".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "a contradicting --findings-file pair must not write a ledger before failing",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-bad-"));
   try {
@@ -1553,6 +1590,60 @@ test("#1616: writeGateFindingsLog rejects a malformed wrapper overallVerdict", a
         headSha: "a1".repeat(20),
         verdict: "clean",
         findings: JSON.stringify({ overallVerdict: "bogus", findings: [] }),
+        tmpRoot: tmpDir,
+      }),
+      /"overallVerdict" must be one of: clean, findings_present, or blocked/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The verdict domain guard previously lived only inside the wrapper branch —
+// a bare-array input (no overallVerdict) skipped it entirely and would have
+// persisted an invalid/non-string --verdict straight into the ledger.
+test("writeGateFindingsLog rejects an invalid --verdict on a bare-array input (no wrapper) as a domain error", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bare-invalid-verdict-"));
+  try {
+    for (const badVerdict of ["bogus", undefined, ["clean"]]) {
+      await assert.rejects(
+        () => writeGateFindingsLog({
+          repo: "o/n",
+          pr: 7,
+          gate: "draft_gate",
+          headSha: "a1".repeat(20),
+          verdict: badVerdict,
+          findings: "[]",
+          tmpRoot: tmpDir,
+        }),
+        /--verdict must be clean, findings_present, or blocked/,
+      );
+    }
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: "a1".repeat(20), tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "an invalid bare-array verdict must not write a ledger before failing",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// normalizeVerdict coerces via String(), so an array-wrapped wrapper verdict
+// like ["clean"] stringifies to the bare string "clean" — without a typeof
+// guard BEFORE normalization this would silently pass as a valid wrapper
+// instead of being rejected as malformed.
+test("writeGateFindingsLog rejects an array-wrapped wrapper overallVerdict instead of string-coercing it", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-array-"));
+  try {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 7,
+        gate: "draft_gate",
+        headSha: "a1".repeat(20),
+        verdict: "clean",
+        findings: JSON.stringify({ overallVerdict: ["clean"], findings: [] }),
         tmpRoot: tmpDir,
       }),
       /"overallVerdict" must be one of: clean, findings_present, or blocked/,
