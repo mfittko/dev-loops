@@ -341,11 +341,12 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
   // verification READ repeats here, never the `gh pr edit --remove-reviewer`
   // itself. A transient throw from ANY verification read — the initial
   // post-edit read included — consumes the next scheduled delay and re-probes
-  // instead of aborting immediately; the error only propagates if the final
-  // attempt in the window also throws, in which case that last error is what
-  // the caller sees (not the generic still-pending message below, which is
-  // reserved for the case where every read succeeds but the request never
-  // clears).
+  // instead of aborting immediately; the error only propagates if the FINAL
+  // read in the window also throws, in which case that last error is what
+  // the caller sees. The generic still-pending message below only requires
+  // that final read to succeed — earlier reads may have thrown and been
+  // recovered by a later successful (but still-pending) probe, which clears
+  // the recorded error.
   let stillRequested = true;
   let lastReadError = null;
   try {
@@ -360,7 +361,6 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
       lastReadError = null;
     } catch (error) {
       lastReadError = error;
-      continue;
     }
   }
   if (stillRequested) {

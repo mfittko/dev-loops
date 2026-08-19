@@ -320,6 +320,58 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
     });
 
+    it("recovers when the INITIAL post-edit read throws and a later read succeeds", async () => {
+      // The initial post-edit read sits inside the retry window: a throw there
+      // consumes the first scheduled delay and re-probes instead of
+      // propagating, so a transient blip immediately after a successful
+      // removal self-heals. This also pins the fail-closed `stillRequested`
+      // initializer — an initial throw never touches `stillRequested`, so it
+      // must start `true` for the loop below to run at all.
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { throws: true, message: "rate limited (initial read)" }, // initial post-edit read: throws
+        { requested: false }, // attempt 0: recovers, removal confirmed
+      ]);
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl });
+      assert.equal(result.status, "withdrawn");
+      assert.deepEqual(delayCalls, [5000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
+    it("fails closed with the byte-identical exhaustion message when a mid-window throw recovers into a still-pending read", async () => {
+      // Mixed window: a non-final attempt throws, later attempts succeed but
+      // stay pending. The recovery clears the recorded read error, so
+      // exhaustion yields the generic still-pending message, never the stale
+      // mid-window error.
+      const delayCalls = [];
+      const delayImpl = async (ms) => {
+        delayCalls.push(ms);
+      };
+      const { calls, runChild } = raceRunChild([
+        { requested: true }, // before-state check
+        { requested: true }, // initial post-edit read: stale
+        { throws: true, message: "rate limited (attempt 1)" }, // attempt 0: throws mid-window
+        { requested: true }, // attempt 1: recovers but still pending
+        { requested: true }, // attempt 2: still pending
+      ]);
+      await assert.rejects(
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild, delayImpl }),
+        (error) => {
+          assert.equal(
+            error.message,
+            "Copilot review request is still pending after gh pr edit --remove-reviewer; nothing was withdrawn.",
+          );
+          return true;
+        },
+      );
+      assert.deepEqual(delayCalls, [5000, 10000, 15000]);
+      assert.equal(calls.filter((argv) => argv.includes("--remove-reviewer")).length, 1);
+    });
+
     it("propagates the final attempt's raw read error when every bounded retry read throws", async () => {
       const delayCalls = [];
       const delayImpl = async (ms) => {
