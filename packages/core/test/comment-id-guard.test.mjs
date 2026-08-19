@@ -151,6 +151,10 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
     assert.deepEqual(extractIssuePrIds("see &#35;&#49;2&#x33; there"), ["123"]);
     // named hash entity + encoded digit
     assert.deepEqual(extractIssuePrIds("see &num;&#52;2 there"), ["42"]);
+    // cmark-gfm decodes numeric references up to 8 digits (decimal or hex):
+    // maximally padded hash forms still refuse.
+    assert.deepEqual(extractIssuePrIds("see &#00000035;77 there"), ["77"]);
+    assert.deepEqual(extractIssuePrIds("see &#x00000023;88 there"), ["88"]);
     // allowlist still works through the assembled form
     assert.equal(
       guardCommentBodyNoIssuePrIds("see #&#49;23 there", { allowedRefs: ["123"] }),

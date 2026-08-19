@@ -28,14 +28,18 @@
  * carry a `#<digits>` token. Extraction is decode-aware on BOTH sides of the
  * token: the body is also scanned after a single left-to-right decode of the
  * entity forms GitHub's renderer resolves (numeric character references,
- * zero-padding and hex included, plus the named hash and ampersand entities),
+ * zero-padding and hex included at cmark-gfm's 8-digit bound, plus the named
+ * hash entity),
  * so a hash or any digit of the id smuggled as an entity — `&#35;123`,
  * `&num;123`, `#&#49;23`, any mix — still refuses. The decode is single-pass
- * like the renderer's, so a double-encoded form (`&amp;#35;123`), which
- * renders as inert literal text, is NOT refused. Case-variants of the named
- * entities are decoded too even where GitHub would not (`&NUM;`): deliberate
- * over-refusal on a suspicious near-miss, keeping the guard fail-closed.
- * Keep the allowlist small and deliberate.
+ * like the renderer's: a double-encoded form (`&amp;#35;123`) renders as
+ * inert literal text and the decode pass never manufactures a refusal of its
+ * INNER id — though the raw scan still refuses the outer digit run of the
+ * numeric form as a pre-existing fail-closed near-miss (the outer entity's
+ * semicolon sits before the hash, so the well-formed-entity exclusion does
+ * not apply). Case-variants of the named hash entity are decoded too even
+ * where GitHub would not (`&NUM;`): deliberate over-refusal, keeping the
+ * guard fail-closed. Keep the allowlist small and deliberate.
  */
 
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
@@ -55,16 +59,16 @@ function isNumericCharacterReference(body, match) {
 // Entity forms the renderer resolves that can participate in assembling a
 // rendered `#<digits>` auto-link: numeric character references (any code
 // point — the hash AND the digits themselves are smuggleable) plus the named
-// hash and ampersand entities. `&amp;` is decoded (consumed) precisely so a
-// double-encoded form's output is never re-read as a fresh entity opener —
-// one pass, like the renderer.
-const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,7}|x[0-9a-f]{1,6})|num|amp);/gi;
+// hash entity. The digit bounds match cmark-gfm's numeric-entity parser
+// (up to 8 digits, decimal or hex) so nothing GitHub decodes escapes the
+// pass. Single non-rescanning replace = one decode, like the renderer, so a
+// double-encoded form's output is never re-read as a fresh entity.
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,8}|x[0-9a-f]{1,8})|num);/gi;
 
 function decodeRenderedText(body) {
   return body.replace(DECODABLE_ENTITY_RE, (entity) => {
     const inner = entity.slice(1, -1).toLowerCase();
     if (inner === "num") return "#";
-    if (inner === "amp") return "&";
     const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
     try {
       return String.fromCodePoint(code);

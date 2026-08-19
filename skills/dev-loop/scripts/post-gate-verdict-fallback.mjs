@@ -170,17 +170,16 @@ function collapseWhitespace(value) {
 // reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
 // the entity-encoded form of `[`). Extraction mirrors the shared copy's
 // decode-aware behavior: the body is also scanned after a single
-// renderer-like entity decode (numeric references, the named hash and
-// ampersand entities — `&amp;` consumed so double-encoded forms stay inert;
-// named-entity case-variants decoded as deliberate over-refusal), so a hash
-// or digit smuggled as an entity still refuses.
+// renderer-like entity decode (numeric references at cmark-gfm's 8-digit
+// bound, plus the named hash entity; named case-variants decoded as
+// deliberate over-refusal), so a hash or digit smuggled as an entity still
+// refuses, while a double-encoded form's output is never re-read.
 const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
-const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,7}|x[0-9a-f]{1,6})|num|amp);/giu;
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,8}|x[0-9a-f]{1,8})|num);/giu;
 function decodeRenderedText(body) {
   return body.replace(DECODABLE_ENTITY_RE, (entity) => {
     const inner = entity.slice(1, -1).toLowerCase();
     if (inner === "num") return "#";
-    if (inner === "amp") return "&";
     const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
     try {
       return String.fromCodePoint(code);
