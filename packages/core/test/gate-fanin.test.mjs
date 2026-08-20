@@ -23,7 +23,19 @@ import {
   tallySeverities,
   zeroSeverityCounts,
   SEVERITY_ORDER,
+  VALID_SEVERITIES,
 } from "../src/loop/gate-fanin.mjs";
+
+// SEVERITY_ORDER and VALID_SEVERITIES must be frozen like this file's other
+// exported vocabulary constants (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES,
+// FANIN_SYNTHETIC_ANGLES, JUDGE_DISPOSITIONS) — nothing in the repo mutates
+// them today, but an unfrozen shared array/set is a footgun a later change
+// could silently corrupt for every consumer.
+test("SEVERITY_ORDER and VALID_SEVERITIES are frozen, matching their frozen sibling exports", () => {
+  assert.equal(Object.isFrozen(SEVERITY_ORDER), true, "SEVERITY_ORDER must be frozen");
+  assert.equal(Object.isFrozen(VALID_SEVERITIES), true, "VALID_SEVERITIES must be frozen");
+  assert.throws(() => { SEVERITY_ORDER.push("bogus"); }, TypeError);
+});
 
 function cleanAngle(angle) {
   return { angle, verdict: "clean", findings: [] };

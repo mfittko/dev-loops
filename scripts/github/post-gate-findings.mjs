@@ -315,7 +315,13 @@ export function sanitizeInline(value) {
 // number rather than a second hand-copied literal.
 export const GITHUB_COMMENT_MAX_CHARS = 65536;
 
+// This is the module's ONLY render entry point (renderBoundedFindingsCommentBody
+// below composes it rather than duplicating a render path), and it runs the
+// SAME validateAndSanitizeRenderInputs seam every caller — bounded or direct —
+// goes through: a value newly added to what gets rendered can never bypass
+// validation by calling this export directly instead of the bounded one.
 export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [], maxChars = GITHUB_COMMENT_MAX_CHARS }) {
+  ({ gate, headSha } = validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }));
   const marker = buildFindingsMarker({ gate });
   const lines = [
     marker,
@@ -446,7 +452,9 @@ function describeInvalidValue(value) {
 }
 
 // Validates and sanitizes every caller-supplied value that
-// renderBoundedFindingsCommentBody renders, in ONE place, so a value newly
+// renderFindingsCommentBody renders, in ONE place, called from
+// renderFindingsCommentBody itself — so it also covers renderBoundedFindingsCommentBody,
+// which composes it rather than duplicating a render path — and a value newly
 // added to what gets rendered can never bypass validation by omission — four
 // consecutive review rounds each added one more one-off guard here before
 // this consolidation. Returns the comment's identity-key fields ready to
@@ -547,11 +555,25 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
       if (!Array.isArray(finding.files)) {
         throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files must be an array, got ${describeInvalidValue(finding.files)}`);
       }
-      finding.files.forEach((file, j) => {
+      // for...of (never .forEach, which SKIPS array holes) — same rationale
+      // as the outer findings loop above: a sparse files array must produce
+      // the same named, index-bearing error as any other bad element.
+      let j = 0;
+      for (const file of finding.files) {
         if (typeof file !== "string" || file.trim().length === 0) {
           throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files[${j}] must be a non-empty string, got ${describeInvalidValue(file)}`);
         }
-      });
+        // The render uses the SANITIZED file ref (sanitizeCodeSpan), never
+        // the raw one, and silently DROPS a ref that sanitizes to empty
+        // (renderFindingsCommentBody's own files.filter) — so a raw ref that
+        // is non-blank but sanitizes to nothing (e.g. a bare "`") must be
+        // rejected here, matching angle/summary/disposition above, rather
+        // than vanishing from the rendered comment with no trace.
+        if (sanitizeCodeSpan(file).length === 0) {
+          throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files[${j}] sanitizes to an empty code span, got ${describeInvalidValue(file)}`);
+        }
+        j += 1;
+      }
     }
     i += 1;
   }
@@ -577,7 +599,10 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
 // kept still cannot fit, so a round that truly cannot be posted is
 // never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
-  ({ gate, headSha } = validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }));
+  // renderFindingsCommentBody now runs validateAndSanitizeRenderInputs itself
+  // (see its own doc comment), so this first call both validates and
+  // normalizes gate/headSha; every later call in this function is idempotent
+  // against the same already-valid input.
   const body = renderFindingsCommentBody({ gate, headSha, findings, maxChars });
   if (body.length <= maxChars) {
     return { body, omittedCounts: [] };
