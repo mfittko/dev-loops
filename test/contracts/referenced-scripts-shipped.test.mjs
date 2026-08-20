@@ -20,11 +20,11 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { ALWAYS_EXCLUDED_DIR_NAMES, flatDir, walkByExt } from "./_walk-helpers.mjs";
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 // ── Packed file set (pure, no `npm pack`) ──────────────────────────
-
-const ALWAYS_EXCLUDED_DIR_NAMES = new Set(["node_modules", ".git"]);
 
 function walkFiles(absDir, repoRoot, out) {
   for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
@@ -61,20 +61,6 @@ function expandPackedFileSet(repoRoot) {
 
 // ── Referenced-script collection ───────────────────────────────────
 
-function walkByExt(absDir, exts, out) {
-  if (!fs.existsSync(absDir)) return out;
-  for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-    const absChild = path.join(absDir, entry.name);
-    if (entry.isDirectory()) {
-      if (ALWAYS_EXCLUDED_DIR_NAMES.has(entry.name)) continue;
-      walkByExt(absChild, exts, out);
-    } else if (exts.some((ext) => entry.name.endsWith(ext))) {
-      out.push(absChild);
-    }
-  }
-  return out;
-}
-
 // Matches a whole path-like token ending in `scripts/...mjs`, including any
 // leading relative segments (e.g. `../dev-loop/scripts/foo.mjs`) — matching
 // only the literal `scripts/[A-Za-z0-9_/.-]+\.mjs` suffix would silently
@@ -84,12 +70,8 @@ const SCRIPT_REFERENCE_RE = /[A-Za-z0-9_.\-/]*scripts\/[A-Za-z0-9_/.-]+\.mjs/g;
 function surfaceFiles(repoRoot) {
   return [
     ...walkByExt(path.join(repoRoot, "skills"), [".md"], []),
-    ...fs.readdirSync(path.join(repoRoot, "commands"))
-      .filter((name) => name.endsWith(".md"))
-      .map((name) => path.join(repoRoot, "commands", name)),
-    ...fs.readdirSync(path.join(repoRoot, "agents"))
-      .filter((name) => name.endsWith(".md"))
-      .map((name) => path.join(repoRoot, "agents", name)),
+    ...flatDir(path.join(repoRoot, "commands"), ".md", []),
+    ...flatDir(path.join(repoRoot, "agents"), ".md", []),
     ...walkByExt(path.join(repoRoot, ".claude"), [".md"], []),
     path.join(repoRoot, "scripts/loop/resolve-dev-loop-startup.mjs"),
     path.join(repoRoot, "scripts/loop/build-handoff-envelope.mjs"),
