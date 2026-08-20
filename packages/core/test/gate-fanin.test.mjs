@@ -23,7 +23,35 @@ import {
   tallySeverities,
   zeroSeverityCounts,
   SEVERITY_ORDER,
+  VALID_SEVERITIES,
+  NON_DEFECT_SEVERITIES,
 } from "../src/loop/gate-fanin.mjs";
+
+// SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES must be frozen
+// like this file's other exported vocabulary constants (GATE_CONFIG_KEY,
+// LEGACY_SEVERITY_ALIASES, FANIN_SYNTHETIC_ANGLES, JUDGE_DISPOSITIONS) — an
+// unfrozen shared array is a footgun a later change could silently corrupt
+// for every consumer. Object.freeze on VALID_SEVERITIES/NON_DEFECT_SEVERITIES
+// (both Sets) only locks their own properties, not Set.prototype.add/delete,
+// so it doesn't block content mutation the way it blocks Array.prototype.push
+// on SEVERITY_ORDER below — it's applied for export consistency and to stop
+// a stray own-property assignment on the Set object itself.
+test("SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES are frozen, matching their frozen sibling exports", () => {
+  assert.equal(Object.isFrozen(SEVERITY_ORDER), true, "SEVERITY_ORDER must be frozen");
+  assert.equal(Object.isFrozen(VALID_SEVERITIES), true, "VALID_SEVERITIES must be frozen");
+  assert.equal(Object.isFrozen(NON_DEFECT_SEVERITIES), true, "NON_DEFECT_SEVERITIES must be frozen");
+  try {
+    assert.throws(() => { SEVERITY_ORDER.push("bogus"); }, TypeError);
+  } finally {
+    // If the freeze above ever regresses, the push actually succeeds BEFORE
+    // assert.throws fails — clean up the pushed entry so that regression
+    // fails only THIS test, instead of leaving "bogus" in the shared
+    // module-level SEVERITY_ORDER where every later order-dependent test in
+    // this file (zeroSeverityCounts/tallySeverities below) would fail too.
+    const bogusIndex = SEVERITY_ORDER.indexOf("bogus");
+    if (bogusIndex !== -1) SEVERITY_ORDER.splice(bogusIndex, 1);
+  }
+});
 
 function cleanAngle(angle) {
   return { angle, verdict: "clean", findings: [] };

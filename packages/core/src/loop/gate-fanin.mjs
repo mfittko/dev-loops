@@ -175,7 +175,7 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // finding via the fix loop, a question via never being auto-deferred) — it
 // outranks "medium"/"low", which both eventually defer. "nit" trails last:
 // it defers immediately, with no fixer cycle at all.
-export const SEVERITY_ORDER = ["high", "question", "medium", "low", "nit"];
+export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
 
 // The non-defect subset of SEVERITY_ORDER: a "question" is answered (never
 // fixed or deferred like a defect — see deriveDisposition), and a "nit"
@@ -185,13 +185,23 @@ export const SEVERITY_ORDER = ["high", "question", "medium", "low", "nit"];
 // partition so a consumer (e.g. config.mjs's BLOCKING_SEVERITY_SPELLINGS
 // vocabulary contract test) derives "defect severities" as
 // SEVERITY_ORDER minus this set, rather than re-hand-listing "question"/"nit".
-export const NON_DEFECT_SEVERITIES = new Set(["question", "nit"]);
+// Object.freeze on a Set only locks its OWN properties, not the add/delete
+// methods that mutate its internal collection — freezing is still applied
+// here for consistency with SEVERITY_ORDER and this file's other frozen
+// exports (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES, etc.), and it does stop
+// a caller from attaching a stray own property to the Set object itself.
+export const NON_DEFECT_SEVERITIES = Object.freeze(new Set(["question", "nit"]));
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
 // resolves no groups and silently downgrades pairing enforcement.
 export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
-export const VALID_SEVERITIES = new Set(SEVERITY_ORDER);
+// Object.freeze on a Set only locks its OWN properties, not the add/delete
+// methods that mutate its internal collection — freezing is still applied
+// here for consistency with SEVERITY_ORDER and this file's other frozen
+// exports (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES, etc.), and it does stop
+// a caller from attaching a stray own property to the Set object itself.
+export const VALID_SEVERITIES = Object.freeze(new Set(SEVERITY_ORDER));
 
 // Pre-rename spellings. Old ledgers, markers, and configs still carry them;
 // every read boundary normalizes through this map. Every SANCTIONED producer
