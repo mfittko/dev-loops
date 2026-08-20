@@ -242,6 +242,43 @@ export function severityRank(severity) {
 }
 
 /**
+ * A zero-initialized severity→count map, one key per SEVERITY_ORDER entry, in
+ * SEVERITY_ORDER's order. The shared starting point every severity tally in
+ * this codebase (consolidateFanin's own `bySeverity`, consolidate-fanin.mjs's
+ * `buildAngleMarker`, reconcile-draft-gate.mjs's no-findings placeholder) used
+ * to hand-roll separately via `Object.fromEntries(SEVERITY_ORDER.map((s) =>
+ * [s, 0]))` — one copy here means a severity added to SEVERITY_ORDER is
+ * zero-initialized everywhere at once.
+ * @returns {Record<string, number>}
+ */
+export function zeroSeverityCounts() {
+  return Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
+}
+
+/**
+ * Tally `findings` by (normalized) severity into a {@link zeroSeverityCounts}
+ * map. Each finding's severity is normalized through `normalizeSeverity`
+ * before counting, so a legacy spelling still lands on its canonical key. A
+ * finding whose normalized severity is not a recognized SEVERITY_ORDER member
+ * is silently excluded from the tally rather than inflating an unknown key —
+ * every routed call site here counts already-validated findings in practice
+ * (consolidateFanin validates every result's severity before this runs;
+ * buildAngleMarker tallies consolidateFanin's own output), so this guard is a
+ * defensive floor against future drift, not an escape hatch for accepting
+ * unvalidated severities.
+ * @param {Iterable<{severity: unknown}>} findings
+ * @returns {Record<string, number>}
+ */
+export function tallySeverities(findings) {
+  const counts = zeroSeverityCounts();
+  for (const f of findings ?? []) {
+    const severity = /** @type {string} */ (normalizeSeverity(f?.severity));
+    if (Object.hasOwn(counts, severity)) counts[severity] += 1;
+  }
+  return counts;
+}
+
+/**
  * Merge a severity→count map's legacy-spelled keys into their canonical keys
  * (summing counts) so both the CLI parser and direct programmatic callers of
  * the verdict poster share ONE merge rule. Values pass through unvalidated —
@@ -770,7 +807,6 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     if (err) malformed.push({ index, reason: err });
   });
 
-  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
   /** @type {Array<{severity: string, angle: string, summary: string, file?: string, line?: number, recommendation?: string, disposition: string}>} */
   const findings = [];
   let blockingCount = 0;
@@ -782,7 +818,6 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
         const severity = /** @type {string} */ (normalizeSeverity(f.severity));
         const isBlocking = blocking.has(severity);
         if (isBlocking) blockingCount += 1;
-        bySeverity[severity] += 1;
         const entry = {
           severity,
           angle,
@@ -810,6 +845,9 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     verdict = "clean";
   }
 
+  // `findings` already carries each entry's normalized severity, so tallying
+  // it directly (rather than incrementing a running map inside the loop
+  // above) reproduces the same counts via the one shared tally rule.
   return {
     verdict,
     findings,
@@ -817,7 +855,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
       angles: results.length,
       findings: findings.length,
       blocking: blockingCount,
-      bySeverity,
+      bySeverity: tallySeverities(findings),
     },
     malformed,
   };

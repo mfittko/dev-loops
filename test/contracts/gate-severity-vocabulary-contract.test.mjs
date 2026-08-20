@@ -8,7 +8,8 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
+import { LEGACY_SEVERITY_ALIASES, SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
+import { BLOCKING_SEVERITY_SPELLINGS } from "@dev-loops/core/config";
 import { VALID_DISPOSITIONS } from "../../scripts/github/write-gate-findings-log.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -41,6 +42,26 @@ test("skills/docs/gate-review-sub-loop-contract.md's classification list names e
     missing,
     [],
     `skills/docs/gate-review-sub-loop-contract.md's classification bullet is missing SEVERITY_ORDER value(s): ${missing.join(", ")}`,
+  );
+});
+
+test("config.mjs's BLOCKING_SEVERITY_SPELLINGS matches SEVERITY_ORDER's defect severities + LEGACY_SEVERITY_ALIASES' keys (#1611)", () => {
+  // blockCleanOnFindingSeverities is a DEFECT-severity-only vocabulary
+  // ("question"/"nit" are non-defect categories that never block a clean
+  // verdict by severity — see the schema's own doc comment) plus every
+  // pre-rename legacy spelling those defect severities accept on read. This
+  // derives the expected list from the two single-source-of-truth exports
+  // (@dev-loops/core/loop/gate-fanin) instead of hand-copying it a third
+  // time, so a severity added to SEVERITY_ORDER (or a new legacy alias) that
+  // is not also added to BLOCKING_SEVERITY_SPELLINGS fails here rather than
+  // leaving the schema enum and resolveGateConfig's exact-match guard
+  // silently stale.
+  const defectSeverities = SEVERITY_ORDER.filter((s) => s !== "question" && s !== "nit");
+  const expected = [...defectSeverities, ...Object.keys(LEGACY_SEVERITY_ALIASES)];
+  assert.deepEqual(
+    [...BLOCKING_SEVERITY_SPELLINGS].sort(),
+    [...expected].sort(),
+    "config.mjs's BLOCKING_SEVERITY_SPELLINGS has drifted from SEVERITY_ORDER's defect severities + LEGACY_SEVERITY_ALIASES' keys",
   );
 });
 
