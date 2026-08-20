@@ -1652,11 +1652,11 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
   // `completedAngles` (angles with a clean artifact already stamped at this
-  // head) drives the same-head skip-completed resume (#1507 AC3); `carriedAngles`
+  // head) drives the same-head skip-completed resume; `carriedAngles`
   // (angles the fail-closed Phase 1.2 carry-forward seam has proven carried
   // from a prior clean head — resolve-angle-carry-forward.mjs's own result,
-  // never guessed here) drives the head-bump half of the same resume (issue
-  // #1635): groups whose angles are all complete-or-carried are excluded from
+  // never guessed here) drives the head-bump half of the same resume:
+  // groups whose angles are all complete-or-carried are excluded from
   // `preflight.requiredReviewers` and from `pendingGroups`, so the conductor
   // dispatches only the shortfall. A wrong/stale carriedAngles input can only
   // shrink the dispatch plan, never grow it past the true group count, so it
@@ -2214,7 +2214,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
- * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles` (issue #1635); null/omitted = no carried angles known
+ * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string }>}
