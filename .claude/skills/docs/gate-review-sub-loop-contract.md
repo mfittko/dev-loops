@@ -338,7 +338,7 @@ harness's remaining reviewer budget, supplied to `write-gate-context` via
 exposes and passes it through). The result shape:
 
 ```
-{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode }
+{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode, completedAngles, carriedAngles, pendingGroups, skippedGroups }
 ```
 
 - `dispatch: true` (budget sufficient, OR the harness does not expose a budget
@@ -351,19 +351,25 @@ exposes and passes it through). The result shape:
   their head. A later session resumes the fan-out instead of restarting it:
   `reviewerBudgetPreflight` receives `completedAngles` — the angle names that
   already have a CLEAN findings artifact stamped for this head (scanned by
-  `write-gate-context.mjs` from the per-angle reviews directory) — and excludes
-  any dispatch unit whose angles are ALL complete from `requiredReviewers` and
-  from `preflight.pendingGroups`. The conductor dispatches only `pendingGroups`
-  (the shortfall), never re-dispatching a group already complete at this head,
-  so a session that exhausted its reviewer budget mid-fan-out picks up exactly
+  `write-gate-context.mjs` from the per-angle reviews directory) — and a second
+  input, `carriedAngles` (issue #1635: `write-gate-context.mjs --carried-angles
+  <json>`, always emitted at `preflight.carriedAngles` even when empty) — the
+  angle names the fail-closed carry-forward seam has proven carried forward
+  from a prior clean head. It excludes any dispatch unit whose angles are ALL
+  complete-OR-carried from `requiredReviewers` and from `preflight.pendingGroups`.
+  The conductor dispatches only `pendingGroups` (the shortfall), never
+  re-dispatching a group already complete-or-carried at this head, so a
+  session that exhausted its reviewer budget mid-fan-out picks up exactly
   where it stopped once a later session re-runs `write-gate-context`
   (`--available-reviewers` with the now-refreshed budget) at the same head and
   the preflight clears. Completed per-angle artifacts from PRIOR heads stay
   valid for their head via the carry-forward seam (see [Angle carry-forward
-  (fail-closed)](#angle-carry-forward-fail-closed)); the same-head resume above
-  is a separate, preflight-driven mechanism — carry-forward is a head-bump
-  provenance check and intentionally fails closed when `--prev-head` equals
-  `--head-sha` (it is never the same-head resume path).
+  (fail-closed)](#angle-carry-forward-fail-closed)); that seam and the
+  same-head resume above are distinct SOURCES — one a head-bump provenance
+  check that intentionally fails closed when `--prev-head` equals
+  `--head-sha`, the other a same-head artifact scan — that both feed this ONE
+  exclusion predicate once a conductor threads the carry-forward result in via
+  `--carried-angles`.
 
 **No new gate-exemption path (#1507 AC4).** A budget shortfall is NOT a
 verdict: `preflight.verdict` and `preflight.executionMode` are always `null`. A
@@ -779,12 +785,55 @@ sentinels, or a sentinel count short of the dispatch units the conductor spawned
 MUST stop the pass rather than proceed to consolidation. The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
 context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
-count; when Phase 1.2 carry-forward carried angles, pass the dispatch-unit count
-over the plan's FRESH angles, since `pendingGroups` includes carried angles and
-would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+count, NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
 the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
-dispatch; NOT the per-angle artifact count, which would false-fail every grouped
-round).
+dispatch; NOT the per-angle artifact count, which would false-fail every
+grouped round). Whether `pendingGroups` already excludes carry-forward-carried
+angles depends on whether the Phase 1 artifact was built with `write-gate-context.mjs
+--carried-angles <json>` (issue #1635, see [Angle carry-forward
+(fail-closed)](#angle-carry-forward-fail-closed) for when a conductor should
+pass it and how it differs from consolidate-fanin's own same-named flag):
+passed the Phase 1.2 carry-forward result, `reviewerBudgetPreflight` excludes
+any group whose angles are ALL carried-or-completed from `pendingGroups`, so
+its length already matches the dispatch-unit count over the plan's FRESH
+angles and needs no further subtraction. If the Phase 1 artifact predates
+Phase 1.2 (the common case: Phase 1 runs before Phase 1.2 in the sub-loop's
+own ordering, so a conductor that never rebuilds the artifact after
+carry-forward resolves never has this input), `pendingGroups` still includes
+the carried angles and would overcount — the caller must subtract the
+carry-forward-carried dispatch units from `pendingGroups.length` by hand
+before passing `--expected-dispatch-units`. Either way, if the resulting count
+is `0` (an all-carried-or-complete round dispatches no reviewer at all), OMIT
+`--expected-dispatch-units` entirely rather than pass `0`:
+`consolidate-fanin.mjs` parses it as a POSITIVE integer and throws on `0`. A
+wrong/stale `--carried-angles` value can only shrink `pendingGroups` further,
+never grow it past the true group count, so this seam can under-dispatch but
+never fabricate a clean verdict — but NOT because of
+`consolidate-fanin.mjs`'s OWN sentinel-count check (its `--expected-dispatch-units`
+threshold, not `verify-briefing-prefixes.mjs`, which has no dispatch-unit
+threshold of its own — it only reports `reviewerCount`): that check's own
+threshold is this same shrunken `--expected-dispatch-units`, so a shrunken
+`pendingGroups` shrinks both sides of its comparison identically and it cannot
+see the difference. What actually catches an under-dispatched round is
+narrower than that framing suggests: `checkFanoutAngleCoverage`
+(`@dev-loops/core/loop/gate-fanin`, called by `write-gate-findings-log.mjs`,
+`upsert-checkpoint-verdict.mjs`, and `detect-checkpoint-evidence.mjs` — never
+by `consolidate-fanin.mjs` itself) reports only `missingMandatory` +
+`foreignAngles`, computed purely from the CALLER-supplied `mandatoryAngles`
+(each caller passes its resolved `gates.<gate>` config angles with
+`mandatory: true`); it never unions the hardcoded ALWAYS_INCLUDE set, so it
+protects only a CONFIGURED mandatory angle, never a non-mandatory angle
+(hardcoded ALWAYS_INCLUDE included) that ends up with no artifact at all —
+and the fail-closed merge check (`buildPreMergeGateCheck`) rejects on a
+missing clean current-head marker plus that same configured-mandatory/pool
+coverage, never per-angle completeness. So a wrong
+`--carried-angles` naming only NON-mandatory angles (hardcoded ALWAYS_INCLUDE
+included) under-dispatches with no
+mechanical refusal catching it; the only trace is the ledger's own
+carried-angle provenance. The direction stays fail-safe for budget/spend
+either way — it can under-dispatch, never over-spend or fabricate findings
+for an angle that DID run — it just does not mechanically catch every
+under-dispatch.
 
 <!-- rule: GATE-EXEC-PRIMER-EVIDENCE -->
 `GATE-EXEC-PRIMER-EVIDENCE`: when the round recorded primer-dispatch ordering
@@ -1204,6 +1253,8 @@ PR review thread per `GATE-EXEC-THREAD-DISPOSITION` rather than fixed in-gate, i
 at every re-gate that follows; that is this rule's fail-closed cost, accepted deliberately.
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
+
+**Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate typically rebuilds the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
 
 **Review-surface mapping.** An angle's review surface is the set of file "surface kinds" whose change could implicate it, derived from the single source of truth for change-category → angle relevance (`CATEGORY_ANGLE_MAP`) via each file's `classifyFile` kind (`code` | `docs` | `config` | `test` | `ci`):
 

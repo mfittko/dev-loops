@@ -164,10 +164,16 @@ Optional:
                                  deterministic regardless of the CLI's invocation directory
   --expected-dispatch-units <n>  The number of fresh dispatch units the conductor spawned reviewers for
                                  this round (groups for grouped dispatch; angle count for per-angle
-                                 dispatch — write-gate-context.mjs's fanout.pendingGroups.length when
-                                 no Phase 1.2 carry-forward ran; when carry-forward carried angles,
-                                 pass the dispatch-unit count over the plan's FRESH angles —
-                                 fanout.pendingGroups includes carried angles and would overcount).
+                                 dispatch — write-gate-context.mjs's fanout.pendingGroups.length).
+                                 Whether that already excludes carry-forward-carried angles depends on
+                                 whether the Phase 1 artifact was built with write-gate-context.mjs
+                                 --carried-angles: if so, pendingGroups already excludes them and needs
+                                 no further subtraction; if the artifact predates that carry-forward
+                                 (no --carried-angles rebuild), pendingGroups still includes the carried
+                                 angles and the caller must subtract the carry-forward-carried
+                                 dispatch units by hand before passing this flag. Either way, if the
+                                 resulting count is 0, OMIT --expected-dispatch-units entirely rather
+                                 than pass 0 (this parses as a POSITIVE integer and throws on 0).
                                  When given alongside --head-sha, the fan-in fails closed
                                  (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
                                  for the head is SHORT of it — a dispatched reviewer never ran the

@@ -111,6 +111,14 @@ const ANGLE_SURFACE_KINDS = (() => {
 
 /**
  * Resolve an angle's declared review surface (the pure angle -> surface mapping).
+ * `angle` is matched trim+lowercase against ALL THREE lookups below (the
+ * hardcoded ALWAYS_INCLUDE set, the caller-supplied `alwaysRerun` set, and the
+ * `kinds` map) — deliberately: this makes a case/whitespace-drifted name (e.g.
+ * "Correctness", "PR-Description") resolve the SAME surface as its canonical
+ * form, rather than falling through to `{ kind: "unknown" }`. That is a
+ * decision-affecting default: a case-drifted MAPPED angle now becomes
+ * carry-forward-eligible (via `resolveAngleCarryForward`) where an unnormalized
+ * lookup would have fail-closed it as unknown.
  *
  * - ALWAYS_INCLUDE angles (gate-evidence, renderer-security, pr-description) plus
  *   any explicit alwaysRerun angle -> `{ kind: "always" }`. These review a surface
@@ -125,15 +133,17 @@ const ANGLE_SURFACE_KINDS = (() => {
  * @returns {AngleReviewSurface}
  */
 export function angleReviewSurface(angle, { alwaysRerun } = {}) {
-  const name = typeof angle === "string" ? angle.trim() : "";
+  // Normalized ONCE here (trim+lowercase) so every caller — the hardcoded
+  // ALWAYS_INCLUDE check below, the configured alwaysRerun match, and the
+  // kinds lookup — agrees on one predicate regardless of whether the caller
+  // pre-lowercases (consolidate-fanin.mjs does; write-gate-context.mjs's
+  // mandatory-angle refusal does not, and must not have to).
+  const name = typeof angle === "string" ? angle.trim().toLowerCase() : "";
   if (name.length === 0) return { kind: "unknown" };
   if (ALWAYS_INCLUDE.has(name)) return { kind: "always" };
-  // Case-insensitive: callers key angles as base+lowercase while configs may
-  // carry case drift ("Correctness"); normalizing HERE keeps producer and
-  // consumer on one predicate instead of each caller pre-lowercasing.
   if (alwaysRerun) {
     const normalized = new Set([...alwaysRerun].map((entry) => String(entry).trim().toLowerCase()));
-    if (normalized.has(name.toLowerCase())) return { kind: "always" };
+    if (normalized.has(name)) return { kind: "always" };
   }
   const kinds = ANGLE_SURFACE_KINDS.get(name);
   if (!kinds || kinds.size === 0) return { kind: "unknown" };
