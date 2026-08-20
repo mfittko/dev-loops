@@ -141,6 +141,14 @@ a matching explicit value, and refuses a contradiction citing this rule. No
 override flag — a round whose verdict genuinely differs from the computed one
 is a consolidator bug to fix, not an operator decision to override.
 
+`write-gate-findings-log.mjs`'s write-time contradiction refusal always
+compares `--verdict` against the wrapper's `overallVerdict` — the
+consolidator's computed round verdict — whether or not `--judge-verdict` was
+also supplied. The judge only enriches findings with `act`/`defer`/`reject`
+dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525));
+it never revises the round verdict, so a `--judge-verdict` run is held to the
+exact same contradiction check as a run without one.
+
 ## Disposition ledger
 
 Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER`
