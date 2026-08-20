@@ -35,8 +35,9 @@ Optional:
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
                                  judgeRationale / judgeCriterion / followUpDraft) via applyJudgeDispositions before
                                  the ledger is written, so the durable ledger and posted findings comment carry what
-                                 was consciously not acted on and why (#1525). Optional; when absent the ledger
-                                 writes byte-identically to before.
+                                 was consciously not acted on and why (#1525). The verdict must dispose every finding
+                                 (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
+                                 ledger. Optional; when absent the ledger writes byte-identically to before.
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -158,12 +159,13 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
-    if (f.followUpDraft) {
+    if (f.followUpDraft !== undefined && f.followUpDraft !== null) {
       // Mirrors validateJudgeVerdict's followUpDraft shape rule
-      // (packages/core/src/loop/gate-fanin.mjs): gate on presence first — a
-      // truthy non-object draft (string/array/number/boolean) is rejected
-      // here rather than silently dropped, then require a non-empty title
-      // string and a body string, so this trust boundary never passes
+      // (packages/core/src/loop/gate-fanin.mjs): gate on presence, carving
+      // out only nullish (undefined/null) as absent, so a present-but-falsy
+      // draft ("", 0, false) is rejected as a non-object rather than silently
+      // dropped like every other malformed draft, then require a non-empty
+      // title string and a body string, so this trust boundary never passes
       // through, or loses without a diagnostic, a malformed draft that would
       // surface later as a broken follow-up file.
       if (typeof f.followUpDraft !== "object" || Array.isArray(f.followUpDraft)) {

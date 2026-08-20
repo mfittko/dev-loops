@@ -1255,6 +1255,19 @@ describe("applyJudgeDispositions (#1525)", () => {
     );
   });
 
+  test("re-disposing a pre-enriched defer-with-draft finding to act drops the stale followUpDraft", () => {
+    const alreadyEnriched = baseFindings.map((f, i) => (i === 1
+      ? { ...f, judgeDisposition: "defer", judgeRationale: "prior round", judgeCriterion: "NG-2", followUpDraft: { title: "stale", body: "stale body" } }
+      : { ...f }));
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+      { index: 1, disposition: "act", rationale: "now in-scope, no longer deferred", criterion: "AC-2" },
+    ]);
+    const { findings } = applyJudgeDispositions(alreadyEnriched, verdict);
+    assert.equal(findings[1].judgeDisposition, "act");
+    assert.equal(findings[1].followUpDraft, undefined);
+  });
+
   test("an empty findings array with an empty dispositions array is vacuously covered", () => {
     const verdict = judgeVerdict([]);
     const { findings } = applyJudgeDispositions([], verdict);

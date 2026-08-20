@@ -538,6 +538,42 @@ test("writeGateFindingsLog rejects an array-wrapped followUpDraft instead of sil
   }, /\[0\]\.followUpDraft must be an object/);
 });
 
+test("writeGateFindingsLog rejects a whitespace-only followUpDraft title", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "   ", body: "b" } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog stores a padded followUpDraft title raw (validated trimmed, stored untrimmed)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-followup-raw-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "  ok  ", body: "" } },
+      ]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.deepEqual(parsed.findings[0].followUpDraft, { title: "  ok  ", body: "" });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog passes a well-formed followUpDraft through unchanged", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-followup-"));
   try {

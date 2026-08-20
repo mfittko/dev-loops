@@ -1034,6 +1034,13 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries)`);
     }
     const target = enriched[d.index];
+    // Reset judge-owned fields before the re-merge: a pre-enriched finding
+    // (already-enriched from a prior round, re-disposed by THIS verdict)
+    // must not let stale judgeCriterion/followUpDraft survive a
+    // defer -> act/reject re-disposition — the merged copy carries only
+    // what the current disposition provides, never prior-round residue.
+    delete target.judgeCriterion;
+    delete target.followUpDraft;
     target.judgeDisposition = d.disposition;
     target.judgeRationale = d.rationale;
     if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
