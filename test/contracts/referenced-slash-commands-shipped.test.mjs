@@ -117,9 +117,12 @@ function collectFailures(repoRoot) {
 
 test("no shipped surface instructs a bare /loop-* slash command without the namespaced alternative", () => {
   // Vacuous-pass guard (mirrors referenced-scripts-shipped.test.mjs's
-  // references.length check): an empty scanned surface set would let the
-  // contract pass without scanning anything.
-  const scannedSurfaces = surfaceFiles(REPO_ROOT).filter((surfaceFile) => fs.existsSync(surfaceFile));
+  // references.length check): counts the files the scan actually inspects —
+  // existing and not allowlisted — so neither an empty surface set nor an
+  // all-allowlisted one can pass the contract without scanning anything.
+  const scannedSurfaces = surfaceFiles(REPO_ROOT).filter(
+    (surfaceFile) => fs.existsSync(surfaceFile) && !isAllowlisted(REPO_ROOT, surfaceFile),
+  );
   assert.ok(scannedSurfaces.length > 0, "expected the scanned surface set to be non-empty (vacuous-pass guard)");
   const failures = collectFailures(REPO_ROOT);
   assert.deepEqual(failures, [], `bare /loop-* slash references without a namespaced alternative:\n${failures.join("\n")}`);
