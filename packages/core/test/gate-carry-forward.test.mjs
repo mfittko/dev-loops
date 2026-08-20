@@ -41,6 +41,23 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(angleReviewSurface(null).kind, "unknown");
   });
 
+  // The trim+lowercase normalization applies to the `kinds` map lookup too,
+  // not just the alwaysRerun/ALWAYS_INCLUDE checks above: a case-drifted
+  // MAPPED angle name resolves the same `kinds` surface as its canonical
+  // form, rather than falling through to `unknown`. Pinned deliberately —
+  // dropping the normalization on this lookup would silently flip these
+  // back to fail-closed `unknown` with no other test noticing (the existing
+  // case-drift tests above pre-lowercase their own lookup argument).
+  test("case/whitespace-drifted MAPPED angle names resolve the same kinds surface, not unknown", () => {
+    assert.equal(angleReviewSurface("Correctness").kind, "kinds");
+    assert.deepEqual([...angleReviewSurface("Correctness").kinds].sort(), [...angleReviewSurface("correctness").kinds].sort());
+    assert.equal(angleReviewSurface(" DOCS ").kind, "kinds");
+  });
+
+  test("case-drifted hardcoded ALWAYS_INCLUDE angle name resolves always, not unknown", () => {
+    assert.equal(angleReviewSurface("Pr-Description").kind, "always");
+  });
+
   test("code-correctness angles' surface excludes docs", () => {
     const surface = angleReviewSurface("correctness");
     assert.equal(surface.kind, "kinds");
@@ -231,6 +248,20 @@ describe("resolveCarryForwardAngles — partition", () => {
     });
     assert.equal(carried.length, 0);
     assert.equal(mustRerun.length, 2);
+  });
+
+  // Pin the case-drift lookup widening end to end at the decision seam this
+  // function drives: a case-drifted MAPPED angle name (as might appear in a
+  // prior findings-log entry) still carries forward on a delta provably
+  // outside its surface — it must not fail closed to must-re-run just
+  // because the recorded name's case drifted from the canonical one.
+  test("a case-drifted mapped angle name carries forward on a non-implicating delta", () => {
+    const { carried, mustRerun } = resolveCarryForwardAngles({
+      prevAngles: ["Correctness"],
+      changedFiles: ["docs/guide.md"],
+    });
+    assert.deepEqual(carried.map((c) => c.angle), ["Correctness"]);
+    assert.deepEqual(mustRerun, []);
   });
 });
 

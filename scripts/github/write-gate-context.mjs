@@ -433,7 +433,12 @@ export function parseWriteGateContextCliArgs(argv) {
       // proof is required here: the caller is expected to be the fail-closed
       // carry-forward seam itself (resolve-angle-carry-forward.mjs's own
       // result), and a wrong/stale value can only shrink the dispatch plan
-      // (never grow it), which the merge-time fail-closed check still catches.
+      // (never grow it): entry refusal below catches a mandatory/
+      // ALWAYS_INCLUDE name, the coverage check catches a configured-
+      // mandatory angle, and the merge check catches a stale current-head
+      // verdict marker; a wrongly-carried non-mandatory angle under-dispatches
+      // with no mechanical catch, traceable only through this artifact's own
+      // carried-angle provenance.
       const raw = requireTokenValue(token, parseError);
       let parsed;
       try {
@@ -1663,9 +1668,15 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // dispatches only the shortfall. A wrong/stale carriedAngles input can only
   // shrink the dispatch plan, never grow it past the true group count, so it
   // can under-dispatch but never over-spend the budget or fabricate a clean
-  // verdict — the fail-closed merge check still requires a clean current-head
-  // marker per angle, so an under-dispatched round is caught there.
-  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles });
+  // verdict — entry refusal above catches a mandatory/ALWAYS_INCLUDE name,
+  // the coverage check catches a configured-mandatory angle, and the merge
+  // check catches a stale current-head verdict marker; a wrongly-carried
+  // non-mandatory angle's under-dispatch is visible only in this artifact's
+  // own carried-angle provenance. Pass the already-materialized
+  // `carriedAnglesList`, not the raw `carriedAngles` option: the latter may be
+  // a one-shot iterable already exhausted by the spread above, which would
+  // silently exclude nothing and record empty provenance.
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
   return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };

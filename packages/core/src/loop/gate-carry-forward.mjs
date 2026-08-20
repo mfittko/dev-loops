@@ -111,6 +111,14 @@ const ANGLE_SURFACE_KINDS = (() => {
 
 /**
  * Resolve an angle's declared review surface (the pure angle -> surface mapping).
+ * `angle` is matched trim+lowercase against ALL THREE lookups below (the
+ * hardcoded ALWAYS_INCLUDE set, the caller-supplied `alwaysRerun` set, and the
+ * `kinds` map) — deliberately: this makes a case/whitespace-drifted name (e.g.
+ * "Correctness", "PR-Description") resolve the SAME surface as its canonical
+ * form, rather than falling through to `{ kind: "unknown" }`. That is a
+ * decision-affecting default: a case-drifted MAPPED angle now becomes
+ * carry-forward-eligible (via `resolveAngleCarryForward`) where an unnormalized
+ * lookup would have fail-closed it as unknown.
  *
  * - ALWAYS_INCLUDE angles (gate-evidence, renderer-security, pr-description) plus
  *   any explicit alwaysRerun angle -> `{ kind: "always" }`. These review a surface

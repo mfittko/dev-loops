@@ -4580,15 +4580,48 @@ test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never
     () => resolveFanoutDispatch(config, "draft", ["scope", "pr-description"], { carriedAngles: [" pr-description "] }),
     /can never legitimately carry forward/,
   );
-  // A case-drifted legitimately-carryable name still carries: the refusal's
-  // own normalization must not accidentally reject a name it should let pass.
-  assert.doesNotThrow(() => resolveFanoutDispatch(config, "draft", ["scope", "docs"], { carriedAngles: ["Docs"] }));
-  // A legitimately-carryable angle (mapped, non-mandatory) is unaffected.
-  assert.doesNotThrow(() => resolveFanoutDispatch(config, "draft", ["scope", "docs"], { carriedAngles: ["docs"] }));
+  // A case-drifted legitimately-carryable name still carries: assert the
+  // resulting plan, not just doesNotThrow — force one dispatch unit per angle
+  // (maxAnglesPerGroup: 1) so "docs" is its own group and the exclusion is
+  // observable in pendingGroups/requiredReviewers instead of being masked by
+  // scope+docs auto-chunking into a single group under the default cap.
+  const singletonConfig = { ...config, gates: { ...config.gates, fanout: { maxAnglesPerGroup: 1 } } };
+  const carriedCaseDrift = resolveFanoutDispatch(singletonConfig, "draft", ["scope", "docs"], { carriedAngles: ["Docs"] });
+  assert.equal(carriedCaseDrift.pendingGroups.some((g) => g.angles.includes("docs")), false);
+  assert.equal(carriedCaseDrift.preflight.requiredReviewers, 1);
+  // A legitimately-carryable angle (mapped, non-mandatory) is excluded the same way.
+  const carriedExact = resolveFanoutDispatch(singletonConfig, "draft", ["scope", "docs"], { carriedAngles: ["docs"] });
+  assert.equal(carriedExact.pendingGroups.some((g) => g.angles.includes("docs")), false);
+  assert.equal(carriedExact.preflight.requiredReviewers, 1);
   // An unmapped/unknown angle name is NOT rejected here (unlike
   // consolidate-fanin.mjs, which cross-checks against a plan proof this seam
-  // does not have) — it is simply not excluded from any group.
-  assert.doesNotThrow(() => resolveFanoutDispatch(config, "draft", ["scope"], { carriedAngles: ["not-a-real-angle"] }));
+  // does not have) — the refusal does not reject this name, and nothing is
+  // excluded: requiredReviewers is unchanged and skippedGroups stays empty.
+  const unmapped = resolveFanoutDispatch(singletonConfig, "draft", ["scope"], { carriedAngles: ["not-a-real-angle"] });
+  assert.equal(unmapped.preflight.requiredReviewers, 1);
+  assert.deepEqual(unmapped.preflight.skippedGroups, []);
+});
+
+test("#1635 resolveFanoutDispatch excludes a carried group and round-trips carriedAngles provenance for a one-shot iterable (generator / Set.values()), not just an array", () => {
+  // Regression pin: resolveFanoutDispatch used to materialize carriedAngles
+  // into carriedAnglesList for the refusal guard, then pass the ORIGINAL
+  // (possibly already-exhausted) carriedAngles into reviewerBudgetPreflight —
+  // a one-shot iterable arrived empty there, excluding nothing and recording
+  // empty provenance even though the caller supplied names.
+  const config = draftConfig({ dynamicAngles: false, mandatoryAngles: ["gate-evidence"] });
+  const singletonConfig = { ...config, gates: { ...config.gates, fanout: { maxAnglesPerGroup: 1 } } };
+  function* carriedGenerator() {
+    yield "docs";
+  }
+  const viaGenerator = resolveFanoutDispatch(singletonConfig, "draft", ["scope", "docs"], { carriedAngles: carriedGenerator() });
+  assert.equal(viaGenerator.pendingGroups.some((g) => g.angles.includes("docs")), false);
+  assert.equal(viaGenerator.preflight.requiredReviewers, 1);
+  assert.deepEqual(viaGenerator.preflight.carriedAngles, ["docs"]);
+
+  const viaSetIterator = resolveFanoutDispatch(singletonConfig, "draft", ["scope", "docs"], { carriedAngles: new Set(["docs"]).values() });
+  assert.equal(viaSetIterator.pendingGroups.some((g) => g.angles.includes("docs")), false);
+  assert.equal(viaSetIterator.preflight.requiredReviewers, 1);
+  assert.deepEqual(viaSetIterator.preflight.carriedAngles, ["docs"]);
 });
 
 test("#1726 gates.fanout.sequential serializes the wave plan and records sequential/effectiveConcurrency in the fanout artifact", () => {
@@ -4839,6 +4872,50 @@ test("readCompletedAnglesForHead: resolves a RELATIVE tmpRoot against the runtim
       { repoRoot },
     );
     assert.deepEqual(completed, ["scope"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext threads { repoRoot } into its own readCompletedAnglesForHead call (mutation pin: dropping either call site's { repoRoot } pass-through must fail this test)", async () => {
+  // The round-2 fixture above pins readCompletedAnglesForHead's OWN parameter
+  // directly; it does not exercise the two production call sites that pass
+  // { repoRoot } through — buildGateContext and main(). Deleting either
+  // pass-through would silently restore the cwd-dependent scan while every
+  // other test in this suite (none of which reference completedAngles) stays
+  // green. This seeds a clean artifact under a RELATIVE tmpRoot ("tmp", the
+  // default) resolved against a repoRoot distinct from process.cwd(), and
+  // proves buildGateContext's own scan picks it up end to end.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-composition-"));
+  try {
+    assert.notEqual(repoRoot, process.cwd());
+    const repo = "owner/repo";
+    const pr = 65;
+    const gate = "draft_gate";
+    const headSha = "abc1234567890";
+    const dir = buildGateReviewsDir({ repo, pr, gate, headSha });
+    assert.equal(path.isAbsolute(dir), false);
+    await mkdir(path.resolve(repoRoot, dir), { recursive: true });
+    await writeFile(
+      path.join(path.resolve(repoRoot, dir), "docs.json"),
+      JSON.stringify({ angle: "docs", verdict: "clean", headSha, findings: [] }),
+      "utf8",
+    );
+    const config = draftConfig({ dynamicAngles: false, angles: ["scope", "docs"], mandatoryAngles: ["gate-evidence"] });
+    // One dispatch unit per angle so the "docs" group is isolated and its
+    // exclusion (from a completed-at-this-head scan, not from carriedAngles)
+    // is directly observable in pendingGroups/requiredReviewers.
+    config.gates.fanout = { maxAnglesPerGroup: 1 };
+    const result = await buildGateContext(
+      { config, gate, diff: null, repo, pr, headSha },
+      { repoRoot },
+    );
+    assert.deepEqual(result.artifact.fanout.preflight.completedAngles, ["docs"]);
+    assert.equal(
+      result.artifact.fanout.pendingGroups.some((g) => g.angles.includes("docs")),
+      false,
+    );
+    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 2);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

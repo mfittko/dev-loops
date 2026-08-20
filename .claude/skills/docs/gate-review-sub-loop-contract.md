@@ -338,7 +338,7 @@ harness's remaining reviewer budget, supplied to `write-gate-context` via
 exposes and passes it through). The result shape:
 
 ```
-{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode, completedAngles, carriedAngles }
+{ ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode, completedAngles, carriedAngles, pendingGroups, skippedGroups }
 ```
 
 - `dispatch: true` (budget sufficient, OR the harness does not expose a budget
@@ -816,13 +816,19 @@ threshold is this same shrunken `--expected-dispatch-units`, so a shrunken
 `pendingGroups` shrinks both sides of its comparison identically and it cannot
 see the difference. What actually catches an under-dispatched round is
 narrower than that framing suggests: `checkFanoutAngleCoverage`
-(`consolidate-fanin.mjs`'s per-angle coverage) reports only
-`missingMandatory` + `foreignAngles` — it protects MANDATORY and hardcoded
-ALWAYS_INCLUDE angles, never a non-mandatory angle that ends up with no
-artifact at all — and the fail-closed merge check (`buildPreMergeGateCheck`)
-rejects on a missing clean current-head marker plus that same
-mandatory/pool coverage, never per-angle completeness. So a wrong
-`--carried-angles` naming only NON-mandatory angles under-dispatches with no
+(`@dev-loops/core/loop/gate-fanin`, called by `write-gate-findings-log.mjs`,
+`upsert-checkpoint-verdict.mjs`, and `detect-checkpoint-evidence.mjs` — never
+by `consolidate-fanin.mjs` itself) reports only `missingMandatory` +
+`foreignAngles`, computed purely from the CALLER-supplied `mandatoryAngles`
+(each caller passes its resolved `gates.<gate>` config angles with
+`mandatory: true`); it never unions the hardcoded ALWAYS_INCLUDE set, so it
+protects only a CONFIGURED mandatory angle, never a non-mandatory angle
+(hardcoded ALWAYS_INCLUDE included) that ends up with no artifact at all —
+and the fail-closed merge check (`buildPreMergeGateCheck`) rejects on a
+missing clean current-head marker plus that same configured-mandatory/pool
+coverage, never per-angle completeness. So a wrong
+`--carried-angles` naming only NON-mandatory angles (hardcoded ALWAYS_INCLUDE
+included) under-dispatches with no
 mechanical refusal catching it; the only trace is the ledger's own
 carried-angle provenance. The direction stays fail-safe for budget/spend
 either way — it can under-dispatch, never over-spend or fabricate findings
