@@ -1016,7 +1016,10 @@ export function validateJudgeVerdict(verdict) {
  *
  * Pure. Fails closed (throws) when a disposition references an out-of-range
  * index — a judge verdict that names a finding that is not in the ledger is a
- * mismatch, never a silent enrichment.
+ * mismatch, never a silent enrichment — and when the dispositions do not
+ * cover every finding: an undisposed finding must never be silently dropped
+ * from the fixer's act list. An empty findings array with an empty
+ * dispositions array is vacuously covered and returns without error.
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
@@ -1031,6 +1034,13 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries)`);
     }
     const target = enriched[d.index];
+    // Reset judge-owned fields before the re-merge: a pre-enriched finding
+    // (already-enriched from a prior round, re-disposed by THIS verdict)
+    // must not let stale judgeCriterion/followUpDraft survive a
+    // defer -> act/reject re-disposition — the merged copy carries only
+    // what the current disposition provides, never prior-round residue.
+    delete target.judgeCriterion;
+    delete target.followUpDraft;
     target.judgeDisposition = d.disposition;
     target.judgeRationale = d.rationale;
     if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
@@ -1039,6 +1049,21 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     if (d.disposition === "defer" && d.followUpDraft) {
       target.followUpDraft = d.followUpDraft;
     }
+  }
+  // Coverage is judged against THIS verdict's disposed-index set, not field
+  // presence on the merged copy — an already-enriched ledger (a finding that
+  // already carries judgeDisposition from a prior round) must not let a
+  // verdict that disposes nothing pass silently. validateJudgeVerdict already
+  // rejects duplicate indexes, so the Set is exact.
+  const disposed = new Set(validated.dispositions.map((d) => d.index));
+  const uncovered = enriched.reduce((positions, _f, i) => {
+    if (!disposed.has(i)) positions.push(i);
+    return positions;
+  }, /** @type {number[]} */ ([]));
+  if (uncovered.length > 0) {
+    throw new Error(
+      `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
+    );
   }
   return { findings: enriched, scopeDrift: validated.scopeDrift };
 }

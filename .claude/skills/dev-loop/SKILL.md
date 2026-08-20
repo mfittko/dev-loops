@@ -171,8 +171,9 @@ dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha 
 ```
 
 The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a `judge-pass` fail-closed
-(stale verdict head, malformed verdict, out-of-range index) means re-run the judge at the current head,
-never a silent severity-only fallback on a wired gate. See Gate Review Sub-Loop Contract Phase 3.5.
+(stale verdict head, malformed verdict, out-of-range index, undisposed finding) means re-run the judge at
+the current head, never a silent severity-only fallback on a wired gate. See Gate Review Sub-Loop Contract
+Phase 3.5.
 
 The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md), [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) Phase 3) remain authoritative for the full refusal list and fail-closed cases; this inline emphasis exists so the sanctioned path is visible at the point of dispatch without following a link. A subagent that skipped the cross-ref and hand-rolled `Promise.all` + transcript-tailing burned ~189k tokens and had to be interrupted and restarted fresh — do not repeat that.
 

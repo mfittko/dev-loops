@@ -209,7 +209,7 @@ export function validateCliArgs(options) {
  *     (trim+lowercase) or the pass fails closed — a stale verdict staged from an
  *     earlier head must never feed the fixer's act list
  *   - applies the judge's relevance dispositions via `applyJudgeDispositions`
- *     (fail-closed on an out-of-range index)
+ *     (fail-closed on an out-of-range index and on undisposed findings)
  *
  * The fix pass consumes ONLY the returned `act` list (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`);
  * the returned `enriched` ledger carries `judgeDisposition` / `judgeRationale` /
@@ -231,17 +231,11 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
       `judge verdict headSha ${JSON.stringify(validated.headSha)} does not match current head ${JSON.stringify(headSha)} — refuse a stale verdict; re-run the judge at the current head`
     );
   }
+  // applyJudgeDispositions fails closed on both an out-of-range index and an
+  // undisposed finding (the coverage check lives in that shared pure seam),
+  // so runJudgePass inherits fail-closed coverage without restating it here.
   const applied = applyJudgeDispositions(findings, judgeVerdict);
   const enriched = applied.findings;
-  // Fail closed when the judge verdict does not dispose every finding: an
-  // undisposed finding would otherwise be silently dropped from the fixer's act
-  // list (it only lingers in the enriched ledger without a disposition).
-  const uncovered = enriched.filter((f) => !f.judgeDisposition);
-  if (uncovered.length > 0) {
-    throw new Error(
-      `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.map((f) => f.index).join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
-    );
-  }
   const act = enriched.filter((f) => f.judgeDisposition === "act");
   const counts = { act: 0, defer: 0, reject: 0 };
   for (const f of enriched) {

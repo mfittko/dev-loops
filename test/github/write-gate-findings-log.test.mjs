@@ -463,6 +463,138 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
   }, /resolvedIn must be a non-empty string/);
 });
 
+test("writeGateFindingsLog rejects a followUpDraft with an empty title", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "", body: "b" } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog rejects a followUpDraft with a non-string body", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "t", body: 42 } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog rejects a followUpDraft with a missing title", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { body: "b" } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog rejects a non-object (string) followUpDraft instead of silently dropping it", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: "see the follow-up" },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must be an object/);
+});
+
+test("writeGateFindingsLog rejects an array-wrapped followUpDraft instead of silently dropping it", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: ["t", "b"] },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must be an object/);
+});
+
+test("writeGateFindingsLog rejects a whitespace-only followUpDraft title", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "   ", body: "b" } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog stores a padded followUpDraft title raw (validated trimmed, stored untrimmed)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-followup-raw-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "  ok  ", body: "" } },
+      ]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.deepEqual(parsed.findings[0].followUpDraft, { title: "  ok  ", body: "" });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog passes a well-formed followUpDraft through unchanged", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-followup-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "t", body: "b" } },
+      ]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.deepEqual(parsed.findings[0].followUpDraft, { title: "t", body: "b" });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog includes an optional positive-integer line when present", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
   try {
@@ -1765,6 +1897,49 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
     assert.equal(parsed.findings[1].judgeDisposition, "reject");
     assert.equal(parsed.scopeDrift.verdict, "drift_detected");
     assert.deepEqual(parsed.scopeDrift.driftedAreas, ["cli surface"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// The --judge-verdict path inherits applyJudgeDispositions's coverage
+// fail-closed check the same as the pure seam and runJudgePass: a verdict
+// that leaves a finding undisposed must abort the write rather than persist
+// a ledger with a silently-dropped finding.
+test("writeGateFindingsLog --judge-verdict fails closed when the verdict does not dispose every finding and writes no ledger", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-coverage-"));
+  try {
+    const headSha = "d4".repeat(20);
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+      ],
+    }), "utf8");
+
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "o/n",
+        pr: 23,
+        gate: "draft_gate",
+        headSha,
+        verdict: "findings_present",
+        findings: JSON.stringify([
+          { severity: "must-fix", angle: "correctness", summary: "null deref", disposition: "accepted-for-fix" },
+          { severity: "low", angle: "docs", summary: "rename variable", disposition: "deferred" },
+        ]),
+        judgeVerdict: judgeVerdictPath,
+        tmpRoot: tmpDir,
+      }),
+      /does not dispose 1 finding\(s\) \(indexes: 1\)/,
+    );
+    await assert.rejects(
+      () => readFile(buildLogPath({ repo: "o/n", pr: 23, gate: "draft_gate", headSha, tmpRoot: tmpDir }), "utf8"),
+      /ENOENT/,
+      "an undisposed-finding verdict must not write a ledger",
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
