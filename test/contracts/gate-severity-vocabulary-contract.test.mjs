@@ -59,8 +59,11 @@ test("config.mjs's BLOCKING_SEVERITY_SPELLINGS matches SEVERITY_ORDER's defect s
   // resolving to one) that is not also added to BLOCKING_SEVERITY_SPELLINGS
   // fails here rather than leaving the schema enum and resolveGateConfig's
   // exact-match guard silently stale. A NON-defect severity added to
-  // SEVERITY_ORDER must NOT be added to BLOCKING_SEVERITY_SPELLINGS — this
-  // pin excludes it via NON_DEFECT_SEVERITIES rather than demanding it.
+  // SEVERITY_ORDER must ALSO be added to NON_DEFECT_SEVERITIES (the
+  // hand-listed Set in gate-fanin.mjs) — only then does this pin exclude it
+  // from BLOCKING_SEVERITY_SPELLINGS; until that second edit lands, the
+  // severity is still classified as a defect below and this pin demands its
+  // addition to BLOCKING_SEVERITY_SPELLINGS instead.
   const defectSeverities = SEVERITY_ORDER.filter((s) => !NON_DEFECT_SEVERITIES.has(s));
   const defectAliases = Object.keys(LEGACY_SEVERITY_ALIASES)
     .filter((alias) => defectSeverities.includes(LEGACY_SEVERITY_ALIASES[alias]));

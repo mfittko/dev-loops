@@ -110,19 +110,14 @@ describe("tallySeverities", () => {
     assert.deepEqual(Object.keys(counts).sort(), [...SEVERITY_ORDER].sort());
   });
 
-  test("a nullish findings argument tallies to the zero map instead of throwing", () => {
-    assert.deepEqual(tallySeverities(undefined), zeroSeverityCounts());
-    assert.deepEqual(tallySeverities(null), zeroSeverityCounts());
+  test("a nullish findings argument throws rather than tallying to a silent zero map", () => {
+    assert.throws(() => tallySeverities(undefined));
+    assert.throws(() => tallySeverities(null));
   });
 
-  test("a nullish individual finding is skipped instead of throwing", () => {
-    assert.deepEqual(tallySeverities([null, undefined, { severity: "nit" }]), {
-      high: 0,
-      question: 0,
-      medium: 0,
-      low: 0,
-      nit: 1,
-    });
+  test("a nullish individual finding throws rather than being silently skipped", () => {
+    assert.throws(() => tallySeverities([null, { severity: "nit" }]));
+    assert.throws(() => tallySeverities([undefined, { severity: "nit" }]));
   });
 });
 

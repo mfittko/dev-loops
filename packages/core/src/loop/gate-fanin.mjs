@@ -275,17 +275,18 @@ export function zeroSeverityCounts() {
  * (consolidateFanin validates every result's severity before this runs;
  * buildAngleMarker tallies consolidateFanin's own output), so this guard is a
  * defensive floor against future drift, not an escape hatch for accepting
- * unvalidated severities. A nullish `findings` argument, and a nullish
- * individual entry within it, both tally as zero rather than throwing — the
- * same defensive-floor stance as the unknown-severity guard above, for a
- * caller that has not yet validated its input shape.
- * @param {Iterable<{severity: unknown}> | null | undefined} findings
+ * unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
+ * a nullish `findings` argument throws (not iterable), and a nullish
+ * individual entry throws reading `.severity` — no routed caller passes
+ * either shape, so a caller that does gets a loud failure instead of a
+ * silently wrong all-zero tally.
+ * @param {Iterable<{severity: unknown}>} findings
  * @returns {Record<string, number>}
  */
 export function tallySeverities(findings) {
   const counts = zeroSeverityCounts();
-  for (const f of findings ?? []) {
-    const severity = /** @type {string} */ (normalizeSeverity(f?.severity));
+  for (const f of findings) {
+    const severity = /** @type {string} */ (normalizeSeverity(f.severity));
     if (Object.hasOwn(counts, severity)) counts[severity] += 1;
   }
   return counts;
