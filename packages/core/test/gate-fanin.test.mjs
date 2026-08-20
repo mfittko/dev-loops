@@ -29,9 +29,13 @@ import {
 
 // SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES must be frozen
 // like this file's other exported vocabulary constants (GATE_CONFIG_KEY,
-// LEGACY_SEVERITY_ALIASES, FANIN_SYNTHETIC_ANGLES, JUDGE_DISPOSITIONS) —
-// nothing in the repo mutates them today, but an unfrozen shared array/set is
-// a footgun a later change could silently corrupt for every consumer.
+// LEGACY_SEVERITY_ALIASES, FANIN_SYNTHETIC_ANGLES, JUDGE_DISPOSITIONS) — an
+// unfrozen shared array is a footgun a later change could silently corrupt
+// for every consumer. Object.freeze on VALID_SEVERITIES/NON_DEFECT_SEVERITIES
+// (both Sets) only locks their own properties, not Set.prototype.add/delete,
+// so it doesn't block content mutation the way it blocks Array.prototype.push
+// on SEVERITY_ORDER below — it's applied for export consistency and to stop
+// a stray own-property assignment on the Set object itself.
 test("SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES are frozen, matching their frozen sibling exports", () => {
   assert.equal(Object.isFrozen(SEVERITY_ORDER), true, "SEVERITY_ORDER must be frozen");
   assert.equal(Object.isFrozen(VALID_SEVERITIES), true, "VALID_SEVERITIES must be frozen");

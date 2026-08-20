@@ -185,6 +185,11 @@ export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low"
 // partition so a consumer (e.g. config.mjs's BLOCKING_SEVERITY_SPELLINGS
 // vocabulary contract test) derives "defect severities" as
 // SEVERITY_ORDER minus this set, rather than re-hand-listing "question"/"nit".
+// Object.freeze on a Set only locks its OWN properties, not the add/delete
+// methods that mutate its internal collection — freezing is still applied
+// here for consistency with SEVERITY_ORDER and this file's other frozen
+// exports (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES, etc.), and it does stop
+// a caller from attaching a stray own property to the Set object itself.
 export const NON_DEFECT_SEVERITIES = Object.freeze(new Set(["question", "nit"]));
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
