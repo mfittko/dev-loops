@@ -321,7 +321,9 @@ export const GITHUB_COMMENT_MAX_CHARS = 65536;
 // goes through: a value newly added to what gets rendered can never bypass
 // validation by calling this export directly instead of the bounded one.
 export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [], maxChars = GITHUB_COMMENT_MAX_CHARS }) {
-  ({ gate, headSha } = validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }));
+  ({ gate, headSha } = validateAndSanitizeRenderInputs({
+    gate, headSha, findings, omittedCounts, maxChars, entryPoint: "renderFindingsCommentBody",
+  }));
   const marker = buildFindingsMarker({ gate });
   const lines = [
     marker,
@@ -452,19 +454,25 @@ function describeInvalidValue(value) {
 }
 
 // Validates and sanitizes every caller-supplied value that
-// renderFindingsCommentBody renders, in ONE place, called from
-// renderFindingsCommentBody itself — so it also covers renderBoundedFindingsCommentBody,
-// which composes it rather than duplicating a render path — and a value newly
-// added to what gets rendered can never bypass validation by omission — four
-// consecutive review rounds each added one more one-off guard here before
-// this consolidation. Returns the comment's identity-key fields ready to
-// render: gate NORMALIZED (trim + lowercase, constrained to KNOWN_GATES —
-// never sanitized, since it is a closed two-value vocabulary, not free
-// text) and headSha SANITIZED (see sanitizeInline above; it is not a closed
-// set); findings are validated only here, since their own free-text fields
-// (summary/angle/files/disposition) are sanitized later, at render time, by
-// renderFindingsCommentBody itself.
-function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) {
+// renderFindingsCommentBody renders (including omittedCounts, its own
+// caller-supplied parameter — see summarizeDroppedBySeverity above), in ONE
+// place — called from renderFindingsCommentBody itself, and again from
+// renderBoundedFindingsCommentBody before it composes renderFindingsCommentBody,
+// so its own later use of the SAME gate/headSha (the fail-closed throw
+// further down) sees the normalized/sanitized values, never the caller's raw
+// input — so a value newly added to what gets rendered can never bypass
+// validation by omission on EITHER render entry point — four consecutive
+// review rounds each added one more one-off guard here before this
+// consolidation. `entryPoint` names the export that actually ran this call
+// (never hand-copied per throw site), so a rejection is always attributed to
+// the function the caller actually invoked, not a hardcoded stand-in.
+// Returns the comment's identity-key fields ready to render: gate NORMALIZED
+// (trim + lowercase, constrained to KNOWN_GATES — never sanitized, since it
+// is a closed two-value vocabulary, not free text) and headSha SANITIZED
+// (see sanitizeInline above; it is not a closed set); findings are validated
+// only here, since their own free-text fields (summary/angle/files/disposition)
+// are sanitized later, at render time, by renderFindingsCommentBody itself.
+function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCounts, maxChars, entryPoint }) {
   // gate is the comment's IDENTITY key (buildFindingsMarker): an unvalidated
   // undefined/blank value would render `gate=undefined` and thereafter match
   // (and keep updating) that bogus marker on every later run. headSha is
@@ -478,17 +486,17 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
   // no collision surface between them left to sanitize away, so gate never
   // needs sanitizeInline at render time the way headSha does.
   if (typeof gate !== "string") {
-    throw new Error(`renderBoundedFindingsCommentBody: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
+    throw new Error(`${entryPoint}: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
   }
   const normalizedGate = gate.trim().toLowerCase();
   if (!KNOWN_GATES.has(normalizedGate)) {
-    throw new Error(`renderBoundedFindingsCommentBody: gate must be one of: ${[...KNOWN_GATES].join(", ")}, got ${describeInvalidValue(gate)}`);
+    throw new Error(`${entryPoint}: gate must be one of: ${[...KNOWN_GATES].join(", ")}, got ${describeInvalidValue(gate)}`);
   }
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
-    throw new Error(`renderBoundedFindingsCommentBody: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
+    throw new Error(`${entryPoint}: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
   }
   if (!Array.isArray(findings)) {
-    throw new Error(`renderBoundedFindingsCommentBody: findings must be an array, got ${describeInvalidValue(findings)}`);
+    throw new Error(`${entryPoint}: findings must be an array, got ${describeInvalidValue(findings)}`);
   }
   // for...of (never .forEach, which SKIPS array holes) so a sparse findings
   // array produces the same named, index-bearing error as any other bad
@@ -499,10 +507,10 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
   let i = 0;
   for (const finding of findings) {
     if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}] must be an object, got ${describeInvalidValue(finding)}`);
+      throw new Error(`${entryPoint}: findings[${i}] must be an object, got ${describeInvalidValue(finding)}`);
     }
     if (!SEVERITY_ORDER.includes(normalizeSeverity(finding.severity))) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(finding.severity)}`);
+      throw new Error(`${entryPoint}: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(finding.severity)}`);
     }
     // angle/summary are rendered directly into the comment (as a code span /
     // bare prose respectively); an unvalidated caller passing neither would
@@ -513,16 +521,16 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
     // the raw string would let it through and render an empty code span /
     // empty prose run.
     if (typeof finding.angle !== "string" || finding.angle.trim().length === 0) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].angle must be a non-empty string, got ${describeInvalidValue(finding.angle)}`);
+      throw new Error(`${entryPoint}: findings[${i}].angle must be a non-empty string, got ${describeInvalidValue(finding.angle)}`);
     }
     if (sanitizeCodeSpan(finding.angle).length === 0) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].angle sanitizes to an empty code span, got ${describeInvalidValue(finding.angle)}`);
+      throw new Error(`${entryPoint}: findings[${i}].angle sanitizes to an empty code span, got ${describeInvalidValue(finding.angle)}`);
     }
     if (typeof finding.summary !== "string" || finding.summary.trim().length === 0) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
+      throw new Error(`${entryPoint}: findings[${i}].summary must be a non-empty string, got ${describeInvalidValue(finding.summary)}`);
     }
     if (sanitizeInline(finding.summary).length === 0) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].summary sanitizes to an empty string, got ${describeInvalidValue(finding.summary)}`);
+      throw new Error(`${entryPoint}: findings[${i}].summary sanitizes to an empty string, got ${describeInvalidValue(finding.summary)}`);
     }
     // disposition is rendered directly into the comment (bare prose, for any
     // truthy value, when present — see renderFindingsCommentBody's own `?:`
@@ -536,7 +544,7 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
       finding.disposition !== undefined && finding.disposition !== null && finding.disposition !== ""
       && (typeof finding.disposition !== "string" || finding.disposition.trim().length === 0)
     ) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].disposition must be a non-empty string when present, got ${describeInvalidValue(finding.disposition)}`);
+      throw new Error(`${entryPoint}: findings[${i}].disposition must be a non-empty string when present, got ${describeInvalidValue(finding.disposition)}`);
     }
     // The render uses the SANITIZED disposition (sanitizeInline), never the
     // raw one, so a non-blank string that sanitizes to nothing (e.g. a bare
@@ -546,14 +554,32 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
       typeof finding.disposition === "string" && finding.disposition.trim().length > 0
       && sanitizeInline(finding.disposition).length === 0
     ) {
-      throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].disposition sanitizes to an empty string, got ${describeInvalidValue(finding.disposition)}`);
+      throw new Error(`${entryPoint}: findings[${i}].disposition sanitizes to an empty string, got ${describeInvalidValue(finding.disposition)}`);
+    }
+    // judgeDisposition is rendered directly into the comment (bare prose, for
+    // any truthy value, when present — see renderFindingsCommentBody's own
+    // judgeSuffix truthiness check), the exact same failure mode as
+    // disposition just above: an unvalidated truthy non-string is
+    // String-coerced by sanitizeInline and posted as junk, and a
+    // whitespace-only string collapses to an empty italic run.
+    if (
+      finding.judgeDisposition !== undefined && finding.judgeDisposition !== null && finding.judgeDisposition !== ""
+      && (typeof finding.judgeDisposition !== "string" || finding.judgeDisposition.trim().length === 0)
+    ) {
+      throw new Error(`${entryPoint}: findings[${i}].judgeDisposition must be a non-empty string when present, got ${describeInvalidValue(finding.judgeDisposition)}`);
+    }
+    if (
+      typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
+      && sanitizeInline(finding.judgeDisposition).length === 0
+    ) {
+      throw new Error(`${entryPoint}: findings[${i}].judgeDisposition sanitizes to an empty string, got ${describeInvalidValue(finding.judgeDisposition)}`);
     }
     // files entries are rendered directly as code-span file refs (see
     // renderFindingsCommentBody); an unvalidated element would otherwise post
     // the literal string "undefined"/"null"/"[object Object]" into the comment.
     if (finding.files !== undefined) {
       if (!Array.isArray(finding.files)) {
-        throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files must be an array, got ${describeInvalidValue(finding.files)}`);
+        throw new Error(`${entryPoint}: findings[${i}].files must be an array, got ${describeInvalidValue(finding.files)}`);
       }
       // for...of (never .forEach, which SKIPS array holes) — same rationale
       // as the outer findings loop above: a sparse files array must produce
@@ -561,7 +587,7 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
       let j = 0;
       for (const file of finding.files) {
         if (typeof file !== "string" || file.trim().length === 0) {
-          throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files[${j}] must be a non-empty string, got ${describeInvalidValue(file)}`);
+          throw new Error(`${entryPoint}: findings[${i}].files[${j}] must be a non-empty string, got ${describeInvalidValue(file)}`);
         }
         // The render uses the SANITIZED file ref (sanitizeCodeSpan), never
         // the raw one, and silently DROPS a ref that sanitizes to empty
@@ -570,15 +596,40 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
         // rejected here, matching angle/summary/disposition above, rather
         // than vanishing from the rendered comment with no trace.
         if (sanitizeCodeSpan(file).length === 0) {
-          throw new Error(`renderBoundedFindingsCommentBody: findings[${i}].files[${j}] sanitizes to an empty code span, got ${describeInvalidValue(file)}`);
+          throw new Error(`${entryPoint}: findings[${i}].files[${j}] sanitizes to an empty code span, got ${describeInvalidValue(file)}`);
         }
         j += 1;
       }
     }
     i += 1;
   }
+  // omittedCounts is a caller-supplied parameter of renderFindingsCommentBody
+  // (built internally by summarizeDroppedBySeverity for the production
+  // bounded path, but any direct caller can pass its own), rendered straight
+  // into the omission note's breakdown (`${count} ${SEVERITY_LABELS[severity]}`)
+  // with NO SEVERITY_LABELS fallback — an unknown severity would render the
+  // literal text "undefined" there, and a non-array truthy value would reach
+  // the note's own `.reduce` as an unnamed TypeError. Both are exactly the
+  // bypass-by-omission class this seam exists to close, so they are rejected
+  // here, by name, before that render is ever reached.
+  if (!Array.isArray(omittedCounts)) {
+    throw new Error(`${entryPoint}: omittedCounts must be an array, got ${describeInvalidValue(omittedCounts)}`);
+  }
+  let m = 0;
+  for (const entry of omittedCounts) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${entryPoint}: omittedCounts[${m}] must be an object, got ${describeInvalidValue(entry)}`);
+    }
+    if (!SEVERITY_ORDER.includes(entry.severity)) {
+      throw new Error(`${entryPoint}: omittedCounts[${m}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(entry.severity)}`);
+    }
+    if (!Number.isFinite(entry.count) || entry.count < 0) {
+      throw new Error(`${entryPoint}: omittedCounts[${m}].count must be a finite non-negative number, got ${describeInvalidValue(entry.count)}`);
+    }
+    m += 1;
+  }
   if (!Number.isInteger(maxChars) || maxChars <= 0) {
-    throw new Error(`renderBoundedFindingsCommentBody: maxChars must be a positive integer, got ${describeInvalidValue(maxChars)}`);
+    throw new Error(`${entryPoint}: maxChars must be a positive integer, got ${describeInvalidValue(maxChars)}`);
   }
   return { gate: normalizedGate, headSha: sanitizeInline(headSha) };
 }
@@ -599,10 +650,19 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, maxChars }) 
 // kept still cannot fit, so a round that truly cannot be posted is
 // never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
-  // renderFindingsCommentBody now runs validateAndSanitizeRenderInputs itself
-  // (see its own doc comment), so this first call both validates and
-  // normalizes gate/headSha; every later call in this function is idempotent
-  // against the same already-valid input.
+  // renderFindingsCommentBody runs validateAndSanitizeRenderInputs itself
+  // (see its own doc comment) on every call below, so that alone would be
+  // enough to keep the RENDERED body safe. But this function's OWN gate/headSha
+  // bindings must also be normalized/sanitized here, in this scope, before
+  // anything else reads them — the fail-closed throw further down interpolates
+  // them directly, and dropOrder/renderWithDropped below close over them too —
+  // so a caller-shaped (unnormalized/unsanitized) value never leaks into this
+  // function's own output. This call is idempotent against renderFindingsCommentBody's
+  // own re-validation below: gate/headSha are already normalized/sanitized by
+  // the time they reach it, so that second call can never reject them.
+  ({ gate, headSha } = validateAndSanitizeRenderInputs({
+    gate, headSha, findings, omittedCounts: [], maxChars, entryPoint: "renderBoundedFindingsCommentBody",
+  }));
   const body = renderFindingsCommentBody({ gate, headSha, findings, maxChars });
   if (body.length <= maxChars) {
     return { body, omittedCounts: [] };

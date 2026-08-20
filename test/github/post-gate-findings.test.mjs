@@ -773,6 +773,99 @@ test("renderFindingsCommentBody (the direct export) rejects invalid input the sa
   );
 });
 
+// omittedCounts is a parameter of the guarded export itself (built internally
+// by renderBoundedFindingsCommentBody, but any direct caller of
+// renderFindingsCommentBody can pass its own) — it is rendered into the
+// omission note but was never validated, so an unknown severity used to
+// render the literal text "undefined" and a non-array value crashed with an
+// unnamed TypeError. Both must now be refused by name instead.
+test("renderFindingsCommentBody rejects an omittedCounts entry with an unknown severity instead of rendering the literal text \"undefined\"", () => {
+  assert.throws(
+    () => renderFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [],
+      omittedCounts: [{ severity: "catastrophic", count: 3 }],
+    }),
+    /omittedCounts\[0\]\.severity must be one of.*got "catastrophic"/,
+  );
+});
+
+test("renderFindingsCommentBody rejects a non-array omittedCounts instead of crashing with an unnamed TypeError", () => {
+  assert.throws(
+    () => renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [], omittedCounts: "bogus" }),
+    /omittedCounts must be an array, got "bogus"/,
+  );
+});
+
+test("renderFindingsCommentBody rejects an omittedCounts element that is not an object", () => {
+  assert.throws(
+    () => renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [], omittedCounts: [null] }),
+    /omittedCounts\[0\] must be an object, got null/,
+  );
+});
+
+test("renderFindingsCommentBody rejects a non-finite or negative omittedCounts entry count", () => {
+  for (const badCount of [-1, NaN, Infinity, "3", null, undefined]) {
+    assert.throws(
+      () => renderFindingsCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        findings: [],
+        omittedCounts: [{ severity: "nit", count: badCount }],
+      }),
+      /omittedCounts\[0\]\.count must be a finite non-negative number/,
+      `expected count ${String(badCount)} to be rejected`,
+    );
+  }
+});
+
+// judgeDisposition is a per-finding field rendered the same way disposition
+// is (bare prose, for any truthy value) but was never validated — the exact
+// bypass-by-omission class the sibling disposition guards above exist to
+// prevent.
+test("renderFindingsCommentBody rejects a non-string/blank judgeDisposition instead of rendering fabricated junk", () => {
+  for (const bad of [{}, 42, true, [1, 2]]) {
+    assert.throws(
+      () => renderFindingsCommentBody({
+        gate: "draft_gate",
+        headSha: "abc1234",
+        findings: [{ severity: "low", angle: "scope", summary: "x", judgeDisposition: bad }],
+      }),
+      /findings\[0\]\.judgeDisposition must be a non-empty string when present/,
+    );
+  }
+  assert.throws(
+    () => renderFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "   " }],
+    }),
+    /findings\[0\]\.judgeDisposition must be a non-empty string when present/,
+  );
+});
+
+test("renderFindingsCommentBody rejects a judgeDisposition that is non-empty raw but sanitizes to nothing, instead of rendering the empty italic run \" — judge: __\"", () => {
+  assert.throws(
+    () => renderFindingsCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234",
+      findings: [{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "```" }],
+    }),
+    /findings\[0\]\.judgeDisposition sanitizes to an empty string/,
+  );
+});
+
+test("renderFindingsCommentBody accepts a null or absent judgeDisposition unchanged (no judge suffix rendered)", () => {
+  const body = renderFindingsCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    findings: [{ severity: "low", angle: "scope", summary: "x", judgeDisposition: null }],
+  });
+  assert.ok(body.includes("`scope`: x"));
+  assert.ok(!body.includes("judge:"));
+});
+
 test("renderFindingsCommentBody states that only the latest round is shown (#AC2 stated replacement)", () => {
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: [] });
   assert.ok(body.includes("only the latest posted round"));
@@ -1189,6 +1282,19 @@ test("renderBoundedFindingsCommentBody fails closed when even the fully-degraded
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings, maxChars: 10 }),
     /cannot be rendered within/,
+  );
+});
+
+// renderBoundedFindingsCommentBody's own gate/headSha bindings must be
+// NORMALIZED/SANITIZED in this function's own scope before the fail-closed
+// throw below interpolates them — not left raw, which would make the same
+// logical input (padded/mixed-case gate, whitespace-bearing headSha) report
+// different refusal text depending on caller formatting.
+test("renderBoundedFindingsCommentBody's fail-closed throw reports the NORMALIZED gate and SANITIZED headSha, not the caller's raw input", () => {
+  const findings = parseFindings(JSON.stringify([{ severity: "high", angle: "scope", summary: "irrelevant" }]));
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: " Draft_Gate ", headSha: "  abc1234  ", findings, maxChars: 10 }),
+    /Gate findings comment for gate "draft_gate" at head abc1234 cannot be rendered within/,
   );
 });
 

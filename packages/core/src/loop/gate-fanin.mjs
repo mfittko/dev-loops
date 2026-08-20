@@ -185,7 +185,7 @@ export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low"
 // partition so a consumer (e.g. config.mjs's BLOCKING_SEVERITY_SPELLINGS
 // vocabulary contract test) derives "defect severities" as
 // SEVERITY_ORDER minus this set, rather than re-hand-listing "question"/"nit".
-export const NON_DEFECT_SEVERITIES = new Set(["question", "nit"]);
+export const NON_DEFECT_SEVERITIES = Object.freeze(new Set(["question", "nit"]));
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
