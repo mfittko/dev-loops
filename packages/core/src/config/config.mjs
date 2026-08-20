@@ -228,9 +228,9 @@ const GateDynamicConfig = z.strictObject({
 // (test/contracts/gate-severity-vocabulary-contract.test.mjs) can pin this
 // list against SEVERITY_ORDER + LEGACY_SEVERITY_ALIASES
 // (@dev-loops/core/loop/gate-fanin) — a severity added to SEVERITY_ORDER
-// without updating this hand-listed trio (or a new legacy alias added
-// without a matching entry here) must fail that test rather than leaving
-// this enum silently stale.
+// without updating this canonical defect trio plus its legacy alias
+// spellings (or a new legacy alias added without a matching entry here)
+// must fail that test rather than leaving this enum silently stale.
 export const BLOCKING_SEVERITY_SPELLINGS = Object.freeze(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]);
 const BLOCKING_SEVERITY_SPELLING_SET = new Set(BLOCKING_SEVERITY_SPELLINGS);
 
