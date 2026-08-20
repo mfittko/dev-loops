@@ -108,13 +108,15 @@ export function backoffMaxConcurrent(maxConcurrent) {
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
  * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — `completedAngles`:
  *   angle names that already have a clean per-angle findings artifact stamped for THIS head.
- *   `carriedAngles`: angle names the fail-closed carry-forward seam (resolve-angle-carry-forward.mjs,
- *   Phase 1.2) has proven carried from a prior clean head, so no reviewer re-runs them this round
- *   either (issue #1635: the head-bump half of #1507 finding 1 — Phase 1.2 runs AFTER this preflight,
- *   so a head-bump re-gate must feed its result back in to avoid over-counting). A dispatch unit
- *   (group) whose angles are ALL complete-or-carried is excluded from the required count and from
- *   `pendingGroups`, so a later session resumes the fan-out instead of restarting it (issue #1507
- *   AC3): it re-runs the preflight and dispatches only the groups not already resolved at this head.
+ *   `carriedAngles`: angle names the fail-closed carry-forward seam (resolve-angle-carry-forward.mjs)
+ *   has proven carried from a prior clean head, so no reviewer re-runs them this round either — that
+ *   carry-forward resolution runs AFTER this preflight, so a head-bump re-gate must feed its result
+ *   back in to avoid over-counting. A dispatch unit (group) whose angles are ALL complete-or-carried
+ *   is excluded from the required count and from `pendingGroups`, so a later session resumes the
+ *   fan-out instead of restarting it: it re-runs the preflight and dispatches only the groups not
+ *   already resolved at this head. Membership is matched trim+lowercase (mirrors
+ *   consolidate-fanin.mjs's own carried-key normalization) so a config/plan case difference in an
+ *   angle name still excludes the right group instead of silently spending a reviewer on it.
  * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[], carriedAngles: string[] }}
  */
 export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles, carriedAngles } = {}) {
@@ -123,17 +125,27 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
     new Set(Array.isArray(iterable) ? iterable : iterable == null ? [] : [...iterable]);
   const completedSet = toSet(completedAngles);
   const carriedSet = toSet(carriedAngles);
-  // #1507 AC3 (same-head resume) + #1635 (head-bump carry-forward): one
-  // reviewer per dispatch unit (a group of N angles is one reviewer's scoped
-  // dispatch — see resolveFanoutGroups / countFreshDispatchUnits), but a group
-  // already RESOLVED for this round — every one of its angles either has a
-  // clean artifact stamped for this head OR is proven carried forward from a
-  // prior clean head — needs no reviewer and is excluded from the required
-  // count and the pending plan. The conductor dispatches only `pendingGroups`.
+  // Same-head resume + head-bump carry-forward: one reviewer per dispatch unit
+  // (a group of N angles is one reviewer's scoped dispatch — see
+  // resolveFanoutGroups / countFreshDispatchUnits), but a group already
+  // RESOLVED for this round — every one of its angles either has a clean
+  // artifact stamped for this head OR is proven carried forward from a prior
+  // clean head — needs no reviewer and is excluded from the required count
+  // and the pending plan. The conductor dispatches only `pendingGroups`.
+  // Membership is matched trim+lowercase (`normalizeAngleKey`) — the same
+  // normalization consolidate-fanin.mjs applies to its own carried keys — so a
+  // config/plan case difference in an angle name still excludes the group
+  // instead of leaving it (and its exempted sibling) silently disagreeing.
+  const normalizeAngleKey = (a) => String(a).trim().toLowerCase();
+  const completedKeys = new Set([...completedSet].map(normalizeAngleKey));
+  const carriedKeys = new Set([...carriedSet].map(normalizeAngleKey));
   const groupIsComplete = (g) =>
     Array.isArray(g?.angles) &&
     g.angles.length > 0 &&
-    g.angles.every((a) => completedSet.has(a) || carriedSet.has(a));
+    g.angles.every((a) => {
+      const key = normalizeAngleKey(a);
+      return completedKeys.has(key) || carriedKeys.has(key);
+    });
   const pendingGroups = groups.filter((g) => !groupIsComplete(g));
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's

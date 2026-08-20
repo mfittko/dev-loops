@@ -34,7 +34,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
+import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -150,7 +151,7 @@ Optional:
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
-  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). A dispatch group whose angles are all carried-or-already-complete (see --available-reviewers above) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or produce a clean verdict, because the fail-closed merge check still requires a clean current-head marker per angle and catches an under-dispatched round there. Omit for today's full-count behavior (nothing excluded).
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or produce a clean verdict: consolidate-fanin.mjs's mandatory-angle coverage refusal and the fail-closed merge check (no clean current-head marker) both still catch an under-dispatched round. Omit for today's full-count behavior (nothing excluded).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -514,16 +515,23 @@ export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }
  * of angles that were already complete — wasteful, not incorrect). This mirrors
  * the head-stamp compare `consolidate-fanin.mjs` uses (trim+lowercase).
  *
+ * `repoRoot` is resolved the same way every sibling path in this module is
+ * (defaults to `process.cwd()`, like every other `{ repoRoot }` runtime
+ * option here) — never left to resolve against the caller's raw relative
+ * `tmpRoot`, which would make the scan's result depend on the process's
+ * working directory instead of the worktree being built for.
+ *
  * @param {object} input
  * @param {string} input.repo — owner/name
  * @param {number|string} input.pr
  * @param {string} input.gate — draft_gate | pre_approval_gate
  * @param {string} input.headSha
  * @param {string} [input.tmpRoot] — default "tmp"
+ * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
-export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  const dir = buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot });
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp" }, { repoRoot = process.cwd() } = {}) {
+  const dir = path.resolve(repoRoot, buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   const want = String(headSha).trim().toLowerCase();
   let entries;
   try {
@@ -1620,6 +1628,25 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config);
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
+  // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
+  // refusal: a name whose review surface always re-runs (a configured
+  // mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/
+  // description angle) can never legitimately carry forward, so honoring it
+  // here would silently drop that angle's dispatch unit from `pendingGroups`
+  // with no reviewer ever assigned. Fail closed instead, before it reaches
+  // the preflight. Unlike consolidate-fanin.mjs, an unmapped/unknown angle
+  // name is NOT rejected here (this seam has no plan-proof cross-check to
+  // validate an unrecognized name against, and resolveFanoutGroups already
+  // treats an unresolved angle as ungrouped rather than erroring).
+  if (Array.isArray(carriedAngles) && carriedAngles.length > 0) {
+    const mandatoryAngles = resolveGateAngleContract(config, configGate).mandatoryAngles;
+    for (const angle of carriedAngles) {
+      const surface = angleReviewSurface(angle, { alwaysRerun: mandatoryAngles });
+      if (surface.kind === "always") {
+        throw new Error(`--carried-angles names "${angle}", which can never legitimately carry forward: it always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) — resolve-angle-carry-forward.mjs can never mark it carried, so refusing to exclude its dispatch unit here (fail-closed)`);
+      }
+    }
+  }
   // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
@@ -2236,7 +2263,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // #1507 AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot });
+  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
   const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null });
 
   const writeResult = await writeGateContext(
@@ -2669,7 +2696,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // --prefix-file (config is a local file read).
       // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" });
+      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });
     }
     const result = await writeGateContext(options, { repoRoot });

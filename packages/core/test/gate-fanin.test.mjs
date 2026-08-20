@@ -1090,6 +1090,24 @@ describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fa
       assert.equal(reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"], carriedAngles: undefined }).requiredReviewers, 1);
       assert.deepEqual(reviewerBudgetPreflight(groups, 10).carriedAngles, []);
     });
+
+    test("group/carried-angle membership matches trim+lowercase (mirrors consolidate-fanin.mjs's own carried-key normalization)", () => {
+      // The group's angle name carries case drift ("Correctness") relative to
+      // the carried/completed name the caller supplies — both seams must still
+      // agree this group is resolved, or one seam honors the carried name
+      // while the other silently spends a reviewer on it.
+      const groups = [{ name: "group:Correctness", angles: ["Correctness"] }, { name: "b", angles: ["b"] }];
+      const viaCarried = reviewerBudgetPreflight(groups, 10, { carriedAngles: [" correctness "] });
+      assert.equal(viaCarried.requiredReviewers, 1);
+      assert.deepEqual(viaCarried.skippedGroups.map((g) => g.name), ["group:Correctness"]);
+      const viaCompleted = reviewerBudgetPreflight(groups, 10, { completedAngles: ["CORRECTNESS"] });
+      assert.equal(viaCompleted.requiredReviewers, 1);
+      assert.deepEqual(viaCompleted.skippedGroups.map((g) => g.name), ["group:Correctness"]);
+      // The recorded resume fields still echo the caller's input verbatim —
+      // normalization is for membership matching only, never a silent rewrite
+      // of the returned provenance.
+      assert.deepEqual(viaCarried.carriedAngles, [" correctness "]);
+    });
   });
 });
 
