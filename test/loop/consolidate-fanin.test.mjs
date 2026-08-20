@@ -2196,6 +2196,13 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     // "style" (the actual cause of the overflow) IS collapsed to a marker.
     const styleFinding = byAngle.get("style").findings[0];
     assert.match(styleFinding.summary, /^300 finding\(s\) omitted from this comment/);
+    // All 300 findings are "nice-to-have" (normalizes to "low") — the
+    // breakdown must count them there, in SEVERITY_ORDER, not leave a
+    // zeroed/mis-tallied parenthesized section.
+    assert.ok(
+      styleFinding.summary.includes("(high: 0, question: 0, medium: 0, low: 300, nit: 0)"),
+      `expected the severity breakdown to tally all 300 findings under "low", got: ${styleFinding.summary}`,
+    );
     assertRendersWithoutThrowing(result.findingsJson);
   });
 });
@@ -2321,6 +2328,12 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
       if (summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`) {
         bareCount += 1;
       } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("— in the disposition ledger")) {
+        // Every finding here is "worth-fixing-now" (normalizes to "medium") —
+        // the parenthesized breakdown must tally all of them there.
+        assert.ok(
+          summary.includes(`(high: 0, question: 0, medium: ${FINDINGS_PER_ANGLE}, low: 0, nit: 0)`),
+          `expected the severity breakdown to tally all ${FINDINGS_PER_ANGLE} findings under "medium", got: ${summary}`,
+        );
         verboseCount += 1;
       } else {
         assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);

@@ -20,6 +20,9 @@ import {
   normalizeSeverity,
   applyJudgeDispositions,
   validateJudgeVerdict,
+  tallySeverities,
+  zeroSeverityCounts,
+  SEVERITY_ORDER,
 } from "../src/loop/gate-fanin.mjs";
 
 function cleanAngle(angle) {
@@ -64,6 +67,62 @@ describe("normalizeSeverity (trim, case-sensitive, before alias lookup)", () => 
 
   test("an unrecognized value still normalizes (trim only) so every caller sees the same rejected form", () => {
     assert.equal(normalizeSeverity(" Bogus "), "Bogus");
+  });
+});
+
+describe("zeroSeverityCounts", () => {
+  test("returns one zeroed key per SEVERITY_ORDER entry", () => {
+    assert.deepEqual(zeroSeverityCounts(), { high: 0, question: 0, medium: 0, low: 0, nit: 0 });
+  });
+
+  test("returns a fresh object on every call — mutating one call's result leaves the next call's result untouched", () => {
+    const first = zeroSeverityCounts();
+    first.high = 99;
+    const second = zeroSeverityCounts();
+    assert.equal(second.high, 0);
+    assert.notEqual(first, second);
+  });
+});
+
+describe("tallySeverities", () => {
+  test("an empty findings list tallies to the zero map", () => {
+    assert.deepEqual(tallySeverities([]), zeroSeverityCounts());
+  });
+
+  test("counts each finding under its already-canonical severity", () => {
+    const counts = tallySeverities([{ severity: "high" }, { severity: "high" }, { severity: "low" }]);
+    assert.deepEqual(counts, { high: 2, question: 0, medium: 0, low: 1, nit: 0 });
+  });
+
+  test("normalizes a legacy spelling onto its canonical bucket before counting", () => {
+    const counts = tallySeverities([
+      { severity: "must-fix" },
+      { severity: "worth-fixing-now" },
+      { severity: "nice-to-have" },
+      { severity: "defer" },
+    ]);
+    assert.deepEqual(counts, { high: 1, question: 0, medium: 1, low: 2, nit: 0 });
+  });
+
+  test("an unrecognized severity (after normalization) is excluded from the tally rather than inflating an unknown key", () => {
+    const counts = tallySeverities([{ severity: "bogus" }, { severity: "high" }]);
+    assert.deepEqual(counts, { high: 1, question: 0, medium: 0, low: 0, nit: 0 });
+    assert.deepEqual(Object.keys(counts).sort(), [...SEVERITY_ORDER].sort());
+  });
+
+  test("a nullish findings argument tallies to the zero map instead of throwing", () => {
+    assert.deepEqual(tallySeverities(undefined), zeroSeverityCounts());
+    assert.deepEqual(tallySeverities(null), zeroSeverityCounts());
+  });
+
+  test("a nullish individual finding is skipped instead of throwing", () => {
+    assert.deepEqual(tallySeverities([null, undefined, { severity: "nit" }]), {
+      high: 0,
+      question: 0,
+      medium: 0,
+      low: 0,
+      nit: 1,
+    });
   });
 });
 

@@ -177,6 +177,16 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // it defers immediately, with no fixer cycle at all.
 export const SEVERITY_ORDER = ["high", "question", "medium", "low", "nit"];
 
+// The non-defect subset of SEVERITY_ORDER: a "question" is answered (never
+// fixed or deferred like a defect — see deriveDisposition), and a "nit"
+// always defers regardless of any gate's blockCleanOnFindingSeverities
+// config (see isDefaultDeferrableSeverity) — neither belongs in a
+// defect-only blocking vocabulary. Exported as the single source for that
+// partition so a consumer (e.g. config.mjs's BLOCKING_SEVERITY_SPELLINGS
+// vocabulary contract test) derives "defect severities" as
+// SEVERITY_ORDER minus this set, rather than re-hand-listing "question"/"nit".
+export const NON_DEFECT_SEVERITIES = new Set(["question", "nit"]);
+
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
 // resolves no groups and silently downgrades pairing enforcement.
@@ -265,8 +275,11 @@ export function zeroSeverityCounts() {
  * (consolidateFanin validates every result's severity before this runs;
  * buildAngleMarker tallies consolidateFanin's own output), so this guard is a
  * defensive floor against future drift, not an escape hatch for accepting
- * unvalidated severities.
- * @param {Iterable<{severity: unknown}>} findings
+ * unvalidated severities. A nullish `findings` argument, and a nullish
+ * individual entry within it, both tally as zero rather than throwing — the
+ * same defensive-floor stance as the unknown-severity guard above, for a
+ * caller that has not yet validated its input shape.
+ * @param {Iterable<{severity: unknown}> | null | undefined} findings
  * @returns {Record<string, number>}
  */
 export function tallySeverities(findings) {

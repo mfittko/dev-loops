@@ -362,7 +362,7 @@ function fitFindingsToRenderBudget(findingsJson) {
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
   // tallySeverities normalizes defensively, same as angleWorstSeverityRank's
-  // sibling normalization above: findingsJson is always consolidateFanin's
+  // sibling normalization below: findingsJson is always consolidateFanin's
   // own OUTPUT (already normalized) through every call site today, but this
   // function must not silently drop a differently-spelled severity from the
   // breakdown/representative selection (or, worse, leak a legacy spelling

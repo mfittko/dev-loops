@@ -1,14 +1,16 @@
-// #1592 doc-drift guard: the reviewer-facing severity vocabulary is owned by
-// SEVERITY_ORDER (@dev-loops/core/loop/gate-fanin). A partial future rename
-// (e.g. adding/renaming a severity in code without updating the reviewer
-// agent's own output schema or the sub-loop contract's classification list)
-// must fail CI, not silently drift the two apart.
+// Doc- and code-drift guard: the reviewer-facing severity vocabulary is
+// owned by SEVERITY_ORDER (@dev-loops/core/loop/gate-fanin). A partial
+// future rename (e.g. adding/renaming a severity in code without updating
+// the reviewer agent's own output schema, the sub-loop contract's
+// classification list, or config.mjs's blockCleanOnFindingSeverities enum
+// and resolveGateConfig's exact-match guard) must fail CI, not silently
+// drift the vocabulary's surfaces apart.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { LEGACY_SEVERITY_ALIASES, SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
+import { LEGACY_SEVERITY_ALIASES, NON_DEFECT_SEVERITIES, SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
 import { BLOCKING_SEVERITY_SPELLINGS } from "@dev-loops/core/config";
 import { VALID_DISPOSITIONS } from "../../scripts/github/write-gate-findings-log.mjs";
 
@@ -45,23 +47,28 @@ test("skills/docs/gate-review-sub-loop-contract.md's classification list names e
   );
 });
 
-test("config.mjs's BLOCKING_SEVERITY_SPELLINGS matches SEVERITY_ORDER's defect severities + LEGACY_SEVERITY_ALIASES' keys (#1611)", () => {
+test("config.mjs's BLOCKING_SEVERITY_SPELLINGS matches SEVERITY_ORDER's defect severities + LEGACY_SEVERITY_ALIASES' keys", () => {
   // blockCleanOnFindingSeverities is a DEFECT-severity-only vocabulary
-  // ("question"/"nit" are non-defect categories that never block a clean
-  // verdict by severity — see the schema's own doc comment) plus every
-  // pre-rename legacy spelling those defect severities accept on read. This
-  // derives the expected list from the two single-source-of-truth exports
-  // (@dev-loops/core/loop/gate-fanin) instead of hand-copying it a third
-  // time, so a severity added to SEVERITY_ORDER (or a new legacy alias) that
-  // is not also added to BLOCKING_SEVERITY_SPELLINGS fails here rather than
-  // leaving the schema enum and resolveGateConfig's exact-match guard
-  // silently stale.
-  const defectSeverities = SEVERITY_ORDER.filter((s) => s !== "question" && s !== "nit");
-  const expected = [...defectSeverities, ...Object.keys(LEGACY_SEVERITY_ALIASES)];
+  // (NON_DEFECT_SEVERITIES are excluded — see the schema's own doc comment)
+  // plus every pre-rename legacy spelling whose CANONICAL target is a
+  // defect severity (an alias whose target is a non-defect severity must
+  // stay out of this defect-only enum). This derives the expected list from
+  // the single-source-of-truth exports (@dev-loops/core/loop/gate-fanin)
+  // instead of hand-copying the defect/non-defect partition a third time, so
+  // a defect severity added to SEVERITY_ORDER (or a new legacy alias
+  // resolving to one) that is not also added to BLOCKING_SEVERITY_SPELLINGS
+  // fails here rather than leaving the schema enum and resolveGateConfig's
+  // exact-match guard silently stale. A NON-defect severity added to
+  // SEVERITY_ORDER must NOT be added to BLOCKING_SEVERITY_SPELLINGS — this
+  // pin excludes it via NON_DEFECT_SEVERITIES rather than demanding it.
+  const defectSeverities = SEVERITY_ORDER.filter((s) => !NON_DEFECT_SEVERITIES.has(s));
+  const defectAliases = Object.keys(LEGACY_SEVERITY_ALIASES)
+    .filter((alias) => defectSeverities.includes(LEGACY_SEVERITY_ALIASES[alias]));
+  const expected = [...defectSeverities, ...defectAliases];
   assert.deepEqual(
     [...BLOCKING_SEVERITY_SPELLINGS].sort(),
     [...expected].sort(),
-    "config.mjs's BLOCKING_SEVERITY_SPELLINGS has drifted from SEVERITY_ORDER's defect severities + LEGACY_SEVERITY_ALIASES' keys",
+    "config.mjs's BLOCKING_SEVERITY_SPELLINGS has drifted from SEVERITY_ORDER's defect severities + their legacy aliases — widen BLOCKING_SEVERITY_SPELLINGS only for a new DEFECT severity or an alias resolving to one; a new NON-defect severity must stay excluded",
   );
 });
 

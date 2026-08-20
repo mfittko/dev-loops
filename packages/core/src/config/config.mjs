@@ -231,7 +231,7 @@ const GateDynamicConfig = z.strictObject({
 // without updating this hand-listed trio (or a new legacy alias added
 // without a matching entry here) must fail that test rather than leaving
 // this enum silently stale.
-export const BLOCKING_SEVERITY_SPELLINGS = ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"];
+export const BLOCKING_SEVERITY_SPELLINGS = Object.freeze(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]);
 const BLOCKING_SEVERITY_SPELLING_SET = new Set(BLOCKING_SEVERITY_SPELLINGS);
 
 // Render an offending config value for a refusal message without letting the
