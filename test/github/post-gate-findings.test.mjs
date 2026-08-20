@@ -805,8 +805,8 @@ test("renderFindingsCommentBody rejects an omittedCounts element that is not an 
   );
 });
 
-test("renderFindingsCommentBody rejects a non-finite or negative omittedCounts entry count", () => {
-  for (const badCount of [-1, NaN, Infinity, "3", null, undefined]) {
+test("renderFindingsCommentBody rejects a non-positive-integer omittedCounts entry count", () => {
+  for (const badCount of [0, -1, 2.5, NaN, Infinity, "3", null, undefined]) {
     assert.throws(
       () => renderFindingsCommentBody({
         gate: "draft_gate",
@@ -814,7 +814,7 @@ test("renderFindingsCommentBody rejects a non-finite or negative omittedCounts e
         findings: [],
         omittedCounts: [{ severity: "nit", count: badCount }],
       }),
-      /omittedCounts\[0\]\.count must be a finite non-negative number/,
+      /omittedCounts\[0\]\.count must be a positive integer/,
       `expected count ${String(badCount)} to be rejected`,
     );
   }
@@ -1567,6 +1567,25 @@ test("renderBoundedFindingsCommentBody rejects a missing/blank gate or headSha i
   assert.throws(
     () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "  ", findings }),
     /headSha must be a non-empty string/,
+  );
+});
+
+test("renderBoundedFindingsCommentBody rejects a headSha that is non-empty raw but sanitizes to nothing, instead of rendering the bare line \"Reviewed head: \"", () => {
+  // "```" survives the raw non-empty check (trim().length > 0) but
+  // sanitizeInline strips every backtick, leaving "" — without this guard,
+  // the identity line would silently render as "Reviewed head: " with the
+  // value gone, and the throw (if any) would misattribute to
+  // renderFindingsCommentBody even when the caller invoked the bounded
+  // export, since the bounded export's own re-validation would have already
+  // passed the RAW value through unsanitized.
+  const findings = [{ severity: "high", angle: "scope", summary: "x" }];
+  assert.throws(
+    () => renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "```", findings }),
+    /renderBoundedFindingsCommentBody: headSha sanitizes to an empty string, got "```"/,
+  );
+  assert.throws(
+    () => renderFindingsCommentBody({ gate: "draft_gate", headSha: "```", findings }),
+    /renderFindingsCommentBody: headSha sanitizes to an empty string, got "```"/,
   );
 });
 

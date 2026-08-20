@@ -495,6 +495,14 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     throw new Error(`${entryPoint}: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
   }
+  // The render uses the SANITIZED headSha (sanitizeInline), never the raw
+  // one, so a non-blank string that sanitizes to nothing (e.g. a bare
+  // "```") must be rejected here too — matching angle/summary/disposition/
+  // judgeDisposition/files above — otherwise the identity line renders as
+  // the silently-empty "Reviewed head: " with the value gone.
+  if (sanitizeInline(headSha).length === 0) {
+    throw new Error(`${entryPoint}: headSha sanitizes to an empty string, got ${describeInvalidValue(headSha)}`);
+  }
   if (!Array.isArray(findings)) {
     throw new Error(`${entryPoint}: findings must be an array, got ${describeInvalidValue(findings)}`);
   }
@@ -623,8 +631,8 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     if (!SEVERITY_ORDER.includes(entry.severity)) {
       throw new Error(`${entryPoint}: omittedCounts[${m}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(entry.severity)}`);
     }
-    if (!Number.isFinite(entry.count) || entry.count < 0) {
-      throw new Error(`${entryPoint}: omittedCounts[${m}].count must be a finite non-negative number, got ${describeInvalidValue(entry.count)}`);
+    if (!Number.isInteger(entry.count) || entry.count <= 0) {
+      throw new Error(`${entryPoint}: omittedCounts[${m}].count must be a positive integer, got ${describeInvalidValue(entry.count)}`);
     }
     m += 1;
   }
