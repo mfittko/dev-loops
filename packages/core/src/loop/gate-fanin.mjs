@@ -1043,8 +1043,14 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       target.followUpDraft = d.followUpDraft;
     }
   }
-  const uncovered = enriched.reduce((positions, f, i) => {
-    if (!f.judgeDisposition) positions.push(i);
+  // Coverage is judged against THIS verdict's disposed-index set, not field
+  // presence on the merged copy — an already-enriched ledger (a finding that
+  // already carries judgeDisposition from a prior round) must not let a
+  // verdict that disposes nothing pass silently. validateJudgeVerdict already
+  // rejects duplicate indexes, so the Set is exact.
+  const disposed = new Set(validated.dispositions.map((d) => d.index));
+  const uncovered = enriched.reduce((positions, _f, i) => {
+    if (!disposed.has(i)) positions.push(i);
     return positions;
   }, /** @type {number[]} */ ([]));
   if (uncovered.length > 0) {

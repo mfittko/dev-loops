@@ -106,11 +106,14 @@ test("runJudgePass fails closed on an out-of-range disposition index", () => {
 });
 
 test("runJudgePass fails closed when the verdict does not dispose every finding (#1658)", () => {
-  // Disposition covers index 0 only; index 1 is undisposed and must fail closed
-  // rather than silently drop out of the fixer act list.
-  const findings = ledger(finding({ index: 0 }), finding({ index: 1, summary: "undisposed" }));
+  // Disposition covers array position 0 only; position 1 is undisposed and
+  // must fail closed rather than silently drop out of the fixer act list.
+  // The findings' own vestigial `index` fields are deliberately set to NOT
+  // coincide with array position, so a regression that reports the stale
+  // `f.index` field instead of the 0-based array position is caught here.
+  const findings = ledger(finding({ index: 7 }), finding({ index: 9, summary: "undisposed" }));
   const v = verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] });
-  assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\)/);
+  assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\) \(indexes: 1\)/);
 });
 
 test("validateCliArgs accepts a full invocation and canonicalizes the gate", () => {

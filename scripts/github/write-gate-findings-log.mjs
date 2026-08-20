@@ -158,15 +158,25 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
-    if (f.followUpDraft && typeof f.followUpDraft === "object" && !Array.isArray(f.followUpDraft)) {
+    if (f.followUpDraft) {
       // Mirrors validateJudgeVerdict's followUpDraft shape rule
-      // (packages/core/src/loop/gate-fanin.mjs): a non-empty title string and
-      // a body string, so this trust boundary never passes through a
-      // malformed draft that would surface later as a broken follow-up file.
+      // (packages/core/src/loop/gate-fanin.mjs): gate on presence first — a
+      // truthy non-object draft (string/array/number/boolean) is rejected
+      // here rather than silently dropped, then require a non-empty title
+      // string and a body string, so this trust boundary never passes
+      // through, or loses without a diagnostic, a malformed draft that would
+      // surface later as a broken follow-up file.
+      if (typeof f.followUpDraft !== "object" || Array.isArray(f.followUpDraft)) {
+        throw parseError(`${flagLabel}[${i}].followUpDraft must be an object`);
+      }
       const draft = f.followUpDraft;
       if (typeof draft.title !== "string" || draft.title.trim().length === 0 || typeof draft.body !== "string") {
         throw parseError(`${flagLabel}[${i}].followUpDraft must have a non-empty title and a body string`);
       }
+      // Validated against the trimmed title but stored raw (untrimmed): this
+      // mirrors validateJudgeVerdict's own raw pass-through, so a
+      // well-formed draft passes through unchanged rather than being
+      // silently renormalized.
       entry.followUpDraft = f.followUpDraft;
     }
     return entry;
@@ -431,7 +441,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // judge's relevance-based dispositions (act/defer/reject + rationale +
   // follow-up drafts) before writing the ledger (#1525). The judge runs after
   // fan-in and before the fix pass; applyJudgeDispositions is the pure merge
-  // seam that fails closed on a malformed verdict or an out-of-range index.
+  // seam that fails closed on a malformed verdict, an out-of-range index, or
+  // dispositions that do not cover every finding.
   let findings = rawFindings;
   let scopeDrift;
   if (options.judgeVerdict) {
@@ -497,8 +508,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // changes based on the judge artifact's content (#1745). A --judge-verdict
     // run can still surface a different, earlier error first: the judge
     // artifact is read, parsed, and applied before this point runs, so an
-    // unreadable, malformed, or out-of-range-index judge artifact throws its
-    // own parse error ahead of this contradiction check, not instead of it.
+    // unreadable, malformed, out-of-range-index, or incomplete-coverage judge
+    // artifact throws its own parse error ahead of this contradiction check,
+    // not instead of it.
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,

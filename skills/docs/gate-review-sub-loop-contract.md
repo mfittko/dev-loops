@@ -1128,7 +1128,8 @@ The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fan
 
 **Merge seam.** The conductor enriches the consolidated findings with the judge's
 dispositions via `applyJudgeDispositions(findings, judgeVerdict)` (`@dev-loops/core/loop/gate-fanin`,
-pure, fail-closed on a malformed verdict or an out-of-range index), then writes the durable
+pure, fail-closed on a malformed verdict, an out-of-range index, or dispositions that do not
+cover every finding), then writes the durable
 ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched findings carry
 `judgeDisposition` / `judgeRationale` / `judgeCriterion` / `followUpDraft` so the disposition
 ledger and the posted findings comment show what was consciously not acted on and why
@@ -1144,7 +1145,7 @@ never feed the fixer), applies the dispositions via `applyJudgeDispositions`, an
 exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
 (`--ledger-out`). The conductor hands that act list — never the full unfiltered ledger —
 to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale
-head, malformed verdict, out-of-range index), the conductor re-runs the judge at the
+head, malformed verdict, out-of-range index, undisposed finding), the conductor re-runs the judge at the
 current head rather than degrading to severity-only disposition for a wired gate.
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->

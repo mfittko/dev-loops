@@ -1238,6 +1238,23 @@ describe("applyJudgeDispositions (#1525)", () => {
     );
   });
 
+  test("fails closed when a disposition leaves two findings uncovered, listing both positions", () => {
+    const verdict = judgeVerdict([]);
+    assert.throws(
+      () => applyJudgeDispositions(baseFindings, verdict),
+      /does not dispose 2 finding\(s\) \(indexes: 0, 1\)/,
+    );
+  });
+
+  test("fails closed on a pre-enriched ledger when the current verdict disposes nothing (coverage is judged against THIS verdict, not field presence)", () => {
+    const alreadyEnriched = baseFindings.map((f) => ({ ...f, judgeDisposition: "act", judgeRationale: "prior round" }));
+    const verdict = judgeVerdict([]);
+    assert.throws(
+      () => applyJudgeDispositions(alreadyEnriched, verdict),
+      /does not dispose 2 finding\(s\) \(indexes: 0, 1\)/,
+    );
+  });
+
   test("an empty findings array with an empty dispositions array is vacuously covered", () => {
     const verdict = judgeVerdict([]);
     const { findings } = applyJudgeDispositions([], verdict);
