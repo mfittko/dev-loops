@@ -224,7 +224,15 @@ const GateDynamicConfig = z.strictObject({
 // fail-closed guard exact-matches raw entries against the same list, so the
 // guard's accept set is byte-identical to the schema's (no trim/normalize
 // superset) and widening the enum can never leave the runtime guard behind.
-const BLOCKING_SEVERITY_SPELLINGS = ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"];
+// Exported (not just module-internal) so the vocabulary contract test
+// (test/contracts/gate-severity-vocabulary-contract.test.mjs) can pin this
+// list against SEVERITY_ORDER + LEGACY_SEVERITY_ALIASES
+// (@dev-loops/core/loop/gate-fanin) — a DEFECT severity added to
+// SEVERITY_ORDER (one not also added to NON_DEFECT_SEVERITIES) without
+// updating this canonical defect trio plus its legacy alias spellings (or a
+// new defect-targeting legacy alias added without a matching entry here)
+// must fail that test rather than leaving this enum silently stale.
+export const BLOCKING_SEVERITY_SPELLINGS = Object.freeze(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]);
 const BLOCKING_SEVERITY_SPELLING_SET = new Set(BLOCKING_SEVERITY_SPELLINGS);
 
 // Render an offending config value for a refusal message without letting the

@@ -4,7 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
+import { zeroSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 // convertPrToDraft/markPrReady live in their own module (no dependency on this
@@ -253,7 +253,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       inlineReason: draftGateConfig.requireCi
         ? "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI green)"
         : "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI optional by config)",
-      findingsSeverityCounts: Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0])),
+      findingsSeverityCounts: zeroSeverityCounts(),
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",

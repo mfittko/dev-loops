@@ -62,7 +62,7 @@ import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructure
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
@@ -361,17 +361,13 @@ function fitFindingsToRenderBudget(findingsJson) {
 // always lossless or bare, never a mangled hybrid.
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
-  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
-  // Normalized defensively, same as angleWorstSeverityRank's sibling
-  // normalization above: findingsJson is always consolidateFanin's own
-  // OUTPUT (already normalized) through every call site today, but this
+  // tallySeverities normalizes defensively, same as angleWorstSeverityRank's
+  // sibling normalization below: findingsJson is always consolidateFanin's
+  // own OUTPUT (already normalized) through every call site today, but this
   // function must not silently drop a differently-spelled severity from the
   // breakdown/representative selection (or, worse, leak a legacy spelling
   // into the posted marker text) if that upstream guarantee ever lapses.
-  for (const f of a.findings) {
-    const severity = normalizeSeverity(f.severity);
-    if (Object.hasOwn(bySeverity, severity)) bySeverity[severity] += 1;
-  }
+  const bySeverity = tallySeverities(a.findings);
   // Represent the angle by its own highest-severity dropped finding — same
   // severity+disposition pairing consolidateFanin already derived, so the
   // marker's "disposition" still matches every other findingsJson finding's
