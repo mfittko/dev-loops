@@ -1323,7 +1323,7 @@ a caller-passed `--verdict` that contradicts it is refused before any ledger
 is written, so a contradicting pair never reaches the durable log in the first
 place. This write-time comparison is always against the wrapper's
 `overallVerdict` — the consolidator's computed round verdict — whether or not
-`--judge-verdict` (below) is also supplied on the same call: the judge only
+`--judge-verdict` (above, Phase 3.5) is also supplied on the same call: the judge only
 enriches findings with `act`/`defer`/`reject` dispositions and never revises
 the round verdict, so its presence does not change what `--verdict` is
 checked against.

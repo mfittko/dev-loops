@@ -485,8 +485,12 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // comparison runs unconditionally against the wrapper's overallVerdict —
     // whether or not --judge-verdict was supplied above. The judge only
     // enriches findings with act/defer/reject dispositions; it never revises
-    // the consolidator's round verdict, so a --judge-verdict run is held to
-    // the exact same contradiction check as a run without one (#1745).
+    // the consolidator's round verdict, so this comparison itself never
+    // changes based on the judge artifact's content (#1745). A --judge-verdict
+    // run can still surface a different, earlier error first: the judge
+    // artifact is read, parsed, and applied before this point runs, so an
+    // unreadable, malformed, or out-of-range-index judge artifact throws its
+    // own parse error ahead of this contradiction check, not instead of it.
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,
