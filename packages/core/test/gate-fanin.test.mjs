@@ -1129,6 +1129,7 @@ describe("applyJudgeDispositions (#1525)", () => {
   test("a finding acted on against a named criterion gets judgeDisposition act", () => {
     const verdict = judgeVerdict([
       { index: 0, disposition: "act", rationale: "fixes the null-deref named in AC criterion 1", criterion: "AC-1: parser must not crash on null input" },
+      { index: 1, disposition: "reject", rationale: "style-only rename, out of scope", criterion: "Non-goal 3" },
     ]);
     const { findings, scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
     assert.equal(findings[0].judgeDisposition, "act");
@@ -1164,7 +1165,10 @@ describe("applyJudgeDispositions (#1525)", () => {
 
   test("scope-drift verdict is raised when the diff exceeds the declared scope", () => {
     const verdict = judgeVerdict(
-      [{ index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" }],
+      [
+        { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+        { index: 1, disposition: "reject", rationale: "style-only rename, out of scope", criterion: "Non-goal 3" },
+      ],
       { verdict: "drift_detected", rationale: "the diff adds a new CLI flag not in any acceptance criterion; criterion 4 limits scope to the parser", driftedAreas: ["cli surface"] },
     );
     const { scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
@@ -1222,5 +1226,21 @@ describe("applyJudgeDispositions (#1525)", () => {
     const logShape = toFindingsLogShape(baseFindings);
     assert.equal(logShape[0].judgeDisposition, undefined);
     assert.equal(logShape[0].followUpDraft, undefined);
+  });
+
+  test("fails closed when a disposition leaves a finding uncovered, naming its 0-based array position", () => {
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+    ]);
+    assert.throws(
+      () => applyJudgeDispositions(baseFindings, verdict),
+      /does not dispose 1 finding\(s\) \(indexes: 1\)/,
+    );
+  });
+
+  test("an empty findings array with an empty dispositions array is vacuously covered", () => {
+    const verdict = judgeVerdict([]);
+    const { findings } = applyJudgeDispositions([], verdict);
+    assert.deepEqual(findings, []);
   });
 });

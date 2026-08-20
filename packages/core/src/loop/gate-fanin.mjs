@@ -1016,7 +1016,10 @@ export function validateJudgeVerdict(verdict) {
  *
  * Pure. Fails closed (throws) when a disposition references an out-of-range
  * index — a judge verdict that names a finding that is not in the ledger is a
- * mismatch, never a silent enrichment.
+ * mismatch, never a silent enrichment — and when the dispositions do not
+ * cover every finding: an undisposed finding must never be silently dropped
+ * from the fixer's act list. An empty findings array with an empty
+ * dispositions array is vacuously covered and returns without error.
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
@@ -1039,6 +1042,15 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     if (d.disposition === "defer" && d.followUpDraft) {
       target.followUpDraft = d.followUpDraft;
     }
+  }
+  const uncovered = enriched.reduce((positions, f, i) => {
+    if (!f.judgeDisposition) positions.push(i);
+    return positions;
+  }, /** @type {number[]} */ ([]));
+  if (uncovered.length > 0) {
+    throw new Error(
+      `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
+    );
   }
   return { findings: enriched, scopeDrift: validated.scopeDrift };
 }

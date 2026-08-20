@@ -159,6 +159,14 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
     if (f.followUpDraft && typeof f.followUpDraft === "object" && !Array.isArray(f.followUpDraft)) {
+      // Mirrors validateJudgeVerdict's followUpDraft shape rule
+      // (packages/core/src/loop/gate-fanin.mjs): a non-empty title string and
+      // a body string, so this trust boundary never passes through a
+      // malformed draft that would surface later as a broken follow-up file.
+      const draft = f.followUpDraft;
+      if (typeof draft.title !== "string" || draft.title.trim().length === 0 || typeof draft.body !== "string") {
+        throw parseError(`${flagLabel}[${i}].followUpDraft must have a non-empty title and a body string`);
+      }
       entry.followUpDraft = f.followUpDraft;
     }
     return entry;

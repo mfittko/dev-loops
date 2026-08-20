@@ -463,6 +463,57 @@ test("writeGateFindingsLog rejects empty-string resolvedIn", async () => {
   }, /resolvedIn must be a non-empty string/);
 });
 
+test("writeGateFindingsLog rejects a followUpDraft with an empty title", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "", body: "b" } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog rejects a followUpDraft with a non-string body", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "t", body: 42 } },
+      ]),
+    });
+  }, /\[0\]\.followUpDraft must have a non-empty title and a body string/);
+});
+
+test("writeGateFindingsLog passes a well-formed followUpDraft through unchanged", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-followup-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "x", followUpDraft: { title: "t", body: "b" } },
+      ]),
+      tmpRoot: tmpDir,
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.deepEqual(parsed.findings[0].followUpDraft, { title: "t", body: "b" });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog includes an optional positive-integer line when present", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
   try {
