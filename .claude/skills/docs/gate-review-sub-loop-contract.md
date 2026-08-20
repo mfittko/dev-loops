@@ -1119,17 +1119,23 @@ The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fan
 - `index` is the 0-based position of the finding in the consolidated ledger's `findings`
   array. One disposition per finding.
 - `act` — in-scope for this PR; the fixer addresses it.
-- `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract).
-  The defer bar is high (net-reduction policy): a `nit` is never deferred (act or reject only;
-  the resolved thread note is its record), and a `low` is deferred only when leaving it
-  unfixed would change an operator-visible outcome (wrong guidance a conductor executes, a
-  fail-closed gap on a sanctioned path, or a demonstrable bug) — otherwise it defaults to
-  `reject`. When an existing open issue covers the finding's territory, the `followUpDraft`
-  is titled `Append to issue N: ...` and the orchestrator appends a comment to that issue
-  instead of filing a new one; a new issue is warranted only when none covers the territory.
+- `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
+  the draft is the durable ledger record, and the conductor consuming the verdict appends or
+  files it by hand. The defer bar is high (net-reduction policy): a `nit` never gets
+  `judgeDisposition: defer` (act or reject only; the resolved thread note is its record —
+  this governs the relevance/filing axis only, while the severity-derived `disposition`
+  field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a `low` is
+  deferred only when leaving it unfixed would change an operator-visible outcome (wrong
+  guidance a conductor executes, a fail-closed gap on a sanctioned path, or a demonstrable
+  bug) — otherwise it defaults to `reject`. When an existing open issue covers the finding's
+  territory, the `followUpDraft` is titled `Append to issue N: ...` and the conductor
+  appends a comment to that issue instead of filing a new one; a new issue is warranted only
+  when none covers the territory.
 - `reject` — out-of-scope against a named non-goal or scope boundary, or below the defer
   bar; this PR is not the place, and a follow-up is not warranted.
-- `rationale` MUST name the criterion, non-goal, or scope boundary the disposition turns on.
+- `rationale` MUST name the criterion, non-goal, scope boundary, or defer-bar test the
+  disposition turns on (a below-the-bar reject names the bar it failed, never a fabricated
+  non-goal).
 - `scopeDrift.verdict` is the PR-as-a-whole scope-drift verdict, distinct from the
   per-finding dispositions.
 
