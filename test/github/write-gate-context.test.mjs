@@ -4546,6 +4546,10 @@ test("#1635 parseWriteGateContextCliArgs rejects a malformed --carried-angles", 
   // would let a whitespace-only element pass validation and become an
   // empty-string angle after the trim map.
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", "   "]']), /JSON array of non-empty angle-name strings/);
+  // Mutation pin: dropping the `typeof a !== "string"` half of the element
+  // check would let a non-string element reach `.trim()` and throw an
+  // unhandled TypeError from inside `.some()` instead of this usage error.
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", 1]']), /JSON array of non-empty angle-name strings/);
 });
 
 test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never legitimately carry forward (mirrors consolidate-fanin.mjs's own mandatory-angle refusal)", () => {
@@ -4561,6 +4565,24 @@ test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never
     () => resolveFanoutDispatch(config, "draft", ["scope", "pr-description"], { carriedAngles: ["pr-description"] }),
     /can never legitimately carry forward/,
   );
+  // Case/whitespace-drifted names must refuse identically — the refusal must
+  // key on the same normalized value the preflight matches on, for BOTH the
+  // configured-mandatory and the hardcoded ALWAYS_INCLUDE refusal sources.
+  assert.throws(
+    () => resolveFanoutDispatch(config, "draft", ["scope", "gate-evidence"], { carriedAngles: ["Gate-Evidence"] }),
+    /can never legitimately carry forward/,
+  );
+  assert.throws(
+    () => resolveFanoutDispatch(config, "draft", ["scope", "pr-description"], { carriedAngles: ["PR-Description"] }),
+    /can never legitimately carry forward/,
+  );
+  assert.throws(
+    () => resolveFanoutDispatch(config, "draft", ["scope", "pr-description"], { carriedAngles: [" pr-description "] }),
+    /can never legitimately carry forward/,
+  );
+  // A case-drifted legitimately-carryable name still carries: the refusal's
+  // own normalization must not accidentally reject a name it should let pass.
+  assert.doesNotThrow(() => resolveFanoutDispatch(config, "draft", ["scope", "docs"], { carriedAngles: ["Docs"] }));
   // A legitimately-carryable angle (mapped, non-mandatory) is unaffected.
   assert.doesNotThrow(() => resolveFanoutDispatch(config, "draft", ["scope", "docs"], { carriedAngles: ["docs"] }));
   // An unmapped/unknown angle name is NOT rejected here (unlike
@@ -4666,10 +4688,15 @@ test("main() threads --available-reviewers to the written artifact's fanout.pref
 test("buildGateContext threads input.carriedAngles into the persisted artifact's fanout.preflight (mutation pin: deleting the carriedAngles pass-through at the buildGateContext->resolveFanoutDispatch seam must fail this test)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
-    // Same 7-angle static pool as the availableReviewers test above (3 groups:
-    // 3+3+1). Carrying forward the whole 2nd group ("docs"/"link-check"/
-    // "config-drift") drops requiredReviewers from 3 to 2, so a budget of 2 —
-    // which would shortfall by 1 without carriedAngles — now dispatches clean.
+    // Same 7-angle static pool as the availableReviewers test above (mandatory
+    // angles sort first, so the pool is [gate-evidence, scope, coverage,
+    // correctness, docs, link-check, config-drift] and the 3-angle-per-group
+    // chunking yields 3 groups: [gate-evidence+scope+coverage],
+    // [correctness+docs+link-check], [config-drift]). Carrying forward the
+    // WHOLE 2nd group ("correctness"/"docs"/"link-check") drops
+    // requiredReviewers from 3 to 2, so a budget of 2 — which would shortfall
+    // by 1 without carriedAngles — now dispatches clean. This exercises the
+    // multi-angle all-carried exclusion path (not just a singleton group).
     const config = draftConfig({ dynamicAngles: false });
     const result = await buildGateContext(
       {
@@ -4680,20 +4707,20 @@ test("buildGateContext threads input.carriedAngles into the persisted artifact's
         pr: 52,
         headSha: "cafef00d5678",
         availableReviewers: 2,
-        carriedAngles: ["docs", "link-check", "config-drift"],
+        carriedAngles: ["correctness", "docs", "link-check"],
       },
       { repoRoot },
     );
     assert.equal(result.artifact.fanout.preflight.requiredReviewers, 2);
     assert.equal(result.artifact.fanout.preflight.dispatch, true);
     assert.equal(result.artifact.fanout.preflight.shortfall, null);
-    assert.deepEqual(result.artifact.fanout.preflight.carriedAngles, ["docs", "link-check", "config-drift"]);
+    assert.deepEqual(result.artifact.fanout.preflight.carriedAngles, ["correctness", "docs", "link-check"]);
 
     // Round-trips on disk — the persisted artifact carries the same preflight.
     const onDisk = await readGateContext({ repo: "owner/repo", pr: 52, gate: "draft_gate", headSha: "cafef00d5678" }, { repoRoot });
     assert.equal(onDisk.fanout.preflight.requiredReviewers, 2);
     assert.equal(onDisk.fanout.preflight.dispatch, true);
-    assert.deepEqual(onDisk.fanout.preflight.carriedAngles, ["docs", "link-check", "config-drift"]);
+    assert.deepEqual(onDisk.fanout.preflight.carriedAngles, ["correctness", "docs", "link-check"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -4787,6 +4814,30 @@ test("readCompletedAnglesForHead: fail-open (never throws) — skips a different
     // Clean and at this head — still collected alongside the two skips above.
     await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: "abc1234", findings: [] }), "utf8");
     const completed = await readCompletedAnglesForHead({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234", tmpRoot });
+    assert.deepEqual(completed, ["scope"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readCompletedAnglesForHead: resolves a RELATIVE tmpRoot against the runtime repoRoot, not process.cwd() (mutation pin: dropping the path.resolve or the { repoRoot } pass-through must fail this test)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    // Default (relative) tmpRoot "tmp" — the scan must resolve it against the
+    // given repoRoot, never against the test process's own cwd.
+    const dir = buildGateReviewsDir({ repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234" });
+    assert.equal(path.isAbsolute(dir), false);
+    await mkdir(path.resolve(repoRoot, dir), { recursive: true });
+    await writeFile(
+      path.join(path.resolve(repoRoot, dir), "scope.json"),
+      JSON.stringify({ angle: "scope", verdict: "clean", headSha: "abc1234", findings: [] }),
+      "utf8",
+    );
+    assert.notEqual(repoRoot, process.cwd());
+    const completed = await readCompletedAnglesForHead(
+      { repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234" },
+      { repoRoot },
+    );
     assert.deepEqual(completed, ["scope"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
