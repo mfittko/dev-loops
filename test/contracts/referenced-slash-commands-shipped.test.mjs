@@ -23,31 +23,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { flatDir, walkByExt } from "./_walk-helpers.mjs";
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-const ALWAYS_EXCLUDED_DIR_NAMES = new Set(["node_modules", ".git"]);
-
-function walkByExt(absDir, exts, out) {
-  if (!fs.existsSync(absDir)) return out;
-  for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-    const absChild = path.join(absDir, entry.name);
-    if (entry.isDirectory()) {
-      if (ALWAYS_EXCLUDED_DIR_NAMES.has(entry.name)) continue;
-      walkByExt(absChild, exts, out);
-    } else if (exts.some((ext) => entry.name.endsWith(ext))) {
-      out.push(absChild);
-    }
-  }
-  return out;
-}
-
-function flatDir(absDir, ext, out) {
-  if (!fs.existsSync(absDir)) return out;
-  for (const name of fs.readdirSync(absDir)) {
-    if (name.endsWith(ext)) out.push(path.join(absDir, name));
-  }
-  return out;
-}
 
 function surfaceFiles(repoRoot) {
   return [
