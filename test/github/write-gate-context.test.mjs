@@ -17,6 +17,7 @@ import {
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
+  buildGateReviewsDir,
   buildValidationResultsPath,
   captureDiffFromBase,
   collapsePureSubstitutionRuns,
@@ -27,6 +28,7 @@ import {
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
+  readCompletedAnglesForHead,
   resolveFanoutDispatch,
   resolvePrSpecContext,
   readGateContext,
@@ -4459,6 +4461,30 @@ test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", (
   assert.equal(plan.preflight.reason, "budget_shortfall");
 });
 
+test("#1635 resolveFanoutDispatch threads carriedAngles into the preflight (head-bump shortfall computed over remaining groups only)", () => {
+  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e). "d" and
+  // "e" were proven carried forward by Phase 1.2 (resolve-angle-carry-forward.mjs)
+  // for this head-bump re-gate, so group:d+e needs no reviewer.
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], {
+    fullLabel: false,
+    availableReviewers: 1,
+    carriedAngles: ["d", "e"],
+  });
+  assert.equal(plan.preflight.requiredReviewers, 1);
+  assert.equal(plan.preflight.dispatch, true);
+  assert.equal(plan.preflight.shortfall, null);
+  assert.equal(plan.preflight.reason, "budget_sufficient");
+  assert.deepEqual(plan.preflight.carriedAngles, ["d", "e"]);
+});
+
+test("#1635 resolveFanoutDispatch: absent carriedAngles is unchanged from today's full-count behavior", () => {
+  const withoutCarried = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  assert.equal(withoutCarried.preflight.requiredReviewers, 2);
+  assert.equal(withoutCarried.preflight.dispatch, false);
+  assert.equal(withoutCarried.preflight.shortfall, 1);
+  assert.deepEqual(withoutCarried.preflight.carriedAngles, []);
+});
+
 test("#1507 buildGateContextArtifact carries the preflight in fanout.preflight", () => {
   const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b"], { fullLabel: false, availableReviewers: 0 });
   const artifact = buildGateContextArtifact({
@@ -4486,6 +4512,38 @@ test("#1507 parseWriteGateContextCliArgs rejects a non-integer / negative --avai
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "nope"]), /non-negative integer/);
 });
 
+test("#1635 parseWriteGateContextCliArgs --available-reviewers rejects non-canonical numeric spellings routed through the shared parseNonNegativeInteger (0x10, 1e2, +3, 3.0)", () => {
+  for (const bad of ["0x10", "1e2", "+3", "3.0"]) {
+    assert.throws(
+      () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", bad]),
+      /non-negative integer/,
+      `${JSON.stringify(bad)} should be rejected`,
+    );
+  }
+});
+
+test("#1635 parseWriteGateContextCliArgs --available-reviewers still trims whitespace and keeps the dedicated empty/whitespace error", () => {
+  const opts = parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", " 3 "]);
+  assert.equal(opts.availableReviewers, 3);
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--available-reviewers", "   "]),
+    /must not be empty\/whitespace-only/,
+  );
+});
+
+test("#1635 parseWriteGateContextCliArgs parses --carried-angles (JSON array of angle-name strings)", () => {
+  const opts = parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", " b "]']);
+  assert.deepEqual(opts.carriedAngles, ["a", "b"]);
+  const omitted = parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234"]);
+  assert.equal(omitted.carriedAngles, null);
+});
+
+test("#1635 parseWriteGateContextCliArgs rejects a malformed --carried-angles", () => {
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", "not json"]), /JSON array of angle-name strings/);
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '{"a":1}']), /JSON array of non-empty angle-name strings/);
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", ""]']), /JSON array of non-empty angle-name strings/);
+});
+
 test("#1726 gates.fanout.sequential serializes the wave plan and records sequential/effectiveConcurrency in the fanout artifact", () => {
   const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: true, maxConcurrent: 8, maxAnglesPerGroup: 1 } } }, "draft", ["a", "b", "c"], {});
   // per-angle → one dispatch unit per angle; serial forces one unit per wave.
@@ -4511,4 +4569,116 @@ test("#1726 sequential:false keeps the maxConcurrent wave plan (no serialization
   assert.equal(plan.effectiveConcurrency, 2);
   // 3 units, cap 2 → 2 waves [2, 1].
   assert.deepEqual(plan.wavePlan.map((w) => w.length), [2, 1]);
+});
+
+// ---------------------------------------------------------------------------
+// #1635 — availableReviewers threaded through the buildGateContext /
+// main() composition (coverage gap: none of the async buildGateContext tests
+// exercised the #1507 preflight end to end, and readCompletedAnglesForHead had
+// no direct test).
+// ---------------------------------------------------------------------------
+
+test("buildGateContext threads input.availableReviewers into the persisted artifact's fanout.preflight", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    // Static pool, no tiers: 6 angles + the mandatory "gate-evidence" floor =
+    // 7 angles → default maxAnglesPerGroup 3 auto-chunks into 3 groups
+    // (3+3+1), so requiredReviewers is 3 and a budget of 2 is short by 1.
+    const config = draftConfig({ dynamicAngles: false });
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF,
+        repo: "owner/repo",
+        pr: 50,
+        headSha: "cafef00d1234",
+        availableReviewers: 2,
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 3);
+    assert.equal(result.artifact.fanout.preflight.availableReviewers, 2);
+    assert.equal(result.artifact.fanout.preflight.dispatch, false);
+    assert.equal(result.artifact.fanout.preflight.shortfall, 1);
+    assert.equal(result.artifact.fanout.preflight.reason, "budget_shortfall");
+
+    // Round-trips on disk — the persisted artifact carries the same preflight.
+    const onDisk = await readGateContext({ repo: "owner/repo", pr: 50, gate: "draft_gate", headSha: "cafef00d1234" }, { repoRoot });
+    assert.equal(onDisk.fanout.preflight.dispatch, false);
+    assert.equal(onDisk.fanout.preflight.shortfall, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("main() threads --available-reviewers to the written artifact's fanout.preflight", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "51", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["a", "b", "c", "d", "e"]',
+      "--available-reviewers", "1",
+    ], { repoRoot, run: stubGhRun });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 51, gate: "draft_gate", headSha,
+    }, { repoRoot });
+
+    // 5 angles, default maxAnglesPerGroup 3 → 2 dispatch units; budget 1 is
+    // short by 1.
+    assert.equal(artifact.fanout.preflight.requiredReviewers, 2);
+    assert.equal(artifact.fanout.preflight.availableReviewers, 1);
+    assert.equal(artifact.fanout.preflight.dispatch, false);
+    assert.equal(artifact.fanout.preflight.shortfall, 1);
+    assert.equal(artifact.fanout.preflight.reason, "budget_shortfall");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readCompletedAnglesForHead: missing gate-reviews directory yields []", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const completed = await readCompletedAnglesForHead({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha: "abc1234", tmpRoot: path.join(repoRoot, "tmp") });
+    assert.deepEqual(completed, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readCompletedAnglesForHead: collects a clean per-angle artifact stamped at this head", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const dir = buildGateReviewsDir({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: "abc1234", tmpRoot });
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: "abc1234", findings: [] }), "utf8");
+    const completed = await readCompletedAnglesForHead({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: "abc1234", tmpRoot });
+    assert.deepEqual(completed, ["scope"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readCompletedAnglesForHead: fail-open (never throws) — skips a different-head artifact and a malformed-JSON entry", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const dir = buildGateReviewsDir({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234", tmpRoot });
+    await mkdir(dir, { recursive: true });
+    // Clean, but stamped for a DIFFERENT head — a stale artifact must not
+    // count as complete for the head this round consolidates.
+    await writeFile(path.join(dir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "clean", headSha: "deadbeef0000", findings: [] }), "utf8");
+    // Malformed JSON — a partial/interrupted write must not throw and abort
+    // the resume scan for every other angle's artifact.
+    await writeFile(path.join(dir, "docs.json"), "{not valid json", "utf8");
+    // Clean and at this head — still collected alongside the two skips above.
+    await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: "abc1234", findings: [] }), "utf8");
+    const completed = await readCompletedAnglesForHead({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234", tmpRoot });
+    assert.deepEqual(completed, ["scope"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

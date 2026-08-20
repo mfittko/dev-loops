@@ -1036,6 +1036,61 @@ describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fa
       assert.deepEqual(reviewerBudgetPreflight(groups, 10).skippedGroups, []);
     });
   });
+
+  describe("#1635 — head-bump carry-forward resume (carriedAngles alongside completedAngles)", () => {
+    const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
+
+    test("a group whose angles are ALL carried forward is excluded from requiredReviewers and pendingGroups", () => {
+      // 3 dispatch units; group:b was proven carried forward by Phase 1.2
+      // (resolve-angle-carry-forward.mjs) from a prior clean head — no
+      // same-head artifact exists for it yet, so completedAngles alone would
+      // not have excluded it.
+      const groups = units(["a", "b", "c"]);
+      const preflight = reviewerBudgetPreflight(groups, 10, { carriedAngles: ["b"] });
+      assert.equal(preflight.requiredReviewers, 2); // only a + c remain
+      assert.deepEqual(preflight.pendingGroups.map((g) => g.name), ["a", "c"]);
+      assert.deepEqual(preflight.skippedGroups.map((g) => g.name), ["b"]);
+      assert.deepEqual(preflight.carriedAngles, ["b"]);
+      assert.equal(preflight.dispatch, true);
+      assert.equal(preflight.shortfall, null);
+    });
+
+    test("a shortfall on a head-bump re-gate is computed over the groups NEITHER completed NOR carried", () => {
+      // 5 units; "a" has a same-head clean artifact, "b" is carried forward —
+      // only c, d, e remain. A budget of 1 is short by 2, matching the plain
+      // completedAngles-only shortfall test above, proving carriedAngles
+      // narrows the count the same way completedAngles does.
+      const groups = units(["a", "b", "c", "d", "e"]);
+      const preflight = reviewerBudgetPreflight(groups, 1, {
+        completedAngles: ["a"],
+        carriedAngles: ["b"],
+      });
+      assert.equal(preflight.dispatch, false);
+      assert.equal(preflight.requiredReviewers, 3);
+      assert.equal(preflight.shortfall, 2);
+      assert.equal(preflight.reason, "budget_shortfall");
+      assert.deepEqual(preflight.pendingGroups.map((g) => g.name), ["c", "d", "e"]);
+      assert.deepEqual(preflight.skippedGroups.map((g) => g.name), ["a", "b"]);
+    });
+
+    test("a multi-angle group is skipped only when every angle is completed-or-carried, mixing both sources", () => {
+      const groups = [{ name: "group:a+b", angles: ["a", "b"] }, { name: "c", angles: ["c"] }];
+      const partial = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"], carriedAngles: ["c"] });
+      assert.equal(partial.requiredReviewers, 1); // group:a+b still needs b; c is fully resolved
+      assert.deepEqual(partial.pendingGroups.map((g) => g.name), ["group:a+b"]);
+      assert.deepEqual(partial.skippedGroups.map((g) => g.name), ["c"]);
+      const full = reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"], carriedAngles: ["b", "c"] });
+      assert.equal(full.requiredReviewers, 0);
+      assert.deepEqual(full.skippedGroups.map((g) => g.name), ["group:a+b", "c"]);
+    });
+
+    test("omitting carriedAngles is backward-compatible (full count, #1507 completedAngles-only behavior unchanged)", () => {
+      const groups = units(["a", "b"]);
+      assert.equal(reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"] }).requiredReviewers, 1);
+      assert.equal(reviewerBudgetPreflight(groups, 10, { completedAngles: ["a"], carriedAngles: undefined }).requiredReviewers, 1);
+      assert.deepEqual(reviewerBudgetPreflight(groups, 10).carriedAngles, []);
+    });
+  });
 });
 
 // #1525: the judge agent's relevance-based dispositions (act/defer/reject) are

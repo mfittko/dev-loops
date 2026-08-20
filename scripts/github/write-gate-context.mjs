@@ -41,7 +41,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
@@ -150,6 +150,7 @@ Optional:
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). A dispatch group whose angles are all carried-or-already-complete (see --available-reviewers above) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or produce a clean verdict, because the fail-closed merge check still requires a clean current-head marker per angle and catches an under-dispatched round there. Omit for today's full-count behavior (nothing excluded).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -275,6 +276,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "validation-results": { type: "string" },
       "full-label": { type: "boolean" },
       "available-reviewers": { type: "string" },
+      "carried-angles": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -300,6 +302,7 @@ export function parseWriteGateContextCliArgs(argv) {
     validationResultsPath: null,
     fullLabel: false,
     availableReviewers: null,
+    carriedAngles: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -416,11 +419,31 @@ export function parseWriteGateContextCliArgs(argv) {
       if (raw.length === 0) {
         throw parseError("--available-reviewers must not be empty/whitespace-only (pass a non-negative integer, or omit to leave the budget unexposed)");
       }
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-        throw parseError(`--available-reviewers must be a non-negative integer (got "${raw}")`);
+      // Shared helper (packages/core/src/cli/primitives.mjs): a strict
+      // `/^\d+$/` match, so non-canonical spellings Number() would silently
+      // accept ("0x10", "1e2", "+3", "3.0") are rejected here too.
+      options.availableReviewers = parseNonNegativeInteger(raw, "--available-reviewers", parseError);
+      continue;
+    }
+    if (token.name === "carried-angles") {
+      // Mirrors consolidate-fanin.mjs's own --carried-angles vocabulary (JSON
+      // array of non-empty angle-name strings) so the two CLIs agree on what
+      // "carried" means. Unlike consolidate-fanin, no --carry-forward-plan
+      // proof is required here: the caller is expected to be the fail-closed
+      // carry-forward seam itself (resolve-angle-carry-forward.mjs's own
+      // result), and a wrong/stale value can only shrink the dispatch plan
+      // (never grow it), which the merge-time fail-closed check still catches.
+      const raw = requireTokenValue(token, parseError);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw parseError("--carried-angles must be a JSON array of angle-name strings");
       }
-      options.availableReviewers = parsed;
+      if (!Array.isArray(parsed) || parsed.some((a) => typeof a !== "string" || a.trim().length === 0)) {
+        throw parseError("--carried-angles must be a JSON array of non-empty angle-name strings");
+      }
+      options.carriedAngles = parsed.map((a) => a.trim());
       continue;
     }
     if (token.name === "tmp-root") {
@@ -1581,10 +1604,10 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string> }} [options]
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options]
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // #1726: serial (one-at-a-time) dispatch of heavy reviewers when
@@ -1602,10 +1625,18 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
   // `completedAngles` (angles with a clean artifact already stamped at this
-  // head) drives the same-head skip-completed resume (#1507 AC3): groups whose
-  // angles are all complete are excluded from `preflight.requiredReviewers` and
-  // from `pendingGroups`, so the conductor dispatches only the shortfall.
-  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles });
+  // head) drives the same-head skip-completed resume (#1507 AC3); `carriedAngles`
+  // (angles the fail-closed Phase 1.2 carry-forward seam has proven carried
+  // from a prior clean head — resolve-angle-carry-forward.mjs's own result,
+  // never guessed here) drives the head-bump half of the same resume (issue
+  // #1635): groups whose angles are all complete-or-carried are excluded from
+  // `preflight.requiredReviewers` and from `pendingGroups`, so the conductor
+  // dispatches only the shortfall. A wrong/stale carriedAngles input can only
+  // shrink the dispatch plan, never grow it past the true group count, so it
+  // can under-dispatch but never over-spend the budget or fabricate a clean
+  // verdict — the fail-closed merge check still requires a clean current-head
+  // marker per angle, so an under-dispatched round is caught there.
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles });
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
   return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
@@ -2156,6 +2187,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
+ * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles` (issue #1635); null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string }>}
@@ -2205,7 +2237,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null });
 
   const writeResult = await writeGateContext(
     {
@@ -2638,7 +2670,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" });
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

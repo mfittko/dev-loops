@@ -106,30 +106,34 @@ export function backoffMaxConcurrent(maxConcurrent) {
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
- * @param {{ completedAngles?: Iterable<string> }} [options] — `completedAngles`: angle names that
- *   already have a clean per-angle findings artifact stamped for THIS head. A dispatch unit (group)
- *   whose angles are ALL complete is excluded from the required count and from `pendingGroups`, so a
- *   later session resumes the fan-out instead of restarting it (issue #1507 AC3): it re-runs the
- *   preflight and dispatches only the groups not already complete at this head.
- * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[] }}
+ * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — `completedAngles`:
+ *   angle names that already have a clean per-angle findings artifact stamped for THIS head.
+ *   `carriedAngles`: angle names the fail-closed carry-forward seam (resolve-angle-carry-forward.mjs,
+ *   Phase 1.2) has proven carried from a prior clean head, so no reviewer re-runs them this round
+ *   either (issue #1635: the head-bump half of #1507 finding 1 — Phase 1.2 runs AFTER this preflight,
+ *   so a head-bump re-gate must feed its result back in to avoid over-counting). A dispatch unit
+ *   (group) whose angles are ALL complete-or-carried is excluded from the required count and from
+ *   `pendingGroups`, so a later session resumes the fan-out instead of restarting it (issue #1507
+ *   AC3): it re-runs the preflight and dispatches only the groups not already resolved at this head.
+ * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[], carriedAngles: string[] }}
  */
-export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles } = {}) {
+export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles, carriedAngles } = {}) {
   const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
-  const completedSet = new Set(
-    Array.isArray(completedAngles)
-      ? completedAngles
-      : completedAngles == null
-        ? []
-        : [...completedAngles],
-  );
-  // #1507 AC3: resume instead of restart. One reviewer per dispatch unit (a
-  // group of N angles is one reviewer's scoped dispatch — see resolveFanoutGroups /
-  // countFreshDispatchUnits), but a group already COMPLETE at this head — every
-  // one of its angles has a clean artifact stamped for this head — needs no
-  // reviewer and is excluded from the required count and the pending plan. The
-  // conductor dispatches only `pendingGroups`.
+  const toSet = (iterable) =>
+    new Set(Array.isArray(iterable) ? iterable : iterable == null ? [] : [...iterable]);
+  const completedSet = toSet(completedAngles);
+  const carriedSet = toSet(carriedAngles);
+  // #1507 AC3 (same-head resume) + #1635 (head-bump carry-forward): one
+  // reviewer per dispatch unit (a group of N angles is one reviewer's scoped
+  // dispatch — see resolveFanoutGroups / countFreshDispatchUnits), but a group
+  // already RESOLVED for this round — every one of its angles either has a
+  // clean artifact stamped for this head OR is proven carried forward from a
+  // prior clean head — needs no reviewer and is excluded from the required
+  // count and the pending plan. The conductor dispatches only `pendingGroups`.
   const groupIsComplete = (g) =>
-    Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => completedSet.has(a));
+    Array.isArray(g?.angles) &&
+    g.angles.length > 0 &&
+    g.angles.every((a) => completedSet.has(a) || carriedSet.has(a));
   const pendingGroups = groups.filter((g) => !groupIsComplete(g));
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's
@@ -138,7 +142,7 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
   const requiredReviewers = pendingGroups.length;
   const verdict = null;
   const executionMode = null;
-  const resume = { pendingGroups, skippedGroups, completedAngles: [...completedSet] };
+  const resume = { pendingGroups, skippedGroups, completedAngles: [...completedSet], carriedAngles: [...carriedSet] };
   if (typeof availableReviewers !== "number" || !Number.isFinite(availableReviewers)) {
     return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode, ...resume };
   }

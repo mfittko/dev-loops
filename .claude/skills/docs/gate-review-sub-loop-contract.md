@@ -779,9 +779,24 @@ sentinels, or a sentinel count short of the dispatch units the conductor spawned
 MUST stop the pass rather than proceed to consolidation. The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
 context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
-count; when Phase 1.2 carry-forward carried angles, pass the dispatch-unit count
-over the plan's FRESH angles, since `pendingGroups` includes carried angles and
-would overcount; NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
+count. Whether `pendingGroups` already excludes carry-forward-carried angles
+depends on whether the Phase 1 artifact was built with `write-gate-context.mjs
+--carried-angles <json>` (issue #1635): passed the Phase 1.2 carry-forward
+result, `reviewerBudgetPreflight` excludes any group whose angles are ALL
+carried-or-completed from `pendingGroups`, so its length already matches the
+dispatch-unit count over the plan's FRESH angles and needs no further
+subtraction. If the Phase 1 artifact predates Phase 1.2 (the common case: Phase
+1 runs before Phase 1.2 in the sub-loop's own ordering, so a conductor that
+never rebuilds the artifact after carry-forward resolves never has this input),
+`pendingGroups` still includes the carried angles and would overcount — hand-
+subtract the carry-forward-carried dispatch units from `pendingGroups.length`
+before passing `--expected-dispatch-units`. A wrong/stale `--carried-angles`
+value can only shrink `pendingGroups` further, never grow it past the true
+group count, so this seam can under-dispatch but never fabricate a clean
+verdict: `verify-briefing-prefixes.mjs`'s sentinel-count check and the
+fail-closed merge check (no clean current-head marker) both still require a
+real per-angle artifact for every non-carried angle, so an under-dispatched
+round is caught there. NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
 the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
 dispatch; NOT the per-angle artifact count, which would false-fail every grouped
 round).
