@@ -1130,8 +1130,8 @@ The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fan
   guidance a conductor executes, a fail-closed gap on a sanctioned path, or a demonstrable
   bug) — otherwise it defaults to `reject`. When an existing open issue covers the finding's
   territory, the `followUpDraft` is titled `Append to issue N: ...` and the conductor
-  appends a comment to that issue instead of filing a new one; a new issue is warranted only
-  when none covers the territory.
+  appends a comment to that issue (via `comment-issue.mjs`) instead of filing a new one (via
+  `create-issue.mjs`); a new issue is warranted only when none covers the territory.
 - `reject` — out-of-scope against a named non-goal or scope boundary, or below the defer
   bar; this PR is not the place, and a follow-up is not warranted.
 - `rationale` MUST name the criterion, non-goal, scope boundary, or defer-bar test the
@@ -1222,7 +1222,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   is, like every non-high body-filed finding, deferred by construction at post time per
   `GATE-EXEC-DEFERRAL-RECORD` — the answered/never-deferred contract applies only to a locatable
   question's own resolvable thread, which is the only surface an answer reply can land on. A nit
-  is deferred immediately at round 1, with no fixer cycle at all. Two layers
+  is deferred immediately at round 1, with no fixer cycle on the severity axis (judge-acted
+  nits excepted). Two layers
   govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open medium thread; an unresolved in-window locatable
@@ -1512,8 +1513,8 @@ never-auto-deferred invariant above is. A nit thread is
 deferred immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no triage cycle
 (unlike low, it is not handed to the fixer as a fix/triage target on the severity axis; the one
 exception is a judge `act` on a nit, which reaches the fixer through judge-pass's severity-blind
-act filter); the closing sweep defer-closes an unacted nit thread regardless of whether the fixer
-looked at it. GATE-CLOSE requires 0 unresolved
+act filter); the closing sweep defer-closes a still-unresolved nit thread regardless of whether
+the fixer looked at it. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: high, medium, low,
 question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`
