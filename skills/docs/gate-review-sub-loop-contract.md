@@ -1509,8 +1509,10 @@ promoting-to-defect-severity answer, or an escalation to the author — is a per
 judgment call, not a state machine this codebase drives or unit-tests; only the
 never-auto-deferred invariant above is. A nit thread is
 deferred immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no triage cycle
-(unlike low, it is never handed to the fixer as a fix/triage target); the closing sweep
-defer-closes it regardless of whether the fixer looked at it. GATE-CLOSE requires 0 unresolved
+(unlike low, it is not handed to the fixer as a fix/triage target on the severity axis; the one
+exception is a judge `act` on a nit, which reaches the fixer through judge-pass's severity-blind
+act filter); the closing sweep defer-closes an unacted nit thread regardless of whether the fixer
+looked at it. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: high, medium, low,
 question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`
@@ -1554,8 +1556,8 @@ field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposit
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
 defers it (a medium thread past the gate's configured medium fix window
-(default 3, round 4 under the default; #1581), or a low/nit thread the fixer triaged (nit skips
-the fixer entirely) and
+(default 3, round 4 under the default; #1581), or a low/nit thread the fixer triaged (a nit skips
+the fixer on the severity axis, judge-acted nits excepted) and
 chose to defer — closed by the post-fixer disposition sweep, never a silent pre-fixer auto-defer
 (#1585)). A question thread is never stamped `disposition=deferred` — it is answered, not
 deferred; its resolution is the answer reply itself. A
