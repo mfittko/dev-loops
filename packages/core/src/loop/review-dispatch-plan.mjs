@@ -22,7 +22,10 @@
  *     briefing block and before the late volatile tail + angle suffix.
  *  4. Dispatch-plan builder — one deterministic per-gate-round artifact that
  *     records the complete cache-relevant request shape without duplicating
- *     briefing content (Section A).
+ *     briefing content (Section A). `buildAngleRequestGroups` partitions a
+ *     caller's angle -> concrete-model resolutions into that plan's
+ *     `requestGroups` shape, bucketing angles with no override into an
+ *     explicit "inherit" key rather than merging them into a concrete group.
  *  5. Primer-form default — deterministic default by harness capability
  *     (Section C/D): first-output-observable harnesses may let a lead reviewer
  *     prime; completion-only harnesses default to a short dedicated primer
@@ -187,20 +190,51 @@ export function sha256Hex(content) {
   return `sha256:${h.digest("hex")}`;
 }
 
-const isPlainObject = (v) =>
-  v != null && typeof v === "object" && !Array.isArray(v) && !Buffer.isBuffer(v);
+/** True for a non-null value whose prototype is exactly Object.prototype or null (a JSON-shaped record, never a Date/Map/Set/class instance). */
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
 
-/** Recursively sort object keys for a byte-deterministic serialization. */
-function stableStringify(value) {
-  if (Array.isArray(value)) return value.map(stableStringify);
+/**
+ * Recursively sort object keys for a byte-deterministic serialization (arrays
+ * keep their order — order is itself cache-relevant for tool definitions and
+ * content-block boundaries).
+ *
+ * Trust-boundary validation, refusing loudly rather than silently colliding
+ * two distinct inputs onto one fingerprint: a non-finite number (NaN/
+ * Infinity) is rejected rather than let `JSON.stringify` collapse it to
+ * `null`, a non-plain object (Date/Map/Set/...) is rejected rather than let
+ * `Object.keys` see it as keyless (and therefore indistinguishable from
+ * `{}`), and undefined/function/symbol/bigint are rejected rather than
+ * silently dropped or crash-serialized by `JSON.stringify` itself. The
+ * accumulator is null-prototype so an own `__proto__` key (a realistic shape
+ * for JSON.parse'd input) is kept as a plain data property instead of
+ * vanishing into the prototype chain.
+ * @param {*} value
+ * @param {string} [keyPath] — dotted path to `value`, for the error message
+ * @returns {*}
+ */
+function stableStringify(value, keyPath = "$") {
+  if (Array.isArray(value)) return value.map((entry, i) => stableStringify(entry, `${keyPath}[${i}]`));
   // Canonicalize nested Buffers to hex (the `__buffer:` prefix keeps a Buffer
   // distinct from a string that happens to equal its hex, so bytes and text can
   // never collide). Mirrors sha256Hex's top-level Buffer handling so a push/pull
   // through memory vs disk yields identical bytes even for nested buffers.
   if (Buffer.isBuffer(value)) return `__buffer:${value.toString("hex")}`;
-  if (isPlainObject(value)) {
-    const out = {};
-    for (const key of Object.keys(value).sort()) out[key] = stableStringify(value[key]);
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new Error(`sha256Hex: fingerprint input at ${keyPath} is a non-finite number (${value}) — refusing to collapse it to JSON null`);
+  }
+  if (value === undefined || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+    throw new Error(`sha256Hex: fingerprint input at ${keyPath} is a ${typeof value} — refusing to silently drop or crash-serialize it`);
+  }
+  if (value !== null && typeof value === "object") {
+    if (!isPlainObject(value)) {
+      throw new Error(`sha256Hex: fingerprint input at ${keyPath} is not a plain object (got ${Object.prototype.toString.call(value)}) — refusing to canonicalize a keyless collision`);
+    }
+    const out = Object.create(null);
+    for (const key of Object.keys(value).sort()) out[key] = stableStringify(value[key], `${keyPath}.${key}`);
     return out;
   }
   return value;
@@ -489,6 +523,107 @@ function validateRequestGroups(requestGroups) {
       angles: [...new Set(g.angles.map(String))],
     });
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * 4b. Angle model bucketing (per-caller angle -> concrete model resolution)
+ * ------------------------------------------------------------------ */
+
+/**
+ * `requestGroups` bucket key for angles whose model resolution is "no
+ * override" (inherit). Reserved: a caller-resolved concrete model literally
+ * named this would otherwise collide with the "no override" bucket and
+ * become indistinguishable from genuine inherit.
+ */
+export const INHERIT_MODEL_KEY = "inherit";
+
+/**
+ * Partition a caller's angle -> concrete-model resolutions into fingerprinted
+ * request groups ready for {@link buildReviewDispatchPlan}'s `requestGroups`
+ * input. Angles resolving to the same concrete model id share one group;
+ * angles with no override (`model: null`/`undefined`) form their own explicit
+ * {@link INHERIT_MODEL_KEY} bucket, never merged with a concrete id. An angle
+ * listed twice with two DIFFERENT models is a caller bug and throws (an angle
+ * cannot honestly belong to two request groups). A concrete model literally
+ * named {@link INHERIT_MODEL_KEY} also throws — it would otherwise silently
+ * collide with the reserved bucket key and become indistinguishable from
+ * genuine no-override.
+ *
+ * Each group's `requestPrefixFingerprint` is computed via
+ * {@link fingerprintRequestPrefix} over every cache-relevant input this layer
+ * observes for that group (the bucket's model, tool set/order, instructions,
+ * settings, content-block boundaries, the shared-prefix bytes, and the
+ * declared cache boundary/TTL intent) — changing only the angle set within a
+ * bucket never changes its fingerprint.
+ *
+ * @param {object} input
+ * @param {Array<{angle: string, model: string|null}>} input.angleModels
+ * @param {string} [input.sharedPrefixHash] — folded in as the fingerprint's shared-artifact reference.
+ * @param {Array<string|object>} [input.toolDefinitions] — tool names/definitions in dispatch order
+ * @param {string|string[]} [input.instructions] — system/project/agent instruction bytes (or a digest)
+ * @param {object} [input.settings] — thinking/tool-choice settings
+ * @param {string[]} [input.blockBoundaries] — content-block boundary markers, in order
+ * @param {string} [input.cacheBoundary]
+ * @param {string} [input.ttlIntent] — one of TTL_INTENT_VALUES
+ * @returns {RequestGroup[]} sorted by model (code-unit order, never localeCompare — ICU-dependent
+ *   sorting could order the same two model ids differently across runtimes); angles sorted within a group.
+ */
+export function buildAngleRequestGroups({
+  angleModels,
+  sharedPrefixHash,
+  toolDefinitions = [],
+  instructions = "",
+  settings = {},
+  blockBoundaries = [],
+  cacheBoundary = CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+  ttlIntent = "harness_managed",
+} = {}) {
+  if (!Array.isArray(angleModels)) {
+    throw new Error("buildAngleRequestGroups: angleModels must be an array of { angle, model }");
+  }
+
+  const angleToModelKey = new Map();
+  const anglesByModelKey = new Map();
+  for (const entry of angleModels) {
+    const angle = typeof entry?.angle === "string" ? entry.angle.trim() : "";
+    if (angle.length === 0) {
+      throw new Error("buildAngleRequestGroups: every angleModels entry needs a non-empty string angle");
+    }
+    const rawModel = entry.model;
+    if (rawModel != null && (typeof rawModel !== "string" || rawModel.trim().length === 0)) {
+      throw new Error(`buildAngleRequestGroups: angleModels entry for "${angle}" has an invalid model (must be a non-empty string, or null/undefined for inherit)`);
+    }
+    const modelKey = rawModel == null ? INHERIT_MODEL_KEY : rawModel.trim();
+    if (rawModel != null && modelKey === INHERIT_MODEL_KEY) {
+      throw new Error(`buildAngleRequestGroups: angle "${angle}" has a concrete model literally named ${JSON.stringify(INHERIT_MODEL_KEY)}, which collides with the bucket key reserved for "no override" — rename the model, or resolve it to null/undefined instead of the literal string`);
+    }
+
+    const priorKey = angleToModelKey.get(angle);
+    if (priorKey !== undefined && priorKey !== modelKey) {
+      throw new Error(`buildAngleRequestGroups: angle "${angle}" is listed with two different models ("${priorKey}" and "${modelKey}") — an angle cannot belong to two request groups`);
+    }
+    angleToModelKey.set(angle, modelKey);
+
+    if (!anglesByModelKey.has(modelKey)) anglesByModelKey.set(modelKey, new Set());
+    anglesByModelKey.get(modelKey).add(angle);
+  }
+
+  return [...anglesByModelKey.entries()]
+    .map(([model, angleSet]) => {
+      const angles = [...angleSet].sort();
+      const { fingerprint } = fingerprintRequestPrefix({
+        model,
+        tools: toolDefinitions,
+        systemInstructions: instructions,
+        settings,
+        contentBlocks: blockBoundaries,
+        sharedArtifact: sharedPrefixHash,
+        cacheBoundary,
+        ttlIntent,
+      });
+      return { model, requestPrefixFingerprint: fingerprint, cacheBoundary, ttlIntent, angles };
+    })
+    .sort((a, b) => (a.model < b.model ? -1 : a.model > b.model ? 1 : 0));
 }
 
 /* ------------------------------------------------------------------ *

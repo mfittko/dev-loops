@@ -5,9 +5,11 @@ import {
   CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
   CACHE_BOUNDARY_VALUES,
   HARNESS_DEFAULT_CAPABILITIES,
+  INHERIT_MODEL_KEY,
   PRIMER_FORM_DEDICATED,
   PRIMER_FORM_LEAD_REVIEWER,
   TTL_INTENT_VALUES,
+  buildAngleRequestGroups,
   buildReviewDispatchPlan,
   cacheReuseVeracity,
   composeCacheAwareRequest,
@@ -146,6 +148,78 @@ describe("fingerprintRequestPrefix — complete observable prefix (Section A/AC-
     assert.match(
       fingerprintRequestPrefix({ ...base, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h" }).fingerprint,
       /^sha256:[0-9a-f]{64}$/,
+    );
+  });
+
+  test("throws on a non-finite number in settings, rather than collapsing it to JSON null", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { temperature: NaN } }),
+      /non-finite number/,
+    );
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { temperature: Infinity } }),
+      /non-finite number/,
+    );
+  });
+
+  test("throws on a non-plain object in settings (Date/Map/Set are keyless and would collide with {})", () => {
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { at: new Date() } }), /not a plain object/);
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { m: new Map() } }), /not a plain object/);
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { s: new Set() } }), /not a plain object/);
+  });
+
+  test("an own __proto__ key in settings is preserved (not silently dropped by a plain-object accumulator)", () => {
+    const settingsWithProto = JSON.parse('{"__proto__":{"a":1}}');
+    const a = fingerprintRequestPrefix({ model: "m", settings: settingsWithProto }).fingerprint;
+    const b = fingerprintRequestPrefix({ model: "m", settings: JSON.parse('{"__proto__":{"a":2}}') }).fingerprint;
+    assert.notEqual(a, b, "two settings objects differing only under __proto__ must not hash identically");
+  });
+
+  test("throws on an undefined value in settings, rather than silently dropping it (would otherwise collide { thinking: undefined } with {})", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { thinking: undefined } }),
+      /is a undefined/,
+    );
+  });
+
+  test("throws on a function value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { onDone: () => {} } }),
+      /is a function/,
+    );
+  });
+
+  test("throws on a symbol value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { tag: Symbol("x") } }),
+      /is a symbol/,
+    );
+  });
+
+  test("throws on a bigint value in settings with the module's own keyPath-annotated message, not a raw JSON.stringify TypeError", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { budget: 10n } }),
+      /sha256Hex: fingerprint input at \$\.settings\.budget is a bigint/,
+    );
+  });
+
+  test("tools: two object-shaped tool defs differing only in key order produce the same fingerprint", () => {
+    const a = fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", schema: { path: "string", limit: "number" } }] }).fingerprint;
+    const b = fingerprintRequestPrefix({ model: "m", tools: [{ schema: { limit: "number", path: "string" }, name: "Read" }] }).fingerprint;
+    assert.equal(a, b, "object-shaped tool definitions canonicalize key order the same as any other object input");
+  });
+
+  test("tools: a non-finite number nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", schema: { temperature: NaN } }] }),
+      /fingerprint input at \$\.tools\[0\]\.schema\.temperature is a non-finite number/,
+    );
+  });
+
+  test("tools: a non-plain object nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", at: new Date() }] }),
+      /fingerprint input at \$\.tools\[0\]\.at is not a plain object/,
     );
   });
 });
@@ -375,6 +449,165 @@ describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact"
         requestGroups: [{ model: "m", ttlIntent: "forever", angles: ["a"] }],
       }),
     );
+  });
+});
+
+describe("buildAngleRequestGroups — angle -> model bucketing into requestGroups", () => {
+  function baseInput(overrides = {}) {
+    return {
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "security", model: "opus" },
+        { angle: "docs", model: null },
+      ],
+      sharedPrefixHash: "sha256:" + "a".repeat(64),
+      toolDefinitions: ["Read", "Grep", "Bash"],
+      instructions: "system+agent instructions",
+      settings: { thinking: "extended", toolChoice: "auto" },
+      blockBoundaries: ["shared_prefix", "cache_boundary", "volatile_tail"],
+      ...overrides,
+    };
+  }
+
+  test("partitions angles by concrete model; angles sharing a model share one group", () => {
+    const groups = buildAngleRequestGroups(baseInput());
+    const opusGroup = groups.find((g) => g.model === "opus");
+    assert.deepEqual(opusGroup.angles, ["correctness", "security"]);
+  });
+
+  test("an angle with model:null forms its own explicit inherit bucket, never merged with a concrete id", () => {
+    const groups = buildAngleRequestGroups(baseInput());
+    const inheritGroup = groups.find((g) => g.model === INHERIT_MODEL_KEY);
+    assert.ok(inheritGroup, "inherit group present");
+    assert.deepEqual(inheritGroup.angles, ["docs"]);
+    assert.equal(groups.length, 2, "opus and inherit stay separate groups");
+  });
+
+  test("groups are sorted by model; angles within a group are sorted", () => {
+    const groups = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "zeta", model: "opus" },
+        { angle: "alpha", model: "opus" },
+        { angle: "beta", model: "sonnet" },
+      ],
+    }));
+    assert.deepEqual(groups.map((g) => g.model), ["opus", "sonnet"]);
+    assert.deepEqual(groups[0].angles, ["alpha", "zeta"]);
+  });
+
+  test("each group carries cacheBoundary and requestPrefixFingerprint fields", () => {
+    for (const group of buildAngleRequestGroups(baseInput())) {
+      assert.equal(group.cacheBoundary, CACHE_BOUNDARY_AFTER_SHARED_PREFIX);
+      assert.match(group.requestPrefixFingerprint, /^sha256:[0-9a-f]{64}$/);
+    }
+  });
+
+  test("empty angleModels produces an empty array (no throw)", () => {
+    assert.deepEqual(buildAngleRequestGroups(baseInput({ angleModels: [] })), []);
+  });
+
+  test("an angle listed twice under two different models throws", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({
+        angleModels: [
+          { angle: "correctness", model: "opus" },
+          { angle: "correctness", model: "sonnet" },
+        ],
+      })),
+      /listed with two different models/,
+    );
+  });
+
+  test("a concrete model literally named 'inherit' throws (would collide with the reserved bucket key)", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: "inherit" }] })),
+      /collides with the bucket key reserved for "no override"/,
+    );
+  });
+
+  test("throws on a non-array angleModels (a string, or null)", () => {
+    assert.throws(() => buildAngleRequestGroups(baseInput({ angleModels: "x" })), /angleModels must be an array/);
+    assert.throws(() => buildAngleRequestGroups(baseInput({ angleModels: null })), /angleModels must be an array/);
+  });
+
+  test("throws on an angleModels entry with an empty/non-string angle", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "", model: "opus" }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: 1 }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+  });
+
+  test("throws on an angleModels entry with an invalid model (empty string, or a non-string)", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: "" }] })),
+      /invalid model/,
+    );
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: 1 }] })),
+      /invalid model/,
+    );
+  });
+
+  test("the same angle listed twice with the SAME model collapses to one entry in one group (not a duplicate)", () => {
+    const groups = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "correctness", model: "opus" },
+      ],
+    }));
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0].angles, ["correctness"]);
+  });
+
+  test("two builds of identical input produce byte-identical JSON", () => {
+    const a = JSON.stringify(buildAngleRequestGroups(baseInput()));
+    const b = JSON.stringify(buildAngleRequestGroups(baseInput()));
+    assert.equal(a, b);
+  });
+
+  test("requestGroups order is independent of angleModels input order", () => {
+    const ordered = baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+        { angle: "security", model: "sonnet" },
+      ],
+    });
+    const permuted = baseInput({
+      angleModels: [
+        { angle: "security", model: "sonnet" },
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+      ],
+    });
+    assert.equal(JSON.stringify(buildAngleRequestGroups(ordered)), JSON.stringify(buildAngleRequestGroups(permuted)));
+  });
+
+  test("does NOT change the fingerprint when only the angle suffix (angle set within a group) changes", () => {
+    const a = buildAngleRequestGroups(baseInput()).find((g) => g.model === "opus").requestPrefixFingerprint;
+    const b = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "security", model: "opus" },
+        { angle: "docs", model: null },
+        { angle: "threat-model", model: "opus" },
+      ],
+    })).find((g) => g.model === "opus").requestPrefixFingerprint;
+    assert.equal(a, b, "the angle list is the volatile suffix — never a fingerprint input");
+  });
+
+  test("changes when the tool set/order, instructions, settings, or blockBoundaries change", () => {
+    const base = buildAngleRequestGroups(baseInput()).find((g) => g.model === "opus").requestPrefixFingerprint;
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ toolDefinitions: ["Bash", "Grep", "Read"] })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ instructions: "different instructions" })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ settings: { thinking: "off", toolChoice: "auto" } })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ blockBoundaries: ["shared_prefix", "volatile_tail"] })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ sharedPrefixHash: "sha256:" + "0".repeat(64) })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ ttlIntent: "1h" })).find((g) => g.model === "opus").requestPrefixFingerprint);
   });
 });
 
