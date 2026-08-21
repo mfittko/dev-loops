@@ -1630,7 +1630,7 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
  * cross-referencing the prefix.
  *
  * This file is NOT itself deterministic (`loggedAt` changes on every write —
- * only the sibling `request-plan.json` carries the "byte-identical for
+ * only the sibling `dispatch-plan.json` carries the "byte-identical for
  * identical inputs" guarantee). Writing or changing this file never touches
  * the stable briefing-prefix bytes.
  *
@@ -2268,7 +2268,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     loggedAt: new Date().toISOString(),
   };
   // Write ORDER matters: the sibling briefing prefix goes first, then the
-  // volatile-tail and request-plan artifacts, and the JSON completion marker
+  // volatile-tail and dispatch-plan artifacts, and the JSON completion marker
   // LAST, so the marker's existence is the completion marker for the whole
   // set. Downstream consumers (readGateContext, the reviewers' --context-path
   // guard) key on the JSON — a prior write failure must not leave a
@@ -2920,7 +2920,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     }
     // Load the dev-loop config once: used both for dynamic angle resolution
     // (when --angles is omitted) and, regardless of --angles, to resolve each
-    // angle's concrete review model for the request-plan artifact
+    // angle's concrete review model for the dispatch-plan artifact
     // (resolveRoleModel(kind:"angle"), inside writeGateContext). loadDevLoopConfig never
     // throws: it returns { config, warnings, errors }, and on a validation
     // error it still returns `config` with every layer merged (its own
@@ -2993,7 +2993,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // independent of whether the angle set came from dynamic resolution or
     // an explicit --angles override, and independent of --prefix-file
     // (config is a local file read, never a GitHub call). config was already
-    // loaded unconditionally above (also feeds the request-plan artifact's
+    // loaded unconditionally above (also feeds the dispatch-plan artifact's
     // per-angle model resolution regardless of --angles), so reuse it here
     // rather than loading it a second time.
     if (options.angles.length > 0) {
