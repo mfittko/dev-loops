@@ -506,6 +506,23 @@ test("a substantially-unclassified diff still blocks when padded with docs+confi
   assert.ok(result.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
 });
 
+test("a docs-only diff (zero source-like changed lines) does not spuriously block as unclassified source", () => {
+  // The unclassifiedRatio guard reads `sourceChangedLines > 0 ? ... : 0`, so a
+  // diff with no code/test/unknown lines must take the zero-source false
+  // branch: ratio 0, no unclassified block, wholeLogicLoc 0, pass. A `: 0`
+  // regressing to `: 1` would spuriously block every docs-only PR — this pins
+  // the fail-open direction of the guard.
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tdocs/design.md\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[300, 0, "docs/design.md"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.ok(!result.reasons.some((r) => r.includes("unclassified")));
+});
+
 test("a configured t1 pattern matching a file that classifies unknown (0 LOC) blocks even when unclassified lines are a small share of the diff", () => {
   const result = computeSizeBudget({
     nameStatusOutput: "M\tsrc/foo.mjs\nM\tsrc/billing/charge.rb\n",
