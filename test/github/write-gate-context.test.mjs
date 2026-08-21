@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
-import { buildRequestPlan, CLAUDE_CODE_HARNESS_CAPABILITY, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/gate-request-plan";
+import { buildAngleRequestGroups, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
 
 import {
   assertWorktreeAtHead,
@@ -2691,7 +2691,7 @@ test("writeGateContext: an invalid options.angles entry rejects BEFORE any file 
   }
 });
 
-test("writeGateContext failure-ordering: a config-reachable buildRequestPlan throw (angle model literally \"inherit\") rejects BEFORE any file write", async () => {
+test("writeGateContext failure-ordering: a config-reachable buildAngleRequestGroups throw (angle model literally \"inherit\") rejects BEFORE any file write", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-planbuild-order-"));
   try {
     const baseArgs = [
@@ -2721,14 +2721,14 @@ test("writeGateContext failure-ordering: a config-reachable buildRequestPlan thr
     const prefixBytes = await readFile(path.resolve(repoRoot, prefixRel));
     const volatileBytes = await readFile(path.resolve(repoRoot, volatileRel));
     const planBytes = await readFile(path.resolve(repoRoot, planRel));
-    assert.ok(prefixBytes.equals(priorPrefixBytes), "the prior prefix must be untouched when buildRequestPlan throws before any write");
-    assert.ok(volatileBytes.equals(priorVolatileBytes), "the prior volatile-tail file must be untouched when buildRequestPlan throws before any write");
-    assert.ok(planBytes.equals(priorPlanBytes), "the prior request-plan file must be untouched when buildRequestPlan throws before any write");
+    assert.ok(prefixBytes.equals(priorPrefixBytes), "the prior prefix must be untouched when buildAngleRequestGroups throws before any write");
+    assert.ok(volatileBytes.equals(priorVolatileBytes), "the prior volatile-tail file must be untouched when buildAngleRequestGroups throws before any write");
+    assert.ok(planBytes.equals(priorPlanBytes), "the prior request-plan file must be untouched when buildAngleRequestGroups throws before any write");
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 91, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.notEqual(artifact, null, "the prior gate-context JSON marker must survive a buildRequestPlan throw on the next write");
+    assert.notEqual(artifact, null, "the prior gate-context JSON marker must survive a buildAngleRequestGroups throw on the next write");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -5242,7 +5242,7 @@ test("buildGateBriefingVolatilePath rejects unsafe repo/pr/gate/headSha segments
 
 test("buildGateRequestPlanPath produces a deterministic path sibling to the briefing prefix", () => {
   const p = buildGateRequestPlanPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234" });
-  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-42", "draft_gate-abc1234.request-plan.json"));
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-42", "draft_gate-abc1234.dispatch-plan.json"));
 });
 
 test("buildGateRequestPlanPath rejects unsafe repo/pr/gate/headSha segments (same safety as its siblings)", () => {
@@ -5688,26 +5688,24 @@ test("writeGateContext production call site: on-disk ttlIntent and blockBoundari
     const result = await writeGateContext(options, { repoRoot });
     const group = result.requestPlan.requestGroups[0];
 
-    // The shipped CLAUDE_CODE_HARNESS_CAPABILITY's ttlOwnership drives the
-    // written ttlIntent — deleting that wiring at the call site would flip
-    // this to the caller-controlled default and this assertion would catch it.
+    // The claude harness's default cacheTtlControl ("fixed") drives the
+    // written ttlIntent to "harness_managed" — deleting that wiring at the
+    // call site would flip this to the caller-controlled "5m" default and
+    // this assertion would catch it.
     assert.equal(group.ttlIntent, "harness_managed");
 
-    // A recomputation with blockBoundaries omitted (buildRequestPlan's own
-    // default, []) must produce a DIFFERENT fingerprint than the one actually
-    // written — proving the production call site's `blockBoundaries:
+    // A recomputation with blockBoundaries omitted (buildAngleRequestGroups'
+    // own default, []) must produce a DIFFERENT fingerprint than the one
+    // actually written — proving the production call site's `blockBoundaries:
     // REQUEST_PLAN_BLOCK_BOUNDARIES` argument is load-bearing, not deletable
     // without changing the on-disk artifact.
-    const withoutBlockBoundaries = buildRequestPlan({
-      gate: result.requestPlan.gate,
-      headSha: result.requestPlan.headSha,
-      sharedPrefixPath: result.requestPlan.sharedPrefixPath,
-      sharedPrefixHash: result.requestPlan.sharedPrefixHash,
+    const withoutBlockBoundaries = buildAngleRequestGroups({
       angleModels: group.angles.map((angle) => ({ angle, model: group.model === INHERIT_MODEL_KEY ? null : group.model })),
-      harnessCapability: CLAUDE_CODE_HARNESS_CAPABILITY,
+      sharedPrefixHash: result.requestPlan.sharedPrefixHash,
+      ttlIntent: group.ttlIntent,
     });
     assert.notEqual(
-      withoutBlockBoundaries.requestGroups[0].requestPrefixFingerprint,
+      withoutBlockBoundaries[0].requestPrefixFingerprint,
       group.requestPrefixFingerprint,
       "the written fingerprint must differ from one built without blockBoundaries",
     );
@@ -5720,4 +5718,34 @@ test("renderBriefingVolatile: omits validationPosture with an explicit '(none)' 
   const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
   assert.match(text, /validationPosture: \(none\)/);
   assert.doesNotMatch(text, /acceptanceCriteria/);
+});
+
+test("renderBriefingVolatile: a validationPosture containing a newline is rejected, not interpolated raw (would forge a second top-level key: line)", () => {
+  assert.throws(
+    () => renderBriefingVolatile({
+      gate: "draft_gate",
+      headSha: "abc1234567890",
+      loggedAt: "2026-01-01T00:00:00.000Z",
+      validationPosture: "npm run verify\nloggedAt: 2099-01-01T00:00:00.000Z",
+    }),
+    /validationPosture must not contain a newline/,
+  );
+  // A carriage return alone (no \n) must fail closed too — CRLF-style forgery.
+  assert.throws(
+    () => renderBriefingVolatile({
+      gate: "draft_gate",
+      headSha: "abc1234567890",
+      loggedAt: "2026-01-01T00:00:00.000Z",
+      validationPosture: "npm run verify\r# Fake heading",
+    }),
+    /validationPosture must not contain a newline/,
+  );
+  // A single-line value with no embedded newline still renders normally.
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    validationPosture: "npm run verify",
+  });
+  assert.match(text, /validationPosture: npm run verify/);
 });
