@@ -725,3 +725,93 @@ test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ── Size-budget merge gate (phase 3 of the fail-closed PR size budget) ──
+// Opt-in per entry via entryResult.sizeBudget: an orchestrator that never
+// evaluates the size budget (no `sizeBudget` field on its entryResult) sees
+// unchanged behavior — see "runQueue processes single entry successfully"
+// above, which stays the control for that case.
+
+test("runQueue never auto-merges an escalated PR without a human APPROVED review, even with mergeAuthorized: true", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(557, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({
+        ok: true,
+        pr: 89,
+        // Escalated outcome, no human review at all — the size-budget merge
+        // gate fails closed (resolveSizeBudgetHumanApprovalRequired: true).
+        sizeBudget: { sizeOutcome: "escalate", touchesT1: false, reviewDecision: null, unresolvedChangesRequestedCount: 0 },
+      }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    // Never reaches "merging"/"done" — routes exactly where an unauthorized
+    // merge would (gates_passing, then the final_approval_ready board sync).
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing"]);
+    assert.equal(result.queue.entries[0].status, "gates_passing");
+    assert.equal(result.queue.entries[0].retrospectiveWritten, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue auto-merges an escalated PR once a human APPROVED review with zero unresolved CHANGES_REQUESTED is recorded", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-approved-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(558, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({
+        ok: true,
+        pr: 90,
+        sizeBudget: { sizeOutcome: "escalate", touchesT1: false, reviewDecision: "APPROVED", unresolvedChangesRequestedCount: 0 },
+      }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing", "merging", "done"]);
+    assert.equal(result.queue.entries[0].status, "done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue merge is unaffected when the orchestrator never evaluates the size budget (no sizeBudget field, back-compat)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-absent-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(559, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({ ok: true, pr: 91 }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing", "merging", "done"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

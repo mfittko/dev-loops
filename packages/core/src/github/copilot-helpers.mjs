@@ -14,6 +14,11 @@ export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED",
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+// Size-budget outcome vocabulary — mirrors
+// check-size-budget.mjs's computeSizeBudget outcome enum exactly; this file
+// never recomputes the outcome, only round-trips it through the verdict
+// comment.
+const GATE_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
 
 // The literal header line the gate review body always emits first
 // (upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody, re-exported
@@ -308,6 +313,32 @@ function normalizeGateExecutionMode(value) {
   return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
 }
 
+function normalizeGateSizeOutcome(value) {
+  const normalized = stripOptionalCodeTicks(value).toLowerCase();
+  return GATE_SIZE_OUTCOMES.has(normalized) ? normalized : null;
+}
+
+function normalizeGateSizeTouchesT1(value) {
+  const normalized = stripOptionalCodeTicks(value).toLowerCase();
+  if (normalized === "touched") return true;
+  if (normalized === "not touched") return false;
+  return null;
+}
+
+// "none" | "granted" | "granted by <name>" — the approver name is free text
+// (already sanitized by the poster via sanitizeInline before rendering), so
+// no further normalization beyond trimming is applied here.
+function normalizeGateSizeWaiver(value) {
+  const normalized = stripOptionalCodeTicks(value).trim();
+  if (/^none$/iu.test(normalized)) return { granted: false, approvedBy: null };
+  const grantedMatch = normalized.match(/^granted(?:\s+by\s+(.+))?$/iu);
+  if (grantedMatch) {
+    const approvedBy = grantedMatch[1]?.trim();
+    return { granted: true, approvedBy: approvedBy && approvedBy.length > 0 ? approvedBy : null };
+  }
+  return null;
+}
+
 function parseGateReviewCommentFields(body) {
   if (typeof body !== "string" || body.trim().length === 0) {
     return null;
@@ -321,6 +352,10 @@ function parseGateReviewCommentFields(body) {
     nextAction: null,
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
   };
 
   for (const rawLine of body.split(/\r?\n/u)) {
@@ -413,6 +448,34 @@ function parseGateReviewCommentFields(body) {
       }
       continue;
     }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+outcome\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeOutcome === null) {
+        fields.sizeOutcome = normalizeGateSizeOutcome(match[1]);
+      }
+      continue;
+    }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+t1\s+slice\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeTouchesT1 === null) {
+        fields.sizeTouchesT1 = normalizeGateSizeTouchesT1(match[1]);
+      }
+      continue;
+    }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+waiver\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeWaiverGranted === null) {
+        const parsedWaiver = normalizeGateSizeWaiver(match[1]);
+        if (parsedWaiver) {
+          fields.sizeWaiverGranted = parsedWaiver.granted;
+          fields.sizeWaiverApprovedBy = parsedWaiver.approvedBy;
+        }
+      }
+      continue;
+    }
   }
 
   // Lenient fallback: detect gate name and head SHA anywhere in body
@@ -481,6 +544,10 @@ export function parseGateReviewCommentMarkerBody(body) {
     nextAction: fields.nextAction,
     executionMode: fields.executionMode,
     inlineReason: fields.inlineReason,
+    sizeOutcome: fields.sizeOutcome,
+    sizeTouchesT1: fields.sizeTouchesT1,
+    sizeWaiverGranted: fields.sizeWaiverGranted,
+    sizeWaiverApprovedBy: fields.sizeWaiverApprovedBy,
     contractComplete: Boolean(fields.verdict && fields.findingsSummary && fields.nextAction),
   };
 }
@@ -525,6 +592,10 @@ export function summarizeGateReviewComments(comments) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
+      sizeOutcome: parsed.sizeOutcome ?? null,
+      sizeTouchesT1: parsed.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: parsed.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: parsed.sizeWaiverApprovedBy ?? null,
       surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
@@ -579,6 +650,10 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
+      sizeOutcome: parsed.sizeOutcome ?? null,
+      sizeTouchesT1: parsed.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: parsed.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: parsed.sizeWaiverApprovedBy ?? null,
       contractComplete: parsed.contractComplete,
       surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
