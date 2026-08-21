@@ -8,6 +8,7 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { sanitizeInline } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
@@ -106,8 +107,8 @@ function renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approv
     "",
     `- **head SHA:** ${headSha}`,
     `- **tier:** ${tier}`,
-    `- **justification:** ${reason}`,
-    `- **approved by:** ${approvedBy ?? "n/a (default-tier waiver)"}`,
+    `- **justification:** ${sanitizeInline(reason)}`,
+    `- **approved by:** ${approvedBy == null ? "n/a (default-tier waiver)" : sanitizeInline(approvedBy)}`,
     `- **whole-PR logic LOC:** ${sizeBudget.wholeLogicLoc}`,
     "",
     "_Minimal standalone record — phase 3 folds tier/outcome/waiver into the checkpoint-verdict contract._",

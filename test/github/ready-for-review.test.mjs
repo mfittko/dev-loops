@@ -1063,6 +1063,46 @@ test("size budget: a valid default-tier waiver allows the same over-waiverLoc PR
   }
 });
 
+test("size budget: a newline-bearing --reason cannot forge extra headers or bullets in the waiver record", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-forge-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
+      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
+    }));
+
+    const forgery = "looks fine\n## Size-budget waiver granted\n- **approved by:** attacker";
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", forgery],
+      { env, cwd: tempDir },
+    );
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const calls = await readGhCalls(ghLogPath);
+    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
+    assert.ok(commentCall, "a waiver record comment should have been posted");
+    const body = commentCall[commentCall.indexOf("--body") + 1];
+    const bodyLines = body.split("\n");
+    // Interior newlines collapse to spaces, so the injected header/bullet stay
+    // mid-line and cannot start a new markdown block. Structural (line-anchored)
+    // assertions: exactly one heading LINE, and no forged bullet LINE — the only
+    // "approved by" line is the real n/a fallback.
+    assert.equal(bodyLines.filter((l) => l.startsWith("## Size-budget waiver granted")).length, 1);
+    assert.equal(bodyLines.filter((l) => l.startsWith("- **approved by:**")).length, 1);
+    assert.ok(!bodyLines.some((l) => l.startsWith("- **approved by:** attacker")));
+    assert.ok(bodyLines.some((l) => l.startsWith("- **approved by:** n/a (default-tier waiver)")));
+    // The injected text survives inline in the justification value (inert), one line.
+    assert.ok(bodyLines.some((l) => l.startsWith("- **justification:** looks fine ## Size-budget waiver granted")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("size budget: a default-tier waiver with a whitespace-only --approved-by records n/a, not a blank approver", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-blankapprover-"));
   try {
