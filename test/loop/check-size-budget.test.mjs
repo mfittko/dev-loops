@@ -244,6 +244,32 @@ test("T1 waiver WITH a named approver is valid and clears the slice-hard-loc blo
   assert.ok(!result.reasons.some((r) => r.includes("t1.sliceHardLoc") && r.includes("not waived")));
 });
 
+test("a T1 slice over sliceHardLoc alongside an unwaivable block (absoluteHardLoc) blocks with a valid waiver request present, both the T1 and default-tier reason arms name the unwaivable-block collision", () => {
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/billing/charge.mjs\n",
+    diffOutput: "",
+    // 2500 whole-PR logic LOC: over t1.sliceHardLoc (400), over
+    // absoluteHardLoc (2000, unwaivable), and over default.waiverLoc (1500).
+    numstatOutput: numstatZ([[2500, 0, "src/billing/charge.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+    waived: true,
+    approvedBy: "Jane Reviewer",
+  });
+  assert.equal(result.outcome, "block");
+  assert.equal(result.waiver.t1Valid, false);
+  assert.equal(result.waiver.defaultValid, false);
+  assert.ok(
+    result.reasons.some(
+      (r) => r.includes("t1.sliceHardLoc") && r.includes("no waiver possible alongside an unwaivable block"),
+    ),
+  );
+  assert.ok(
+    result.reasons.some(
+      (r) => r.includes("default.waiverLoc") && r.includes("no waiver possible alongside an unwaivable block"),
+    ),
+  );
+});
+
 test("default-tier waiver: over waiverLoc blocks when not waived", () => {
   const result = computeSizeBudget({
     nameStatusOutput: MIXED_NAME_STATUS,
@@ -390,6 +416,29 @@ test("boundary: t1.sliceHardLoc — AT threshold does not block, ABOVE does", ()
   assert.ok(aboveThreshold.reasons.some((r) => r.includes("t1.sliceHardLoc") && r.includes("not waived")));
 });
 
+test("boundary: UNCLASSIFIED_BLOCK_RATIO (source-like denominator) — AT threshold does not block on it, ABOVE does", () => {
+  // AT: 500 unknown + 500 code -> sourceChangedLines 1000, ratio 500/1000 = 0.5
+  // exactly (strict `>`, so this must not trigger the unclassified block).
+  const atThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.rb\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [500, 0, "app/models/thing.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.ok(!atThreshold.reasons.some((r) => r.includes("unclassified")));
+
+  // ABOVE: 500 code + 501 unknown -> sourceChangedLines 1001, ratio 501/1001
+  // > 0.5 -> blocks.
+  const aboveThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.rb\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [501, 0, "app/models/thing.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(aboveThreshold.outcome, "block");
+  assert.ok(aboveThreshold.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
+});
+
 // ---------------------------------------------------------------------------
 // computeSizeBudget — generated/lockfile/docs/config exclusion
 // ---------------------------------------------------------------------------
@@ -431,6 +480,30 @@ test("a mostly-JS diff with a little unknown source still computes normally (no 
   });
   assert.equal(result.outcome, "pass");
   assert.equal(result.wholeLogicLoc, 300);
+});
+
+test("a substantially-unclassified diff still blocks when padded with docs+config (docs/config must not dilute the unclassified ratio)", () => {
+  // Same shape as the pure-Ruby-only case above, but padded with docs/config
+  // lines that contribute 0 logicLoc and are NOT source-like: the ratio
+  // denominator is source-like changed lines (code + test + unknown) only,
+  // so this padding must not dilute unclassifiedRatio below the block
+  // threshold. Before the fix, the denominator was ALL changed lines
+  // (300 rb + 300 docs + 100 config = 700, ratio 300/700 = 0.43 -> pass);
+  // after the fix, the denominator is source-like lines only (300 rb,
+  // docs/config excluded), so ratio is 300/300 = 1.0 -> still blocks.
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tapp/models/subscription.rb\nM\tdocs/design.md\nM\tconfig/settings.yml\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([
+      [300, 0, "app/models/subscription.rb"],
+      [300, 0, "docs/design.md"],
+      [100, 0, "config/settings.yml"],
+    ]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "block");
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.ok(result.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
 });
 
 test("a configured t1 pattern matching a file that classifies unknown (0 LOC) blocks even when unclassified lines are a small share of the diff", () => {

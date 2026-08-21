@@ -229,7 +229,13 @@ export function computeSizeBudget({
   let wholeLoc = 0;
   let t1SliceLoc = 0;
   const tierLoc = { default: 0, t1: 0, t3: 0 };
-  let totalChangedLines = 0;
+  // Denominator for the unclassified-ratio fail-closed check: source-like
+  // changed lines only (code + test + unknown). docs/config/ci are
+  // legitimately-zero-LOC categories the classifier already excludes from
+  // logicLoc; counting them here would let padding a non-JS-source PR with
+  // docs/config dilute the unclassified fraction below the block threshold
+  // while wholeLogicLoc stays silently at (or near) 0.
+  let sourceChangedLines = 0;
   let unclassifiedChangedLines = 0;
   // A configured t1/t3 pattern is an explicit operator signal that a path is
   // risk-slice/relaxed-tier; a matching file that classifies outside
@@ -241,12 +247,16 @@ export function computeSizeBudget({
   for (const file of files) {
     const category = classifyFile(file.path);
     const changedLines = file.added + file.deleted;
-    totalChangedLines += changedLines;
+    if (category === "unknown") {
+      sourceChangedLines += changedLines;
+      unclassifiedChangedLines += changedLines;
+    } else if (category === "code" || category === "test") {
+      sourceChangedLines += changedLines;
+    }
     let logic = 0;
     if (category === "code") logic = changedLines;
     else if (category === "test") logic = testDiscount * changedLines;
     else {
-      if (category === "unknown") unclassifiedChangedLines += changedLines;
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/unknown excluded — covers generated/lockfile content
     }
@@ -257,7 +267,7 @@ export function computeSizeBudget({
   }
   wholeLoc = Math.round(wholeLoc);
   t1SliceLoc = Math.round(t1SliceLoc);
-  const unclassifiedRatio = totalChangedLines > 0 ? unclassifiedChangedLines / totalChangedLines : 0;
+  const unclassifiedRatio = sourceChangedLines > 0 ? unclassifiedChangedLines / sourceChangedLines : 0;
   const substantiallyUnclassified = unclassifiedRatio > UNCLASSIFIED_BLOCK_RATIO || tierPatternDroppedToZero;
 
   const reasons = [];
@@ -277,7 +287,7 @@ export function computeSizeBudget({
     reasons.push(
       tierPatternDroppedToZero
         ? "a configured t1/t3 pattern matched a file that classifies outside code/test (its logic LOC would silently drop to 0); size budget cannot be computed safely — no waiver possible"
-        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of changed lines); size budget cannot be computed safely — no waiver possible`,
+        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of source-like changed lines); size budget cannot be computed safely — no waiver possible`,
     );
   }
   if (wholeLoc > absoluteHardLoc) {
