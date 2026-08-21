@@ -205,7 +205,10 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
 #### Request-plan artifact and harness capability
 
 `write-gate-context.mjs` additionally writes two sibling files beside the briefing
-prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` module. Only the
+prefix: the request-plan JSON, built by the pure `@dev-loops/core/loop/gate-request-plan`
+module's `buildRequestPlan`, and the briefing-volatile text, rendered by
+`write-gate-context.mjs`'s own `renderBriefingVolatile` (which also owns the
+`REQUEST_PLAN_BLOCK_BOUNDARIES` constant fed into the plan below). Only the
 first is deterministic; the second carries a genuine per-write timestamp:
 
 - **`<gate>-<headSha>.request-plan.json`** — the per-round dispatch plan. Byte-identical
@@ -302,10 +305,16 @@ first is deterministic; the second carries a genuine per-write timestamp:
   tail: round-level values that sit AFTER the cache boundary the briefing prefix
   establishes AND that `renderBriefingPrefix` never consumes (the rule for
   what belongs here: volatile-tail material is whatever the stable prefix render
-  does not read). Today that is `validationPosture` (only a pointer,
-  `validationResultsPath`, reaches the prefix — the posture string itself never
-  does) and `loggedAt`, a genuine per-write timestamp with no prefix counterpart —
-  which is why this file, unlike the request plan above, is NOT deterministic.
+  does not read). `gate`/`head` are the one deliberate exception to that rule:
+  `renderBriefingPrefix` also states both values (in its own identifying header),
+  so this file's `gate:`/`head:` lines are a repeated identifying header, not
+  volatile-tail material by the rule — they let a reader with only the volatile
+  tail open still tell which round/head it belongs to without cross-referencing
+  the prefix. Today the rest of the content is `validationPosture` (only a
+  pointer, `validationResultsPath`, reaches the prefix — the posture string
+  itself never does) and `loggedAt`, a genuine per-write timestamp with no
+  prefix counterpart — which is why this file, unlike the request plan above,
+  is NOT deterministic.
   `acceptanceCriteria` is NOT in this file: `write-gate-context.mjs` passes it as
   `renderBriefingPrefix`'s `issueRef`, which appears in the stable prefix's
   `## Linked issue <ref>` heading whenever an issue body/sections are present, so

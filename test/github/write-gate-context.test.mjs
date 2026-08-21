@@ -2654,6 +2654,87 @@ test("writeGateContext failure-ordering: a request-plan-write failure leaves the
   }
 });
 
+test("writeGateContext: an invalid options.angles entry rejects BEFORE any file write (programmatic caller, bypassing parseAnglesJson)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-angles-guard-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    // A programmatic caller bypasses parseAnglesJson entirely and hands
+    // writeGateContext an already-"parsed" array with a bad entry directly.
+    options.angles = ["scope", ""];
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /--angles\[1\] must be a non-empty string/);
+
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: "abc1234567890" });
+    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: "abc1234567890" });
+    const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: "abc1234567890" });
+    await assert.rejects(() => readFile(path.resolve(repoRoot, prefixRel)), /ENOENT/, "no briefing prefix may be written when options.angles is invalid");
+    await assert.rejects(() => readFile(path.resolve(repoRoot, volatileRel)), /ENOENT/, "no volatile-tail file may be written when options.angles is invalid");
+    await assert.rejects(() => readFile(path.resolve(repoRoot, planRel)), /ENOENT/, "no request-plan file may be written when options.angles is invalid");
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no gate-context JSON may exist when options.angles is invalid");
+
+    // A non-array options.angles pins the array-shape check too.
+    const options2 = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    options2.angles = "scope";
+    await assert.rejects(() => writeGateContext(options2, { repoRoot }), /--angles must be a JSON array/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext failure-ordering: a config-reachable buildRequestPlan throw (angle model literally \"inherit\") rejects BEFORE any file write", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-planbuild-order-"));
+  try {
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["docs"]',
+    ];
+    // Establish a real, valid artifact set at this head first, so the
+    // assertion below can also confirm the PRIOR set survives untouched.
+    await writeGateContext(
+      parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "first body"]),
+      { repoRoot },
+    );
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 91, gate: "draft_gate", headSha: "abc1234567890" });
+    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 91, gate: "draft_gate", headSha: "abc1234567890" });
+    const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 91, gate: "draft_gate", headSha: "abc1234567890" });
+    const priorPrefixBytes = await readFile(path.resolve(repoRoot, prefixRel));
+    const priorVolatileBytes = await readFile(path.resolve(repoRoot, volatileRel));
+    const priorPlanBytes = await readFile(path.resolve(repoRoot, planRel));
+
+    // A DIFFERENT --pr-body forces a real rebuild (not the byte-identical
+    // rerun path) so a failure here would otherwise overwrite the prefix.
+    const options = parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "second body"]);
+    options.config = { gates: { draft: { angles: [{ name: "docs", model: "inherit" }] } } };
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /collides with the bucket key/);
+
+    const prefixBytes = await readFile(path.resolve(repoRoot, prefixRel));
+    const volatileBytes = await readFile(path.resolve(repoRoot, volatileRel));
+    const planBytes = await readFile(path.resolve(repoRoot, planRel));
+    assert.ok(prefixBytes.equals(priorPrefixBytes), "the prior prefix must be untouched when buildRequestPlan throws before any write");
+    assert.ok(volatileBytes.equals(priorVolatileBytes), "the prior volatile-tail file must be untouched when buildRequestPlan throws before any write");
+    assert.ok(planBytes.equals(priorPlanBytes), "the prior request-plan file must be untouched when buildRequestPlan throws before any write");
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 91, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.notEqual(artifact, null, "the prior gate-context JSON marker must survive a buildRequestPlan throw on the next write");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // --prefix-file — record an orchestrator-supplied prefix VERBATIM instead of
 // self-rendering (an orchestrator that briefs reviewers with its OWN prefix

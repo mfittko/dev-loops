@@ -2255,10 +2255,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
-  // Write ORDER matters: stale siblings are unlinked FIRST (below, right
-  // before the prefix write), then the sibling briefing prefix goes first,
-  // then the volatile-tail and request-plan artifacts, and the JSON artifact
-  // LAST, so the artifact's existence is the completion marker for the whole
+  // Write ORDER matters: the sibling briefing prefix goes first, then the
+  // volatile-tail and request-plan artifacts, and the JSON completion marker
+  // LAST, so the marker's existence is the completion marker for the whole
   // set. Downstream consumers (readGateContext, the reviewers' --context-path
   // guard) key on the JSON — a prior write failure must not leave a
   // complete-looking artifact pointing at a missing/stale sibling file: at an
@@ -2266,10 +2265,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // after the prefix already overwrote) would otherwise leave the PRIOR
   // run's plan/volatile — describing the prior prefix bytes — surviving
   // beside the freshly-overwritten prefix, with a sharedPrefixHash that no
-  // longer matches what's on disk. Deleting the JSON marker and both
-  // siblings before any new byte is written means any partial failure below
-  // leaves the artifact set incomplete (JSON absent) rather than
-  // complete-looking-but-contradictory.
+  // longer matches what's on disk. Only the JSON marker is unlinked up front
+  // (below), and only when the prefix bytes are actually changing — writeFile
+  // already truncates each sibling file in place, so a separate unlink buys
+  // nothing there: any partial failure below still leaves the marker absent,
+  // which is all readGateContext needs to treat the set as incomplete.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
@@ -2405,12 +2405,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   });
 
   // Delete the stale JSON completion marker BEFORE overwriting the prefix. A
-  // re-write at an existing head must never leave it (or a stale volatile/plan
-  // file describing the PRIOR prefix bytes) surviving beside freshly-
-  // overwritten prefix bytes if a write further down this function throws.
-  // Unlinking the marker first means any partial failure leaves the artifact
-  // set incomplete (the JSON marker absent, exactly what readGateContext
-  // already treats as "no artifact") rather than complete-looking with a
+  // re-write at an existing head must never leave it surviving beside
+  // freshly-overwritten prefix bytes (with a stale volatile/plan sibling
+  // still describing the PRIOR prefix bytes) if a write further down this
+  // function throws. Unlinking the marker first means any partial failure
+  // leaves the artifact set incomplete (the JSON marker absent, exactly what
+  // readGateContext already treats as "no artifact") rather than complete-looking with a
   // sharedPrefixHash that contradicts the prefix actually on disk. Force-mode
   // rm is a no-op when the marker never existed (first-ever write).
   //
@@ -2432,24 +2432,22 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // {@link renderBriefingVolatile}'s doc comment for the rule (it reaches the
   // stable prefix via issueRef, so it is not volatile-tail material).
   //
-  // Its own stale copy is unlinked immediately before this rewrite (not
-  // bundled into one upfront removal pass with the other siblings): a failure
-  // writing THIS sibling then happens only after the prefix write above has
-  // already landed, rather than aborting before any byte at all is written.
+  // No separate unlink: writeFile truncates and overwrites this file in
+  // place, so a failure here happens only after the prefix write above has
+  // already landed, and leaves the JSON marker (already gone or not yet
+  // written) as the signal that the set is incomplete.
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
     loggedAt: artifact.loggedAt,
     validationPosture: options.validationPosture ?? null,
   });
-  await rm(fullVolatilePath, { force: true });
   await mkdir(path.dirname(fullVolatilePath), { recursive: true });
   await writeFile(fullVolatilePath, volatileText, "utf8");
 
-  // Request plan: same rationale as the volatile tail above — unlink its own
-  // stale copy right before rewriting it, after the prefix AND volatile tail
-  // have both already landed.
-  await rm(fullRequestPlanPath, { force: true });
+  // Request plan: same rationale as the volatile tail above — writeFile
+  // overwrites it in place after the prefix AND volatile tail have both
+  // already landed.
   await mkdir(path.dirname(fullRequestPlanPath), { recursive: true });
   await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
 
