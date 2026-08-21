@@ -39,6 +39,9 @@ import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+// Mirrors check-size-budget.mjs's computeSizeBudget outcome enum exactly —
+// this file never recomputes the outcome, only validates/renders it.
+const SIZE_BUDGET_OUTCOMES = new Set(["pass", "escalate", "block"]);
 const DEFAULT_EXECUTION_MODE = "inline_single_agent";
 const MAX_GATE_COMMENT_TEXT_LENGTH = 2000;
 const MAX_GATE_COMMENT_EXCERPT_LENGTH = 120;
@@ -205,6 +208,19 @@ Optional:
                                             body-filed finding text (the
                                             no-ids-in-comments guard refuses any
                                             other bare #<digits>).
+  --size-budget-json <path>                 Path to check-size-budget.mjs's (or
+                                            evaluatePrSizeBudget's) JSON output —
+                                            never recomputed here. Records the PR's
+                                            size-budget outcome, whether any T1 file
+                                            is in the diff (t1SliceLoc > 0), and
+                                            waiver state on the posted verdict
+                                            (**Size-budget outcome/T1 slice/waiver**
+                                            lines). Omit it and those lines are not
+                                            rendered at all — a verdict without them
+                                            reads back as size evidence ABSENT,
+                                            which the size-budget merge gate
+                                            (@dev-loops/core/loop/size-budget-merge-gate)
+                                            fails closed on, never as a silent pass.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -437,6 +453,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "inline-reason": { type: "string" },
       "allowed-refs": { type: "string" },
       lightweight: { type: "boolean" },
+      "size-budget-json": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -460,6 +477,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     inlineReason: undefined,
     allowedRefs: [],
     lightweight: false,
+    sizeBudgetJson: undefined,
     jq: undefined,
     silent: false,
   };
@@ -583,6 +601,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     }
     if (token.name === "allowed-refs") {
       options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
+      continue;
+    }
+    if (token.name === "size-budget-json") {
+      const rawPath = requireTokenValue(token, parseError).trim();
+      if (rawPath.length === 0) {
+        throw parseError("--size-budget-json must be a non-empty path");
+      }
+      options.sizeBudgetJson = rawPath;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1049,7 +1075,32 @@ function renderExecutionModeLine(executionMode, inlineReason) {
   }
   return `**Execution mode:** ${mode}`;
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
+// Size-budget fields (phase 3 of the fail-closed PR size budget): rendered ONLY when a caller
+// supplies `sizeOutcome` (the wiring is opt-in — a caller that never ran the
+// size-budget check keeps the exact body shape it has always had). Each
+// field is its own line, matching the existing one-field-per-line convention
+// (Reviewed head SHA / Verdict / Next action), so
+// parseGateReviewCommentFields's per-line label matching (copilot-helpers.mjs)
+// round-trips them without a combined-line parse. `sizeWaiverApprovedBy` is
+// free text and is routed through sanitizeInline (entity-encoded, never
+// backslash-escaped) so a crafted approver name can never forge a markdown
+// delimiter or a second field label.
+function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }) {
+  if (typeof sizeOutcome !== "string" || sizeOutcome.length === 0) {
+    return [];
+  }
+  const waiverLine = sizeWaiverGranted === true
+    ? (typeof sizeWaiverApprovedBy === "string" && sizeWaiverApprovedBy.trim().length > 0
+      ? `granted by ${sanitizeInline(sizeWaiverApprovedBy)}`
+      : "granted")
+    : "none";
+  return [
+    `**Size-budget outcome:** ${sizeOutcome}`,
+    `**Size-budget T1 slice:** ${sizeTouchesT1 === true ? "touched" : "not touched"}`,
+    `**Size-budget waiver:** ${waiverLine}`,
+  ];
+}
+export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1066,6 +1117,7 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     `**Reviewed head SHA:** \`${headSha}\``,
     `**Verdict:** ${verdict}`,
     renderExecutionModeLine(executionMode, inlineReason),
+    ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
   );
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
@@ -1176,6 +1228,10 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       nextAction: markerSameHead.nextAction ?? null,
       executionMode: markerSameHead.executionMode ?? null,
       inlineReason: markerSameHead.inlineReason ?? null,
+      sizeOutcome: markerSameHead.sizeOutcome ?? null,
+      sizeTouchesT1: markerSameHead.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: markerSameHead.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: markerSameHead.sizeWaiverApprovedBy ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -1190,6 +1246,10 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       nextAction: strictSameHead.nextAction,
       executionMode: strictSameHead.executionMode ?? markerSameHead?.executionMode ?? null,
       inlineReason: strictSameHead.inlineReason ?? markerSameHead?.inlineReason ?? null,
+      sizeOutcome: strictSameHead.sizeOutcome ?? markerSameHead?.sizeOutcome ?? null,
+      sizeTouchesT1: strictSameHead.sizeTouchesT1 ?? markerSameHead?.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: strictSameHead.sizeWaiverGranted ?? markerSameHead?.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: strictSameHead.sizeWaiverApprovedBy ?? markerSameHead?.sizeWaiverApprovedBy ?? null,
       contractComplete: true,
     };
   }
@@ -1204,6 +1264,10 @@ function summarizeExistingComment({ strict, marker, headSha }) {
       nextAction: markerSameHead.nextAction ?? null,
       executionMode: markerSameHead.executionMode ?? null,
       inlineReason: markerSameHead.inlineReason ?? null,
+      sizeOutcome: markerSameHead.sizeOutcome ?? null,
+      sizeTouchesT1: markerSameHead.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: markerSameHead.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: markerSameHead.sizeWaiverApprovedBy ?? null,
       contractComplete: markerSameHead.contractComplete === true,
     };
   }
@@ -2121,6 +2185,36 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ),
     );
   }
+  // Size-budget fields (phase 3 of the fail-closed PR size budget): reuses check-size-budget.mjs's
+  // (or evaluatePrSizeBudget's) OWN JSON output verbatim — never recomputed
+  // here. Optional: omitting --size-budget-json posts a verdict with no size
+  // evidence at all (the fields simply are not rendered), which the
+  // size-budget merge gate reads as "human approval required" downstream,
+  // never as a silent pass.
+  if (options.sizeBudgetJson) {
+    let sizeBudgetContent;
+    try {
+      sizeBudgetContent = await readFile(options.sizeBudgetJson, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read --size-budget-json "${options.sizeBudgetJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let sizeBudget;
+    try {
+      sizeBudget = parseJsonText(sizeBudgetContent);
+    } catch (err) {
+      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!SIZE_BUDGET_OUTCOMES.has(sizeBudget?.outcome)) {
+      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a .outcome of "pass", "escalate", or "block"`);
+    }
+    options.sizeOutcome = sizeBudget.outcome;
+    options.sizeTouchesT1 = typeof sizeBudget.t1SliceLoc === "number" && sizeBudget.t1SliceLoc > 0;
+    const waiverGranted = sizeBudget.waiver?.t1Valid === true || sizeBudget.waiver?.defaultValid === true;
+    options.sizeWaiverGranted = waiverGranted;
+    options.sizeWaiverApprovedBy = waiverGranted && typeof sizeBudget.waiver?.approvedBy === "string" && sizeBudget.waiver.approvedBy.trim().length > 0
+      ? sizeBudget.waiver.approvedBy.trim()
+      : null;
+  }
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser
   // recovers from the `**Findings summary:**` line); otherwise the free-text path.
@@ -2204,6 +2298,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const unpostedFindings = findingSurface
     ? findingSurface.locatable.length + findingSurface.nonLocatable.length
     : 0;
+  // Size-budget fields (phase 3 of the fail-closed PR size budget) join the noop comparison so a
+  // waiver granted (or a size-budget evaluation run for the first time) at an
+  // otherwise-unchanged head still forces a re-post rather than silently
+  // keeping stale evidence — e.g. a T1-slice waiver approved after the
+  // initial escalated post at the same head.
+  const desiredSizeOutcome = options.sizeOutcome ?? null;
+  const desiredSizeTouchesT1 = options.sizeOutcome ? (options.sizeTouchesT1 === true) : null;
+  const desiredSizeWaiverGranted = options.sizeOutcome ? (options.sizeWaiverGranted === true) : null;
+  const desiredSizeWaiverApprovedBy = options.sizeOutcome ? (options.sizeWaiverApprovedBy ?? null) : null;
   if (
     existing
     && existing.contractComplete
@@ -2212,6 +2315,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && existing.nextAction === options.nextAction
     && (existing.executionMode ?? DEFAULT_EXECUTION_MODE) === desiredExecutionMode
     && existingInlineReason === desiredInlineReason
+    && (existing.sizeOutcome ?? null) === desiredSizeOutcome
+    && (existing.sizeTouchesT1 ?? null) === desiredSizeTouchesT1
+    && (existing.sizeWaiverGranted ?? null) === desiredSizeWaiverGranted
+    && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
   ) {
     // GATE-EXEC-LIGHT-ESCALATION (#1621): a same-head noop rerun must still

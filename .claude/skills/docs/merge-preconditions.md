@@ -53,6 +53,7 @@ Before merge, ALL of the following MUST hold:
 6. ✅ Merge authorization from the operator — explicit for the active scope, or a recorded standing authorization (see [Merge authorization](#merge-authorization))
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
 8. ✅ PR **title** free of merge-blocking markers — see [Title markers](#title-markers) for the exact constructions that count
+9. ✅ Size-budget human-approval requirement satisfied for an escalated/T1 PR — see [Size-budget merge gate](#size-budget-merge-gate-issue-1480)
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. The release fires both at Copilot-loop terminal states (`loop handoff`, #1128) and at gate-coordination terminal stops (`detect-pr-gate-coordination-state` — approval checkpoint / merge-ready / done / blocked, #1632), so a run that stops at the approval checkpoint without a Copilot-loop terminal state still releases immediately. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
@@ -224,6 +225,37 @@ human action and this authorization step is **non-overridable**:
 
 This makes human-gated merge an enforced repo invariant, not a per-run default an
 explicit instruction can unlock.
+
+### Size-budget merge gate (issue #1480)
+
+An escalated or T1 PR (the `gates.size` outcome recorded on the `pre_approval_gate`
+verdict — see [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
+needs a **human APPROVED review** and **zero unresolved CHANGES_REQUESTED** before
+merge, regardless of any standing merge authorization above. A Copilot-clean verdict
+alone is never sufficient for these PRs — pairing with, not replacing, the ordinary
+merge-authorization rule.
+
+- The pure decision (`resolveSizeBudgetHumanApprovalRequired`,
+  `@dev-loops/core/loop/size-budget-merge-gate`) requires human approval when the
+  recorded size-budget `outcome` is `escalate` or `block`, OR the PR touches the T1
+  tier (a T1 file is in the diff) — a plain `pass` outcome with no T1 slice carries no
+  size-imposed requirement at all.
+- "Human APPROVED" is derived from the raw PR reviews (`resolveHumanReviewDecision`,
+  same module), NOT GitHub's own aggregate `reviewDecision` field: a review authored
+  by the Copilot bot login is excluded before the decision is computed, so Copilot's
+  own approval can never satisfy this gate. Any other login's latest submitted review
+  being `APPROVED`, with no other human login's latest review left at
+  `CHANGES_REQUESTED`, satisfies it.
+- **Fail-closed**: absent or unreadable size-budget evidence (a `pre_approval_gate`
+  verdict posted without the `**Size-budget outcome/T1 slice**` fields — see
+  `detect-checkpoint-evidence.mjs`), an unreadable T1-touch signal, an unknown review
+  decision, or a nonzero/unreadable unresolved-CHANGES_REQUESTED count all require
+  human approval — never treated as a silent pass.
+- `resolveLifecycleState` (`@dev-loops/core/loop/lifecycle-state`) consults this gate
+  IN ADDITION TO `resolveEffectiveMergeAuthorized`: when it is required, the lifecycle
+  parks at `pre_approval_gate` (the existing human-approval handoff) instead of
+  advancing to `merge`, even under a standing authorization. The agent must not run
+  `gh pr merge` for such a PR until a human review satisfies it.
 
 ### `approval` — offer to assign a human at the handoff (opt-in)
 

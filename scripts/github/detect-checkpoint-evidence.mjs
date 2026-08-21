@@ -92,6 +92,10 @@ Output (stdout, JSON; always includes preMergeGateCheck):
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
+      "sizeOutcome": "pass",
+      "sizeTouchesT1": false,
+      "sizeWaiverGranted": false,
+      "sizeWaiverApprovedBy": null,
       "commentId": 102,
       "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
@@ -122,6 +126,14 @@ Output (stdout, JSON; always includes preMergeGateCheck):
   mid-Copilot-loop, pre-approval not yet re-run after a fix commit); "violation"
   means a visible current-head comment carries a bad verdict, or another
   pre-merge check failed. Present on both success and failure output.)
+  (sizeOutcome is "pass"|"escalate"|"block"|null, sizeTouchesT1/sizeWaiverGranted
+  are boolean|null, sizeWaiverApprovedBy is string|null: the PR's size-budget
+  result (check-size-budget.mjs's computeSizeBudget), round-tripped through the
+  verdict comment. null on every field means size evidence is ABSENT — a verdict
+  posted before this field set existed, or a gate that never ran the size-budget
+  check — which the size-budget merge gate
+  (@dev-loops/core/loop/size-budget-merge-gate) reads as "human approval
+  required", never as "pass".)
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
@@ -232,6 +244,15 @@ function emptyGateSummary() {
     verdict: null,
     findingsSummary: null,
     nextAction: null,
+    // Size-budget fields (phase 3 of the fail-closed PR size budget): null on every path where no
+    // comment/marker is visible OR the visible comment predates this field
+    // set — both read identically as "size evidence absent", which the
+    // size-budget merge gate (@dev-loops/core/loop/size-budget-merge-gate)
+    // fails closed on.
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
     commentId: null,
     commentUrl: null,
     updatedAt: null,
@@ -248,6 +269,10 @@ function normalizeGateSummary(summary) {
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
+    sizeOutcome: summary.sizeOutcome ?? null,
+    sizeTouchesT1: summary.sizeTouchesT1 ?? null,
+    sizeWaiverGranted: summary.sizeWaiverGranted ?? null,
+    sizeWaiverApprovedBy: summary.sizeWaiverApprovedBy ?? null,
     commentId: summary.commentId,
     commentUrl: summary.commentUrl,
     updatedAt: summary.updatedAt,
@@ -263,6 +288,10 @@ function emptyGateMarkerSummary() {
     nextAction: null,
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
     contractComplete: false,
     commentId: null,
     commentUrl: null,
@@ -282,6 +311,10 @@ function normalizeGateMarkerSummary(summary) {
     nextAction: summary.nextAction,
     executionMode: summary.executionMode ?? null,
     inlineReason: summary.inlineReason ?? null,
+    sizeOutcome: summary.sizeOutcome ?? null,
+    sizeTouchesT1: summary.sizeTouchesT1 ?? null,
+    sizeWaiverGranted: summary.sizeWaiverGranted ?? null,
+    sizeWaiverApprovedBy: summary.sizeWaiverApprovedBy ?? null,
     contractComplete: summary.contractComplete === true,
     commentId: summary.commentId,
     commentUrl: summary.commentUrl,

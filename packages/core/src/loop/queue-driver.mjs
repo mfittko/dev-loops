@@ -27,6 +27,7 @@ import {
   REASON_NEXT_UP_TARGET_MISSING_LOCALLY,
   EMPTY_NEXT_UP_MESSAGE,
 } from "./queue-board-ordering.mjs";
+import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 
 export const DEFAULT_QUEUE_DRIVER_OPTIONS = {
   mergeAuthorized: false,
@@ -237,7 +238,19 @@ export async function runQueue(repoRoot, repo, options = {}) {
         if (entryResult.pr) {
           await doTransition(entry, "waiting_review", queue, repoRoot, opts, { pr: entryResult.pr });
           await doTransition(entry, "gates_passing", queue, repoRoot, opts);
-          if (opts.mergeAuthorized) {
+          // Size-budget merge gate (phase 3 of the fail-closed PR size budget): consulted IN
+          // ADDITION TO opts.mergeAuthorized, never in its place. Opt-in per
+          // entry — only engaged when the orchestrator's entryResult carries
+          // a `sizeBudget` object (the size-budget-aware evaluation actually
+          // ran for this PR); an orchestrator that has not been updated to
+          // evaluate the size budget sees unchanged behavior. When engaged,
+          // an escalated/T1 PR without a human APPROVED review (zero
+          // unresolved CHANGES_REQUESTED) is never auto-merged, even under a
+          // standing mergeAuthorized authorization — it routes to the same
+          // "final_approval_ready" column an unauthorized merge would.
+          const sizeBudgetBlocksMerge = entryResult.sizeBudget
+            && resolveSizeBudgetHumanApprovalRequired(entryResult.sizeBudget) === true;
+          if (opts.mergeAuthorized && !sizeBudgetBlocksMerge) {
             await doTransition(entry, "merging", queue, repoRoot, opts);
             await doTransition(entry, "done", queue, repoRoot, opts, { retrospectiveWritten: true });
             await syncColumn(entry.target, columnFor("done"));

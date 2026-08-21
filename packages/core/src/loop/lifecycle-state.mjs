@@ -164,6 +164,14 @@ function normalizeLifecycleState(value) {
  *   mergeAuthorized,    // boolean: explicit merge authorization granted
  *   humanMergeOnly,     // boolean: repo invariant — agent may never merge (fails closed)
  *   isMerged,           // boolean: PR has been merged
+ *   sizeBudgetHumanApprovalRequired, // boolean: the size-budget merge gate
+ *                       // (resolveSizeBudgetHumanApprovalRequired,
+ *                       // @dev-loops/core/loop/size-budget-merge-gate) says
+ *                       // this escalated/T1 PR still needs a human APPROVED
+ *                       // review — consulted IN ADDITION TO mergeAuthorized/
+ *                       // humanMergeOnly, defaults false (opt-in; callers
+ *                       // that do not evaluate the size budget see unchanged
+ *                       // behavior)
  * }
  * ```
  *
@@ -180,7 +188,8 @@ function normalizeLifecycleState(value) {
  * Resolution order (first-match):
  * 1. Explicit phase → return canonical if recognized, fall through if not
  * 2. Merged → merge (terminal)
- * 3. Merge authorized + pre-approval passed + linked PR → merge
+ * 3. Merge authorized + pre-approval passed + linked PR + size-budget gate
+ *    clear (not sizeBudgetHumanApprovalRequired) → merge
  * 4. Pre-approval passed + PR exists → pre_approval_gate
  * 5. Unresolved threads + PR exists → feedback_resolution
  * 6. Draft PR → implementation
@@ -197,6 +206,7 @@ export function resolveLifecycleState(input = {}) {
     mergeAuthorized = false,
     humanMergeOnly = false,
     isMerged = false,
+    sizeBudgetHumanApprovalRequired = false,
   } = input;
 
   // Fail closed: when the repo enforces human-only merge, the agent is never
@@ -205,7 +215,16 @@ export function resolveLifecycleState(input = {}) {
   // exact `true` clears merge), matching the authoritative
   // `resolveEffectiveMergeAuthorized` gate. An already-merged PR (isMerged) is
   // still terminal below.
-  const effectiveMergeAuthorized = humanMergeOnly !== true && mergeAuthorized === true;
+  //
+  // The size-budget merge gate (resolveSizeBudgetHumanApprovalRequired) is
+  // consulted IN ADDITION TO the two invariants above, never in their place:
+  // an escalated/T1 PR without a human APPROVED review (and zero unresolved
+  // CHANGES_REQUESTED) parks at PRE_APPROVAL_GATE — the existing "await human
+  // approval" phase — instead of advancing to MERGE, even under a standing
+  // merge authorization.
+  const effectiveMergeAuthorized = humanMergeOnly !== true
+    && mergeAuthorized === true
+    && sizeBudgetHumanApprovalRequired !== true;
 
   // 1. Explicit phase override — canonical or fail closed
   if (phase !== null && phase !== undefined) {

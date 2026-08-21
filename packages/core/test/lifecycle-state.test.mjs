@@ -330,6 +330,44 @@ test("resolveLifecycleState: pre-approval + merge authorized without linked PR �
   assert.equal(result.state, LIFECYCLE_STATE.ISSUE_INTAKE);
 });
 
+test("resolveLifecycleState: sizeBudgetHumanApprovalRequired fails closed — merge authorized but NOT merge (size-budget merge gate, phase 3 of the fail-closed PR size budget)", () => {
+  // An escalated/T1 PR without a human APPROVED review parks at
+  // pre_approval_gate (the existing human-approval handoff) instead of
+  // advancing to merge, even under mergeAuthorized: true — the size-budget
+  // merge gate is consulted IN ADDITION TO mergeAuthorized/humanMergeOnly.
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: true,
+    sizeBudgetHumanApprovalRequired: true,
+  });
+  assert.notEqual(result.state, LIFECYCLE_STATE.MERGE);
+  assert.equal(result.state, LIFECYCLE_STATE.PRE_APPROVAL_GATE);
+  assert.equal(result.isTerminal, false);
+});
+
+test("resolveLifecycleState: sizeBudgetHumanApprovalRequired defaults to false — unchanged behavior for callers that never evaluate the size budget", () => {
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: true,
+  });
+  assert.equal(result.state, LIFECYCLE_STATE.MERGE);
+});
+
+test("resolveLifecycleState: sizeBudgetHumanApprovalRequired false (gate clear) still allows merge", () => {
+  const result = resolveLifecycleState({
+    hasLinkedPr: true,
+    hasUnresolvedThreads: false,
+    preApprovalGatePassed: true,
+    mergeAuthorized: true,
+    sizeBudgetHumanApprovalRequired: false,
+  });
+  assert.equal(result.state, LIFECYCLE_STATE.MERGE);
+});
+
 test("resolveLifecycleState: humanMergeOnly fails closed — merge authorized but NOT merge (issue #910)", () => {
   // The fixed repo invariant: even with mergeAuthorized + pre-approval + linked
   // PR, the agent is never cleared to merge. It stays at the human-merge handoff
