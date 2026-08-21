@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, repeatedLinesContent, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 import { parsePrePrReadyGateCliArgs } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 
@@ -142,9 +142,10 @@ test("gate passes: draft PR with clean draft_gate comment for current head", asy
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));
 
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
-    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
-    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
     ...gateCloseStubs(),
   ]);
 
@@ -154,19 +155,21 @@ test("gate passes: draft PR with clean draft_gate comment for current head", asy
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.draftGateSatisfied, true);
+  assert.equal(parsed.sizeBudget.outcome, "pass");
 });
 
 test("gate passes: clean draft verdict lives only in the review stream (single-surface round)", async (t) => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));
 
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
-    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
     { stdout: "[]" }, // issue comments: no verdict on the legacy surface
     {
       stdout: JSON.stringify([
         {
-          ...makeDraftGateComment(HEAD_SHA_SHORT),
+          ...makeDraftGateComment(headSha.slice(0, 7)),
           state: "COMMENTED",
           submitted_at: "2026-06-07T00:00:00Z",
           html_url: "https://github.com/owner/repo/pull/42#pullrequestreview-100",
@@ -188,9 +191,10 @@ test("gate passes off a legacy issue-comment verdict when the reviews fetch fail
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));
 
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
-    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
-    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
     { stdout: "", code: 1, stderr: "HTTP 500" }, // reviews fetch fails
     ...gateThreadLoginStubs(),
   ], { repeatLastOnOverflow: false });
@@ -244,8 +248,9 @@ test("gate passes: non-draft PR with visible clean draft_gate (relaxed, any head
 
   // Even though the draft_gate comment has a different head SHA,
   // the PR is no longer draft so any visible clean draft_gate is sufficient
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
-    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: false })) },
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: false, headRefOid: headSha, baseRefName: baseBranch })) },
     { stdout: JSON.stringify([makeDraftGateComment("9999999")]) },
     ...gateCloseStubs(),
   ]);
@@ -370,9 +375,10 @@ test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pa
   // The fixer triaged the nice-to-have (fixed or deferred) and the disposition
   // pass closed the thread — 0 unresolved gate-authored threads remain. The
   // gate-close assertion passes and the PR can go ready.
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
-    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
-    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
     { stdout: "[]" }, // listPrReviews (fail-open)
     { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
     {
@@ -389,4 +395,137 @@ test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pa
   assert.equal(parsed.ok, true);
   assert.equal(parsed.draftGateSatisfied, true);
   assert.equal(parsed.unresolvedGateThreadCount, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Fail-closed PR size budget (gates.size) — the same computation
+// readyForReview() runs, mirrored on the raw `gh pr ready` hook path. No
+// waiver surface here: only ready-for-review.mjs's --waive-size-budget can
+// grant one, so these scenarios never need to exercise a waiver.
+// ---------------------------------------------------------------------------
+
+test("size budget: escalate outcome still passes the gate (no waiver surface needed) and records the signal", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-escalate-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 2\n",
+    headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.sizeBudget.outcome, "escalate");
+});
+
+test("size budget: a block outcome (default.waiverLoc, no waiver possible on this path) refuses the raw gh pr ready path", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-block-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
+    headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /blocked by size budget/i);
+  assert.match(stderrParsed.error, /waiverLoc/);
+});
+
+test("size budget: an unwaivable block (absoluteHardLoc) refuses the raw gh pr ready path", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-unwaivable-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    devloopsYaml: "version: 1\ngates:\n  size:\n    absoluteHardLoc: 2\n",
+    headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /absoluteHardLoc/);
+  assert.match(stderrParsed.error, /no waiver possible/i);
+});
+
+test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-nobaseref-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) }, // baseRefName omitted
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /Could not resolve PR #42 base branch/i);
+});
+
+test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-badbase-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha } = await initSizeBudgetFixtureRepo(tmpDir);
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: "totally-unresolvable-base" })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /git diff against --base/i);
+});
+
+test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-configerr-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    devloopsYaml: "gates:\n  size: [\n", // malformed — invalid YAML/JSON
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /config errors/i);
 });

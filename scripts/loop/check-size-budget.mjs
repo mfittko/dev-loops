@@ -426,6 +426,14 @@ function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), 
     encoding: "utf8",
     maxBuffer,
     env: gitEnvWithoutDirOverrides(),
+    // Explicit stdio so a git WARNING on stderr (e.g. a deprecated ambient
+    // GIT_CONFIG_* override) never leaks onto the calling CLI's own stderr —
+    // execFileSync's stderr is only captured into the thrown error's
+    // `.message` on a non-zero exit when piped like this; without an
+    // explicit stdio, Node lets a clean-exit child's stderr write straight
+    // through to the parent, corrupting a caller's machine-parseable JSON
+    // (e.g. pre-pr-ready-gate.mjs's error-path emits the result to stderr).
+    stdio: ["ignore", "pipe", "pipe"],
   });
   try {
     return {
@@ -436,6 +444,27 @@ function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), 
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
   }
+}
+
+/**
+ * The ONE shared code path readyForReview() and pre-pr-ready-gate.mjs both
+ * call to enforce the size budget (phase 2) — loads `gates.size` config,
+ * captures the base...head diff, and runs computeSizeBudget. `base` must
+ * already be a locally-resolvable ref (e.g. "origin/main"); like the CLI
+ * above, this never runs `git fetch` itself — the caller's checkout/worktree
+ * flow is responsible for the base ref being present locally.
+ */
+export async function evaluatePrSizeBudget({
+  base,
+  head = "HEAD",
+  repoRoot = process.cwd(),
+  waived = false,
+  approvedBy = null,
+} = {}) {
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+  const sizeConfig = config?.gates?.size ?? {};
+  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot });
+  return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy });
 }
 
 function assertPlausibleRef(ref, label, onError) {
