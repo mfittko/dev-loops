@@ -127,7 +127,7 @@ function windowReason(severity, mediumFixWindow) {
     return `stayed open past this gate's round-${mediumFixWindow} medium fix window`;
   }
   if (severity === "nit") {
-    return "nit findings are deferred immediately at gate close, with no fixer cycle";
+    return "nit findings are deferred immediately at gate close, with no fixer cycle on the severity axis (judge-acted nits excepted)";
   }
   return "low findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer)";
 }

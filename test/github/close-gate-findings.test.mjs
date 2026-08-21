@@ -505,7 +505,7 @@ test("an unresolved nit thread is replied-to + resolved immediately, at round 1"
       patchReviewCommentEntry(6250),
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6250/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity nit", "nit findings are deferred immediately at gate close, with no fixer cycle"],
+        assertStdinIncludes: ["severity nit", "nit findings are deferred immediately at gate close, with no fixer cycle on the severity axis (judge-acted nits excepted)"],
         stdout: `${JSON.stringify({ id: 7150, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7150` })}\n`,
       },
       resolveThreadEntry("THREAD_NIT"),

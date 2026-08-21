@@ -1121,16 +1121,18 @@ The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fan
 - `act` — in-scope for this PR; the fixer addresses it.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
   the draft is the durable ledger record, and the conductor consuming the verdict appends or
-  files it by hand. The defer bar is high (net-reduction policy): a `nit` never gets
-  a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; act or
-  reject only, and the resolved thread note is its record —
-  this governs the relevance/filing axis only, while the severity-derived `disposition`
-  field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a `low` is
-  deferred only when leaving it unfixed would change an operator-visible outcome (wrong
-  guidance a conductor executes, a fail-closed gap on a sanctioned path, or a demonstrable
-  bug) — otherwise it defaults to `reject`. When an existing open issue covers the finding's
-  territory, the `followUpDraft` is titled `Append to issue N: ...` and the conductor
-  appends a comment to that issue (via `comment-issue.mjs`) instead of filing a new one (via
+  files it by hand. The defer bar is high (net-reduction policy): a `nit` MUST NOT get
+  a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
+  only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
+  is its record; this governs the relevance/filing axis only, while the severity-derived
+  `disposition` field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a
+  `low` MUST be deferred only when leaving it unfixed would change an operator-visible
+  outcome (wrong guidance a conductor executes, a fail-closed gap reachable on a sanctioned
+  path, or a demonstrable bug) — otherwise it defaults to `reject`. When the judge's briefing
+  names an existing open issue covering the finding's territory, the `followUpDraft` MUST be
+  titled `Append to issue N: ...`; coverage resolution is otherwise the conductor's job — the
+  conductor MUST check the open issues (via `list-issues.mjs`) before filing and append a
+  comment to a covering issue (via `comment-issue.mjs`) instead of filing a new one (via
   `create-issue.mjs`); a new issue is warranted only when none covers the territory.
 - `reject` — out-of-scope against a named non-goal or scope boundary, or below the defer
   bar; this PR is not the place, and a follow-up is not warranted.
