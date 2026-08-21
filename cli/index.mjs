@@ -283,6 +283,7 @@ const SUBCOMMAND_ROUTES = {
     "capture-threads":    "scripts/github/capture-review-threads.mjs",
     "reply-resolve":      "scripts/github/reply-resolve-review-threads.mjs",
     "offer-human-handoff": "scripts/github/offer-human-handoff.mjs",
+    "size-budget":        "scripts/loop/check-size-budget.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -372,6 +373,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "capture-threads": "Capture review threads",
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
+    "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",

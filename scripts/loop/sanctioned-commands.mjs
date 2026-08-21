@@ -34,6 +34,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "review-threads": "scripts/github/list-review-threads.mjs",
     "gate-coordination": "scripts/loop/detect-pr-gate-coordination-state.mjs",
     "agent-stall": "scripts/loop/detect-agent-stall.mjs",
+    "size-budget": "scripts/loop/check-size-budget.mjs",
   }),
 
   // Metadata edits.

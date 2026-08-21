@@ -350,8 +350,37 @@ function rejectDuplicateFanoutGroupNames(val, ctx) {
   }
 }
 
+// Fail-closed PR size budget (Phase 1 of the escalate-don't-chop size gate:
+// this schema plus check-size-budget.mjs's pure computation only — no
+// enforcement wiring yet). `patterns` classifies a changed file into t1/t3
+// by path glob; the default tier is implicit for every file matching
+// neither, so it carries no `patterns` field of its own. `sliceHardLoc`
+// (t1 only) caps the T1-slice LOC, not the whole-PR LOC.
+const SizeTierConfig = z.strictObject({
+  patterns: z.array(z.string().trim().min(1)).optional().describe("Glob-style path patterns; a changed file matching one resolves to this tier."),
+  softLoc: z.number().int().positive().nullable().optional().describe("Escalate above this many logic LOC; null disables the soft threshold for this tier."),
+  waiverLoc: z.number().int().positive().nullable().optional().describe("Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier."),
+  sliceHardLoc: z.number().int().positive().optional().describe("T1 only: block above this many T1-slice logic LOC unless waived by a named human approver."),
+});
+
+const SizeTiersConfig = z.strictObject({
+  default: SizeTierConfig.omit({ patterns: true, sliceHardLoc: true }).default({ softLoc: 400, waiverLoc: 1500 }).describe("Fallback tier applied to every changed file that matches no t1/t3 pattern."),
+  t1: SizeTierConfig.optional().describe("Risk-slice tier (money/auth/shared/ungated paths). Empty by default — a repo defines its own patterns; the T1 slice is computed separately from whole-PR LOC."),
+  t3: SizeTierConfig.optional().describe("Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies."),
+});
+
+const SizeConfig = z.strictObject({
+  testDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to test LOC when computing logicLoc = code + testDiscount * test."),
+  absoluteHardLoc: z.number().int().positive().default(2000).describe("Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier."),
+  tiers: SizeTiersConfig.default({}).describe("Per-tier soft/waiver/slice thresholds and path patterns."),
+});
+
 const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
+  // Fail-closed PR size/tier budget (active by default). Computation lives in
+  // scripts/loop/check-size-budget.mjs; this config carries only the
+  // thresholds and tier patterns it reads.
+  size: SizeConfig.optional(),
   // `requireCi` is honored on both gates: default true keeps CI a precondition,
   // false is an opt-out escape hatch so a repo with no CI is not held at the
   // gate. The pre-approval gate mirrors the draft gate's `requireCi` semantics —
@@ -778,6 +807,7 @@ const FileGatesConfig = z.strictObject({
   draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
   preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
+  size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect.").optional(),

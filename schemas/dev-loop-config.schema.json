@@ -726,6 +726,157 @@
           "additionalProperties": false,
           "description": "Relaxed spike gate profile; applies only to spike-mode work."
         },
+        "size": {
+          "type": "object",
+          "properties": {
+            "testDiscount": {
+              "default": 0.25,
+              "description": "Weight applied to test LOC when computing logicLoc = code + testDiscount * test.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "absoluteHardLoc": {
+              "default": 2000,
+              "description": "Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier.",
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "tiers": {
+              "default": {},
+              "description": "Per-tier soft/waiver/slice thresholds and path patterns.",
+              "type": "object",
+              "properties": {
+                "default": {
+                  "default": {
+                    "softLoc": 400,
+                    "waiverLoc": 1500
+                  },
+                  "description": "Fallback tier applied to every changed file that matches no t1/t3 pattern.",
+                  "type": "object",
+                  "properties": {
+                    "softLoc": {
+                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "waiverLoc": {
+                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "t1": {
+                  "description": "Risk-slice tier (money/auth/shared/ungated paths). Empty by default — a repo defines its own patterns; the T1 slice is computed separately from whole-PR LOC.",
+                  "type": "object",
+                  "properties": {
+                    "patterns": {
+                      "description": "Glob-style path patterns; a changed file matching one resolves to this tier.",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "softLoc": {
+                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "waiverLoc": {
+                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sliceHardLoc": {
+                      "description": "T1 only: block above this many T1-slice logic LOC unless waived by a named human approver.",
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "t3": {
+                  "description": "Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies.",
+                  "type": "object",
+                  "properties": {
+                    "patterns": {
+                      "description": "Glob-style path patterns; a changed file matching one resolves to this tier.",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "softLoc": {
+                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "waiverLoc": {
+                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sliceHardLoc": {
+                      "description": "T1 only: block above this many T1-slice logic LOC unless waived by a named human approver.",
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "description": "Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns."
+        },
         "requireFanoutEvidence": {
           "type": "boolean",
           "description": "Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason)."

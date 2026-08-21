@@ -545,6 +545,37 @@ describe("schema validation", () => {
     }).success);
   });
 
+  // gates.size (fail-closed PR size/tier budget, Phase 1 — check-size-budget.mjs's
+  // pure computation; no enforcement wiring yet). See extension-defaults.yaml
+  // for the shipped defaults and BUILT_IN_DEFAULTS tests below for AC7.
+  test("S37: gates.size accepts full tier config (t1 patterns + sliceHardLoc, t3 patterns)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: {
+        size: {
+          testDiscount: 0.25,
+          absoluteHardLoc: 2000,
+          tiers: {
+            default: { softLoc: 400, waiverLoc: 1500 },
+            t1: { patterns: ["app/models/subscription*", "config/routes.rb"], sliceHardLoc: 400 },
+            t3: { patterns: ["app/frontends/*"], softLoc: null },
+          },
+        },
+      },
+    });
+    assert.ok(result.success);
+    assert.deepEqual(result.data.gates.size.tiers.t1.patterns, ["app/models/subscription*", "config/routes.rb"]);
+    assert.equal(result.data.gates.size.tiers.t3.softLoc, null);
+  });
+
+  test("S38: gates.size rejects an unknown key (strict schema)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { testDiscount: 0.25, bogusKey: true } },
+    });
+    assert.ok(!result.success);
+  });
+
 });
 
 // ============================================================================
@@ -648,6 +679,22 @@ describe("loader — graceful degradation", () => {
       assert.ok(result.config);
       assert.equal(result.config.version, 1);
       assert.ok(result.warnings.length > 0, "should warn about missing config");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1b: gates.size shipped defaults are active with empty t1/t3 (AC7)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-size-budget-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.config.gates.size, {
+        testDiscount: 0.25,
+        absoluteHardLoc: 2000,
+        tiers: { default: { softLoc: 400, waiverLoc: 1500 } },
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

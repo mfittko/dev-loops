@@ -165,6 +165,17 @@ gates:
     #     - name: docs-only
     #       match: { kinds: [docs] }
     #       angles: [pr-description, link-check, gate-evidence]
+  # Fail-closed PR size/tier budget (Phase 1: computation only, via
+  # scripts/loop/check-size-budget.mjs — not yet wired into any gate). Empty
+  # t1/t3 — no shipped tier patterns; a repo defines its own risk-slice
+  # (money/auth/shared) and relaxed (scaffold/template) globs in .devloops.
+  size:
+    testDiscount: 0.25
+    absoluteHardLoc: 2000
+    tiers:
+      default:
+        softLoc: 400
+        waiverLoc: 1500
   # The gate round's verdict review already carries every finding, so the
   # consolidated findings comment is opt-in duplication — keep it off.
   postFindingsComments: false
