@@ -368,7 +368,7 @@ test("public dev-loop agent is a thin executable entrypoint that defers to the p
   assert.match(agentContent, /stop and ask for human direction rather than guessing/i);
   assert.match(skillContent, /public `dev-loop` façade/i);
 });
-test("thin pointer docs reference canonical contract content", async () => {
+test("canonical contract docs carry their expected contract content", async () => {
   const [trackerCanonical, conductorContent, ciContent, skillContent] = await Promise.all([
     readRepo("skills/docs/tracker-first-loop-state.md"),
     readRepo("skills/docs/conductor-routing-contract.md"),
