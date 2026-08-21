@@ -30,11 +30,11 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveReviewerRole } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildRequestPlan, CLAUDE_CODE_HARNESS_CAPABILITY } from "@dev-loops/core/loop/gate-request-plan";
@@ -194,13 +194,14 @@ function normalizeBaseRef(value) {
 
 const VALID_ACTIONS = new Set(["kept", "added", "dropped", "joined"]);
 
-function parseAnglesJson(raw) {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw parseError("--angles must be valid JSON");
-  }
+// Shared by the CLI's --angles parser AND writeGateContext's programmatic
+// entrypoint (buildGateContext/writeGateContext callers may pass options.angles
+// directly, bypassing the CLI parser entirely): every angle name is validated
+// and deduped through this ONE function, so both entrypoints fail closed with
+// the same indexed message rather than the programmatic path silently
+// accepting a non-string/blank angle that buildRequestPlan would only reject
+// AFTER the briefing prefix and volatile tail are already on disk.
+function validateAngleList(parsed) {
   if (!Array.isArray(parsed)) {
     throw parseError("--angles must be a JSON array");
   }
@@ -214,6 +215,16 @@ function parseAnglesJson(raw) {
   // two dispatch units sharing one name downstream (resolveFanoutGroups),
   // which race the same reviewer-sentinel scope and per-angle artifact path.
   return [...new Set(trimmed)];
+}
+
+function parseAnglesJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw parseError("--angles must be valid JSON");
+  }
+  return validateAngleList(parsed);
 }
 
 function parseRationaleJson(raw) {
@@ -1595,28 +1606,39 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
  * counterpart): the round-level values that sit AFTER the cache boundary the
  * briefing prefix establishes, physically separated into their own file so
  * the stable/volatile split the request plan's `cacheBoundary` claims is a
- * real boundary rather than only a common substring. `acceptanceCriteria` and
- * `validationPosture` are round-scoped (identical for every reviewer of this
- * round) but were never part of the rendered prefix (see
- * {@link renderBriefingPrefix}); `loggedAt` is a genuine per-write timestamp.
- * None of this changes the stable prefix's bytes.
+ * real boundary rather than only a common substring.
+ *
+ * The rule for what belongs here: a value is volatile-tail material ONLY IF
+ * {@link renderBriefingPrefix} never consumes it. `acceptanceCriteria` fails
+ * that test — `writeGateContext` passes it as `renderBriefingPrefix`'s
+ * `issueRef`, which appears in the stable prefix's `## Linked issue <ref>`
+ * heading whenever an issue body/sections are present — so it is NOT
+ * accepted by this function; it belongs to the stable prefix (and to the
+ * separate JSON context artifact's `scope.acceptanceCriteria`), never to this
+ * file. `validationPosture` passes the test (only `validationResultsPath`
+ * reaches the prefix, as a pointer to a separate artifact — the posture
+ * string itself never does) and stays here. `loggedAt` is a genuine per-write
+ * timestamp with no prefix counterpart at all.
+ *
+ * This file is NOT itself deterministic (`loggedAt` changes on every write —
+ * only the sibling `request-plan.json` carries the "byte-identical for
+ * identical inputs" guarantee). Writing or changing this file never touches
+ * the stable briefing-prefix bytes.
  *
  * @param {object} input
  * @param {string} input.gate
  * @param {string} input.headSha
  * @param {string} input.loggedAt
- * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
  * @returns {string}
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, acceptanceCriteria = null, validationPosture = null }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null }) {
   const lines = [];
   lines.push("# Gate Review Briefing — volatile tail (after the cache boundary)");
   lines.push("");
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
   lines.push(`loggedAt: ${loggedAt}`);
-  lines.push(`acceptanceCriteria: ${acceptanceCriteria ?? "(none)"}`);
   lines.push(`validationPosture: ${validationPosture ?? "(none)"}`);
   lines.push("");
   return lines.join("\n") + "\n";
@@ -2024,6 +2046,17 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
+  // Validate/dedupe options.angles BEFORE any file write. The CLI path
+  // already validates via parseAnglesJson; a programmatic caller
+  // (buildGateContext or a direct writeGateContext call) may pass an
+  // unvalidated array straight through, and buildRequestPlan was previously
+  // the first validator on that path — running only after the briefing
+  // prefix and volatile tail were already written, so a bad angle aborted
+  // mid-set and left a partial artifact behind. Both entrypoints now fail
+  // closed with the same indexed message before any write happens.
+  if (Array.isArray(options.angles)) {
+    options.angles = validateAngleList(options.angles);
+  }
   const contextPath = buildGateContextPath({
     repo: options.repo,
     pr: options.pr,
@@ -2214,13 +2247,24 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
-  // Write ORDER matters: the sibling briefing prefix goes first, then the
-  // volatile-tail and request-plan artifacts, and the JSON artifact LAST, so
-  // the artifact's existence is the completion marker for the whole set.
-  // Downstream consumers (readGateContext, the reviewers' --context-path
+  // Write ORDER matters: stale siblings are unlinked FIRST (below, right
+  // before the prefix write), then the sibling briefing prefix goes first,
+  // then the volatile-tail and request-plan artifacts, and the JSON artifact
+  // LAST, so the artifact's existence is the completion marker for the whole
+  // set. Downstream consumers (readGateContext, the reviewers' --context-path
   // guard) key on the JSON — a prior write failure must not leave a
-  // complete-looking artifact pointing at a missing sibling file.
+  // complete-looking artifact pointing at a missing/stale sibling file: at an
+  // existing head, a partial re-write failure (volatile or plan write throws
+  // after the prefix already overwrote) would otherwise leave the PRIOR
+  // run's plan/volatile — describing the prior prefix bytes — surviving
+  // beside the freshly-overwritten prefix, with a sharedPrefixHash that no
+  // longer matches what's on disk. Deleting the JSON marker and both
+  // siblings before any new byte is written means any partial failure below
+  // leaves the artifact set incomplete (JSON absent) rather than
+  // complete-looking-but-contradictory.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
+  const fullVolatilePath = path.resolve(repoRoot, volatilePath);
+  const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
   // No-rebuild-mid-fan-out enforcement (#1537). The contract has always
   // stated in prose that a conductor MUST NOT rebuild the context while
@@ -2293,43 +2337,78 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // retired or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
   }
+  // Delete stale siblings BEFORE overwriting the prefix. A re-write at an
+  // existing head must never leave the JSON completion marker (or a stale
+  // volatile/plan file describing the PRIOR prefix bytes) surviving beside
+  // freshly-overwritten prefix bytes if a write further down this function
+  // throws. Unlinking first means any partial failure leaves the artifact set
+  // incomplete (the JSON marker absent, exactly what readGateContext already
+  // treats as "no artifact") rather than complete-looking with a
+  // sharedPrefixHash that contradicts the prefix actually on disk. Force-mode
+  // rm is a no-op when a sibling never existed (first-ever write).
+  await Promise.all([fullPath, fullVolatilePath, fullRequestPlanPath].map((p) => rm(p, { force: true })));
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   // Volatile tail (#1474/#1468-B): physically separate from the stable prefix
   // above — writing it never touches the prefix's already-written bytes.
+  // acceptanceCriteria is deliberately NOT threaded here — see
+  // {@link renderBriefingVolatile}'s doc comment for the rule (it reaches the
+  // stable prefix via issueRef, so it is not volatile-tail material).
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
     loggedAt: artifact.loggedAt,
-    acceptanceCriteria: options.acceptanceCriteria ?? null,
     validationPosture: options.validationPosture ?? null,
   });
-  const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   await mkdir(path.dirname(fullVolatilePath), { recursive: true });
   await writeFile(fullVolatilePath, volatileText, "utf8");
 
   // Request plan (#1474/#1468-A): angles partition by concrete resolved model
-  // via resolveReviewerRole's `.model` (config override → built-in persona
-  // default → null=inherit — the SAME resolution the review-persona dispatch
-  // itself uses, not the forced-high-tier `resolveRoleModel(kind:"angle")`
-  // path, since that would report every angle as one concrete model rather
-  // than the dispatch-time "no override" reality). Without a config, every
-  // angle honestly resolves to inherit (never guessed).
-  const angleModels = (Array.isArray(options.angles) ? options.angles : []).map((angle) => ({
+  // via resolveRoleModel(config, { role: angle, harness, kind: "angle" }) —
+  // the SAME dispatch-time resolution a fan-out actually dispatches on
+  // (config override → per-angle tier → built-in tier → null=inherit),
+  // harness- and tier-aware, unlike resolveReviewerRole's `.model` (which
+  // reads only a bare per-angle override and ignores `tier`, so it can merge
+  // two angles that dispatch on different tiers into one "inherit" bucket, or
+  // split two angles that dispatch on the same tier into two groups). The
+  // harness defaults to "claude" (this writer's own shipped default
+  // capability is CLAUDE_CODE_HARNESS_CAPABILITY); pass options.harness to
+  // report the plan for a different dispatch harness. Without a config, every
+  // angle honestly resolves to inherit (never guessed) — a plan written this
+  // way is not evidence of dispatch grouping, only of "no config was
+  // consulted."
+  //
+  // The angle universe is restricted to the PENDING set: options.fanoutDispatch
+  // (set by both the CLI main() and buildGateContext, from the same
+  // completedAngles/carriedAngles resolveFanoutDispatch already excludes from
+  // requiredReviewers/pendingGroups) when present, else the full resolved
+  // angle set — a bare programmatic writeGateContext call with no
+  // fanoutDispatch has no pending/completed distinction to restrict by.
+  const harness = options.harness ?? "claude";
+  const pendingAngleNames = options.fanoutDispatch?.pendingGroups
+    ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles))
+    : null;
+  const angleUniverse = Array.isArray(options.angles) ? options.angles : [];
+  const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
+  const angleModels = pendingAngles.map((angle) => ({
     angle,
-    model: options.config ? resolveReviewerRole(options.config, angle).model : null,
+    model: options.config ? resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }) : null,
   }));
   const requestPlan = buildRequestPlan({
     gate: options.gate,
     headSha: options.headSha,
     sharedPrefixPath: briefingPrefixPath,
-    sharedPrefixHash: prefixHash,
+    // sha256:-prefixed, matching requestPrefixFingerprint's own format (one
+    // format for both hash fields in this artifact) — distinct from the
+    // bare-hex `prefixHash` this function returns/uses for the #1537
+    // sentinel-hash comparisons above, which is an independent, older
+    // contract this artifact does not own.
+    sharedPrefixHash: `sha256:${prefixHash}`,
     angleModels,
     harnessCapability: options.harnessCapability ?? CLAUDE_CODE_HARNESS_CAPABILITY,
     blockBoundaries: REQUEST_PLAN_BLOCK_BOUNDARIES,
   });
-  const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
   await mkdir(path.dirname(fullRequestPlanPath), { recursive: true });
   await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
 
@@ -2767,7 +2846,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // Load the dev-loop config once: used both for dynamic angle resolution
     // (when --angles is omitted) and, regardless of --angles, to resolve each
     // angle's concrete review model for the request-plan artifact
-    // (resolveReviewerRole, inside writeGateContext). loadDevLoopConfig never
+    // (resolveRoleModel(kind:"angle"), inside writeGateContext). loadDevLoopConfig never
     // throws: it returns { config, warnings, errors }, and on a validation
     // error it still returns `config` with every layer merged (its own
     // documented fallback) — nulling it out here would replace a

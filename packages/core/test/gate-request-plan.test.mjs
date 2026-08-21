@@ -130,6 +130,27 @@ describe("buildRequestPlan: shape", () => {
   test("throws on a missing harnessCapability", () => {
     assert.throws(() => buildRequestPlan(baseInput({ harnessCapability: null })), /harnessCapability is required/);
   });
+
+  test("throws on a harnessCapability missing a field, rather than silently accepting it (routed through makeHarnessCapability)", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ harnessCapability: { streaming: "opaque", cacheTelemetry: "unavailable" } })),
+      /ttlOwnership must be one of/,
+    );
+  });
+
+  test("throws on a harnessCapability with a typo'd ttlOwnership value, rather than silently deriving a caller-controlled ttlIntent", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ harnessCapability: { streaming: "opaque", cacheTelemetry: "unavailable", ttlOwnership: "harness-managed" } })),
+      /ttlOwnership must be one of/,
+    );
+  });
+
+  test("a concrete model literally named 'inherit' throws (would collide with the reserved bucket key)", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ angleModels: [{ angle: "correctness", model: "inherit" }] })),
+      /collides with the bucket key reserved for "no override"/,
+    );
+  });
 });
 
 // ── ttlIntent derivation ────────────────────────────────────────────────────
@@ -150,6 +171,13 @@ describe("buildRequestPlan: ttlIntent", () => {
     const plan = buildRequestPlan(baseInput({ ttlIntent: "1h" }));
     for (const group of plan.requestGroups) assert.equal(group.ttlIntent, "1h");
   });
+
+  test("rejects an explicit ttlIntent outside the closed vocabulary, rather than writing it through verbatim", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ ttlIntent: "30s" })),
+      /ttlIntent must be one of/,
+    );
+  });
 });
 
 // ── Determinism ──────────────────────────────────────────────────────────────
@@ -166,6 +194,24 @@ describe("buildRequestPlan: determinism", () => {
     const a = buildRequestPlan(baseInput({ settings: { thinking: "extended", toolChoice: "auto" } }));
     const b = buildRequestPlan(baseInput({ settings: { toolChoice: "auto", thinking: "extended" } }));
     assert.deepEqual(a, b);
+  });
+
+  test("requestGroups order is independent of angleModels input order (Map insertion order alone would be silently order-dependent)", () => {
+    const ordered = baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+        { angle: "security", model: "sonnet" },
+      ],
+    });
+    const permuted = baseInput({
+      angleModels: [
+        { angle: "security", model: "sonnet" },
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+      ],
+    });
+    assert.equal(JSON.stringify(buildRequestPlan(ordered)), JSON.stringify(buildRequestPlan(permuted)));
   });
 });
 
@@ -235,5 +281,29 @@ describe("buildRequestPlan: requestPrefixFingerprint sensitivity", () => {
       "opus",
     );
     assert.equal(a, b, "the angle list is the volatile suffix — never a fingerprint input");
+  });
+
+  test("throws on a non-finite number in settings, rather than collapsing it to JSON null", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { temperature: NaN } })),
+      /non-finite number/,
+    );
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { temperature: Infinity } })),
+      /non-finite number/,
+    );
+  });
+
+  test("throws on a non-plain object in settings (Date/Map/Set are keyless and would collide with {})", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ settings: { at: new Date() } })), /not a plain object/);
+    assert.throws(() => buildRequestPlan(baseInput({ settings: { m: new Map() } })), /not a plain object/);
+    assert.throws(() => buildRequestPlan(baseInput({ settings: { s: new Set() } })), /not a plain object/);
+  });
+
+  test("an own __proto__ key in settings is preserved (not silently dropped by a plain-object accumulator)", () => {
+    const settingsWithProto = JSON.parse('{"__proto__":{"a":1}}');
+    const a = fingerprintOf(buildRequestPlan(baseInput({ settings: settingsWithProto })), "opus");
+    const b = fingerprintOf(buildRequestPlan(baseInput({ settings: JSON.parse('{"__proto__":{"a":2}}') })), "opus");
+    assert.notEqual(a, b, "two settings objects differing only under __proto__ must not hash identically");
   });
 });

@@ -204,10 +204,12 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
 
 #### Request-plan artifact and harness capability
 
-`write-gate-context.mjs` additionally writes two deterministic files sibling to the
-briefing prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` module:
+`write-gate-context.mjs` additionally writes two sibling files beside the briefing
+prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` module. Only the
+first is deterministic; the second carries a genuine per-write timestamp:
 
-- **`<gate>-<headSha>.request-plan.json`** — the per-round dispatch plan. Shape:
+- **`<gate>-<headSha>.request-plan.json`** — the per-round dispatch plan. Byte-identical
+  for identical inputs at the same head (no timestamp field lives inside it). Shape:
   ```json
   {
     "gate": "pre_approval_gate",
@@ -225,14 +227,35 @@ briefing prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` modu
     ]
   }
   ```
-  `requestGroups` partitions the round's fan-out angles BY CONCRETE RESOLVED MODEL
-  (`resolveReviewerRole(config, angle).model` — the same "config override → built-in
-  persona default → null=inherit" resolution the review-persona dispatch itself
-  uses). Angles with no override share the model-less `"inherit"` bucket, kept
-  separate from every concrete model id — an angle never silently merges into a
-  group its actual dispatch would not share. `sharedPrefixHash` always equals the
-  hash of the briefing-prefix bytes actually written in the same call; a mismatch
-  would mean the plan describes a prefix that was never materialized.
+  `requestGroups` partitions the round's PENDING fan-out angles (the resolved angle
+  set minus whatever `options.fanoutDispatch.pendingGroups` already excludes as
+  completed/carried — a group never lists an angle this round will not actually
+  dispatch) BY CONCRETE RESOLVED MODEL: `resolveRoleModel(config, { role: angle,
+  harness, kind: "angle" })` — the SAME dispatch-time resolution (config override →
+  per-angle tier → built-in review-persona tier → null=inherit) an actual fan-out
+  dispatches on, harness- and tier-aware. This is deliberately NOT
+  `resolveReviewerRole(config, angle).model`: that reads only a bare per-angle
+  `model` override and ignores `tier` entirely, so it can merge two angles that
+  dispatch on different tiers into one false "inherit" bucket, or (for a bare
+  no-override angle, which resolves through the built-in review tier to a concrete
+  model on most harnesses) report "inherit" for an angle that never inherits in
+  practice. `harness` defaults to `"claude"` (this writer's own shipped default
+  capability is `CLAUDE_CODE_HARNESS_CAPABILITY`); pass `options.harness` to report
+  the plan for a different dispatch harness. Angles with no override share the
+  model-less `"inherit"` bucket, kept separate from every concrete model id — a
+  concrete model literally named `"inherit"` is rejected (it would otherwise
+  silently collide with that bucket key) — an angle never silently merges into a
+  group its actual dispatch would not share. Without a config, every angle
+  resolves to `"inherit"` (never guessed); a plan written this way records only
+  "no config was consulted," not evidence of real dispatch grouping.
+  `sharedPrefixHash` always equals the `sha256:`-prefixed hash of the
+  briefing-prefix bytes actually written in the same call (the same format as
+  `requestPrefixFingerprint` below — one hash format for both fields in this
+  artifact; the independent, bare-hex `prefixHash` `write-gate-context.mjs`
+  returns/uses for its own `#1537` rebuild-detection and
+  `verify-fresh-review-context.mjs`'s sentinel contract is a different, older
+  field this artifact does not own); a mismatch would mean the plan describes a
+  prefix that was never materialized.
   `requestPrefixFingerprint` is a sha256 over every cache-relevant input this layer
   observes for that group: the concrete model, the shared-prefix bytes (via
   `sharedPrefixHash`), tool definitions and their dispatch order, system/project/agent
@@ -241,9 +264,23 @@ briefing prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` modu
   deliberately EXCLUDED from the fingerprint — they are the volatile per-angle
   suffix appended after the cache boundary, so an angle-suffix-only change never
   changes the fingerprint, while a change to any of the inputs above always does.
+  **Shipped coverage today:** the production `write-gate-context.mjs` call site
+  currently feeds `buildRequestPlan` only the model, the shared-prefix bytes, a
+  fixed `blockBoundaries` constant (`REQUEST_PLAN_BLOCK_BOUNDARIES`), and the
+  TTL intent derived from `CLAUDE_CODE_HARNESS_CAPABILITY` — `toolDefinitions`,
+  `instructions`, and `settings` are NOT yet threaded through (they fall through to
+  `buildRequestPlan`'s empty defaults), so the shipped fingerprint does not yet move
+  when tool definitions, instructions, or settings change; treat those three as
+  documented-but-not-yet-observed until a later slice feeds real values. A group
+  containing a non-`"full"`-scope angle still keeps `cacheBoundary:
+  "after_shared_prefix"`: every angle in the group — scoped or not — is mandated
+  (`GATE-EXEC-BRIEFING-PREFIX`) to read the full shared prefix first, and a scoped
+  companion file is additional material layered AFTER that boundary, never a
+  replacement of the shared prefix bytes within it.
   Re-running for identical inputs at the same head produces byte-identical JSON: no
   timestamp field lives inside the plan (`loggedAt` stays on the separate JSON
-  context artifact only).
+  context artifact only), and group/angle ordering is code-unit sorted (never
+  locale-dependent) so the byte-identical guarantee holds across runtimes too.
 
   **Non-claim:** a fingerprint proves REQUEST-SHAPE identity — that two dispatches
   sent the same observable request prefix. It never proves a provider actually
@@ -253,10 +290,20 @@ briefing prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` modu
   cache hit."
 
 - **`<gate>-<headSha>.briefing-volatile.txt`** — the physically separate volatile
-  tail: round-level values (`acceptanceCriteria`, `validationPosture`, the write
-  timestamp) that sit AFTER the cache boundary the briefing prefix establishes.
-  This file exists so the boundary `cacheBoundary: "after_shared_prefix"` names is a
-  real file boundary, not only a documented convention or a common substring buried
+  tail: round-level values that sit AFTER the cache boundary the briefing prefix
+  establishes AND that {@link renderBriefingPrefix} never consumes (the rule for
+  what belongs here: volatile-tail material is whatever the stable prefix render
+  does not read). Today that is `validationPosture` (only a pointer,
+  `validationResultsPath`, reaches the prefix — the posture string itself never
+  does) and `loggedAt`, a genuine per-write timestamp with no prefix counterpart —
+  which is why this file, unlike the request plan above, is NOT deterministic.
+  `acceptanceCriteria` is NOT in this file: `write-gate-context.mjs` passes it as
+  `renderBriefingPrefix`'s `issueRef`, which appears in the stable prefix's
+  `## Linked issue <ref>` heading whenever an issue body/sections are present, so
+  it is stable-prefix material (and separately recorded in the JSON context
+  artifact's `scope.acceptanceCriteria`), never volatile-tail material. This file
+  exists so the boundary `cacheBoundary: "after_shared_prefix"` names is a real
+  file boundary, not only a documented convention or a common substring buried
   inside per-angle prompt text. Writing or changing this file never touches the
   stable briefing-prefix bytes — the two are independent files, written
   independently, and a change confined to the volatile file leaves the prefix's
@@ -278,11 +325,18 @@ Every field is required and validated against its declared vocabulary — there 
 default-filling, and no code path may infer a capability the harness has not
 declared; an unobserved capability must be passed as its `"opaque"` (or
 `"unavailable"`/`"harness_managed"`) value rather than guessed as yes/no.
+`buildRequestPlan` routes every `harnessCapability` it receives through
+`makeHarnessCapability` itself (never trusting an arbitrary truthy object), so a
+capability missing a field, or carrying a typo'd value, fails closed rather than
+silently deriving a caller-controlled TTL the harness never declared.
 `CLAUDE_CODE_HARNESS_CAPABILITY` is the shipped, honest default for the current
 Claude Code harness: `streaming: "opaque"`, `cacheTelemetry: "unavailable"`,
 `ttlOwnership: "harness_managed"`. A request group's `ttlIntent` is derived from the
 capability (`"harness_managed"` when the harness owns the lifecycle, else a
-caller-controlled default of `"5m"`) unless the caller passes an explicit override.
+caller-controlled default of `"5m"`) unless the caller passes an explicit override —
+an override is validated against the closed vocabulary shown in the shape above
+(`"5m"`, `"1h"`, `"harness_managed"`); anything else throws rather than being
+written through verbatim.
 
 This artifact and capability representation are the deterministic foundation a
 later slice's primer-dispatch evidence consumes: the plan says WHAT the observable

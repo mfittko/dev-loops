@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { buildRequestPlan, CLAUDE_CODE_HARNESS_CAPABILITY, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/gate-request-plan";
 
 import {
   assertWorktreeAtHead,
@@ -2563,6 +2564,54 @@ test("writeGateContext failure-ordering: a prefix-write failure leaves NO JSON a
   }
 });
 
+test("writeGateContext failure-ordering: a volatile-tail-write failure leaves NO JSON artifact behind", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-volatile-"));
+  try {
+    // Occupy the deterministic volatile-tail path with a DIRECTORY so its
+    // writeFile throws EISDIR before the JSON artifact write is attempted.
+    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
+    await mkdir(path.resolve(repoRoot, volatileRel), { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no partial gate-context JSON may exist when the volatile-tail write failed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext failure-ordering: a request-plan-write failure leaves NO JSON artifact behind", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-plan-"));
+  try {
+    // Occupy the deterministic request-plan path with a DIRECTORY so its
+    // writeFile throws EISDIR before the JSON artifact write is attempted.
+    const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
+    await mkdir(path.resolve(repoRoot, planRel), { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["scope"]',
+    ]);
+    await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no partial gate-context JSON may exist when the request-plan write failed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // --prefix-file — record an orchestrator-supplied prefix VERBATIM instead of
 // self-rendering (an orchestrator that briefs reviewers with its OWN prefix
@@ -4928,10 +4977,41 @@ test("buildGateContext threads { repoRoot } into its own readCompletedAnglesForH
 // Request plan + stable/volatile block split (#1474)
 // ---------------------------------------------------------------------------
 
+test("buildGateBriefingVolatilePath produces a deterministic path sibling to the briefing prefix", () => {
+  const p = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-42", "draft_gate-abc1234.briefing-volatile.txt"));
+});
+
+test("buildGateBriefingVolatilePath rejects unsafe repo/pr/gate/headSha segments (same safety as its siblings)", () => {
+  assert.throws(() => buildGateBriefingVolatilePath({ repo: "no-slash", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name/);
+  assert.throws(() => buildGateBriefingVolatilePath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
+  assert.throws(() => buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateBriefingVolatilePath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+});
+
+test("buildGateRequestPlanPath produces a deterministic path sibling to the briefing prefix", () => {
+  const p = buildGateRequestPlanPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: "abc1234" });
+  assert.equal(p, path.join("tmp", "gate-context", "owner-repo", "pr-42", "draft_gate-abc1234.request-plan.json"));
+});
+
+test("buildGateRequestPlanPath rejects unsafe repo/pr/gate/headSha segments (same safety as its siblings)", () => {
+  assert.throws(() => buildGateRequestPlanPath({ repo: "no-slash", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name/);
+  assert.throws(() => buildGateRequestPlanPath({ repo: "../x/y", pr: 1, gate: "draft_gate", headSha: "abc1234" }), /owner\/name|unsafe/);
+  assert.throws(() => buildGateRequestPlanPath({ repo: "owner/repo", pr: 1, gate: "../etc", headSha: "abc1234" }), /gate.*unsafe/);
+  assert.throws(() => buildGateRequestPlanPath({ repo: "owner/repo", pr: "../9", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
+  assert.throws(() => buildGateRequestPlanPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
+});
+
 // A fake config with explicit per-angle model overrides for two angles
-// ("correctness", "security") and no override for a third ("docs"), so
-// resolveReviewerRole resolves a mix of a concrete model and inherit(null) —
-// exercising both request-group buckets end to end.
+// ("correctness", "security") and an explicit `tier: "inherit"` for a third
+// ("docs"), so resolveRoleModel(kind:"angle") resolves a mix of a concrete
+// model and genuine inherit(null) — exercising both request-group buckets
+// end to end. `docs` needs the explicit inherit tier because a plain
+// no-override entry resolves through BUILTIN_ROLE_TIERS.review ("high"),
+// which is a concrete "opus" on the claude harness — NOT inherit; that
+// mismatch (a bare no-override angle silently dispatching at the review
+// tier) is exactly what resolveRoleModel fixes over resolveReviewerRole.
 function angleModelConfig() {
   return {
     gates: {
@@ -4939,7 +5019,7 @@ function angleModelConfig() {
         angles: [
           { name: "correctness", model: "opus" },
           { name: "security", model: "opus" },
-          { name: "docs" },
+          { name: "docs", tier: "inherit" },
         ],
       },
     },
@@ -4979,8 +5059,13 @@ test("writeGateContext request-plan sharedPrefixHash equals the prefix hash actu
 
     const prefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath));
     const actualPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
-    assert.equal(result.prefixHash, actualPrefixHash);
-    assert.equal(result.requestPlan.sharedPrefixHash, actualPrefixHash);
+    assert.equal(result.prefixHash, actualPrefixHash, "the top-level, bare-hex prefixHash contract (#1537/verify-fresh-review-context) is unchanged");
+    // sharedPrefixHash is sha256:-prefixed — the same documented format as
+    // requestPrefixFingerprint (one format for both hash fields in this
+    // artifact) — even though it is derived from the same bare-hex digest as
+    // the top-level prefixHash above.
+    assert.equal(result.requestPlan.sharedPrefixHash, `sha256:${actualPrefixHash}`);
+    assert.match(result.requestPlan.sharedPrefixHash, /^sha256:[0-9a-f]{64}$/, "pins the documented artifact format");
     assert.equal(result.requestPlan.sharedPrefixPath, result.prefixPath);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -5007,6 +5092,49 @@ test("writeGateContext request-plan partitions angles by concrete resolved model
   }
 });
 
+test("writeGateContext request-plan resolves a bare no-override angle to its dispatch-time review-tier model, not the inherit bucket (tier/harness-aware resolution)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-tier-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["docs"]',
+    ]);
+    // No model/tier override at all: resolveRoleModel(kind:"angle") falls
+    // back through BUILTIN_ROLE_TIERS.review ("high"), which is a concrete
+    // "opus" on the claude harness — the SAME tier every gate fan-out angle
+    // dispatches at by default. resolveReviewerRole's bare-override-only
+    // read would have reported this as "inherit", which is what a real
+    // dispatch never does for an unconfigured angle.
+    options.config = { gates: { draft: { angles: [{ name: "docs" }] } } };
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.equal(result.requestPlan.requestGroups.length, 1);
+    assert.equal(result.requestPlan.requestGroups[0].model, "opus");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext request-plan honors a per-angle tier override (harness-aware, not just a bare model override)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-tier2-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["docs"]',
+    ]);
+    // "low" tier maps to "sonnet" on the claude harness (BUILTIN_TIERS.low).
+    options.config = { gates: { draft: { angles: [{ name: "docs", tier: "low" }] } } };
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.equal(result.requestPlan.requestGroups.length, 1);
+    assert.equal(result.requestPlan.requestGroups[0].model, "sonnet");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext without a config resolves every angle to the explicit inherit bucket (never guessed)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-noconfig-"));
   try {
@@ -5019,6 +5147,32 @@ test("writeGateContext without a config resolves every angle to the explicit inh
     assert.equal(result.requestPlan.requestGroups.length, 1);
     assert.equal(result.requestPlan.requestGroups[0].model, "inherit");
     assert.deepEqual(result.requestPlan.requestGroups[0].angles, ["correctness", "security"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext request-plan excludes an angle fanoutDispatch already carried/completed (only the PENDING set is planned)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-pending-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "84", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["correctness","docs"]',
+    ]);
+    options.config = angleModelConfig();
+    // Simulate the same completedAngles/carriedAngles exclusion
+    // resolveFanoutDispatch itself applies (see main()'s own
+    // resolveFanoutDispatch call, a few lines above where it stores this on
+    // options before calling writeGateContext): "docs" is not in
+    // pendingGroups, so it must not appear in the request plan either — a
+    // group listing a never-dispatched angle makes the plan's "round's
+    // fan-out angles" claim unsatisfiable.
+    options.fanoutDispatch = { pendingGroups: [{ name: "group-1", angles: ["correctness"] }] };
+    const result = await writeGateContext(options, { repoRoot });
+
+    const allPlannedAngles = result.requestPlan.requestGroups.flatMap((g) => g.angles);
+    assert.deepEqual(allPlannedAngles, ["correctness"], "the completed/carried angle is excluded from every request group");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -5064,39 +5218,85 @@ test("writeGateContext writes a physically separate volatile-tail file sibling t
     const expectedVolatilePath = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 85, gate: "draft_gate", headSha: "abc1234567890" });
     assert.equal(result.volatilePath, expectedVolatilePath);
     const volatileText = await readFile(path.resolve(repoRoot, expectedVolatilePath), "utf8");
-    assert.match(volatileText, /acceptanceCriteria: #1474/);
     assert.match(volatileText, /validationPosture: npm run verify/);
+    // acceptanceCriteria is NOT volatile-tail material — it feeds the stable
+    // prefix's issueRef (see renderBriefingVolatile's doc comment) — so it
+    // must never appear in this file even though --acceptance-criteria was
+    // supplied.
+    assert.doesNotMatch(volatileText, /acceptanceCriteria/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("stable prefix bytes are UNCHANGED by a volatile-tail-only change at the same head", async () => {
+test("stable prefix bytes are UNCHANGED by a volatile-tail-only change at the same head (production-shaped: --issue-body present)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-stable-unchanged-"));
   try {
-    const runWith = (pr, acceptanceCriteria, validationPosture) => parseWriteGateContextCliArgs([
+    // Production-shaped: --issue-body present, so acceptanceCriteria reaches
+    // the stable prefix as renderBriefingPrefix's issueRef (the `## Linked
+    // issue <ref>` heading only renders when an issue body/sections exist).
+    // acceptanceCriteria is held CONSTANT across both runs — only the
+    // genuinely-volatile validationPosture differs.
+    const runWith = (pr, validationPosture) => parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
       "--angles", '["correctness"]',
-      "--acceptance-criteria", acceptanceCriteria,
+      "--issue-body", "Issue body text",
+      "--acceptance-criteria", "#1474",
       "--validation-posture", validationPosture,
     ]);
 
-    // Same head, same repo/pr/gate — only the volatile round-level fields differ.
-    const first = await writeGateContext(runWith(90, "#1", "posture-one"), { repoRoot });
+    // Same head, same repo/pr/gate — only the volatile round-level field differs.
+    const first = await writeGateContext(runWith(90, "posture-one"), { repoRoot });
     const firstPrefixBytes = await readFile(path.resolve(repoRoot, first.prefixPath), "utf8");
     const firstVolatileBytes = await readFile(path.resolve(repoRoot, first.volatilePath), "utf8");
+    assert.ok(firstPrefixBytes.includes("## Linked issue #1474"), "sanity: acceptanceCriteria did reach the stable prefix in this configuration");
 
-    const second = await writeGateContext(runWith(90, "#2-different", "a-totally-different-posture"), { repoRoot });
+    const second = await writeGateContext(runWith(90, "a-totally-different-posture"), { repoRoot });
     const secondPrefixBytes = await readFile(path.resolve(repoRoot, second.prefixPath), "utf8");
     const secondVolatileBytes = await readFile(path.resolve(repoRoot, second.volatilePath), "utf8");
 
-    assert.equal(firstPrefixBytes, secondPrefixBytes, "the stable prefix's bytes must not change when only volatile-tail content changes");
+    assert.equal(firstPrefixBytes, secondPrefixBytes, "the stable prefix's bytes must not change when only the genuinely-volatile validationPosture changes");
     assert.notEqual(firstVolatileBytes, secondVolatileBytes, "the volatile file DID actually change (sanity check the test isn't vacuous)");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("stable prefix bytes DO change when acceptanceCriteria changes and an issue body is present (the documented coupling, not a volatile-split violation)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-ac-coupled-"));
+  try {
+    const runWith = (pr, acceptanceCriteria) => parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--issue-body", "Issue body text",
+      "--acceptance-criteria", acceptanceCriteria,
+    ]);
+
+    const first = await writeGateContext(runWith(91, "#1"), { repoRoot });
+    const firstPrefixBytes = await readFile(path.resolve(repoRoot, first.prefixPath), "utf8");
+    const second = await writeGateContext(runWith(91, "#2-different"), { repoRoot });
+    const secondPrefixBytes = await readFile(path.resolve(repoRoot, second.prefixPath), "utf8");
+
+    assert.notEqual(firstPrefixBytes, secondPrefixBytes, "acceptanceCriteria feeds the stable prefix's issueRef, so it is not volatile-tail material — a change here legitimately changes the prefix");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Resolve the file an angle's dispatch actually reads for its LEADING
+// (through-cache-boundary) request bytes: a non-"full" scope's own
+// companion file when one was written, else the shared invariant prefix.
+// Mirrors the resolution writeGateContext itself performs when deciding
+// which file to fail-open to (see the declaredScopes loop in writeGateContext).
+function resolveAngleBriefingSource(artifact, prefixPath, angle) {
+  const scope = artifact.angleScopes?.[angle] ?? "full";
+  if (scope !== "full" && artifact.briefingVariants?.[scope]) {
+    return artifact.briefingVariants[scope];
+  }
+  return prefixPath;
+}
 
 test("AC4 contract: two angle requests composed from the same plan are byte-equal through the declared cacheBoundary, diverging only after it", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cacheboundary-"));
@@ -5109,31 +5309,117 @@ test("AC4 contract: two angle requests composed from the same plan are byte-equa
     options.config = angleModelConfig(); // both angles resolve to "opus" — one request group
     const result = await writeGateContext(options, { repoRoot });
 
-    const prefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
     const group = result.requestPlan.requestGroups.find((g) => g.model === "opus");
     assert.equal(group.cacheBoundary, "after_shared_prefix");
     assert.deepEqual(group.angles, ["correctness", "security"]);
 
-    // Compose the two angle-specific requests: identical stable prefix bytes up
-    // to the declared cache boundary, then an angle-specific suffix appended
-    // strictly AFTER it.
-    const composeRequest = (angle) => prefixBytes + `\n\n## Angle: ${angle}\n`;
-    const requestA = composeRequest("correctness");
-    const requestB = composeRequest("security");
-
+    // Resolve + independently READ each angle's leading briefing source
+    // through the production surface a dispatch would actually consult
+    // (angleScopes → briefingVariants, falling back to the shared prefix) —
+    // two SEPARATE disk reads, not one shared in-memory string reused for
+    // both angles, so equality here proves the ON-DISK bytes agree rather
+    // than proving a tautology (a local string concat proves itself).
+    const correctnessSourcePath = resolveAngleBriefingSource(result.artifact, result.prefixPath, "correctness");
+    const securitySourcePath = resolveAngleBriefingSource(result.artifact, result.prefixPath, "security");
+    const correctnessLeadingBytes = await readFile(path.resolve(repoRoot, correctnessSourcePath), "utf8");
+    const securityLeadingBytes = await readFile(path.resolve(repoRoot, securitySourcePath), "utf8");
     assert.equal(
-      requestA.slice(0, prefixBytes.length),
-      requestB.slice(0, prefixBytes.length),
+      correctnessLeadingBytes,
+      securityLeadingBytes,
       "bytes through the declared cache boundary are identical across angles in the same request group",
     );
+
+    // Compose the two angle-specific requests: identical leading bytes, then
+    // an angle-specific suffix appended strictly AFTER the cache boundary.
+    const requestA = correctnessLeadingBytes + `\n\n## Angle: correctness\n`;
+    const requestB = securityLeadingBytes + `\n\n## Angle: security\n`;
     assert.notEqual(requestA, requestB, "divergence happens strictly after the cache boundary (the angle suffix)");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("renderBriefingVolatile: omits acceptanceCriteria/validationPosture with an explicit '(none)' placeholder when absent", () => {
+test("AC4 scoped-variant coverage: a docs-only-scope angle sharing a model group with a full-scope angle still shares identical bytes through the cache boundary", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cacheboundary-scoped-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "92", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["correctness","docs"]',
+    ]);
+    // Both angles resolve to the SAME model — one request group — while
+    // declaring DIFFERENT scopes (correctness: full (default), docs: docs-only).
+    options.config = { gates: { draft: { angles: [{ name: "correctness", model: "opus" }, { name: "docs", model: "opus" }] } } };
+    options.angleScopes = { docs: "docs-only" };
+    const result = await writeGateContext(options, { repoRoot });
+
+    const group = result.requestPlan.requestGroups.find((g) => g.model === "opus");
+    assert.deepEqual(group.angles, ["correctness", "docs"]);
+    // The group's cacheBoundary claim holds regardless of a member angle's
+    // scope: EVERY angle — scoped or not — is mandated (GATE-EXEC-BRIEFING-
+    // PREFIX) to read the full shared prefix first; a non-"full" scope's
+    // companion file is additional material layered AFTER that boundary,
+    // never a replacement of the shared prefix bytes within it.
+    assert.equal(group.cacheBoundary, "after_shared_prefix");
+
+    // Independently read the shared prefix once per angle — both the
+    // full-scope AND the docs-only-scope angle read the SAME underlying
+    // file for their through-the-boundary bytes.
+    const correctnessPrefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    const docsPrefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.equal(correctnessPrefixBytes, docsPrefixBytes, "bytes through the cache boundary are identical for every angle in the group, independent of scope");
+
+    // The docs-only scoped variant is real, on-disk, ADDITIONAL material —
+    // never a substitute for the shared prefix within the boundary.
+    assert.ok(result.artifact.briefingVariants?.["docs-only"], "a docs-only companion file was actually written");
+    const scopedVariantBytes = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["docs-only"]), "utf8");
+    assert.notEqual(scopedVariantBytes, correctnessPrefixBytes, "the scoped variant is materially different text, layered after the shared boundary, not a substitute for it");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext production call site: on-disk ttlIntent and blockBoundaries are not mutation-survivable", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-mutation-survivable-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "93", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+    const group = result.requestPlan.requestGroups[0];
+
+    // The shipped CLAUDE_CODE_HARNESS_CAPABILITY's ttlOwnership drives the
+    // written ttlIntent — deleting that wiring at the call site would flip
+    // this to the caller-controlled default and this assertion would catch it.
+    assert.equal(group.ttlIntent, "harness_managed");
+
+    // A recomputation with blockBoundaries omitted (buildRequestPlan's own
+    // default, []) must produce a DIFFERENT fingerprint than the one actually
+    // written — proving the production call site's `blockBoundaries:
+    // REQUEST_PLAN_BLOCK_BOUNDARIES` argument is load-bearing, not deletable
+    // without changing the on-disk artifact.
+    const withoutBlockBoundaries = buildRequestPlan({
+      gate: result.requestPlan.gate,
+      headSha: result.requestPlan.headSha,
+      sharedPrefixPath: result.requestPlan.sharedPrefixPath,
+      sharedPrefixHash: result.requestPlan.sharedPrefixHash,
+      angleModels: group.angles.map((angle) => ({ angle, model: group.model === INHERIT_MODEL_KEY ? null : group.model })),
+      harnessCapability: CLAUDE_CODE_HARNESS_CAPABILITY,
+    });
+    assert.notEqual(
+      withoutBlockBoundaries.requestGroups[0].requestPrefixFingerprint,
+      group.requestPrefixFingerprint,
+      "the written fingerprint must differ from one built without blockBoundaries",
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderBriefingVolatile: omits validationPosture with an explicit '(none)' placeholder when absent, and never accepts acceptanceCriteria", () => {
   const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
-  assert.match(text, /acceptanceCriteria: \(none\)/);
   assert.match(text, /validationPosture: \(none\)/);
+  assert.doesNotMatch(text, /acceptanceCriteria/);
 });
