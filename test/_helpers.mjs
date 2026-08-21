@@ -167,6 +167,11 @@ const GIT_FIXTURE_ENV = {
   GIT_AUTHOR_EMAIL: "test@example.com",
   GIT_COMMITTER_NAME: "Test",
   GIT_COMMITTER_EMAIL: "test@example.com",
+  // Mirror the isolation captureSizeBudgetDiff's gitEnvWithoutDirOverrides
+  // applies in production: an ambient GIT_DIR/GIT_WORK_TREE would redirect
+  // this fixture's init/add/commit calls into a different repo entirely.
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
 };
 
 function runGitFixture(cwd, args) {

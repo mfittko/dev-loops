@@ -1166,6 +1166,40 @@ test("size budget: non-empty config errors[] block the draft exit fail-closed", 
   }
 });
 
+test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-nobaseref-"));
+  try {
+    const headSha = "abc123def456";
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch: undefined }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Could not resolve PR #17 base branch/i);
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when baseRefName cannot be resolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-badbase-"));
+  try {
+    const { headSha } = await initSizeBudgetFixtureRepo(tempDir);
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch: "totally-unresolvable-base" }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /git diff against --base/i);
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when the base ref cannot be resolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("parseReadyForReviewCliArgs requires --reason when --waive-size-budget is set", () => {
   assert.throws(
     () => parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "1", "--waive-size-budget"]),

@@ -472,6 +472,43 @@ test("size budget: an unwaivable block (absoluteHardLoc) refuses the raw gh pr r
   assert.match(stderrParsed.error, /no waiver possible/i);
 });
 
+test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-nobaseref-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) }, // baseRefName omitted
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /Could not resolve PR #42 base branch/i);
+});
+
+test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-badbase-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha } = await initSizeBudgetFixtureRepo(tmpDir);
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: "totally-unresolvable-base" })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /git diff against --base/i);
+});
+
 test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async (t) => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-configerr-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));

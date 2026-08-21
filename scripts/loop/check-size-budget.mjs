@@ -407,7 +407,7 @@ export function computeSizeBudget({
  * scripts/github/write-gate-context.mjs) so the byte-for-byte diff/LOC counts
  * a run produces don't depend on the operator's local git config.
  */
-export function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
+function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
   const range = `${base}...${head}`;
   const isolation = [
     "-c", "color.ui=false",

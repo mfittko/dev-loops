@@ -12,9 +12,12 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
 Wrapper around gh pr ready that enforces gate-evidence validation and the
-fail-closed PR size budget (gates.size): a block outcome (whole-PR logic LOC
-over absoluteHardLoc, a T1 slice over sliceHardLoc, an unclassifiable diff, or
-non-empty config errors[]) prevents the draft exit unless waived; an escalate
+fail-closed PR size budget (gates.size): a block outcome prevents the draft
+exit unless waived. Waiver-eligible block triggers — whole-PR logic LOC over
+default.waiverLoc, or a T1 slice over t1.sliceHardLoc — accept
+--waive-size-budget; whole-PR logic LOC over absoluteHardLoc, non-empty config
+errors[], an ambiguous diff, or a substantially-unclassified diff are
+unwaivable block triggers, never bypassed by --waive-size-budget. An escalate
 outcome does not block but is recorded on the result for a later phase to act on.
 
 --waive-size-budget requires --reason <text> naming the justification; a
