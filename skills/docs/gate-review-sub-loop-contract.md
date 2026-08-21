@@ -1122,7 +1122,8 @@ The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fan
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
   the draft is the durable ledger record, and the conductor consuming the verdict appends or
   files it by hand. The defer bar is high (net-reduction policy): a `nit` never gets
-  `judgeDisposition: defer` (act or reject only; the resolved thread note is its record —
+  a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; act or
+  reject only, and the resolved thread note is its record —
   this governs the relevance/filing axis only, while the severity-derived `disposition`
   field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a `low` is
   deferred only when leaving it unfixed would change an operator-visible outcome (wrong
