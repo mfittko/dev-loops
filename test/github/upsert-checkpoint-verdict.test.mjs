@@ -1146,6 +1146,106 @@ test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .
   }
 });
 
+// Shared gh call sequence for the --size-budget-json fail-closed cases below:
+// the malformed JSON is read (and refused) BEFORE the review POST, so no POST
+// entry is provided — a call that reached it would fail the mock instead of
+// matching the expected parse error.
+const sizeBudgetRefusalGhEntries = [
+  {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+    stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+  },
+  {
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    stdout: '{"users":[],"teams":[]}\n',
+  },
+  {
+    assertArgs: ["api", "graphql", "pr=17"],
+    stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+  },
+  {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+    stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
+  },
+  {
+    assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+    stdout: '[]\n',
+  },
+];
+
+for (const [label, rawJson] of [
+  // Field omitted entirely — the resolver's own "absent evidence" case.
+  ["absent", JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, waiver: { requested: true, approvedBy: "jane-doe", t1Valid: true, defaultValid: false } })],
+  ["non-numeric", JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: "forty", waiver: { requested: true, approvedBy: "jane-doe", t1Valid: true, defaultValid: false } })],
+  ["negative", JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: -1, waiver: { requested: true, approvedBy: "jane-doe", t1Valid: true, defaultValid: false } })],
+  // `1e400` is valid JSON syntax (a numeric literal) that overflows to the
+  // JS value `Infinity` once parsed — the only way a real JSON document can
+  // carry a non-finite number (JSON itself has no `Infinity`/`NaN` token).
+  ["Infinity", JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: 0, waiver: { requested: true, approvedBy: "jane-doe", t1Valid: true, defaultValid: false } }).replace('"t1SliceLoc":0', '"t1SliceLoc":1e400')],
+]) {
+  test(`upsert-checkpoint-verdict --size-budget-json fails closed when .t1SliceLoc is ${label}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-t1bad-"));
+    try {
+      const sizeBudgetPath = path.join(tempDir, "size-budget.json");
+      await writeFile(sizeBudgetPath, rawJson, "utf8");
+
+      const env = await writeGhStub(tempDir, sizeBudgetRefusalGhEntries);
+
+      const result = await runNode([
+        "--repo", "owner/repo",
+        "--pr", "17",
+        "--gate", "draft_gate",
+        "--head-sha", "abc1234000000000000000000000000000000000",
+        "--verdict", "clean",
+        "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+        "--findings-summary", "no issues found",
+        "--next-action", "mark ready for review",
+        "--size-budget-json", sizeBudgetPath,
+      ], { env });
+
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /must carry a finite, non-negative numeric \.t1SliceLoc/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .waiver", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-waiverbad-"));
+  try {
+    const sizeBudgetPath = path.join(tempDir, "size-budget.json");
+    await writeFile(sizeBudgetPath, JSON.stringify({
+      ok: false,
+      outcome: "escalate",
+      wholeLogicLoc: 620,
+      t1SliceLoc: 40,
+      // .waiver.t1Valid is a truthy string, not a boolean — must not silently
+      // coerce to a benign `sizeWaiverGranted: false`.
+      waiver: { requested: true, approvedBy: "jane-doe", t1Valid: "yes", defaultValid: false },
+    }), "utf8");
+
+    const env = await writeGhStub(tempDir, sizeBudgetRefusalGhEntries);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--size-budget-json", sizeBudgetPath,
+    ], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /must carry a \.waiver object with boolean \.t1Valid and \.defaultValid/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict embeds --findings-file content with preserved newlines", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-"));
 
@@ -3049,6 +3149,67 @@ test("renderGateReviewCommentBody entity-encodes a markdown-forging sizeWaiverAp
   // The forged "Verdict:" line never wins — the genuine one (earlier in the
   // body) is what first-match parsing already returned.
   assert.equal(parsed.verdict, "clean");
+});
+
+test("renderGateReviewCommentBody omits the WHOLE size-budget section when sizeTouchesT1 is ill-typed alongside a genuine sizeOutcome", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "await final human approval",
+    executionMode: "inline_single_agent",
+    inlineReason: "small change",
+    sizeOutcome: "pass",
+    // sizeTouchesT1 deliberately omitted/ill-typed: a partial/ill-typed size
+    // result must never render a coerced "not touched" line — that read as
+    // genuine benign evidence would defeat the merge gate's fail-closed
+    // contract on absent evidence.
+    sizeWaiverGranted: false,
+    sizeWaiverApprovedBy: null,
+  });
+  assert.doesNotMatch(body, /Size-budget/);
+  const parsed = parseGateReviewCommentBody(body);
+  assert.equal(parsed.sizeOutcome, null);
+  assert.equal(parsed.sizeTouchesT1, null);
+  assert.equal(parsed.sizeWaiverGranted, null);
+  assert.equal(parsed.sizeWaiverApprovedBy, null);
+});
+
+test("renderGateReviewCommentBody omits the size-budget section when sizeWaiverGranted is ill-typed even though sizeOutcome/sizeTouchesT1 are well-formed", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "await final human approval",
+    executionMode: "inline_single_agent",
+    inlineReason: "small change",
+    sizeOutcome: "escalate",
+    sizeTouchesT1: true,
+    sizeWaiverGranted: "yes", // ill-typed: not a boolean
+    sizeWaiverApprovedBy: "jane-doe",
+  });
+  assert.doesNotMatch(body, /Size-budget/);
+});
+
+test("renderGateReviewCommentBody still renders a genuine sizeTouchesT1: false as 'not touched' (complete, well-typed evidence)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "pre_approval_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "await final human approval",
+    executionMode: "inline_single_agent",
+    inlineReason: "small change",
+    sizeOutcome: "pass",
+    sizeTouchesT1: false,
+    sizeWaiverGranted: false,
+    sizeWaiverApprovedBy: null,
+  });
+  assert.match(body, /\*\*Size-budget T1 slice:\*\* not touched/);
+  const parsed = parseGateReviewCommentBody(body);
+  assert.equal(parsed.sizeTouchesT1, false);
 });
 
 test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {

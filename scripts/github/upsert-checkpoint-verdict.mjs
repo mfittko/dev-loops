@@ -1085,8 +1085,24 @@ function renderExecutionModeLine(executionMode, inlineReason) {
 // free text and is routed through sanitizeInline (entity-encoded, never
 // backslash-escaped) so a crafted approver name can never forge a markdown
 // delimiter or a second field label.
+//
+// All-or-nothing: `sizeOutcome` alone is not enough. A caller that supplies
+// `sizeOutcome` but leaves `sizeTouchesT1`/`sizeWaiverGranted` missing or
+// ill-typed gets NOTHING rendered — never a coerced "not touched"/"none"
+// line. Persisting that coerced line would read back downstream as
+// genuine benign evidence and defeat resolveSizeBudgetHumanApprovalRequired's
+// (size-budget-merge-gate.mjs) fail-closed-on-absent-evidence contract. An
+// omitted section round-trips as absent (null) instead, which that resolver
+// already treats as "human approval required". Only a complete, well-typed
+// result renders.
 function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }) {
   if (typeof sizeOutcome !== "string" || sizeOutcome.length === 0) {
+    return [];
+  }
+  if (typeof sizeTouchesT1 !== "boolean" || typeof sizeWaiverGranted !== "boolean") {
+    return [];
+  }
+  if (sizeWaiverApprovedBy !== null && sizeWaiverApprovedBy !== undefined && typeof sizeWaiverApprovedBy !== "string") {
     return [];
   }
   const waiverLine = sizeWaiverGranted === true
@@ -2207,12 +2223,32 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (!SIZE_BUDGET_OUTCOMES.has(sizeBudget?.outcome)) {
       throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a .outcome of "pass", "escalate", or "block"`);
     }
+    // Fail closed on the T1-touch signal, mirroring the .outcome check above:
+    // a missing/non-numeric/negative/non-finite .t1SliceLoc must abort BEFORE
+    // any verdict posts, not silently derive `sizeTouchesT1: false` — that
+    // false would persist as a definite, readable "not touched" and defeat
+    // resolveSizeBudgetHumanApprovalRequired's (size-budget-merge-gate.mjs)
+    // fail-closed-on-absent-evidence contract downstream.
+    const t1SliceLoc = sizeBudget.t1SliceLoc;
+    if (typeof t1SliceLoc !== "number" || !Number.isFinite(t1SliceLoc) || t1SliceLoc < 0) {
+      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a finite, non-negative numeric .t1SliceLoc`);
+    }
+    // Same fail-closed treatment for the waiver fields this CLI derives: a
+    // partially-readable/malformed .waiver must abort rather than fold into
+    // a benign `sizeWaiverGranted: false` ("no waiver"). check-size-budget.mjs
+    // always emits a `.waiver` object with boolean `.t1Valid`/`.defaultValid`
+    // (see computeSizeBudget), so a genuine producer's output always passes
+    // this check; only a truncated/hand-edited/malformed JSON trips it.
+    const waiver = sizeBudget.waiver;
+    if (waiver === null || typeof waiver !== "object" || typeof waiver.t1Valid !== "boolean" || typeof waiver.defaultValid !== "boolean") {
+      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a .waiver object with boolean .t1Valid and .defaultValid`);
+    }
     options.sizeOutcome = sizeBudget.outcome;
-    options.sizeTouchesT1 = typeof sizeBudget.t1SliceLoc === "number" && sizeBudget.t1SliceLoc > 0;
-    const waiverGranted = sizeBudget.waiver?.t1Valid === true || sizeBudget.waiver?.defaultValid === true;
+    options.sizeTouchesT1 = t1SliceLoc > 0;
+    const waiverGranted = waiver.t1Valid === true || waiver.defaultValid === true;
     options.sizeWaiverGranted = waiverGranted;
-    options.sizeWaiverApprovedBy = waiverGranted && typeof sizeBudget.waiver?.approvedBy === "string" && sizeBudget.waiver.approvedBy.trim().length > 0
-      ? sizeBudget.waiver.approvedBy.trim()
+    options.sizeWaiverApprovedBy = waiverGranted && typeof waiver.approvedBy === "string" && waiver.approvedBy.trim().length > 0
+      ? waiver.approvedBy.trim()
       : null;
   }
   // The findings-summary the comment is compared/round-tripped against. With a
