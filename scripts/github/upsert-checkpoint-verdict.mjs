@@ -1880,13 +1880,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     { env, ghCommand, repoRoot, runChild },
   );
   const activeGateConfig = options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig;
-  // Legacy config spellings ("defer") compare against the same canonical
-  // vocabulary as the normalized counts keys.
-  if (Array.isArray(activeGateConfig.blockCleanOnFindingSeverities)) {
-    activeGateConfig.blockCleanOnFindingSeverities = activeGateConfig.blockCleanOnFindingSeverities.map(
-      (sev) => /** @type {string} */ (normalizeSeverity(sev)),
-    );
-  }
   // Normalized at the CONSUME site, not only in the CLI parser: a direct
   // programmatic caller may pass legacy-keyed counts, and the guard below
   // must compare canonical keys on both sides.

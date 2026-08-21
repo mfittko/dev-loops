@@ -337,13 +337,12 @@ test("checkpoint review chain contract exists and is referenced by both gates", 
 });
 
 test("skill docs enforce self-assignment and draft-first rules for create commands", async () => {
-  const [copilotFollowupSkill, localImplementationSkill, finalApprovalSkill, agents, workflowHandoffTemplate, trackerStoryPrContract] = await Promise.all([
+  const [copilotFollowupSkill, localImplementationSkill, finalApprovalSkill, agents, workflowHandoffTemplate] = await Promise.all([
     readCopilotFollowupSurface(),
     readRepo("skills/local-implementation/SKILL.md"),
     readRepo("skills/final-approval/SKILL.md"),
     readRepo("AGENTS.md"),
     readRepo("skills/docs/workflow-handoff-contract.md"),
-    readRepo("skills/docs/tracker-story-pr-contract.md"),
   ]);
 
   // copilot-pr-followup routes PR creation through the canonical create-pr wrapper
@@ -373,8 +372,4 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   // Draft-first enforcement lives in AGENTS.md and individual skill docs.
   assert.match(workflowHandoffTemplate, /derivation contract/i);
   assert.match(workflowHandoffTemplate, /buildDevLoopHandoffEnvelope/);
-  // tracker-story-pr-contract.md is now a thin pointer; verify pointer, content in copilot-review-doc-contracts
-  assert.match(trackerStoryPrContract, /Canonical location:/i);
-  assert.match(trackerStoryPrContract, /tracker-first-loop-state\.md/i);
-  assert.doesNotMatch(trackerStoryPrContract, /gh pr create --draft --assignee @me/i);
 });

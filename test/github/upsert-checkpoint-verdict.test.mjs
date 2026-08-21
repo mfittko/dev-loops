@@ -2599,6 +2599,49 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
   }
 });
 
+test("upsert-checkpoint-verdict's blocking-severity error reports only the canonical spelling even when the gate config uses a legacy one", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-legacy-blocking-"));
+
+  try {
+    // gates.draft.blockCleanOnFindingSeverities is written in the legacy
+    // "must-fix" spelling. resolveGateConfig normalizes it to "high" at the
+    // resolve boundary, so the verdict poster must only ever see and report
+    // the canonical spelling, never the legacy one.
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: false",
+      "  draft:",
+      "    blockCleanOnFindingSeverities:",
+      "      - must-fix",
+      "",
+    ].join("\n"), "utf8");
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-summary", "reviewed: 1 high",
+      "--next-action", "mark ready for review",
+      "--findings-severity-counts", '{"high":1}',
+    ], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /blocking severities \[high\]\./);
+    assert.doesNotMatch(payload.error, /must-fix/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity findings remain", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-clean-ok-"));
 

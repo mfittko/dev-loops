@@ -25,5 +25,4 @@ worktrees/
 .llmwiki/graph.json
 
 # local-only scratch (never commit)
-ombase/
 .pi-subagents/
