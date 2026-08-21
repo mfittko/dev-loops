@@ -111,6 +111,15 @@ function canonicalize(value, keyPath = "$") {
   if (typeof value === "number" && !Number.isFinite(value)) {
     throw new Error(`buildRequestPlan: fingerprint input at ${keyPath} is a non-finite number (${value}) — refusing to collapse it to JSON null`);
   }
+  // undefined/function/symbol values are DROPPED by JSON.stringify (an own
+  // property holding one vanishes rather than serializing), and a bigint
+  // raises its own un-annotated TypeError from JSON.stringify itself —
+  // reject all four here, at the same trust boundary as the non-finite-number
+  // and non-plain-object checks above/below, so e.g. { thinking: undefined }
+  // and {} fail loudly instead of colliding onto one fingerprint.
+  if (value === undefined || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+    throw new Error(`buildRequestPlan: fingerprint input at ${keyPath} is a ${typeof value} — refusing to silently drop or crash-serialize it`);
+  }
   if (value !== null && typeof value === "object") {
     if (!isPlainObject(value)) {
       throw new Error(`buildRequestPlan: fingerprint input at ${keyPath} is not a plain object (got ${Object.prototype.toString.call(value)}) — refusing to canonicalize a keyless collision`);

@@ -151,6 +151,68 @@ describe("buildRequestPlan: shape", () => {
       /collides with the bucket key reserved for "no override"/,
     );
   });
+
+  test("throws on a missing/empty/whitespace-only gate", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ gate: undefined })), /gate is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ gate: "" })), /gate is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ gate: "   " })), /gate is required/);
+  });
+
+  test("throws on a missing/empty/whitespace-only headSha", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ headSha: undefined })), /headSha is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ headSha: "" })), /headSha is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ headSha: "   " })), /headSha is required/);
+  });
+
+  test("throws on a missing/empty/whitespace-only sharedPrefixPath", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixPath: undefined })), /sharedPrefixPath is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixPath: "" })), /sharedPrefixPath is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixPath: "   " })), /sharedPrefixPath is required/);
+  });
+
+  test("throws on a missing/empty/whitespace-only sharedPrefixHash", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixHash: undefined })), /sharedPrefixHash is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixHash: "" })), /sharedPrefixHash is required/);
+    assert.throws(() => buildRequestPlan(baseInput({ sharedPrefixHash: "   " })), /sharedPrefixHash is required/);
+  });
+
+  test("throws on a non-array angleModels (a string, or null)", () => {
+    assert.throws(() => buildRequestPlan(baseInput({ angleModels: "x" })), /angleModels must be an array/);
+    assert.throws(() => buildRequestPlan(baseInput({ angleModels: null })), /angleModels must be an array/);
+  });
+
+  test("throws on an angleModels entry with an empty/non-string angle", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ angleModels: [{ angle: "", model: "opus" }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+    assert.throws(
+      () => buildRequestPlan(baseInput({ angleModels: [{ angle: 1 }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+  });
+
+  test("throws on an angleModels entry with an invalid model (empty string, or a non-string)", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ angleModels: [{ angle: "correctness", model: "" }] })),
+      /invalid model/,
+    );
+    assert.throws(
+      () => buildRequestPlan(baseInput({ angleModels: [{ angle: "correctness", model: 1 }] })),
+      /invalid model/,
+    );
+  });
+
+  test("the same angle listed twice with the SAME model collapses to one entry in one group (not a duplicate)", () => {
+    const plan = buildRequestPlan(baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "correctness", model: "opus" },
+      ],
+    }));
+    assert.equal(plan.requestGroups.length, 1);
+    assert.deepEqual(plan.requestGroups[0].angles, ["correctness"]);
+  });
 });
 
 // ── ttlIntent derivation ────────────────────────────────────────────────────
@@ -305,5 +367,59 @@ describe("buildRequestPlan: requestPrefixFingerprint sensitivity", () => {
     const a = fingerprintOf(buildRequestPlan(baseInput({ settings: settingsWithProto })), "opus");
     const b = fingerprintOf(buildRequestPlan(baseInput({ settings: JSON.parse('{"__proto__":{"a":2}}') })), "opus");
     assert.notEqual(a, b, "two settings objects differing only under __proto__ must not hash identically");
+  });
+
+  test("throws on an undefined value in settings, rather than silently dropping it (would otherwise collide { thinking: undefined } with {})", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { thinking: undefined } })),
+      /is a undefined/,
+    );
+  });
+
+  test("throws on a function value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { onDone: () => {} } })),
+      /is a function/,
+    );
+  });
+
+  test("throws on a symbol value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { tag: Symbol("x") } })),
+      /is a symbol/,
+    );
+  });
+
+  test("throws on a bigint value in settings with the module's own keyPath-annotated message, not a raw JSON.stringify TypeError", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ settings: { budget: 10n } })),
+      /buildRequestPlan: fingerprint input at \$\.settings\.budget is a bigint/,
+    );
+  });
+
+  test("toolDefinitions: two object-shaped tool defs differing only in key order produce the same fingerprint", () => {
+    const a = fingerprintOf(
+      buildRequestPlan(baseInput({ toolDefinitions: [{ name: "Read", schema: { path: "string", limit: "number" } }] })),
+      "opus",
+    );
+    const b = fingerprintOf(
+      buildRequestPlan(baseInput({ toolDefinitions: [{ schema: { limit: "number", path: "string" }, name: "Read" }] })),
+      "opus",
+    );
+    assert.equal(a, b, "object-shaped tool definitions canonicalize key order the same as any other object input");
+  });
+
+  test("toolDefinitions: a non-finite number nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ toolDefinitions: [{ name: "Read", schema: { temperature: NaN } }] })),
+      /fingerprint input at \$\.toolDefinitions\[0\]\.schema\.temperature is a non-finite number/,
+    );
+  });
+
+  test("toolDefinitions: a non-plain object nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => buildRequestPlan(baseInput({ toolDefinitions: [{ name: "Read", at: new Date() }] })),
+      /fingerprint input at \$\.toolDefinitions\[0\]\.at is not a plain object/,
+    );
   });
 });

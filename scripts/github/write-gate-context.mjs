@@ -1620,6 +1620,14 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
  * string itself never does) and stays here. `loggedAt` is a genuine per-write
  * timestamp with no prefix counterpart at all.
  *
+ * `gate`/`head` are the one deliberate exception to the ONLY-IF rule above:
+ * {@link renderBriefingPrefix} also states both values (as `gate`/`headSha`
+ * inputs surfaced in its own identifying header), so this file's `gate:`/
+ * `head:` lines are NOT volatile-tail material by the rule — they are an
+ * identifying header repeated on this file too, so a reader who only has the
+ * volatile tail open can still tell which round/head it belongs to without
+ * cross-referencing the prefix.
+ *
  * This file is NOT itself deterministic (`loggedAt` changes on every write —
  * only the sibling `request-plan.json` carries the "byte-identical for
  * identical inputs" guarantee). Writing or changing this file never touches
@@ -2054,7 +2062,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // prefix and volatile tail were already written, so a bad angle aborted
   // mid-set and left a partial artifact behind. Both entrypoints now fail
   // closed with the same indexed message before any write happens.
-  if (Array.isArray(options.angles)) {
+  if (options.angles !== undefined) {
     options.angles = validateAngleList(options.angles);
   }
   const contextPath = buildGateContextPath({
@@ -2337,32 +2345,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // retired or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
   }
-  // Delete stale siblings BEFORE overwriting the prefix. A re-write at an
-  // existing head must never leave the JSON completion marker (or a stale
-  // volatile/plan file describing the PRIOR prefix bytes) surviving beside
-  // freshly-overwritten prefix bytes if a write further down this function
-  // throws. Unlinking first means any partial failure leaves the artifact set
-  // incomplete (the JSON marker absent, exactly what readGateContext already
-  // treats as "no artifact") rather than complete-looking with a
-  // sharedPrefixHash that contradicts the prefix actually on disk. Force-mode
-  // rm is a no-op when a sibling never existed (first-ever write).
-  await Promise.all([fullPath, fullVolatilePath, fullRequestPlanPath].map((p) => rm(p, { force: true })));
-  await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
-
-  // Volatile tail (#1474/#1468-B): physically separate from the stable prefix
-  // above — writing it never touches the prefix's already-written bytes.
-  // acceptanceCriteria is deliberately NOT threaded here — see
-  // {@link renderBriefingVolatile}'s doc comment for the rule (it reaches the
-  // stable prefix via issueRef, so it is not volatile-tail material).
-  const volatileText = renderBriefingVolatile({
-    gate: options.gate,
-    headSha: options.headSha,
-    loggedAt: artifact.loggedAt,
-    validationPosture: options.validationPosture ?? null,
-  });
-  await mkdir(path.dirname(fullVolatilePath), { recursive: true });
-  await writeFile(fullVolatilePath, volatileText, "utf8");
 
   // Request plan (#1474/#1468-A): angles partition by concrete resolved model
   // via resolveRoleModel(config, { role: angle, harness, kind: "angle" }) —
@@ -2385,9 +2368,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // requiredReviewers/pendingGroups) when present, else the full resolved
   // angle set — a bare programmatic writeGateContext call with no
   // fanoutDispatch has no pending/completed distinction to restrict by.
+  // Names on both sides of the intersection are trimmed the same way
+  // (validateAngleList already trimmed options.angles above): a caller that
+  // built fanoutDispatch.pendingGroups from an untrimmed angle list must still
+  // match the trimmed universe here, or a whitespace-padded angle silently
+  // drops out of the plan while the round still dispatches it.
+  //
+  // Built — and validated, buildRequestPlan throws on a bad angle/model shape
+  // — BEFORE any destructive write below: prefixHash only needs prefixBytes,
+  // already in hand, so a config-reachable bad model spelling (e.g. the
+  // reserved "inherit" literal) fails closed here, before the stale-sibling
+  // unlink or any file touches disk.
   const harness = options.harness ?? "claude";
   const pendingAngleNames = options.fanoutDispatch?.pendingGroups
-    ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles))
+    ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles).map((a) => String(a).trim()))
     : null;
   const angleUniverse = Array.isArray(options.angles) ? options.angles : [];
   const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
@@ -2409,6 +2403,53 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     harnessCapability: options.harnessCapability ?? CLAUDE_CODE_HARNESS_CAPABILITY,
     blockBoundaries: REQUEST_PLAN_BLOCK_BOUNDARIES,
   });
+
+  // Delete the stale JSON completion marker BEFORE overwriting the prefix. A
+  // re-write at an existing head must never leave it (or a stale volatile/plan
+  // file describing the PRIOR prefix bytes) surviving beside freshly-
+  // overwritten prefix bytes if a write further down this function throws.
+  // Unlinking the marker first means any partial failure leaves the artifact
+  // set incomplete (the JSON marker absent, exactly what readGateContext
+  // already treats as "no artifact") rather than complete-looking with a
+  // sharedPrefixHash that contradicts the prefix actually on disk. Force-mode
+  // rm is a no-op when the marker never existed (first-ever write).
+  //
+  // Skipped entirely when this rebuild is a byte-identical rerun (existingBytes
+  // already proven equal to prefixBytes above) — the mid-fan-out enforcement
+  // above deliberately permits that rerun to proceed, and deleting the marker
+  // here would open a fail-closed window for a concurrent reviewer's
+  // --context-path check even though nothing about the prefix is actually
+  // changing.
+  const markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
+  if (!markerUnchanged) {
+    await rm(fullPath, { force: true });
+  }
+  await writeFile(fullPrefixPath, prefixBytes);
+
+  // Volatile tail (#1474/#1468-B): physically separate from the stable prefix
+  // above — writing it never touches the prefix's already-written bytes.
+  // acceptanceCriteria is deliberately NOT threaded here — see
+  // {@link renderBriefingVolatile}'s doc comment for the rule (it reaches the
+  // stable prefix via issueRef, so it is not volatile-tail material).
+  //
+  // Its own stale copy is unlinked immediately before this rewrite (not
+  // bundled into one upfront removal pass with the other siblings): a failure
+  // writing THIS sibling then happens only after the prefix write above has
+  // already landed, rather than aborting before any byte at all is written.
+  const volatileText = renderBriefingVolatile({
+    gate: options.gate,
+    headSha: options.headSha,
+    loggedAt: artifact.loggedAt,
+    validationPosture: options.validationPosture ?? null,
+  });
+  await rm(fullVolatilePath, { force: true });
+  await mkdir(path.dirname(fullVolatilePath), { recursive: true });
+  await writeFile(fullVolatilePath, volatileText, "utf8");
+
+  // Request plan: same rationale as the volatile tail above — unlink its own
+  // stale copy right before rewriting it, after the prefix AND volatile tail
+  // have both already landed.
+  await rm(fullRequestPlanPath, { force: true });
   await mkdir(path.dirname(fullRequestPlanPath), { recursive: true });
   await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
 

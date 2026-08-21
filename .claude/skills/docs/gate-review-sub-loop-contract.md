@@ -231,17 +231,25 @@ first is deterministic; the second carries a genuine per-write timestamp:
   set minus whatever `options.fanoutDispatch.pendingGroups` already excludes as
   completed/carried — a group never lists an angle this round will not actually
   dispatch) BY CONCRETE RESOLVED MODEL: `resolveRoleModel(config, { role: angle,
-  harness, kind: "angle" })` — the SAME dispatch-time resolution (config override →
+  harness, kind: "angle" })` — the SAME per-angle tier resolution (config override →
   per-angle tier → built-in review-persona tier → null=inherit) an actual fan-out
-  dispatches on, harness- and tier-aware. This is deliberately NOT
+  dispatches on. This is deliberately NOT
   `resolveReviewerRole(config, angle).model`: that reads only a bare per-angle
   `model` override and ignores `tier` entirely, so it can merge two angles that
   dispatch on different tiers into one false "inherit" bucket, or (for a bare
   no-override angle, which resolves through the built-in review tier to a concrete
   model on most harnesses) report "inherit" for an angle that never inherits in
-  practice. `harness` defaults to `"claude"` (this writer's own shipped default
-  capability is `CLAUDE_CODE_HARNESS_CAPABILITY`); pass `options.harness` to report
-  the plan for a different dispatch harness. Angles with no override share the
+  practice. **`harness` is hardcoded `"claude"` today** — `resolveRoleModel`
+  itself accepts a `harness` parameter and `write-gate-context.mjs` honors
+  `options.harness` when present, but no shipped entrypoint threads a different
+  value through: there is no `--harness` CLI flag, and `buildGateContext`'s
+  option whitelist does not forward `harness`/`harnessCapability` from its
+  caller. So the plan records the `claude`-harness resolution only. Built-in
+  tiers are `null` (inherit) for the `pi` harness, so a `pi` fan-out actually
+  dispatches at inherit for every angle with no explicit per-harness override —
+  the plan's concrete `claude`-resolved groups are not evidence of what a `pi`
+  dispatch would do. Threading `harness` through a CLI flag and
+  `buildGateContext`'s whitelist is a later slice. Angles with no override share the
   model-less `"inherit"` bucket, kept separate from every concrete model id — a
   concrete model literally named `"inherit"` is rejected (it would otherwise
   silently collide with that bucket key) — an angle never silently merges into a
@@ -278,9 +286,10 @@ first is deterministic; the second carries a genuine per-write timestamp:
   companion file is additional material layered AFTER that boundary, never a
   replacement of the shared prefix bytes within it.
   Re-running for identical inputs at the same head produces byte-identical JSON: no
-  timestamp field lives inside the plan (`loggedAt` stays on the separate JSON
-  context artifact only), and group/angle ordering is code-unit sorted (never
-  locale-dependent) so the byte-identical guarantee holds across runtimes too.
+  timestamp field lives inside the plan (`loggedAt` lives on the separate JSON
+  context artifact and in the volatile-tail file below, never inside the plan
+  itself), and group/angle ordering is code-unit sorted (never locale-dependent)
+  so the byte-identical guarantee holds across runtimes too.
 
   **Non-claim:** a fingerprint proves REQUEST-SHAPE identity — that two dispatches
   sent the same observable request prefix. It never proves a provider actually
@@ -291,7 +300,7 @@ first is deterministic; the second carries a genuine per-write timestamp:
 
 - **`<gate>-<headSha>.briefing-volatile.txt`** — the physically separate volatile
   tail: round-level values that sit AFTER the cache boundary the briefing prefix
-  establishes AND that {@link renderBriefingPrefix} never consumes (the rule for
+  establishes AND that `renderBriefingPrefix` never consumes (the rule for
   what belongs here: volatile-tail material is whatever the stable prefix render
   does not read). Today that is `validationPosture` (only a pointer,
   `validationResultsPath`, reaches the prefix — the posture string itself never

@@ -2564,49 +2564,91 @@ test("writeGateContext failure-ordering: a prefix-write failure leaves NO JSON a
   }
 });
 
-test("writeGateContext failure-ordering: a volatile-tail-write failure leaves NO JSON artifact behind", async () => {
+test("writeGateContext failure-ordering: a volatile-tail-write failure leaves the already-landed prefix write in place and NO JSON artifact", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-volatile-"));
   try {
-    // Occupy the deterministic volatile-tail path with a DIRECTORY so its
-    // writeFile throws EISDIR before the JSON artifact write is attempted.
-    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
-    await mkdir(path.resolve(repoRoot, volatileRel), { recursive: true });
-
-    const options = parseWriteGateContextCliArgs([
+    const baseArgs = [
       "--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
       "--angles", '["scope"]',
-    ]);
+    ];
+    // First write succeeds cleanly — establishes real sibling files on disk
+    // (the fixture below then re-occupies ONLY the volatile-tail path, after
+    // this initial write has already unlinked/recreated every sibling once).
+    await writeGateContext(
+      parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "first body"]),
+      { repoRoot },
+    );
+
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
+    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
+
+    // Replace the volatile-tail sibling with a DIRECTORY so its own rm+write
+    // (now interleaved immediately after the prefix write, not batched into
+    // one upfront pass) throws EISDIR only once the prefix write below has
+    // already landed.
+    await rm(path.resolve(repoRoot, volatileRel), { force: true });
+    await mkdir(path.resolve(repoRoot, volatileRel), { recursive: true });
+
+    // A DIFFERENT --pr-body changes the prefix bytes so this second write is
+    // not the byte-identical-rerun path (which would skip the JSON-marker
+    // unlink and prove nothing about write ordering here).
+    const options = parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "second body"]);
     await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const prefixBytes = await readFile(path.resolve(repoRoot, prefixRel));
+    assert.ok(
+      prefixBytes.toString("utf8").includes("second body"),
+      "the prefix write must have landed with the NEW bytes before the volatile-tail write failed",
+    );
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.equal(artifact, null, "no partial gate-context JSON may exist when the volatile-tail write failed");
+    assert.equal(artifact, null, "no gate-context JSON — stale or fresh — may exist when the volatile-tail write failed");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("writeGateContext failure-ordering: a request-plan-write failure leaves NO JSON artifact behind", async () => {
+test("writeGateContext failure-ordering: a request-plan-write failure leaves the already-landed prefix+volatile writes in place and NO JSON artifact", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-order-plan-"));
   try {
-    // Occupy the deterministic request-plan path with a DIRECTORY so its
-    // writeFile throws EISDIR before the JSON artifact write is attempted.
-    const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
-    await mkdir(path.resolve(repoRoot, planRel), { recursive: true });
-
-    const options = parseWriteGateContextCliArgs([
+    const baseArgs = [
       "--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
       "--angles", '["scope"]',
-    ]);
+    ];
+    await writeGateContext(
+      parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "first body"]),
+      { repoRoot },
+    );
+
+    const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
+    const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
+    const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
+
+    // Replace ONLY the request-plan sibling with a DIRECTORY: its interleaved
+    // rm+write throws EISDIR only after both the prefix AND volatile-tail
+    // writes below have already landed.
+    await rm(path.resolve(repoRoot, planRel), { force: true });
+    await mkdir(path.resolve(repoRoot, planRel), { recursive: true });
+
+    const options = parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "second body"]);
     await assert.rejects(() => writeGateContext(options, { repoRoot }), /EISDIR/);
+
+    const prefixBytes = await readFile(path.resolve(repoRoot, prefixRel));
+    assert.ok(
+      prefixBytes.toString("utf8").includes("second body"),
+      "the prefix write must have landed with the NEW bytes before the request-plan write failed",
+    );
+    const volatileText = await readFile(path.resolve(repoRoot, volatileRel), "utf8");
+    assert.match(volatileText, /gate:/, "the volatile-tail write must also have landed before the request-plan write failed");
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.equal(artifact, null, "no partial gate-context JSON may exist when the request-plan write failed");
+    assert.equal(artifact, null, "no gate-context JSON — stale or fresh — may exist when the request-plan write failed");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -4839,6 +4881,134 @@ test("main() threads --carried-angles to the written artifact's fanout.preflight
   }
 });
 
+test("main(): the --angles path resolves the request plan's models from an on-disk .devloops config (mutation pin: deleting main()'s unconditional options.config = config assignment must fail this test)", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    // A concrete per-angle model override ("sonnet", distinct from the
+    // built-in review tier's "opus" default) plus an explicit inherit tier —
+    // proves the --angles path resolved THIS config rather than reporting
+    // every angle "inherit" (the failure mode if the config load were never
+    // threaded onto options.config for this path).
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  draft:",
+        "    angles:",
+        "      - name: correctness",
+        "        model: sonnet",
+        "      - name: docs",
+        "        tier: inherit",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await main([
+      "--repo", "owner/repo", "--pr", "58", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", '["correctness","docs"]',
+    ], { repoRoot, run: stubGhRun });
+
+    const planPath = buildGateRequestPlanPath({ repo: "owner/repo", pr: 58, gate: "draft_gate", headSha });
+    const plan = JSON.parse(await readFile(path.resolve(repoRoot, planPath), "utf8"));
+
+    const sonnetGroup = plan.requestGroups.find((g) => g.model === "sonnet");
+    const inheritGroup = plan.requestGroups.find((g) => g.model === "inherit");
+    assert.ok(sonnetGroup, "the configured concrete model must resolve into its own request group, not the inherit bucket");
+    assert.deepEqual(sonnetGroup.angles, ["correctness"]);
+    assert.deepEqual(inheritGroup?.angles, ["docs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext threads input.config into the persisted request plan's resolved models (mutation pin: deleting the config: input.config pass-through must fail this test)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-planconfig-"));
+  try {
+    const config = {
+      gates: {
+        draft: {
+          angles: [
+            { name: "correctness", model: "sonnet" },
+            { name: "docs", tier: "inherit" },
+          ],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: DOCS_ONLY_DIFF,
+        repo: "owner/repo",
+        pr: 59,
+        headSha: "cafef00d9999",
+      },
+      { repoRoot },
+    );
+
+    const sonnetGroup = result.requestPlan.requestGroups.find((g) => g.model === "sonnet");
+    const inheritGroup = result.requestPlan.requestGroups.find((g) => g.model === "inherit");
+    assert.ok(sonnetGroup, "the configured concrete model must resolve into its own request group, not the inherit bucket");
+    assert.deepEqual(sonnetGroup.angles, ["correctness"]);
+    assert.deepEqual(inheritGroup?.angles, ["docs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI with --angles + malformed .devloops: warns to stderr on the same reachable config error (the --angles path now loads config unconditionally too)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-badconfig-angles-"));
+  try {
+    // Same malformed shape as the sibling --angles-omitted warning test above
+    // (dynamicAngles must be a boolean) — this one supplies --angles
+    // explicitly, exercising the path that used to skip loadDevLoopConfig
+    // (and therefore this warning) entirely.
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  draft:",
+        "    dynamicAngles: \"yes\"",
+        "    angles:",
+        "      - scope",
+        "      - coverage",
+        "    mandatoryAngles:",
+        "      - gate-evidence",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890",
+        "--angles", '["scope","coverage"]',
+      ], { repoRoot, run: stubGhRun });
+    } finally {
+      process.stderr.write = origErr;
+    }
+
+    const stderrText = stderrChunks.join("");
+    assert.match(stderrText, /could not be fully loaded\/validated/, "warns to stderr on a malformed .devloops even when --angles is supplied");
+    assert.match(stderrText, /dynamicAngles/, "warning surfaces the actual validation error");
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.ok(artifact, "artifact still written despite the config error (documented fallback, not a fail-closed exit)");
+    assert.deepEqual(artifact.resolvedAngles, ["scope", "coverage"], "the explicit --angles override is honored verbatim, unaffected by the config error");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("readCompletedAnglesForHead: missing gate-reviews directory yields []", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
@@ -5178,6 +5348,32 @@ test("writeGateContext request-plan excludes an angle fanoutDispatch already car
   }
 });
 
+test("writeGateContext request-plan: a whitespace-padded angle name in fanoutDispatch.pendingGroups still matches the trimmed angle universe", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-trim-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890",
+      // A whitespace-padded angle name — validateAngleList (run unconditionally
+      // at the top of writeGateContext) trims it into options.angles, but a
+      // caller may have already built fanoutDispatch.pendingGroups from the
+      // SAME untrimmed name before calling writeGateContext (mirroring main()'s
+      // own resolveFanoutDispatch-then-writeGateContext sequence). The pending
+      // intersection must still match on the trimmed name — not silently drop
+      // the angle from the plan.
+      "--angles", '[" correctness "]',
+    ]);
+    options.fanoutDispatch = { pendingGroups: [{ name: "group-1", angles: [" correctness "] }] };
+    const result = await writeGateContext(options, { repoRoot });
+
+    assert.deepEqual(result.artifact.resolvedAngles, ["correctness"]);
+    const allPlannedAngles = result.requestPlan.requestGroups.flatMap((g) => g.angles);
+    assert.deepEqual(allPlannedAngles, ["correctness"], "the whitespace-padded pendingGroups angle must still resolve into the plan, not vanish");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext request-plan is byte-identical across two runs with identical inputs at the same head", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-determinism-"));
   try {
@@ -5285,12 +5481,16 @@ test("stable prefix bytes DO change when acceptanceCriteria changes and an issue
   }
 });
 
-// Resolve the file an angle's dispatch actually reads for its LEADING
-// (through-cache-boundary) request bytes: a non-"full" scope's own
-// companion file when one was written, else the shared invariant prefix.
-// Mirrors the resolution writeGateContext itself performs when deciding
-// which file to fail-open to (see the declaredScopes loop in writeGateContext).
-function resolveAngleBriefingSource(artifact, prefixPath, angle) {
+// Resolve the file that supplies an angle's per-scope material BEYOND the
+// shared invariant prefix — a non-"full" scope's own companion file when one
+// was written, else the shared prefix itself (a "full"-scope angle has no
+// additional seed; its request is the prefix alone). This is deliberately
+// NOT "the leading through-cache-boundary bytes": per the contract
+// (GATE-EXEC-BUILD-ONCE-SEED), the invariant prefix's bytes are the
+// through-boundary content for EVERY angle regardless of scope — a scoped
+// companion is additional material layered strictly AFTER it, never a
+// replacement of it.
+function resolveAngleAdditionalSeedPath(artifact, prefixPath, angle) {
   const scope = artifact.angleScopes?.[angle] ?? "full";
   if (scope !== "full" && artifact.briefingVariants?.[scope]) {
     return artifact.briefingVariants[scope];
@@ -5319,8 +5519,8 @@ test("AC4 contract: two angle requests composed from the same plan are byte-equa
     // two SEPARATE disk reads, not one shared in-memory string reused for
     // both angles, so equality here proves the ON-DISK bytes agree rather
     // than proving a tautology (a local string concat proves itself).
-    const correctnessSourcePath = resolveAngleBriefingSource(result.artifact, result.prefixPath, "correctness");
-    const securitySourcePath = resolveAngleBriefingSource(result.artifact, result.prefixPath, "security");
+    const correctnessSourcePath = resolveAngleAdditionalSeedPath(result.artifact, result.prefixPath, "correctness");
+    const securitySourcePath = resolveAngleAdditionalSeedPath(result.artifact, result.prefixPath, "security");
     const correctnessLeadingBytes = await readFile(path.resolve(repoRoot, correctnessSourcePath), "utf8");
     const securityLeadingBytes = await readFile(path.resolve(repoRoot, securitySourcePath), "utf8");
     assert.equal(
@@ -5362,18 +5562,36 @@ test("AC4 scoped-variant coverage: a docs-only-scope angle sharing a model group
     // never a replacement of the shared prefix bytes within it.
     assert.equal(group.cacheBoundary, "after_shared_prefix");
 
-    // Independently read the shared prefix once per angle — both the
-    // full-scope AND the docs-only-scope angle read the SAME underlying
-    // file for their through-the-boundary bytes.
-    const correctnessPrefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
-    const docsPrefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
-    assert.equal(correctnessPrefixBytes, docsPrefixBytes, "bytes through the cache boundary are identical for every angle in the group, independent of scope");
-
     // The docs-only scoped variant is real, on-disk, ADDITIONAL material —
     // never a substitute for the shared prefix within the boundary.
     assert.ok(result.artifact.briefingVariants?.["docs-only"], "a docs-only companion file was actually written");
+
+    const sharedPrefixBytes = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
     const scopedVariantBytes = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["docs-only"]), "utf8");
-    assert.notEqual(scopedVariantBytes, correctnessPrefixBytes, "the scoped variant is materially different text, layered after the shared boundary, not a substitute for it");
+    assert.notEqual(scopedVariantBytes, sharedPrefixBytes, "the scoped variant is materially different text, layered after the shared boundary, not a substitute for it");
+
+    // Compose each angle's FULL dispatch request per the contract: the
+    // full-scope angle's request is the shared prefix alone; the docs-only
+    // angle's request is the shared prefix PLUS its additional scoped seed
+    // appended after (never a replacement of the prefix bytes). Reading each
+    // angle's additional-seed source through the production resolution
+    // surface (angleScopes → briefingVariants) — not a local string reused
+    // for both — proves the ON-DISK bytes actually agree through the
+    // boundary rather than proving a tautology.
+    const correctnessSeedPath = resolveAngleAdditionalSeedPath(result.artifact, result.prefixPath, "correctness");
+    const docsSeedPath = resolveAngleAdditionalSeedPath(result.artifact, result.prefixPath, "docs");
+    assert.equal(correctnessSeedPath, result.prefixPath, "sanity: the full-scope angle has no additional seed beyond the shared prefix");
+    assert.equal(docsSeedPath, result.artifact.briefingVariants["docs-only"], "sanity: the docs-only angle's additional seed is its own companion file");
+
+    const correctnessRequest = sharedPrefixBytes;
+    const docsRequest = sharedPrefixBytes + (await readFile(path.resolve(repoRoot, docsSeedPath), "utf8"));
+
+    assert.equal(
+      docsRequest.slice(0, sharedPrefixBytes.length),
+      correctnessRequest,
+      "the docs-only angle's composed request still begins with the EXACT SAME leading prefix bytes as the full-scope angle — the scoped variant is appended, not substituted",
+    );
+    assert.notEqual(correctnessRequest, docsRequest, "divergence happens strictly after the shared leading segment (the appended scoped seed)");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
