@@ -54,7 +54,7 @@ export function parseReadyForReviewCliArgs(argv) {
     if (token.name === "pr") { opts.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
     if (token.name === "waive-size-budget") { opts.waiveSizeBudget = true; continue; }
     if (token.name === "reason") { opts.reason = requireTokenValue(token, parseError).trim(); continue; }
-    if (token.name === "approved-by") { opts.approvedBy = requireTokenValue(token, parseError).trim(); continue; }
+    if (token.name === "approved-by") { const v = requireTokenValue(token, parseError).trim(); opts.approvedBy = v === "" ? null : v; continue; }
     if (matchJqOutputToken(token, opts, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }

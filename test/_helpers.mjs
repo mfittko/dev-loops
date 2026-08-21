@@ -219,7 +219,7 @@ export async function initSizeBudgetFixtureRepo(workDir, {
 
 /** A code-file body whose line count is >= `count` changed (added) lines — for
  * size-budget fixtures that need to cross a specific LOC threshold. */
-export function repeatedLinesContent(count, { prefix = "const x", } = {}) {
+export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
   const lines = [];
   for (let i = 0; i < count; i += 1) lines.push(`${prefix}${i} = ${i};`);
   return `${lines.join("\n")}\n`;

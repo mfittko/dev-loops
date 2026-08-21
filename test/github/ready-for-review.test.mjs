@@ -1063,6 +1063,38 @@ test("size budget: a valid default-tier waiver allows the same over-waiverLoc PR
   }
 });
 
+test("size budget: a default-tier waiver with a whitespace-only --approved-by records n/a, not a blank approver", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-blankapprover-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
+      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
+    }));
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "atomic rename", "--approved-by", "   "],
+      { env, cwd: tempDir },
+    );
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const calls = await readGhCalls(ghLogPath);
+    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
+    assert.ok(commentCall, "a waiver record comment should have been posted");
+    const body = commentCall[commentCall.indexOf("--body") + 1];
+    // Whitespace-only --approved-by normalizes to null, so the record shows the
+    // default-tier fallback rather than a blank "approved by:" line.
+    assert.match(body, /approved by:\*\* n\/a \(default-tier waiver\)/);
+    assert.doesNotMatch(body, /approved by:\*\*\s*$/m);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("size budget: an unwaivable block (absoluteHardLoc) is never bypassed by --waive-size-budget", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-unwaivable-"));
   try {
