@@ -73,7 +73,6 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/detect-refinement-grill-state.mjs", "standalone — refinement-grill state detector, agent-invoked"],
   ["scripts/loop/pr-runner-coordination.mjs", "delete — public duplicate; the wired sibling is scripts/loop/_pr-runner-coordination.mjs"],
   ["scripts/loop/pre-write-remote-freshness-guard.mjs", "standalone — remote-freshness guard step, agent-invoked"],
-  ["scripts/loop/run-conductor-cycle.mjs", "standalone — conductor cycle step (documented in scripts/README), agent-invoked"],
   ["scripts/loop/run-gate-validation.mjs", "standalone — CLI gate-suite runner, agent/operator invoked"],
   ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
   ["scripts/loop/run-refinement-audit.mjs", "standalone — refinement audit step (documented in scripts/README), agent-invoked"],

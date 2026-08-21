@@ -369,33 +369,6 @@ Contract:
 Success output shape:
 - `{ "ok": true, "repo": "owner/name", "issue": 59, "state": "...", "prNumber": 79|null, "prUrl": "..."|null, "headBranch": "..."|null, "authorLogin": "Copilot"|null, "isDraft": true|false|null, "changedFiles": 0|null, "commitCount": 1|null, "soleCommitHeadline": "Initial plan"|null, "sessionActivity": "active"|"concluded"|"idle"|null, "sessionRunId": 123|null, "sessionRunName": "..."|null, "sessionRunStatus": "..."|null, "sessionRunConclusion": string|null, "sessionRunCreatedAt": "..."|null, "sessionConfidence": "high"|null }`
 
-### `scripts/loop/run-conductor-cycle.mjs`
-
-Poll all open PRs, detect gate state, and emit an ordered action queue.
-
-Output `actions[]` entries include:
-- `requiresSubagent`
-- `requiresApproval`
-- `handoffContract` with:
-  - `ownership`
-  - `stopBoundary`
-  - `resumePolicy`
-
-The handoff contract is recorded on each action so parent, child, and resume
-actions can share one explicit stop/resume boundary.
-
-Contract values:
-- `ownership`: `subagent`, `parent`, `human`, or `terminal`
-- `stopBoundary`: `subagent_exit`, `watch_boundary`, `approval_boundary`,
-  `merge_boundary`, `conflict_boundary`, or `terminal_boundary`
-- `resumePolicy`: `resume_after_subagent_exit`,
-  `resume_after_state_refresh`, `resume_after_human_approval`,
-  `resume_after_merge_authorization`, `manual_attention`, or `none`
-
-`run-conductor-cycle.mjs` emits the contract-boundary values above. The parser
-also accepts `PR_CHECKPOINT` values when reading recorded artifacts so older
-recorded handoff notes can still be validated fail-closed.
-
 ### `scripts/loop/conductor-monitor.mjs`
 
 Aggregate the current Copilot-loop status for every open PR in one repository.

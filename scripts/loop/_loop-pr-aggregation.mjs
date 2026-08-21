@@ -1,6 +1,5 @@
-// Shared loop PR-aggregation helpers used by both conductor-monitor.mjs and
-// run-conductor-cycle.mjs. Spawns `gh`, so this lives at the scripts level
-// rather than in @dev-loops/core.
+// Shared loop PR-aggregation helpers used by conductor-monitor.mjs. Spawns
+// `gh`, so this lives at the scripts level rather than in @dev-loops/core.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseJsonText } from "../_core-helpers.mjs";
 

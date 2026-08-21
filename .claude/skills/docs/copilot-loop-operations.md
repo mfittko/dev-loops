@@ -29,7 +29,7 @@ Each machine's snapshot-to-state mapping is defined in its owner doc (see the Ov
 [Copilot Loop State Graph](./copilot-loop-state-graph.md) and
 [Reviewer Loop State Graph](./reviewer-loop-state-graph.md)), both bundled sibling docs under `skills/docs/`.
 
-For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-story-pr-contract.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
+For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-first-loop-state.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
 
 ## Key guarantees from the state machine
 
