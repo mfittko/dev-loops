@@ -9,19 +9,23 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
+import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>
 
-Gate guard for gh pr ready (draft → ready-for-review transition).
-Blocks unless a visible clean draft_gate checkpoint verdict exists for the
-PR's current head SHA, on either surface it can live on: the round's PR
-review, or a legacy verdict issue comment.
+Gate guard for gh pr ready (draft → ready-for-review transition). Blocks
+unless a visible clean draft_gate checkpoint verdict exists for the PR's
+current head SHA (on either surface it can live on: the round's PR review, or
+a legacy verdict issue comment) AND the fail-closed PR size budget
+(gates.size) does not return a block outcome. This is the guard the raw
+\`gh pr ready\` hook path runs — no --waive-size-budget surface here; a size
+waiver can only be granted through ready-for-review.mjs.
 
 Exit codes:
-  0  Draft gate evidence exists — ready transition is allowed
-  1  Draft gate evidence missing or insufficient — transition blocked
+  0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
+  1  Draft gate evidence missing/insufficient, or the size budget blocks — transition blocked
 
 Output (stdout, JSON on success):
   {
@@ -30,7 +34,8 @@ Output (stdout, JSON on success):
     "pr": 17,
     "currentHeadSha": "abc1234",
     "draftGateSatisfied": true,
-    "draftGate": { "visible": true, "headSha": "abc1234", "verdict": "clean", ... }
+    "draftGate": { "visible": true, "headSha": "abc1234", "verdict": "clean", ... },
+    "sizeBudget": { "outcome": "pass"|"escalate", ... }
   }
 
 Error output (stderr, JSON):
@@ -38,7 +43,7 @@ Error output (stderr, JSON):
 ${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
-const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, state } } }`;
+const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state } } }`;
 
 export function parsePrePrReadyGateCliArgs(argv) {
   const options = { help: false, repo: undefined, pr: undefined };
@@ -97,11 +102,12 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
     id: d.id,
     isDraft: d.isDraft === true,
     headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null,
+    baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null,
     state: typeof d.state === "string" ? d.state.trim() : null,
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh" } = {}) {
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
@@ -151,6 +157,32 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
+  // Fail-closed PR size budget (gates.size): the same computation
+  // readyForReview() runs, via the shared evaluatePrSizeBudget code path in
+  // check-size-budget.mjs — but with no waiver surface. A raw `gh pr ready`
+  // intercepted by this guard can never be waived; only ready-for-review.mjs's
+  // --waive-size-budget can grant one.
+  if (!prState.baseRefName) throw new Error(`Could not resolve PR #${options.pr} base branch`);
+  const sizeBudget = await evaluatePrSizeBudget({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    repoRoot,
+  });
+  if (sizeBudget.outcome === "block") {
+    return {
+      ok: false,
+      error: `PR #${options.pr} blocked by size budget: ${sizeBudget.reasons.join("; ")}`,
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+    };
+  }
+
   return {
     ok: true,
     repo: options.repo,
@@ -160,6 +192,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
     draftGate: gate.draftGate,
     draftGateMarker: gate.draftGateMarker,
+    sizeBudget,
   };
 }
 

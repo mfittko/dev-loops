@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
@@ -147,6 +147,78 @@ export const DEFAULT_TEST_PR_BODY = [
   "- none",
   "",
 ].join("\n");
+
+// ---------------------------------------------------------------------------
+// Real-git fixture for the size-budget check (readyForReview / pre-pr-ready-
+// gate wire computeSizeBudget over an ACTUAL local `git diff`, not a gh-stub
+// response — see scripts/loop/check-size-budget.mjs's evaluatePrSizeBudget).
+// Builds a tiny two-commit repo at `workDir`: a base commit, then a
+// `refs/remotes/origin/<baseBranch>` ref pinned to it (the state a real
+// `git fetch origin <base>` would leave, without touching the network), then
+// one small head commit on top. Returns the real head SHA so the gh-stub PR
+// payload's headRefOid can match what git actually computed — required
+// because check-size-budget.mjs's diff-capture calls real `git`, not the gh
+// stub.
+// ---------------------------------------------------------------------------
+
+const GIT_FIXTURE_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "Test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "Test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
+function runGitFixture(cwd, args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/**
+ * @param {string} workDir — an existing empty directory (e.g. a mkdtemp result)
+ * @param {{
+ *   baseBranch?: string,
+ *   devloopsYaml?: string|null — written into the BASE commit (not the diff)
+ *     so a gates.size override never itself counts toward logic LOC,
+ *   headFiles?: Array<{ path: string, content: string }> — files the head
+ *     commit adds; defaults to one small code file (an under-budget diff),
+ * }} [opts]
+ * @returns {{ headSha: string, baseBranch: string }}
+ */
+export async function initSizeBudgetFixtureRepo(workDir, {
+  baseBranch = "main",
+  devloopsYaml = null,
+  headFiles = [{ path: "src/example.mjs", content: "export function example() {\n  return 1;\n}\n" }],
+} = {}) {
+  runGitFixture(workDir, ["init", "-q", "-b", baseBranch]);
+  runGitFixture(workDir, ["config", "commit.gpgsign", "false"]);
+  await writeFile(path.join(workDir, "README.md"), "base fixture\n", "utf8");
+  if (devloopsYaml) await writeFile(path.join(workDir, ".devloops"), devloopsYaml, "utf8");
+  runGitFixture(workDir, ["add", "."]);
+  runGitFixture(workDir, ["commit", "-q", "-m", "base"]);
+  const baseSha = runGitFixture(workDir, ["rev-parse", "HEAD"]);
+  runGitFixture(workDir, ["update-ref", `refs/remotes/origin/${baseBranch}`, baseSha]);
+
+  for (const file of headFiles) {
+    await mkdir(path.dirname(path.join(workDir, file.path)), { recursive: true });
+    await writeFile(path.join(workDir, file.path), file.content, "utf8");
+  }
+  runGitFixture(workDir, ["add", "."]);
+  runGitFixture(workDir, ["commit", "-q", "-m", "head"]);
+  const headSha = runGitFixture(workDir, ["rev-parse", "HEAD"]);
+  return { headSha, baseBranch };
+}
+
+/** A code-file body whose line count is >= `count` changed (added) lines — for
+ * size-budget fixtures that need to cross a specific LOC threshold. */
+export function repeatedLinesContent(count, { prefix = "const x", } = {}) {
+  const lines = [];
+  for (let i = 0; i < count; i += 1) lines.push(`${prefix}${i} = ${i};`);
+  return `${lines.join("\n")}\n`;
+}
 
 export function runNode(scriptPath, args = [], options = {}) {
   return new Promise((resolve, reject) => {
