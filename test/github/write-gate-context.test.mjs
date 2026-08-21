@@ -2574,7 +2574,7 @@ test("writeGateContext failure-ordering: a volatile-tail-write failure leaves th
     ];
     // First write succeeds cleanly — establishes real sibling files on disk
     // (the fixture below then re-occupies ONLY the volatile-tail path, after
-    // this initial write has already unlinked/recreated every sibling once).
+    // this initial write has already created every sibling once).
     await writeGateContext(
       parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "first body"]),
       { repoRoot },
@@ -2583,10 +2583,9 @@ test("writeGateContext failure-ordering: a volatile-tail-write failure leaves th
     const prefixRel = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
     const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: "abc1234567890" });
 
-    // Replace the volatile-tail sibling with a DIRECTORY so its own rm+write
-    // (now interleaved immediately after the prefix write, not batched into
-    // one upfront pass) throws EISDIR only once the prefix write below has
-    // already landed.
+    // Replace the volatile-tail sibling with a DIRECTORY so its in-place
+    // rewrite (which runs immediately after the prefix write) throws EISDIR
+    // only once the prefix write below has already landed.
     await rm(path.resolve(repoRoot, volatileRel), { force: true });
     await mkdir(path.resolve(repoRoot, volatileRel), { recursive: true });
 
@@ -2628,8 +2627,8 @@ test("writeGateContext failure-ordering: a request-plan-write failure leaves the
     const volatileRel = buildGateBriefingVolatilePath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
     const planRel = buildGateRequestPlanPath({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: "abc1234567890" });
 
-    // Replace ONLY the request-plan sibling with a DIRECTORY: its interleaved
-    // rm+write throws EISDIR only after both the prefix AND volatile-tail
+    // Replace ONLY the request-plan sibling with a DIRECTORY: its in-place
+    // rewrite throws EISDIR only after both the prefix AND volatile-tail
     // writes below have already landed.
     await rm(path.resolve(repoRoot, planRel), { force: true });
     await mkdir(path.resolve(repoRoot, planRel), { recursive: true });

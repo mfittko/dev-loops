@@ -2268,8 +2268,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // longer matches what's on disk. Only the JSON marker is unlinked up front
   // (below), and only when the prefix bytes are actually changing — writeFile
   // already truncates each sibling file in place, so a separate unlink buys
-  // nothing there: any partial failure below still leaves the marker absent,
-  // which is all readGateContext needs to treat the set as incomplete.
+  // nothing there: whenever the prefix bytes change, any partial failure
+  // below leaves the marker absent, which is all readGateContext needs to
+  // treat the set as incomplete. On the byte-identical rerun branch the
+  // marker is deliberately kept — a sibling failure there leaves a set whose
+  // surviving marker still describes the same prefix bytes, so no
+  // hash-vs-disk contradiction can arise.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
@@ -2434,8 +2438,10 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   //
   // No separate unlink: writeFile truncates and overwrites this file in
   // place, so a failure here happens only after the prefix write above has
-  // already landed, and leaves the JSON marker (already gone or not yet
-  // written) as the signal that the set is incomplete.
+  // already landed. When the prefix bytes were changing, the JSON marker is
+  // already gone (or not yet written), signalling the set as incomplete; on
+  // the byte-identical rerun branch the kept marker still describes the same
+  // prefix bytes, so a failure here cannot create a contradiction.
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
