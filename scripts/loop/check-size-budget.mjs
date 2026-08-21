@@ -20,6 +20,12 @@
  * separately from the whole-PR total so a large PR with a small, isolated
  * risk slice does not get penalized for its bulk, and a small PR with an
  * oversize risk slice cannot hide inside an otherwise-small diff.
+ *
+ * The classifier's `code`/`test` extension coverage is JS/TS-only; a diff
+ * whose changed lines are substantially outside that coverage (non-JS
+ * source, or a configured t1/t3 pattern matching a file that classifies
+ * outside code/test) cannot be measured, so it blocks rather than silently
+ * computing a zero — see `substantiallyUnclassified` below.
  */
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -179,6 +185,12 @@ export function parseNumstatZ(output) {
 const DEFAULT_TEST_DISCOUNT = 0.25;
 const DEFAULT_ABSOLUTE_HARD_LOC = 2000;
 const DEFAULT_TIER_DEFAULTS = Object.freeze({ softLoc: 400, waiverLoc: 1500 });
+// Fail-closed threshold for the "substantially unclassified" case: the
+// shared classifier only recognizes JS/TS as `code` (see diff-analyzer.mjs),
+// so a non-JS-source PR (e.g. Ruby) classifies every file `unknown` and would
+// otherwise silently compute logicLoc:0 and pass. Majority-unclassified
+// changed lines means the budget cannot be measured, full stop.
+const UNCLASSIFIED_BLOCK_RATIO = 0.5;
 
 /**
  * Compute the size-budget outcome for one diff. Pure — no git, no config I/O
@@ -217,12 +229,27 @@ export function computeSizeBudget({
   let wholeLoc = 0;
   let t1SliceLoc = 0;
   const tierLoc = { default: 0, t1: 0, t3: 0 };
+  let totalChangedLines = 0;
+  let unclassifiedChangedLines = 0;
+  // A configured t1/t3 pattern is an explicit operator signal that a path is
+  // risk-slice/relaxed-tier; a matching file that classifies outside
+  // code/test still drops its LOC to 0 (docs/config/ci/unknown all excluded
+  // above), which would silently defeat that signal rather than the intended
+  // "code the classifier does not recognize" gap.
+  let tierPatternDroppedToZero = false;
+  const tierPatterns = [...(tiers.t1?.patterns ?? []), ...(tiers.t3?.patterns ?? [])];
   for (const file of files) {
     const category = classifyFile(file.path);
+    const changedLines = file.added + file.deleted;
+    totalChangedLines += changedLines;
     let logic = 0;
-    if (category === "code") logic = file.added + file.deleted;
-    else if (category === "test") logic = testDiscount * (file.added + file.deleted);
-    else continue; // docs/config/ci/unknown excluded — covers generated/lockfile content
+    if (category === "code") logic = changedLines;
+    else if (category === "test") logic = testDiscount * changedLines;
+    else {
+      if (category === "unknown") unclassifiedChangedLines += changedLines;
+      if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
+      continue; // docs/config/ci/unknown excluded — covers generated/lockfile content
+    }
     const tier = resolveFileTier(file.path, tiers);
     tierLoc[tier] += logic;
     wholeLoc += logic;
@@ -230,6 +257,8 @@ export function computeSizeBudget({
   }
   wholeLoc = Math.round(wholeLoc);
   t1SliceLoc = Math.round(t1SliceLoc);
+  const unclassifiedRatio = totalChangedLines > 0 ? unclassifiedChangedLines / totalChangedLines : 0;
+  const substantiallyUnclassified = unclassifiedRatio > UNCLASSIFIED_BLOCK_RATIO || tierPatternDroppedToZero;
 
   const reasons = [];
   let outcome = "pass";
@@ -243,34 +272,54 @@ export function computeSizeBudget({
     outcome = "block";
     reasons.push("diff is unclassifiable (ambiguous change categories); size budget cannot be computed safely — no waiver possible");
   }
+  if (substantiallyUnclassified) {
+    outcome = "block";
+    reasons.push(
+      tierPatternDroppedToZero
+        ? "a configured t1/t3 pattern matched a file that classifies outside code/test (its logic LOC would silently drop to 0); size budget cannot be computed safely — no waiver possible"
+        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of changed lines); size budget cannot be computed safely — no waiver possible`,
+    );
+  }
   if (wholeLoc > absoluteHardLoc) {
     outcome = "block";
     reasons.push(`whole-PR logic LOC (${wholeLoc}) exceeds absoluteHardLoc (${absoluteHardLoc}); no waiver possible`);
   }
 
+  // Every branch above blocks with no waiver possible; a waiver flag must
+  // never read true once one of them has already fired, or a Phase-2
+  // consumer keying off waiver.*Valid could mis-record a hard-blocked PR.
+  const unwaivableBlock = configErrorCount > 0 || diffAnalysis.ambiguous || substantiallyUnclassified || wholeLoc > absoluteHardLoc;
+
   let t1WaiverValid = false;
   if (t1Tier && typeof t1Tier.sliceHardLoc === "number" && t1SliceLoc > t1Tier.sliceHardLoc) {
-    t1WaiverValid = waived === true && typeof approvedBy === "string" && approvedBy.trim().length > 0;
+    const waiverRequestValid = waived === true && typeof approvedBy === "string" && approvedBy.trim().length > 0;
+    t1WaiverValid = waiverRequestValid && !unwaivableBlock;
     if (t1WaiverValid) {
       reasons.push(`T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); waived by ${approvedBy.trim()}`);
     } else {
       outcome = "block";
       reasons.push(
-        waived === true
-          ? `T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); a T1 waiver requires --approved-by naming a human approver`
-          : `T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); not waived`,
+        waiverRequestValid && unwaivableBlock
+          ? `T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); no waiver possible alongside an unwaivable block`
+          : waived === true
+            ? `T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); a T1 waiver requires --approved-by naming a human approver`
+            : `T1-slice logic LOC (${t1SliceLoc}) exceeds t1.sliceHardLoc (${t1Tier.sliceHardLoc}); not waived`,
       );
     }
   }
 
   let defaultWaiverValid = false;
   if (typeof defaultTier.waiverLoc === "number" && wholeLoc > defaultTier.waiverLoc) {
-    defaultWaiverValid = waived === true;
+    defaultWaiverValid = waived === true && !unwaivableBlock;
     if (defaultWaiverValid) {
       reasons.push(`whole-PR logic LOC (${wholeLoc}) exceeds default.waiverLoc (${defaultTier.waiverLoc}); waived`);
     } else {
       outcome = "block";
-      reasons.push(`whole-PR logic LOC (${wholeLoc}) exceeds default.waiverLoc (${defaultTier.waiverLoc}); not waived`);
+      reasons.push(
+        waived === true && unwaivableBlock
+          ? `whole-PR logic LOC (${wholeLoc}) exceeds default.waiverLoc (${defaultTier.waiverLoc}); no waiver possible alongside an unwaivable block`
+          : `whole-PR logic LOC (${wholeLoc}) exceeds default.waiverLoc (${defaultTier.waiverLoc}); not waived`,
+      );
     }
   }
 
@@ -346,6 +395,12 @@ function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), 
   }
 }
 
+function assertPlausibleRef(ref, label, onError) {
+  if (ref.length === 0 || ref.startsWith("-") || ref.includes("..")) {
+    throw onError(`${label} must be a plausible git ref (no leading '-', no '..')`);
+  }
+}
+
 export function parseCheckSizeBudgetCliArgs(argv) {
   const options = { help: false, base: null, head: null, waived: false, approvedBy: null };
   const { tokens } = parseArgs({
@@ -377,10 +432,10 @@ export function parseCheckSizeBudgetCliArgs(argv) {
   // Same denylist rationale as write-gate-context.mjs's normalizeBaseRef: the
   // git call runs via execFileSync's argv array (no shell), so this only
   // needs to reject shapes that are unsafe/malformed for OUR "<base>...<head>"
-  // construction, not enumerate every valid git revision grammar.
-  if (options.base.length === 0 || options.base.startsWith("-") || options.base.includes("..")) {
-    throw parseError("--base must be a plausible git ref (no leading '-', no '..')");
-  }
+  // construction, not enumerate every valid git revision grammar. --head feeds
+  // the identical range construction, so it gets the same denylist.
+  assertPlausibleRef(options.base, "--base", parseError);
+  if (options.head) assertPlausibleRef(options.head, "--head", parseError);
   return options;
 }
 

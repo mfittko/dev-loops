@@ -794,30 +794,6 @@
                         "minLength": 1
                       }
                     },
-                    "softLoc": {
-                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "exclusiveMinimum": 0
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "waiverLoc": {
-                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "exclusiveMinimum": 0
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
                     "sliceHardLoc": {
                       "description": "T1 only: block above this many T1-slice logic LOC unless waived by a named human approver.",
                       "type": "integer",
@@ -827,7 +803,7 @@
                   "additionalProperties": false
                 },
                 "t3": {
-                  "description": "Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies.",
+                  "description": "Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies. Per-tier soft/waiver thresholds are not yet honored (Phase 1).",
                   "type": "object",
                   "properties": {
                     "patterns": {
@@ -837,35 +813,6 @@
                         "type": "string",
                         "minLength": 1
                       }
-                    },
-                    "softLoc": {
-                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "exclusiveMinimum": 0
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "waiverLoc": {
-                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
-                      "anyOf": [
-                        {
-                          "type": "integer",
-                          "exclusiveMinimum": 0
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "sliceHardLoc": {
-                      "description": "T1 only: block above this many T1-slice logic LOC unless waived by a named human approver.",
-                      "type": "integer",
-                      "exclusiveMinimum": 0
                     }
                   },
                   "additionalProperties": false

@@ -356,6 +356,14 @@ function rejectDuplicateFanoutGroupNames(val, ctx) {
 // by path glob; the default tier is implicit for every file matching
 // neither, so it carries no `patterns` field of its own. `sliceHardLoc`
 // (t1 only) caps the T1-slice LOC, not the whole-PR LOC.
+//
+// Per-tier `softLoc`/`waiverLoc` on t1/t3, and `sliceHardLoc` on t3, are a
+// later phase's escalation surface (e.g. a t3 "relaxed" tier with its own
+// softLoc, or a t1 slice with its own waiver ceiling) — not honored by
+// computeSizeBudget yet, so they are parked out of the schema for Phase 1
+// rather than shipped as inert accepted-but-ignored knobs. Only the
+// default tier's softLoc/waiverLoc and t1's sliceHardLoc drive Phase 1's
+// outcome; see check-size-budget.mjs.
 const SizeTierConfig = z.strictObject({
   patterns: z.array(z.string().trim().min(1)).optional().describe("Glob-style path patterns; a changed file matching one resolves to this tier."),
   softLoc: z.number().int().positive().nullable().optional().describe("Escalate above this many logic LOC; null disables the soft threshold for this tier."),
@@ -365,8 +373,8 @@ const SizeTierConfig = z.strictObject({
 
 const SizeTiersConfig = z.strictObject({
   default: SizeTierConfig.omit({ patterns: true, sliceHardLoc: true }).default({ softLoc: 400, waiverLoc: 1500 }).describe("Fallback tier applied to every changed file that matches no t1/t3 pattern."),
-  t1: SizeTierConfig.optional().describe("Risk-slice tier (money/auth/shared/ungated paths). Empty by default — a repo defines its own patterns; the T1 slice is computed separately from whole-PR LOC."),
-  t3: SizeTierConfig.optional().describe("Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies."),
+  t1: SizeTierConfig.omit({ softLoc: true, waiverLoc: true }).optional().describe("Risk-slice tier (money/auth/shared/ungated paths). Empty by default — a repo defines its own patterns; the T1 slice is computed separately from whole-PR LOC."),
+  t3: SizeTierConfig.pick({ patterns: true }).optional().describe("Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies. Per-tier soft/waiver thresholds are not yet honored (Phase 1)."),
 });
 
 const SizeConfig = z.strictObject({

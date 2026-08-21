@@ -558,14 +558,29 @@ describe("schema validation", () => {
           tiers: {
             default: { softLoc: 400, waiverLoc: 1500 },
             t1: { patterns: ["app/models/subscription*", "config/routes.rb"], sliceHardLoc: 400 },
-            t3: { patterns: ["app/frontends/*"], softLoc: null },
+            t3: { patterns: ["app/frontends/*"] },
           },
         },
       },
     });
     assert.ok(result.success);
     assert.deepEqual(result.data.gates.size.tiers.t1.patterns, ["app/models/subscription*", "config/routes.rb"]);
-    assert.equal(result.data.gates.size.tiers.t3.softLoc, null);
+    assert.deepEqual(result.data.gates.size.tiers.t3.patterns, ["app/frontends/*"]);
+  });
+
+  test("S37b: gates.size rejects t1/t3 per-tier softLoc/waiverLoc, and t3 sliceHardLoc (not honored in Phase 1)", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t1: { patterns: ["app/models/*"], softLoc: 400 } } } },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t3: { patterns: ["app/frontends/*"], softLoc: null } } } },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t3: { patterns: ["app/frontends/*"], sliceHardLoc: 400 } } } },
+    }).success);
   });
 
   test("S38: gates.size rejects an unknown key (strict schema)", () => {

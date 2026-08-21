@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   computeSizeBudget,
   matchesGlob,
+  parseCheckSizeBudgetCliArgs,
   parseNumstatZ,
   resolveFileTier,
 } from "../../scripts/loop/check-size-budget.mjs";
@@ -69,6 +70,14 @@ test("resolveFileTier: t1 pattern wins over t3, unmatched falls to default", () 
   assert.equal(resolveFileTier("src/billing/charge.mjs", tiers), "t1");
   assert.equal(resolveFileTier("src/scaffold/widget.mjs", tiers), "t3");
   assert.equal(resolveFileTier("src/other/thing.mjs", tiers), "default");
+});
+
+test("resolveFileTier: a file matching BOTH t1 and t3 patterns resolves to t1", () => {
+  const tiers = {
+    t1: { patterns: ["src/billing/*"] },
+    t3: { patterns: ["src/billing/*"] },
+  };
+  assert.equal(resolveFileTier("src/billing/charge.mjs", tiers), "t1");
 });
 
 test("resolveFileTier: no tiers configured -> every file is default", () => {
@@ -152,6 +161,11 @@ test("block, no waiver possible: whole-PR logic LOC over absoluteHardLoc even wh
   });
   assert.equal(result.outcome, "block");
   assert.ok(result.reasons.some((r) => r.includes("absoluteHardLoc") && r.includes("no waiver possible")));
+  // Output-contract: waiver.*Valid must not read true under an unwaivable
+  // ceiling, even though --waived/--approved-by were both given and wholeLoc
+  // (2500) also exceeds default.waiverLoc (1500).
+  assert.equal(result.waiver.defaultValid, false);
+  assert.equal(result.waiver.t1Valid, false);
 });
 
 test("block, no waiver possible: config errors present, regardless of waiver", () => {
@@ -257,7 +271,10 @@ test("default-tier waiver: granting it clears the block but the escalation still
   assert.ok(result.reasons.some((r) => r.includes("default.waiverLoc") && r.includes("waived")));
 });
 
-test("t3 tier: relaxed default (softLoc: null) never escalates on LOC alone", () => {
+test("default tier: relaxed default (softLoc: null) never escalates on LOC alone", () => {
+  // Named for what it actually drives: SIZE_CONFIG has no t3 patterns, so
+  // src/scaffold/widget.mjs resolves to the DEFAULT tier here, not t3 (see
+  // the genuine t3-resolution test below for that case).
   const result = computeSizeBudget({
     nameStatusOutput: "M\tsrc/scaffold/widget.mjs\n",
     diffOutput: "",
@@ -269,4 +286,194 @@ test("t3 tier: relaxed default (softLoc: null) never escalates on LOC alone", ()
   });
   assert.equal(result.outcome, "pass");
   assert.equal(result.wholeLogicLoc, 900);
+  assert.equal(result.tierLogicLoc.default, 900);
+});
+
+test("t3 tier: a file matching a configured t3 pattern resolves its LOC under tierLogicLoc.t3, not default", () => {
+  // wholeLoc (900) is still measured against the DEFAULT tier's softLoc
+  // (400) regardless of which tier the file resolved to — t3 does not give
+  // it a relaxed whole-PR ceiling in Phase 1 (see the config-honesty note on
+  // SizeTierConfig); resolveFileTier still routes its LOC into tierLogicLoc.t3.
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/scaffold/widget.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[900, 0, "src/scaffold/widget.mjs"]]),
+    sizeConfig: {
+      ...SIZE_CONFIG,
+      tiers: { ...SIZE_CONFIG.tiers, t3: { patterns: ["src/scaffold/*"] } },
+    },
+  });
+  assert.equal(result.outcome, "escalate");
+  assert.equal(result.tierLogicLoc.t3, 900);
+  assert.equal(result.tierLogicLoc.default, 0);
+});
+
+// ---------------------------------------------------------------------------
+// computeSizeBudget — boundary values (strict `>`, not `>=`)
+// ---------------------------------------------------------------------------
+
+test("boundary: absoluteHardLoc — AT threshold does not block on it, ABOVE does", () => {
+  const atThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[2000, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+    waived: true, // clears the default.waiverLoc block this whole-PR total also crosses
+  });
+  assert.ok(!atThreshold.reasons.some((r) => r.includes("absoluteHardLoc")));
+
+  const aboveThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[2001, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+    waived: true,
+  });
+  assert.equal(aboveThreshold.outcome, "block");
+  assert.ok(aboveThreshold.reasons.some((r) => r.includes("absoluteHardLoc") && r.includes("no waiver possible")));
+});
+
+test("boundary: default.waiverLoc — AT threshold does not block, ABOVE does", () => {
+  const atThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[1500, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.ok(!atThreshold.reasons.some((r) => r.includes("default.waiverLoc")));
+
+  const aboveThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[1501, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(aboveThreshold.outcome, "block");
+  assert.ok(aboveThreshold.reasons.some((r) => r.includes("default.waiverLoc") && r.includes("not waived")));
+});
+
+test("boundary: default.softLoc — AT threshold does not escalate, ABOVE does", () => {
+  const atThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[400, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(atThreshold.outcome, "pass");
+
+  const aboveThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[401, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(aboveThreshold.outcome, "escalate");
+  assert.ok(aboveThreshold.reasons.some((r) => r.includes("default.softLoc")));
+});
+
+test("boundary: t1.sliceHardLoc — AT threshold does not block, ABOVE does", () => {
+  const atThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/billing/charge.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[400, 0, "src/billing/charge.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(atThreshold.outcome, "pass");
+
+  const aboveThreshold = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/billing/charge.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[401, 0, "src/billing/charge.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(aboveThreshold.outcome, "block");
+  assert.ok(aboveThreshold.reasons.some((r) => r.includes("t1.sliceHardLoc") && r.includes("not waived")));
+});
+
+// ---------------------------------------------------------------------------
+// computeSizeBudget — generated/lockfile/docs/config exclusion
+// ---------------------------------------------------------------------------
+
+test("a lockfile with a large numstat count contributes 0 logic LOC alongside a small code change", () => {
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tpackage-lock.json\nM\tsrc/foo.mjs\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[5000, 0, "package-lock.json"], [3, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 3);
+  assert.equal(result.tierLogicLoc.default, 3);
+});
+
+// ---------------------------------------------------------------------------
+// computeSizeBudget — fail-closed on substantially unclassified source
+// ---------------------------------------------------------------------------
+
+test("a pure-Ruby-style diff (all files classify unknown) blocks — size budget cannot be computed safely", () => {
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tapp/models/subscription.rb\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([[500, 0, "app/models/subscription.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "block");
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.ok(result.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
+});
+
+test("a mostly-JS diff with a little unknown source still computes normally (no block)", () => {
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tweird/thing.xyz\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[300, 0, "src/foo.mjs"], [10, 0, "weird/thing.xyz"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 300);
+});
+
+test("a configured t1 pattern matching a file that classifies unknown (0 LOC) blocks even when unclassified lines are a small share of the diff", () => {
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tsrc/billing/charge.rb\n",
+    diffOutput: MIXED_DIFF,
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [10, 0, "src/billing/charge.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((r) => r.includes("t1/t3 pattern") && r.includes("no waiver possible")));
+});
+
+// ---------------------------------------------------------------------------
+// parseCheckSizeBudgetCliArgs
+// ---------------------------------------------------------------------------
+
+test("parseCheckSizeBudgetCliArgs: missing --base throws", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs([]), /--base/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a positional argument throws", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs(["--base", "main", "extra"]), /Unknown argument/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a '-'-leading --base throws", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs(["--base", "-evil"]), /plausible git ref/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a '..'-containing --base throws", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs(["--base", "main..evil"]), /plausible git ref/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a '-'-leading --head throws (same denylist as --base)", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs(["--base", "main", "--head", "-evil"]), /plausible git ref/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a '..'-containing --head throws (same denylist as --base)", () => {
+  assert.throws(() => parseCheckSizeBudgetCliArgs(["--base", "main", "--head", "feature..evil"]), /plausible git ref/);
+});
+
+test("parseCheckSizeBudgetCliArgs: a plain valid --base (and --head) is accepted", () => {
+  const options = parseCheckSizeBudgetCliArgs(["--base", "main", "--head", "feature/x"]);
+  assert.equal(options.base, "main");
+  assert.equal(options.head, "feature/x");
 });
