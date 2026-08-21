@@ -62,6 +62,21 @@ test("matchesGlob: '**' matches across path segments", () => {
   assert.equal(matchesGlob("app/frontends/index.js", "app/frontends/**"), true);
 });
 
+test("matchesGlob: 'src/**/foo.js' globstar matches zero-or-more segments (including zero)", () => {
+  assert.equal(matchesGlob("src/foo.js", "src/**/foo.js"), true);
+  assert.equal(matchesGlob("src/a/b/foo.js", "src/**/foo.js"), true);
+});
+
+test("matchesGlob: single '*' stays within one segment even with a trailing extension", () => {
+  assert.equal(matchesGlob("app/models/x.rb", "app/models/*.rb"), true);
+  assert.equal(matchesGlob("app/models/sub/x.rb", "app/models/*.rb"), false);
+});
+
+test("matchesGlob: a backslash-separated candidate path matches a '/'-written pattern", () => {
+  assert.equal(matchesGlob("src\\billing\\charge.mjs", "src/billing/*"), true);
+  assert.equal(matchesGlob("src\\a\\b\\foo.js", "src/**/foo.js"), true);
+});
+
 test("resolveFileTier: t1 pattern wins over t3, unmatched falls to default", () => {
   const tiers = {
     t1: { patterns: ["src/billing/*"] },
@@ -332,6 +347,33 @@ test("t3 tier: a file matching a configured t3 pattern resolves its LOC under ti
   assert.equal(result.outcome, "escalate");
   assert.equal(result.tierLogicLoc.t3, 900);
   assert.equal(result.tierLogicLoc.default, 0);
+});
+
+test("tierLogicLoc reconciles with wholeLogicLoc across tiers under a fractional testDiscount", () => {
+  // Two test-only files, each contributing testDiscount(0.25) * 2 lines = 0.5
+  // logic LOC — one in the default tier, one in t1 (src/billing/*). Rounding
+  // each tier's 0.5 subtotal independently (Math.round -> 1 each) and summing
+  // the rounded tiers gives wholeLogicLoc = 2, which is what this asserts.
+  // Rounding the RAW total (0.5 + 0.5 = 1.0) instead would have produced
+  // wholeLogicLoc = 1, unable to reconcile with a tier breakdown of 1 + 1.
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.test.mjs\nM\tsrc/billing/charge.test.mjs\n",
+    diffOutput: "",
+    numstatOutput: numstatZ([
+      [2, 0, "src/foo.test.mjs"],
+      [2, 0, "src/billing/charge.test.mjs"],
+    ]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.tierLogicLoc.default, 1);
+  assert.equal(result.tierLogicLoc.t1, 1);
+  assert.equal(result.tierLogicLoc.t3, 0);
+  assert.equal(result.wholeLogicLoc, 2);
+  assert.equal(
+    result.wholeLogicLoc,
+    result.tierLogicLoc.default + result.tierLogicLoc.t1 + result.tierLogicLoc.t3,
+  );
+  assert.equal(result.t1SliceLoc, result.tierLogicLoc.t1);
 });
 
 // ---------------------------------------------------------------------------

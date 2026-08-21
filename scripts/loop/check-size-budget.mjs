@@ -88,38 +88,63 @@ const parseError = buildParseError(USAGE);
 
 // ---------------------------------------------------------------------------
 // Glob-style path-pattern matching (gates.size.tiers.{t1,t3}.patterns).
-// A minimal shell-glob subset: "**" matches across "/" (any depth), a single
-// "*" matches within one path segment, everything else is literal. This is
-// deliberately not a full glob library — the config's own examples
-// ("app/models/subscription*", "config/routes.rb") only need this subset,
-// and no glob dependency is installed in this repo.
+// A minimal shell-glob subset, standard globstar semantics: a "**/" sequence
+// matches zero-or-more whole path segments (so "src/**/foo.js" matches both
+// "src/foo.js" and "src/a/b/foo.js"), a lone "**" (not followed by "/")
+// matches any suffix including "/", a single "*" matches within one path
+// segment only, everything else is literal. This is deliberately not a full
+// glob library — the config's own examples ("app/models/subscription*",
+// "config/routes.rb") only need this subset, and no glob dependency is
+// installed in this repo.
+//
+// Git can report backslash-separated paths on Windows; both the pattern
+// (written with "/") and the candidate path are separator-normalized before
+// matching so a tier pattern still resolves regardless of platform.
+//
+// Compiled patterns are cached by (normalized) pattern string — a large PR
+// with many changed files re-tests the same handful of configured patterns
+// per file, so recompiling the regex per file would be wasted work.
 // ---------------------------------------------------------------------------
 
 function escapeGlobLiteral(ch) {
   return /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
 }
 
+function normalizePathSeparators(value) {
+  return value.replace(/\\/g, "/");
+}
+
+const globPatternCache = new Map();
+
 function globToRegExp(pattern) {
+  const normalizedPattern = normalizePathSeparators(pattern);
+  const cached = globPatternCache.get(normalizedPattern);
+  if (cached) return cached;
   let re = "";
-  for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      if (pattern[i + 1] === "*") {
-        re += ".*";
-        i += 1;
+  for (let i = 0; i < normalizedPattern.length; i += 1) {
+    const ch = normalizedPattern[i];
+    if (ch === "*" && normalizedPattern[i + 1] === "*") {
+      if (normalizedPattern[i + 2] === "/") {
+        re += "(?:.*/)?"; // "**/" — zero or more whole path segments
+        i += 2; // consume the second "*" and the "/"
       } else {
-        re += "[^/]*";
+        re += ".*"; // lone "**" — any suffix, including "/"
+        i += 1; // consume the second "*"
       }
+    } else if (ch === "*") {
+      re += "[^/]*"; // single "*" — within one path segment only
     } else {
       re += escapeGlobLiteral(ch);
     }
   }
-  return new RegExp(`^${re}$`);
+  const compiled = new RegExp(`^${re}$`);
+  globPatternCache.set(normalizedPattern, compiled);
+  return compiled;
 }
 
 export function matchesGlob(filePath, pattern) {
   if (typeof filePath !== "string" || typeof pattern !== "string" || pattern.length === 0) return false;
-  return globToRegExp(pattern).test(filePath);
+  return globToRegExp(pattern).test(normalizePathSeparators(filePath));
 }
 
 function matchesAnyPattern(filePath, patterns) {
@@ -226,8 +251,6 @@ export function computeSizeBudget({
   const diffAnalysis = analyzeDiff({ nameStatusOutput, diffOutput });
   const files = parseNumstatZ(numstatOutput);
 
-  let wholeLoc = 0;
-  let t1SliceLoc = 0;
   const tierLoc = { default: 0, t1: 0, t3: 0 };
   // Denominator for the unclassified-ratio fail-closed check: source-like
   // changed lines only (code + test + unknown). docs/config/ci are
@@ -262,11 +285,21 @@ export function computeSizeBudget({
     }
     const tier = resolveFileTier(file.path, tiers);
     tierLoc[tier] += logic;
-    wholeLoc += logic;
-    if (tier === "t1") t1SliceLoc += logic;
   }
-  wholeLoc = Math.round(wholeLoc);
-  t1SliceLoc = Math.round(t1SliceLoc);
+  // Round each tier's unrounded subtotal once, then derive wholeLogicLoc as
+  // the SUM of the rounded tiers rather than independently rounding the
+  // unrounded total — otherwise fractional per-tier subtotals (testDiscount
+  // applied per test file) can round down to 0 in each tier while their sum
+  // rounds up to 1, leaving the reported breakdown unable to reconcile with
+  // wholeLogicLoc. Summing the already-rounded tiers keeps the breakdown
+  // additive by construction.
+  const tierLogicLoc = {
+    default: Math.round(tierLoc.default),
+    t1: Math.round(tierLoc.t1),
+    t3: Math.round(tierLoc.t3),
+  };
+  const wholeLoc = tierLogicLoc.default + tierLogicLoc.t1 + tierLogicLoc.t3;
+  const t1SliceLoc = tierLogicLoc.t1;
   const unclassifiedRatio = sourceChangedLines > 0 ? unclassifiedChangedLines / sourceChangedLines : 0;
   const substantiallyUnclassified = unclassifiedRatio > UNCLASSIFIED_BLOCK_RATIO || tierPatternDroppedToZero;
 
@@ -343,7 +376,7 @@ export function computeSizeBudget({
     outcome,
     wholeLogicLoc: wholeLoc,
     t1SliceLoc,
-    tierLogicLoc: { default: Math.round(tierLoc.default), t1: Math.round(tierLoc.t1), t3: Math.round(tierLoc.t3) },
+    tierLogicLoc,
     thresholds: {
       testDiscount,
       absoluteHardLoc,
