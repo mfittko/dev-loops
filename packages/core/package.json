@@ -35,6 +35,7 @@
     "./loop/copilot-loop-state": "./src/loop/copilot-loop-state.mjs",
     "./loop/gate-carry-forward": "./src/loop/gate-carry-forward.mjs",
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
+    "./loop/gate-request-plan": "./src/loop/gate-request-plan.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
     "./loop/issue-refinement-artifact": "./src/loop/issue-refinement-artifact.mjs",

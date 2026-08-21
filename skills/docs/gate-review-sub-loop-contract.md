@@ -202,6 +202,94 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   `context-build/validation-and-risks.md`) and synthesize the outputs into the review
   handoff artifacts
 
+#### Request-plan artifact and harness capability
+
+`write-gate-context.mjs` additionally writes two deterministic files sibling to the
+briefing prefix, built by the pure `@dev-loops/core/loop/gate-request-plan` module:
+
+- **`<gate>-<headSha>.request-plan.json`** — the per-round dispatch plan. Shape:
+  ```json
+  {
+    "gate": "pre_approval_gate",
+    "headSha": "...",
+    "sharedPrefixPath": "...briefing-prefix.txt",
+    "sharedPrefixHash": "sha256:...",
+    "requestGroups": [
+      {
+        "model": "opus",
+        "requestPrefixFingerprint": "sha256:...",
+        "cacheBoundary": "after_shared_prefix",
+        "ttlIntent": "5m|1h|harness_managed",
+        "angles": ["correctness", "security"]
+      }
+    ]
+  }
+  ```
+  `requestGroups` partitions the round's fan-out angles BY CONCRETE RESOLVED MODEL
+  (`resolveReviewerRole(config, angle).model` — the same "config override → built-in
+  persona default → null=inherit" resolution the review-persona dispatch itself
+  uses). Angles with no override share the model-less `"inherit"` bucket, kept
+  separate from every concrete model id — an angle never silently merges into a
+  group its actual dispatch would not share. `sharedPrefixHash` always equals the
+  hash of the briefing-prefix bytes actually written in the same call; a mismatch
+  would mean the plan describes a prefix that was never materialized.
+  `requestPrefixFingerprint` is a sha256 over every cache-relevant input this layer
+  observes for that group: the concrete model, the shared-prefix bytes (via
+  `sharedPrefixHash`), tool definitions and their dispatch order, system/project/agent
+  instruction bytes, thinking/tool-choice settings, content-block boundaries, and the
+  TTL/breakpoint intent. The angle list and any angle-specific prompt text are
+  deliberately EXCLUDED from the fingerprint — they are the volatile per-angle
+  suffix appended after the cache boundary, so an angle-suffix-only change never
+  changes the fingerprint, while a change to any of the inputs above always does.
+  Re-running for identical inputs at the same head produces byte-identical JSON: no
+  timestamp field lives inside the plan (`loggedAt` stays on the separate JSON
+  context artifact only).
+
+  **Non-claim:** a fingerprint proves REQUEST-SHAPE identity — that two dispatches
+  sent the same observable request prefix. It never proves a provider actually
+  served a cache read for that prefix; provider-side cache reuse requires telemetry
+  a harness may not expose (see the capability representation below). Treat a
+  fingerprint match as "these requests were shaped identically," not as "this was a
+  cache hit."
+
+- **`<gate>-<headSha>.briefing-volatile.txt`** — the physically separate volatile
+  tail: round-level values (`acceptanceCriteria`, `validationPosture`, the write
+  timestamp) that sit AFTER the cache boundary the briefing prefix establishes.
+  This file exists so the boundary `cacheBoundary: "after_shared_prefix"` names is a
+  real file boundary, not only a documented convention or a common substring buried
+  inside per-angle prompt text. Writing or changing this file never touches the
+  stable briefing-prefix bytes — the two are independent files, written
+  independently, and a change confined to the volatile file leaves the prefix's
+  bytes (and therefore `GATE-EXEC-BRIEFING-PREFIX`'s hash contract) untouched.
+
+**Harness capability.** `makeHarnessCapability({ streaming, cacheTelemetry,
+ttlOwnership })` (from the same module) is the explicit-data representation of what
+the executing harness exposes for cache-priming purposes:
+
+- `streaming`: `"streaming"` (first-output is observable and can gate a primer
+  barrier) | `"non_streaming"` | `"opaque"` (this layer cannot observe it)
+- `cacheTelemetry`: `"available"` (cache creation/read counts are exposed) |
+  `"unavailable"`
+- `ttlOwnership`: `"caller_controlled"` (the caller may select a TTL/breakpoint) |
+  `"harness_managed"` (the harness owns the cache lifecycle; the caller cannot set a
+  TTL)
+
+Every field is required and validated against its declared vocabulary — there is no
+default-filling, and no code path may infer a capability the harness has not
+declared; an unobserved capability must be passed as its `"opaque"` (or
+`"unavailable"`/`"harness_managed"`) value rather than guessed as yes/no.
+`CLAUDE_CODE_HARNESS_CAPABILITY` is the shipped, honest default for the current
+Claude Code harness: `streaming: "opaque"`, `cacheTelemetry: "unavailable"`,
+`ttlOwnership: "harness_managed"`. A request group's `ttlIntent` is derived from the
+capability (`"harness_managed"` when the harness owns the lifecycle, else a
+caller-controlled default of `"5m"`) unless the caller passes an explicit override.
+
+This artifact and capability representation are the deterministic foundation a
+later slice's primer-dispatch evidence consumes: the plan says WHAT the observable
+request shape and grouping are; a later slice records WHETHER a primer barrier
+actually ran before the rest of a group's fan-out, using this plan's
+`requestPrefixFingerprint`/`sharedPrefixHash` as its ordering evidence.
+
 ### Phase 1.5 — Cache primer (MANDATORY)
 
 <!-- rule: GATE-EXEC-PRIME -->

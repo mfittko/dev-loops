@@ -34,9 +34,10 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveReviewerRole } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { buildRequestPlan, CLAUDE_CODE_HARNESS_CAPABILITY } from "@dev-loops/core/loop/gate-request-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -710,6 +711,47 @@ export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = 
   const repoSlug = repoSlugFor(repo);
   const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
   return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.validation.json`);
+}
+
+/**
+ * Build the deterministic path for the materialized VOLATILE tail block
+ * (round-level values that sit AFTER the cache boundary the briefing prefix
+ * establishes — see #1474/#1468-B): a physically separate file sibling to the
+ * briefing prefix, so the stable/volatile split is a real file boundary
+ * rather than only a documented convention. Mirrors buildGateBriefingPrefixPath.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative briefing-volatile path
+ */
+export function buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.briefing-volatile.txt`);
+}
+
+/**
+ * Build the deterministic path for the request-plan artifact (#1468-A shape,
+ * built by `buildRequestPlan` from `@dev-loops/core/loop/gate-request-plan`):
+ * the per-round fingerprint of the complete observable request prefix,
+ * sibling to the briefing prefix. Mirrors buildGateBriefingPrefixPath.
+ *
+ * @param {object} input
+ * @param {string} input.repo — owner/name
+ * @param {number|string} input.pr
+ * @param {string} input.gate — draft_gate | pre_approval_gate
+ * @param {string} input.headSha
+ * @param {string} [input.tmpRoot] — default "tmp"
+ * @returns {string} relative request-plan path
+ */
+export function buildGateRequestPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  const repoSlug = repoSlugFor(repo);
+  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
+  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.request-plan.json`);
 }
 
 /**
@@ -1539,6 +1581,48 @@ export function renderScopedBriefingVariant(scope, {
 }
 
 /**
+ * The physical content-block boundary order this writer establishes, in
+ * order: the materialized stable shared prefix, the cache boundary the
+ * request plan's `cacheBoundary` field names, then the volatile tail. Fed
+ * into `buildRequestPlan`'s fingerprint as its `blockBoundaries` input (a
+ * fixed, deterministic value here — a real per-dispatch value once a later
+ * slice observes actual content-block boundaries at dispatch time).
+ */
+export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "cache_boundary", "volatile_tail"]);
+
+/**
+ * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
+ * counterpart): the round-level values that sit AFTER the cache boundary the
+ * briefing prefix establishes, physically separated into their own file so
+ * the stable/volatile split the request plan's `cacheBoundary` claims is a
+ * real boundary rather than only a common substring. `acceptanceCriteria` and
+ * `validationPosture` are round-scoped (identical for every reviewer of this
+ * round) but were never part of the rendered prefix (see
+ * {@link renderBriefingPrefix}); `loggedAt` is a genuine per-write timestamp.
+ * None of this changes the stable prefix's bytes.
+ *
+ * @param {object} input
+ * @param {string} input.gate
+ * @param {string} input.headSha
+ * @param {string} input.loggedAt
+ * @param {string|null} [input.acceptanceCriteria]
+ * @param {string|null} [input.validationPosture]
+ * @returns {string}
+ */
+export function renderBriefingVolatile({ gate, headSha, loggedAt, acceptanceCriteria = null, validationPosture = null }) {
+  const lines = [];
+  lines.push("# Gate Review Briefing — volatile tail (after the cache boundary)");
+  lines.push("");
+  lines.push(`gate: ${gate}`);
+  lines.push(`head: ${headSha}`);
+  lines.push(`loggedAt: ${loggedAt}`);
+  lines.push(`acceptanceCriteria: ${acceptanceCriteria ?? "(none)"}`);
+  lines.push(`validationPosture: ${validationPosture ?? "(none)"}`);
+  lines.push("");
+  return lines.join("\n") + "\n";
+}
+
+/**
  * Parse `git diff --name-status` output into full repo-relative changed file
  * paths. Handles rename/copy entries (R100 old new, C75 old new) by recording
  * the destination path. Tolerates blank lines and malformed rows.
@@ -1937,7 +2021,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  *   run-gate-validation.mjs artifact; fails closed when missing/unreadable —
  *   see the CLI's `--validation-results` doc above).
  * @param {{ repoRoot?: string }} [runtime]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
@@ -1948,6 +2032,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     tmpRoot: options.tmpRoot || "tmp",
   });
   const briefingPrefixPath = buildGateBriefingPrefixPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || "tmp",
+  });
+  const volatilePath = buildGateBriefingVolatilePath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || "tmp",
+  });
+  const requestPlanPath = buildGateRequestPlanPath({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
@@ -2116,11 +2214,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
-  // Write ORDER matters: the sibling briefing prefix goes first and the JSON
-  // artifact last, so the artifact's existence is the completion marker for
-  // the whole set. Downstream consumers (readGateContext, the reviewers'
-  // --context-path guard) key on the JSON — a prefix-write failure must not
-  // leave a complete-looking artifact pointing at a missing prefix file.
+  // Write ORDER matters: the sibling briefing prefix goes first, then the
+  // volatile-tail and request-plan artifacts, and the JSON artifact LAST, so
+  // the artifact's existence is the completion marker for the whole set.
+  // Downstream consumers (readGateContext, the reviewers' --context-path
+  // guard) key on the JSON — a prior write failure must not leave a
+  // complete-looking artifact pointing at a missing sibling file.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
   // No-rebuild-mid-fan-out enforcement (#1537). The contract has always
@@ -2197,10 +2296,58 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   await writeFile(fullPrefixPath, prefixBytes);
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
+  // Volatile tail (#1474/#1468-B): physically separate from the stable prefix
+  // above — writing it never touches the prefix's already-written bytes.
+  const volatileText = renderBriefingVolatile({
+    gate: options.gate,
+    headSha: options.headSha,
+    loggedAt: artifact.loggedAt,
+    acceptanceCriteria: options.acceptanceCriteria ?? null,
+    validationPosture: options.validationPosture ?? null,
+  });
+  const fullVolatilePath = path.resolve(repoRoot, volatilePath);
+  await mkdir(path.dirname(fullVolatilePath), { recursive: true });
+  await writeFile(fullVolatilePath, volatileText, "utf8");
+
+  // Request plan (#1474/#1468-A): angles partition by concrete resolved model
+  // via resolveReviewerRole's `.model` (config override → built-in persona
+  // default → null=inherit — the SAME resolution the review-persona dispatch
+  // itself uses, not the forced-high-tier `resolveRoleModel(kind:"angle")`
+  // path, since that would report every angle as one concrete model rather
+  // than the dispatch-time "no override" reality). Without a config, every
+  // angle honestly resolves to inherit (never guessed).
+  const angleModels = (Array.isArray(options.angles) ? options.angles : []).map((angle) => ({
+    angle,
+    model: options.config ? resolveReviewerRole(options.config, angle).model : null,
+  }));
+  const requestPlan = buildRequestPlan({
+    gate: options.gate,
+    headSha: options.headSha,
+    sharedPrefixPath: briefingPrefixPath,
+    sharedPrefixHash: prefixHash,
+    angleModels,
+    harnessCapability: options.harnessCapability ?? CLAUDE_CODE_HARNESS_CAPABILITY,
+    blockBoundaries: REQUEST_PLAN_BLOCK_BOUNDARIES,
+  });
+  const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
+  await mkdir(path.dirname(fullRequestPlanPath), { recursive: true });
+  await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
+
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
 
-  return { ok: true, path: contextPath, artifact, prefixPath: briefingPrefixPath, prefixHash, prefixMode, ...(rebuildWarning ? { warning: rebuildWarning } : {}) };
+  return {
+    ok: true,
+    path: contextPath,
+    artifact,
+    prefixPath: briefingPrefixPath,
+    prefixHash,
+    prefixMode,
+    volatilePath,
+    requestPlanPath,
+    requestPlan,
+    ...(rebuildWarning ? { warning: rebuildWarning } : {}),
+  };
 }
 
 /**
@@ -2300,6 +2447,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       prBody: input.prBody ?? null,
       issueBody: input.issueBody ?? null,
       tmpRoot,
+      config: input.config,
     },
     { repoRoot },
   );
@@ -2616,6 +2764,23 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
       options.diffSource = "none";
     }
+    // Load the dev-loop config once: used both for dynamic angle resolution
+    // (when --angles is omitted) and, regardless of --angles, to resolve each
+    // angle's concrete review model for the request-plan artifact
+    // (resolveReviewerRole, inside writeGateContext). loadDevLoopConfig never
+    // throws: it returns { config, warnings, errors }, and on a validation
+    // error it still returns `config` with every layer merged (its own
+    // documented fallback) — nulling it out here would replace a
+    // partially-valid configured angle set with an EMPTY one, a worse
+    // regression than the signal gap this fixes.
+    const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+    if (Array.isArray(configErrors) && configErrors.length > 0) {
+      process.stderr.write(
+        `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
+      );
+    }
+    options.config = config;
+
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). This
@@ -2623,29 +2788,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // mandatory floor + diff-selected candidates when a diff is present, and
     // falls back to the static configured pool otherwise. When --angles IS
     // supplied, it is a verbatim override (dynamic resolution bypassed).
-    // AC3 (#1572): captured when the dynamic-resolution branch below loads
-    // config, and reused for angle-scope resolution afterward so an explicit
-    // --angles caller (which never takes that branch) doesn't skip a second,
-    // otherwise-identical load.
-    let loadedConfig = null;
     if (!Array.isArray(options.angles)) {
-      // loadDevLoopConfig never throws: it returns { config, warnings, errors }, and
-      // on a validation error it still returns `config` with every layer merged (its
-      // own documented fallback). buildGateContext — the programmatic API this CLI
-      // mirrors — never calls loadDevLoopConfig itself (callers hand it a config), so
-      // there is no separate fail-closed/null-out behavior to match there; the gap is
-      // purely a missing signal. Mirror post-gate-findings.mjs's stderr warning so a
-      // malformed .devloops is never silently swallowed, then proceed with that same
-      // merged fallback config — nulling it out here (unlike post-gate-findings.mjs's
-      // boolean-flag default) would replace a partially-valid configured angle set
-      // with an EMPTY one, a worse regression than the signal gap this fixes.
-      const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
-      loadedConfig = config;
-      if (Array.isArray(configErrors) && configErrors.length > 0) {
-        process.stderr.write(
-          `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
-        );
-      }
       // The gate:full label must not depend on the operator remembering
       // --full-label: derive it from the live PR when the flag is absent, and
       // fail CLOSED (treat as labelled → untriered set) when the read fails.
@@ -2695,9 +2838,12 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // AC3: resolve each angle's declared scope from local config —
     // independent of whether the angle set came from dynamic resolution or
     // an explicit --angles override, and independent of --prefix-file
-    // (config is a local file read, never a GitHub call).
+    // (config is a local file read, never a GitHub call). config was already
+    // loaded unconditionally above (also feeds the request-plan artifact's
+    // per-angle model resolution regardless of --angles), so reuse it here
+    // rather than loading it a second time.
     if (options.angles.length > 0) {
-      const scopeConfig = loadedConfig ?? (await loadDevLoopConfig({ repoRoot })).config;
+      const scopeConfig = config;
       const scopeConfigKey = mapGateToConfigKey(options.gate);
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
