@@ -37,6 +37,11 @@ const VALID_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
  * {@link resolveHumanReviewDecision}, which derives it from raw PR reviews
  * and treats a Copilot review as never satisfying it.
  *
+ * `touchesT1` is unprefixed here, but the persisted verdict field a caller
+ * would source it from is size-namespaced (`sizeTouchesT1` in
+ * copilot-helpers.mjs's detect-checkpoint-evidence output) — a caller wiring
+ * that evidence in MUST remap the field name, not spread it as-is.
+ *
  * @param {{
  *   sizeOutcome?: "pass"|"escalate"|"block"|null,
  *   touchesT1?: boolean,

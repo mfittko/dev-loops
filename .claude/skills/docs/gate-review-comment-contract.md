@@ -115,6 +115,27 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
 | **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
 
+## Optional size-budget fields
+
+<!-- rule: GATE-COMMENT-SIZE-BUDGET-FIELDS -->
+`GATE-COMMENT-SIZE-BUDGET-FIELDS`: `GATE-COMMENT-REQUIRED-FIELDS` above covers only the
+fields every verdict body MUST carry. The size-budget merge gate
+([Size-budget merge gate](./merge-preconditions.md#size-budget-merge-gate-issue-1480)) adds
+three further fields that are OPTIONAL — rendered only when a `pre_approval_gate` verdict
+is posted with size-budget evidence (`--size-budget-json`), omitted entirely otherwise. An
+absent field reads as absent (`null`), never as a false negative:
+
+| Field | Rendered line | Values |
+|---|---|---|
+| **Size-budget outcome** | `**Size-budget outcome:** <outcome>` | The recorded `gates.size` outcome, e.g. `pass`, `escalate`, `block` |
+| **Size-budget T1 slice** | `**Size-budget T1 slice:** touched` or `**Size-budget T1 slice:** not touched` | Whether the diff touches the T1 tier |
+| **Size-budget waiver** | `**Size-budget waiver:** none`, `**Size-budget waiver:** granted`, or `**Size-budget waiver:** granted by <approver>` | Whether a size-budget waiver was granted, and by whom if known |
+
+All three fields are rendered together or not at all: they appear only when the outcome is
+supplied, and are read back as `null` (not a parse failure) when the verdict body carries
+none of them — the pre-size-budget comment shape stays valid evidence for every other rule
+in this document.
+
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->

@@ -205,6 +205,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-COMMENT-SIZE-BUDGET-FIELDS"
+    },
+    {
       "id": "GATE-COMMENT-VALIDATION-REPORTING"
     },
     {
