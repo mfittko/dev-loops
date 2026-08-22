@@ -1,102 +1,10 @@
 name: Gate evidence
 
-# Server-side enforcement of the draft_gate / pre_approval_gate contract
-# (skills/docs/merge-preconditions.md, MERGE-PRECOND-REQUIRED items 3-4). Runs on
-# GitHub's own token so that — once an operator makes this a required check in
-# branch protection on the default branch — an API-driven ready/merge transition
-# (gh CLI, MCP/REST, web UI) cannot bypass the gates the client-side tooling
-# already enforces. Until then it runs and reports but does not block merge.
-#
-# Skipped entirely while the PR is a draft (draft_gate is not required yet, and a
-# draft PR cannot be merged regardless). A skipped run posts no `gate-evidence`
-# status at all, leaving the required check pending rather than passing — fine,
-# since a draft PR is never mergeable anyway. The first non-draft run (at
-# latest, ready_for_review) always posts a real status once merge is possible.
-#
-# Evaluation provenance: the checkout below is pinned to the DEFAULT BRANCH,
-# so the detector code that computes the verdict is always the trusted base
-# tree — never the PR head. This matters because the review/comment-class
-# triggers run in the base-repo context with `statuses: write` (fork
-# pull_request runs get a read-only token, but the comment-class runs do
-# not): a head-tree checkout would let a fork PR swap the detector (or a
-# package lifecycle script under npm ci) and forge a green required check on
-# itself with no maintainer involvement. The resolved PR head SHA is used
-# ONLY as the status TARGET, never as the code source. (For issue_comment
-# events GitHub additionally reads the workflow DEFINITION itself from the
-# default branch, so changes to this trigger arm only after merge.)
-#
-# Trigger staleness (the thread/comment axis) was a real gap: the verdict
-# depends on PR comment history + thread resolution, and pull_request events
-# don't re-fire when a review is submitted or a review comment opens a new
-# thread. Closed by also re-firing on pull_request_review (submitted) and
-# pull_request_review_comment (created) — the two events through which a NEW
-# unresolved thread appears, which is the stale-green direction that matters
-# here.
-#
-# The stale-PENDING direction (#1702) is closed two ways. First, the check is
-# now PRE-MERGE-ONLY: `synchronize` is NOT a trigger, so development pushes do
-# not start/leave a gate-evidence run and the check materializes only at a
-# pre-merge/verdict point (opened / reopened / ready_for_review / a posted-or-edited
-# verdict review / a verdict-shaped issue comment). Second, a run NEVER posts a
-# `pending` status: it always posts a definitive success/failure for the
-# current head. Because the workflow only fires at a merge-decision moment, the
-# previous "in-progress -> pending" case (evidence not yet established for the
-# current head) is now a fail-closed `failure` rather than a dangling pending —
-# the next verdict-post re-fires the check and flips it to `success`. Gate
-# verdicts are posted as a PR REVIEW
-# (upsert-checkpoint-verdict.mjs, the round's single visible surface), so a
-# NEW verdict re-fires via pull_request_review [submitted], and a same-head
-# in-place correction (PUT pulls/{pr}/reviews/{id}) re-fires via
-# pull_request_review [edited]. The issue_comment trigger below covers only
-# the LEGACY/fallback issue-comment verdicts (old PRs; the zero-dep fallback
-# poster), guarded to PR comments that START with the gate-comment marker
-# ("### Gate review:") AND come from a trusted author
-# (OWNER/MEMBER/COLLABORATOR — the verdict posters run under operator auth),
-# so ordinary discussion comments and untrusted marker-shaped comments never
-# start a run. issue_comment events carry no pull_request payload object, so
-# the Resolve-PR-facts step below fetches number/draft/head SHA once and
-# every later step reads those outputs.
-#
-# `gh run rerun` is NOT a recovery path for a stale status: it replays the
-# original event payload (an older head / pre-verdict comment set), so the
-# fresh evaluation still misses the current state. Post (or correct in place)
-# the gate verdict review instead — that re-fires this workflow with fresh
-# context.
-#
-# (GitHub Actions has no `pull_request_review_thread` workflow trigger —
-# thread resolve/unresolve is a webhook but not an `on:` event — so it is not
-# used; the review events above cover a newly-appearing unresolved thread. Narrow
-# residual: a bare "Unresolve conversation" UI action on an already-resolved
-# thread with no accompanying review/comment fires only that non-triggerable
-# event and is not re-caught until the next review or comment — bounded by the
-# maintainer-gated merge.) All the added
-# events are triggered by base-repo actions and run in the base-repo context,
-# so they get this workflow's declared permissions (including `statuses:
-# write`) even when the PR head is a fork; the two review events carry the
-# `pull_request` payload object directly, while issue_comment does not — hence
-# the Resolve-PR-facts step.
-#
-# Head-SHA mismatch on the non-pull_request event types: unlike `pull_request`
-# (whose implicit job check-run GitHub auto-associates with the PR's head
-# commit), `github.sha` for review/comment events is not the PR head (base
-# branch for review events, default branch for issue_comment). An implicit
-# check-run from those triggers would land on the wrong commit and never
-# refresh the required check on the head — the exact staleness this workflow
-# exists to close. So the job posts an EXPLICIT commit status to the RESOLVED
-# PR head SHA (steps.pr.outputs.head_sha — always the right commit, on every
-# trigger type) instead of relying on the job's own auto-attached check-run. To avoid two different reporters (the
-# job's own check-run + this explicit status) both claiming the required
-# `gate-evidence` context — which GitHub's docs warn is ambiguous — the job
-# itself is named something else; the explicit status below is the ONLY
-# thing that ever reports context `gate-evidence`.
-# Pre-merge-only trigger set (#1702): `synchronize` is deliberately absent so
-# development pushes never start a blocking gate-evidence run. The remaining
-# events are all pre-merge/verdict points: PR opened/reopened, ready_for_review
-# (the draft->non-draft merge-review transition), a posted or edited verdict
-# review, a new unresolved-thread review comment, and a verdict-shaped issue
-# comment. A clean verdict on the current head is guaranteed to re-fire via
-# pull_request_review [submitted]/[edited], so a satisfied PR flips straight to
-# `success` at the pre-merge point instead of dangling on a stale pending.
+# Behavioral contract (triggers, staleness, fail-closed provenance) is pinned by
+# test/github/gate-evidence-workflow.test.mjs.
+# Rationale and design records:
+#   docs/decisions/0034-server-side-gate-evidence-required-check.md
+#   docs/decisions/0043-gate-evidence-verdict-comment-refire.md
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]

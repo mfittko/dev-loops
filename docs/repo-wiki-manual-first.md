@@ -41,7 +41,7 @@ Pinned source ref used by the helper:
 
 Helper entrypoint:
 
-- `scripts/repo-wiki-local.mjs`
+- `scripts/repo-wiki.mjs --source local`
 
 ## Local prerequisites
 
@@ -66,7 +66,7 @@ Generated artifacts under `.llmwiki/run/`, `.llmwiki/wiki/`, and `.llmwiki/searc
 Prepare the pinned local-helper fallback (only needed for the fallback path):
 
 ```bash
-npm run repo-wiki:prepare
+node scripts/repo-wiki.mjs --source local prepare
 ```
 
 Run a full local bootstrap export from a clean checkout (scan + plan + compile, no LLM key required for the deterministic compile step):
@@ -80,37 +80,36 @@ The lint step is intentionally **not** wired into the bootstrap script: `npm run
 flags a pre-existing `OPENAI_API_KEY` mention in `README.md` as secret-like content, and that
 issue is outside this slice. Run lint separately if you want to inspect wiki page health.
 Lint remains available as an explicit opt-in step via `npm run repo-wiki:lint`.
-Lint of ingested markdown docs is also available separately via `npm run repo-wiki:lint-docs`.
+Lint of ingested markdown docs is also available separately via `node scripts/repo-wiki.mjs lint-docs --repo .`.
 
 ```bash
-npm run repo-wiki:scan
-npm run repo-wiki:plan
-npm run repo-wiki:lint-docs
-npm run repo-wiki:compile
+node scripts/repo-wiki.mjs scan --repo .
+node scripts/repo-wiki.mjs plan --repo .
+node scripts/repo-wiki.mjs lint-docs --repo .
+node scripts/repo-wiki.mjs compile --repo .
 npm run repo-wiki:lint
 ```
 
-To run the same stages against the offline fallback source checkout instead of the published npm package, prefix the stage script with `repo-wiki:local-`:
+To run the same stages against the offline fallback source checkout instead of the published npm package, add `--source local` to each stage:
 
 ```bash
-npm run repo-wiki:local-bootstrap
-npm run repo-wiki:local-scan
-npm run repo-wiki:local-plan
-npm run repo-wiki:local-lint-docs
-npm run repo-wiki:local-compile
-npm run repo-wiki:local-lint
+node scripts/repo-wiki.mjs --source local scan --repo .
+node scripts/repo-wiki.mjs --source local plan --repo .
+node scripts/repo-wiki.mjs --source local lint-docs --repo .
+node scripts/repo-wiki.mjs --source local compile --repo .
+node scripts/repo-wiki.mjs --source local lint --repo .
 ```
 
 Inspect the documentation lint output separately:
 
 ```bash
-npm run repo-wiki:lint-docs
+node scripts/repo-wiki.mjs lint-docs --repo .
 ```
 
 Search the generated local wiki output:
 
 ```bash
-npm run repo-wiki:search -- "dev-loop"
+node scripts/repo-wiki.mjs search --repo . "dev-loop"
 ```
 
 Inspect the generated wiki pages directly:
@@ -122,7 +121,7 @@ find .llmwiki/wiki -maxdepth 1 -type f | sort
 If you want to regenerate `.llmwiki/config.json` and `.llmwiki/schema.md` from the helper instead of using the checked-in versions:
 
 ```bash
-npm run repo-wiki:init
+node scripts/repo-wiki.mjs init --repo .
 ```
 
 ## What each path does
@@ -138,7 +137,7 @@ npm run repo-wiki:init
 
 ### Fallback (local helper) path
 
-`scripts/repo-wiki-local.mjs`:
+`scripts/repo-wiki.mjs --source local`:
 
 1. clones `mfittko/repo-wiki` under `.tmp/repo-wiki/<ref>/source/`
 2. checks out the pinned commit `d7e772e3d702a75896a6f4eec574a4e4e5bfa6dd`
@@ -150,9 +149,9 @@ npm run repo-wiki:init
 The following commands were run from a clean checkout of this repository (see the lint caveat above; lint is intentionally excluded from this verification list because of a pre-existing repo-wiki finding):
 
 ```bash
-npm run repo-wiki:scan
-npm run repo-wiki:plan
-npm run repo-wiki:compile
+node scripts/repo-wiki.mjs scan --repo .
+node scripts/repo-wiki.mjs plan --repo .
+node scripts/repo-wiki.mjs compile --repo .
 npm run repo-wiki:lint
 find .llmwiki/wiki -maxdepth 1 -type f | sort
 ```
@@ -171,8 +170,8 @@ A GitHub Actions workflow at `.github/workflows/wiki.yml` compiles the repositor
 
 ### Triggers
 
-- `push` to `main` — runs the `compile-wiki` job and, because it is on `main`, the `publish-wiki` job.
-- `workflow_dispatch` — optionally opt in to `publish_wiki` after `compile-wiki` succeeds. The compile job always runs `npm run repo-wiki:bootstrap` (scan + plan + compile).
+- `push` to `main` — runs the single `compile-wiki` job, which compiles and, because it is on `main`, also publishes.
+- `workflow_dispatch` — the `compile-wiki` job always runs `npm run repo-wiki:bootstrap` (scan + plan + compile); the publish step runs only when you opt in to `publish_wiki`.
 
 ### Required operator setup
 
@@ -197,12 +196,11 @@ A GitHub Actions workflow at `.github/workflows/wiki.yml` compiles the repositor
    - `LLMWIKI_LLM_SYSTEM_PROMPT`
    - `LLMWIKI_LLM_SYSTEM_PROMPT_FILE`
 4. **Repo Wiki feature**:
-   - Confirm Wikis are enabled: Settings → General → Features → Wikis. If disabled, the `publish-wiki` job fails with a clear run summary message.
+   - Confirm Wikis are enabled: Settings → General → Features → Wikis. If disabled, the publish step of the `compile-wiki` job fails with a clear run summary message.
 
-### Workflow jobs
+### Workflow job
 
-- `compile-wiki` — checks out the repo, installs Node.js 24 dependencies, runs `npm run repo-wiki:bootstrap` (chained scan + plan + compile) and `npm run repo-wiki:lint`, then uploads `.llmwiki/wiki` as the `compiled-wiki` artifact.
-- `publish-wiki` — downloads the artifact and pushes it to `${{ github.repository }}.wiki.git` using `secrets.GITHUB_TOKEN` via `npm run repo-wiki -- publish --target github-wiki`.
+- `compile-wiki` — checks out the repo, installs Node.js 24 dependencies, runs `npm run repo-wiki:bootstrap` (chained scan + plan + compile) and `npm run repo-wiki:lint`, and uploads `.llmwiki/wiki` as the `compiled-wiki` artifact. On pushes to `main` (or a `workflow_dispatch` opt-in) the same job's publish step pushes the compiled pages to `${{ github.repository }}.wiki.git` using `secrets.GITHUB_TOKEN` via `npm run repo-wiki -- publish --target github-wiki`.
 
 ### Local commands still work
 

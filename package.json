@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "verify": "run-p --aggregate-output --continue-on-error test:assets test:extension test:scripts test:core test:docs test:pack test:dev-loop test:workflows",
-    "test": "run-p --aggregate-output --continue-on-error test:assets test:extension test:scripts test:core test:docs test:pack",
+    "test": "npm run verify",
     "test:assets": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/dev-loop-init-phase-smoke.test.mjs test/core-runtime-boundary.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:doc-guard": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:extension": "node --import tsx --test --test-reporter ./test/failure-summary-reporter.mjs test/extension-checks.test.mjs test/extension-post-merge-update.test.mjs test/extension-command-contract.test.mjs test/extension-package-contract.test.mjs test/extension-pi-adapter.test.mjs test/dev-loops-core.test.mjs test/dev-loops-cli.test.mjs test/cli-deps-less-checkout-preflight.test.mjs test/extension-pi-agent-tools.test.mjs",
@@ -34,30 +34,18 @@
     "test:playwright:how-decided-deck": "PW_UI_SLICE=how-decided-deck playwright test --project=how-decided-deck",
     "test:playwright:intro-deck": "PW_UI_SLICE=intro-deck playwright test --project=intro-deck",
     "test:playwright:intro-article": "PW_UI_SLICE=intro-article playwright test --project=intro-article",
-    "test:playwright:ui-review-drive": "PW_UI_SLICE=ui-review-drive playwright test --project=ui-review-drive",
     "test:playwright:deep-dive-article": "PW_UI_SLICE=deep-dive-article playwright test --project=deep-dive-article",
     "test:playwright:how-decided-article": "PW_UI_SLICE=how-decided-article playwright test --project=how-decided-article",
     "smoke:headless": "node scripts/claude/headless-info-smoke.mjs",
     "test:docs": "node scripts/docs/validate-links.mjs && node scripts/docs/validate-rule-ownership.mjs && node scripts/docs/validate-decision-records.mjs",
     "test:workflows": "node scripts/github/lint-workflows.mjs",
     "test:pack": "node --test --test-reporter ./test/failure-summary-reporter.mjs test/packaged-install-smoke.test.mjs",
-    "schema:generate": "node scripts/generate-config-schema.mjs",
     "schema:check": "node scripts/generate-config-schema.mjs --check",
     "assets:check": "node scripts/claude/generate-claude-assets.mjs --check",
     "articles:render": "node scripts/pages/render-article.mjs",
-    "articles:check": "node scripts/pages/render-article.mjs --check",
     "repo-wiki": "node scripts/repo-wiki.mjs",
     "repo-wiki:bootstrap": "node scripts/repo-wiki.mjs scan --repo . && node scripts/repo-wiki.mjs plan --repo . && node scripts/repo-wiki.mjs compile --repo .",
-    "repo-wiki:scan": "node scripts/repo-wiki.mjs scan --repo .",
-    "repo-wiki:plan": "node scripts/repo-wiki.mjs plan --repo .",
-    "repo-wiki:lint-docs": "node scripts/repo-wiki.mjs lint-docs --repo .",
-    "repo-wiki:compile": "node scripts/repo-wiki.mjs compile --repo .",
-    "repo-wiki:lint": "node scripts/repo-wiki.mjs lint --repo .",
-    "repo-wiki:search": "node scripts/repo-wiki.mjs search --repo .",
-    "repo-wiki:init": "node scripts/repo-wiki.mjs init --repo .",
-    "repo-wiki:prepare": "node scripts/repo-wiki.mjs --source local prepare",
-    "repo-wiki:local": "node scripts/repo-wiki.mjs --source local",
-    "repo-wiki:local-prepare": "node scripts/repo-wiki.mjs --source local prepare"
+    "repo-wiki:lint": "node scripts/repo-wiki.mjs lint --repo ."
   },
   "bin": {
     "dev-loops": "./cli/index.mjs"
@@ -94,7 +82,7 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^1.0.0-rc.1",
+    "@dev-loops/core": "^1.0.0-rc.6",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
