@@ -193,7 +193,19 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow) {
     if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
       throw new Error(`Thread ${thread.threadId} carries a gate-authored finding marker selected for deferral but has no resolvable comment id (commentId=${JSON.stringify(thread.commentId)}); refuse to stamp/resolve it.`);
     }
-    targets.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity, angle: marker.angle, fp: marker.fp });
+    // #1807 idempotency: a target can already carry its own
+    // `disposition=deferred issue=<n>` stamp (e.g. an interrupted retry where
+    // the PATCH landed but the reply+resolve did not) — isDeferredAtRound
+    // still selects it (it must still be resolved), but runDispositionPass
+    // must never re-append it to the follow-up issue a second time.
+    targets.push({
+      threadId: thread.threadId,
+      commentId: thread.commentId,
+      severity: marker.severity,
+      angle: marker.angle,
+      fp: marker.fp,
+      alreadyStamped: marker.disposition === "deferred",
+    });
   }
   return targets;
 }
@@ -287,16 +299,31 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
   // this pass defers — reuse an existing one (found on an earlier round's
   // stamped marker) rather than mint a duplicate.
   const existingIssueNumber = findExistingFollowUpIssueNumber(threads, login);
-  const entries = targets.map((target) => ({
-    fingerprint: target.fp,
-    severity: target.severity,
-    angle: target.angle,
-    refUrl: `https://github.com/${repo}/pull/${pr}#discussion_r${target.commentId}`,
-  }));
-  const { issueNumber } = await ensureFollowUpIssue(
-    { repo, pr, entries, existingIssueNumber },
-    { env, ghCommand },
-  );
+  // Idempotency (Copilot review, PR #1809): a target already stamped
+  // `disposition=deferred issue=<n>` on a PRIOR (interrupted) run of this
+  // pass was already recorded on the follow-up issue — appending it again
+  // here would duplicate the "additional finding(s)" comment on every retry.
+  // Only targets NOT yet stamped still need to reach the follow-up issue;
+  // an already-stamped target still needs its reply+resolve below (that is
+  // exactly the retry gap: the stamp landed, the resolve did not), but never
+  // a second append.
+  const unstampedTargets = targets.filter((target) => !target.alreadyStamped);
+  let issueNumber = existingIssueNumber;
+  if (unstampedTargets.length > 0) {
+    const entries = unstampedTargets.map((target) => ({
+      fingerprint: target.fp,
+      severity: target.severity,
+      angle: target.angle,
+      refUrl: `https://github.com/${repo}/pull/${pr}#discussion_r${target.commentId}`,
+    }));
+    ({ issueNumber } = await ensureFollowUpIssue(
+      { repo, pr, entries, existingIssueNumber },
+      { env, ghCommand },
+    ));
+  }
+  // A pure retry (every target already stamped) must always resolve to the
+  // existing issue found on the threads' own markers — the guard in
+  // stampDeferredDisposition below fails closed if this is ever null/mismatched.
   let deferredResolved = 0;
   for (const target of targets) {
     await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });

@@ -673,9 +673,12 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      // The batch's follow-up issue is already known from this same thread's
-      // own marker, so the pass APPENDS to it rather than creating a new one.
-      appendFollowUpIssueEntry(9500),
+      // #1809 round-3 (idempotency): every target in the batch is ALREADY
+      // stamped, so the pass reuses issue=9500 straight off the thread's own
+      // marker — no `gh issue list --search`, no `gh issue create`, and no
+      // `gh issue comment` append. No listFollowUpIssuesEntry/
+      // createFollowUpIssueEntry/appendFollowUpIssueEntry here: any of those
+      // calls would overflow the stub and fail the test.
       getReviewCommentEntry(6501, alreadyStamped),
       // No patchReviewCommentEntry: a PATCH here would overflow the stub and
       // fail the test — the already-stamped guard must skip straight to
@@ -686,6 +689,67 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
     async ({ env, ghCommand, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.deferredResolved, 1);
+      assert.equal(result.followUpIssueNumber, 9500);
+    },
+  ));
+});
+
+// #1809 round-3 (idempotency): a batch of MULTIPLE targets that are ALL
+// already stamped `disposition=deferred issue=<n>` (e.g. a retry after every
+// PATCH landed but the run was interrupted before any reply+resolve) must
+// perform ZERO follow-up-issue gh calls (no search, no create, no append) —
+// only reuse the linked issue number and finish the reply+resolve.
+test("a disposition pass where EVERY target is already stamped performs no create and no append (pure retry)", async () => {
+  const first = `${buildFindingMarker({ fp: "aaaa1111aaaa1111", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache A`;
+  const second = `${buildFindingMarker({ fp: "bbbb2222bbbb2222", severity: "nice-to-have", angle: "naming", round: 1, disposition: "deferred", issue: 9500 })}\n**nice-to-have** (\`naming\`): casing nit B`;
+  const threadA = threadNode({ id: "THREAD_A", path: "src/cache.mjs", line: 9, commentId: 6801, body: first });
+  const threadB = threadNode({ id: "THREAD_B", path: "src/naming.mjs", line: 4, commentId: 6802, body: second });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadA, threadB] }),
+      // No listFollowUpIssuesEntry/createFollowUpIssueEntry/appendFollowUpIssueEntry:
+      // both targets are already stamped, so ensureFollowUpIssue is never called.
+      getReviewCommentEntry(6801, first),
+      postReplyEntry(6801, { id: 7801 }),
+      resolveThreadEntry("THREAD_A"),
+      getReviewCommentEntry(6802, second),
+      postReplyEntry(6802, { id: 7802 }),
+      resolveThreadEntry("THREAD_B"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 2);
+      assert.equal(result.followUpIssueNumber, 9500);
+    },
+  ));
+});
+
+// #1809 round-3 (idempotency): a MIXED batch — one target already stamped
+// (a carried-over retry), one target not yet stamped — appends to the
+// follow-up issue exactly ONCE, carrying only the UNSTAMPED target's entry,
+// and reuses the already-linked issue number rather than minting a new one.
+test("a mixed disposition pass appends once, for only the unstamped target, reusing the already-linked issue", async () => {
+  const stamped = `${buildFindingMarker({ fp: "cccc3333cccc3333", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache C`;
+  const unstamped = wfnBody("dddd4444dddd4444");
+  const threadStamped = threadNode({ id: "THREAD_STAMPED", path: "src/cache.mjs", line: 9, commentId: 6901, body: stamped });
+  const threadUnstamped = threadNode({ id: "THREAD_UNSTAMPED", path: "src/cache.mjs", line: 11, commentId: 6902, body: unstamped });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadStamped, threadUnstamped] }),
+      // Exactly one append, reusing issue=9500 found on the stamped thread's
+      // own marker — no search, no create, and no second append.
+      appendFollowUpIssueEntry(9500),
+      getReviewCommentEntry(6901, stamped),
+      postReplyEntry(6901, { id: 7901 }),
+      resolveThreadEntry("THREAD_STAMPED"),
+      getReviewCommentEntry(6902, unstamped),
+      patchReviewCommentEntry(6902),
+      postReplyEntry(6902, { id: 7902 }),
+      resolveThreadEntry("THREAD_UNSTAMPED"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 2);
       assert.equal(result.followUpIssueNumber, 9500);
     },
   ));

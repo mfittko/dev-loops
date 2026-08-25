@@ -290,7 +290,7 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
   const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
   assert.equal(enriched.overallVerdict, "findings_present");
   assert.equal(enriched.findings[0].judgeDisposition, "act");
-  assert.ok(typeof enriched.findings[0].fingerprint, "string");
+  assert.strictEqual(typeof enriched.findings[0].fingerprint, "string");
   assert.equal(enriched.findings[1].judgeDisposition, "defer");
   assert.equal(enriched.findings[1].followUpIssueNumber, 9001);
   assert.equal(enriched.scopeDrift.verdict, "within_scope");
