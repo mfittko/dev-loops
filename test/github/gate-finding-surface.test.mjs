@@ -15,6 +15,7 @@ import {
   collectVerdictHeadShas,
   createGateReview,
   ensureFollowUpIssue,
+  findFollowUpIssueOnGitHub,
   fingerprintFinding,
   isDeferredAtRound,
   isLocatableFinding,
@@ -712,32 +713,38 @@ test("buildFollowUpIssueTitle / buildFollowUpIssueBody: one issue per PR, every 
   assert.match(body, /`2222222222222222`.*\*\*medium\*\*.*stale cache/);
 });
 
-test("ensureFollowUpIssue: no existing issue creates ONE issue for the whole batch", async () => {
+function noMatchListIssues() {
+  return async () => ({ ok: true, issues: [] });
+}
+
+test("ensureFollowUpIssue: no existing issue, no GitHub match, creates ONE issue for the whole batch", async () => {
   const createCalls = [];
   const createIssue = async (opts) => {
     createCalls.push(opts);
     return { ok: true, issueNumber: 101, url: `https://github.com/${opts.repo}/issues/101` };
   };
   const commentIssue = async () => { throw new Error("must not append when no issue exists yet"); };
+  const listIssues = noMatchListIssues();
   const result = await ensureFollowUpIssue(
     { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
-    { createIssue, commentIssue },
+    { createIssue, commentIssue, listIssues },
   );
   assert.deepEqual(result, { issueNumber: 101, created: true });
   assert.equal(createCalls.length, 1);
   assert.equal(createCalls[0].repo, "o/r");
 });
 
-test("ensureFollowUpIssue: an existing issue number appends a comment instead of creating a duplicate", async () => {
+test("ensureFollowUpIssue: an existing issue number appends a comment instead of creating a duplicate, and never searches GitHub", async () => {
   const createIssue = async () => { throw new Error("must not create a duplicate issue"); };
   const commentCalls = [];
   const commentIssue = async (opts) => {
     commentCalls.push(opts);
     return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
   };
+  const listIssues = async () => { throw new Error("must not search GitHub when the caller already knows the issue"); };
   const result = await ensureFollowUpIssue(
     { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: 101 },
-    { createIssue, commentIssue },
+    { createIssue, commentIssue, listIssues },
   );
   assert.deepEqual(result, { issueNumber: 101, created: false });
   assert.equal(commentCalls.length, 1);
@@ -749,4 +756,130 @@ test("ensureFollowUpIssue rejects an empty entries array", async () => {
     () => ensureFollowUpIssue({ repo: "o/r", pr: 42, entries: [], existingIssueNumber: null }, {}),
     /entries must be a non-empty array/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// #1809: cross-path convergence — GitHub is the source of truth when the
+// caller's own local channel doesn't know of a follow-up issue yet.
+// ---------------------------------------------------------------------------
+
+test("findFollowUpIssueOnGitHub: returns null when no open issue matches this PR's exact title", async () => {
+  const listIssues = async (opts) => {
+    assert.equal(opts.repo, "o/r");
+    assert.equal(opts.state, "open");
+    assert.match(opts.search, /Deferred gate findings for o\/r#42/);
+    return { ok: true, issues: [{ number: 5, title: "Deferred gate findings for o/r#99 (different PR)", state: "open", labels: [] }] };
+  };
+  const result = await findFollowUpIssueOnGitHub({ repo: "o/r", pr: 42 }, { listIssues });
+  assert.equal(result, null);
+});
+
+test("findFollowUpIssueOnGitHub: returns the matching issue number on an exact title match", async () => {
+  const listIssues = async () => ({
+    ok: true,
+    issues: [{ number: 777, title: "Deferred gate findings for o/r#42", state: "open", labels: [] }],
+  });
+  const result = await findFollowUpIssueOnGitHub({ repo: "o/r", pr: 42 }, { listIssues });
+  assert.equal(result, 777);
+});
+
+test("ensureFollowUpIssue: no local existingIssueNumber but GitHub already has this PR's open follow-up issue — appends, does not create a duplicate", async () => {
+  const createIssue = async () => { throw new Error("must not create a duplicate issue when GitHub already has one"); };
+  const commentCalls = [];
+  const commentIssue = async (opts) => {
+    commentCalls.push(opts);
+    return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
+  };
+  const listIssues = async () => ({
+    ok: true,
+    issues: [{ number: 555, title: "Deferred gate findings for o/r#42", state: "open", labels: [] }],
+  });
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    { createIssue, commentIssue, listIssues },
+  );
+  assert.deepEqual(result, { issueNumber: 555, created: false });
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 555);
+});
+
+// The scenario from the finding: one path (modelled here as caller A) defers
+// first and creates issue N; a second, independent path (caller B) — which
+// has NO local knowledge of N (its own idempotency channel is disjoint) —
+// defers on the SAME PR next. Both calls share only a fake in-memory GitHub
+// issue store, exactly like judge-pass.mjs and close-gate-findings.mjs share
+// only the real GitHub API. B must link N, never mint a second issue. Then
+// the reverse ordering (B first, A second) must hold too.
+function fakeGitHubIssueStore() {
+  const issues = [];
+  let nextNumber = 1000;
+  return {
+    createIssue: async (opts) => {
+      const issueNumber = nextNumber;
+      nextNumber += 1;
+      issues.push({ number: issueNumber, title: opts.title, state: "open", labels: [] });
+      return { ok: true, issueNumber, url: `https://github.com/${opts.repo}/issues/${issueNumber}` };
+    },
+    commentIssue: async (opts) => ({ ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` }),
+    listIssues: async () => ({ ok: true, issues: issues.filter((i) => i.state === "open") }),
+  };
+}
+
+test("ensureFollowUpIssue: judge-pass-style caller defers first, close-gate-findings-style caller defers second — links the SAME issue", async () => {
+  const gh = fakeGitHubIssueStore();
+  const first = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    gh,
+  );
+  assert.equal(first.created, true);
+  const second = await ensureFollowUpIssue(
+    // The second (disjoint-cache) caller also has no local existingIssueNumber.
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    gh,
+  );
+  assert.deepEqual(second, { issueNumber: first.issueNumber, created: false });
+});
+
+test("ensureFollowUpIssue: close-gate-findings-style caller defers first, judge-pass-style caller defers second — links the SAME issue (order reversed)", async () => {
+  const gh = fakeGitHubIssueStore();
+  const first = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    gh,
+  );
+  assert.equal(first.created, true);
+  const second = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    gh,
+  );
+  assert.deepEqual(second, { issueNumber: first.issueNumber, created: false });
+});
+
+// ---------------------------------------------------------------------------
+// #1809: guard symmetry — a finding's own untrusted summary must not throw on
+// the append path (commentIssue's guardCommentBodyNoIssuePrIds) while
+// silently leaking on the create path.
+// ---------------------------------------------------------------------------
+
+test("buildFollowUpIssueBody / buildFollowUpIssueAppendComment: a bare #<digits> in a finding summary is entity-encoded, never raw, on both the create and append render paths", async () => {
+  const entries = [{ fingerprint: "3333333333333333", severity: "low", angle: "naming", summary: "duplicates #123 behavior" }];
+  const createBody = buildFollowUpIssueBody({ repo: "o/r", pr: 42, entries });
+  assert.doesNotMatch(createBody, /[^&]#123\b/);
+  assert.match(createBody, /&#35;123/);
+
+  const listIssues = async () => ({ ok: true, issues: [] });
+  const commentCalls = [];
+  const commentIssue = async (opts) => {
+    commentCalls.push(opts);
+    return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
+  };
+  // The append path must not throw: guardCommentBodyNoIssuePrIds
+  // (comment-id-guard.mjs) fails closed on a raw `#<digits>` token, so this
+  // only passes if formatDeferredFindingEntry already neutralized it.
+  await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries, existingIssueNumber: 101 },
+    { commentIssue, listIssues },
+  );
+  assert.equal(commentCalls.length, 1);
+  assert.doesNotMatch(commentCalls[0].body, /[^&]#123\b/);
+  assert.match(commentCalls[0].body, /&#35;123/);
 });

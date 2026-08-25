@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
+import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue, listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
 import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
@@ -208,11 +208,31 @@ export function collectFingerprints(text, set) {
 // thread marker's own `issue=` field), is reused: new entries are appended as
 // a comment instead of minting a second issue.
 
+// A finding's summary (and, transitively, angle) is untrusted free text from a
+// scoped-review agent. `ensureFollowUpIssue`'s append path renders this same
+// entry into a body that `commentIssue` guards with
+// `guardCommentBodyNoIssuePrIds` (fail-closed: throws on a bare `#<digits>`
+// auto-link token), while the create path's `createIssue` runs no such guard
+// at all — so a raw id in a finding's own summary would silently leak via
+// GitHub's auto-link on a first-ever defer, then abort the whole pass on a
+// LATER defer of the same PR, purely because of defer ordering. Entity-encode
+// the hash here, at the one place every deferred entry renders, so neither
+// path ever sees a live `#<digits>` token to begin with — consistent with the
+// repo's entity-encode-not-escape convention (sanitizeInline/sanitizeCodeSpan
+// above); this must never be "add the throwing guard to createIssue too", or
+// ordinary finding text that happens to start a sentence with a hashtag-like
+// number would fail-close the create path as well.
+const BARE_ISSUE_PR_ID_RE = /#(\d{1,9})/g;
+function neutralizeBareIssuePrIds(value) {
+  return String(value).replace(BARE_ISSUE_PR_ID_RE, "&#35;$1");
+}
+
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
     ? sanitizeInline(summary.trim())
     : (typeof refUrl === "string" && refUrl.trim().length > 0 ? refUrl.trim() : "(no summary recorded)");
-  return `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${sanitizeCodeSpan(angle)}\`): ${detail}`;
+  const line = `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${sanitizeCodeSpan(angle)}\`): ${detail}`;
+  return neutralizeBareIssuePrIds(line);
 }
 
 export function buildFollowUpIssueTitle({ repo, pr }) {
@@ -237,26 +257,70 @@ export function buildFollowUpIssueAppendComment({ entries }) {
 }
 
 /**
+ * Resolve the PR's ONE tracked follow-up issue by asking GitHub itself,
+ * rather than a caller's own local idempotency channel. #1807/cross-path fix:
+ * `judge-pass.mjs` (relevance defer) and `close-gate-findings.mjs`
+ * (severity/round defer) each cache the link in a DISJOINT local store — the
+ * judge's own `--ledger-out` artifact vs. a thread marker's `issue=` field —
+ * so a PR that fires both paths could mint two issues if each trusted only
+ * its own cache. GitHub is the one channel both paths share: search open
+ * issues for the deterministic per-PR title (`buildFollowUpIssueTitle`) and
+ * require an EXACT title match (gh's `--search` is full-text/fuzzy, so a
+ * substring or reordered-word hit must not be treated as this PR's issue).
+ * Returns the lowest matching issue number, or `null` when none exists yet.
+ */
+export async function findFollowUpIssueOnGitHub(
+  { repo, pr },
+  { env = process.env, ghCommand = "gh", run = defaultRunChild, listIssues = coreListIssues } = {},
+) {
+  const title = buildFollowUpIssueTitle({ repo, pr });
+  const { issues } = await listIssues(
+    { repo, state: "open", search: `"${title}" in:title`, limit: 10 },
+    { env, ghCommand, run },
+  );
+  const matches = issues.filter((issue) => issue.title === title).map((issue) => issue.number);
+  return matches.length > 0 ? Math.min(...matches) : null;
+}
+
+/**
  * Create (or, when `existingIssueNumber` is already known, append a comment
  * to) the ONE tracked follow-up issue for a batch of `defer`-disposed
  * findings on one PR. Returns `{ issueNumber, created }`. The `createIssue` /
- * `commentIssue` dependencies default to the sanctioned core wrappers
- * (`@dev-loops/core/github/issue-ops`) — never a raw `gh` call — and are
- * injectable so a caller/test can stub them without hitting the real API.
+ * `commentIssue` / `listIssues` dependencies default to the sanctioned core
+ * wrappers (`@dev-loops/core/github/issue-ops`) — never a raw `gh` call — and
+ * are injectable so a caller/test can stub them without hitting the real API.
+ *
+ * When the caller does not already know an `existingIssueNumber` (its own
+ * local cache is empty or stale), this resolves against GitHub itself
+ * (`findFollowUpIssueOnGitHub`) BEFORE creating — the caller-supplied value
+ * is trusted as a fast-path optimization (skips the search round-trip), but
+ * an absent one is never treated as proof no issue exists yet.
+ *
+ * ponytail: a crash between `createIssue` returning and the caller writing
+ * its own local link (the ledger/marker) no longer orphans a duplicate on
+ * retry — the retry's search-before-create finds the just-created issue on
+ * GitHub and appends instead. The one residual window is GitHub search's own
+ * indexing lag: a retry landing in the brief gap before the new issue is
+ * searchable could still create a second one. Narrowing that further (e.g. a
+ * direct `gh issue view` fallback keyed on a caller-recorded issue number)
+ * is not worth it until it is observed in practice.
  */
 export async function ensureFollowUpIssue(
   { repo, pr, entries, existingIssueNumber },
-  { env = process.env, ghCommand = "gh", run = defaultRunChild, createIssue = coreCreateIssue, commentIssue = coreCommentIssue } = {},
+  { env = process.env, ghCommand = "gh", run = defaultRunChild, createIssue = coreCreateIssue, commentIssue = coreCommentIssue, listIssues = coreListIssues } = {},
 ) {
   if (!Array.isArray(entries) || entries.length === 0) {
     throw new Error("ensureFollowUpIssue: entries must be a non-empty array");
   }
-  if (Number.isInteger(existingIssueNumber) && existingIssueNumber > 0) {
+  const resolvedIssueNumber = Number.isInteger(existingIssueNumber) && existingIssueNumber > 0
+    ? existingIssueNumber
+    : await findFollowUpIssueOnGitHub({ repo, pr }, { env, ghCommand, run, listIssues });
+  if (resolvedIssueNumber !== null) {
     await commentIssue(
-      { repo, issue: existingIssueNumber, body: buildFollowUpIssueAppendComment({ entries }) },
+      { repo, issue: resolvedIssueNumber, body: buildFollowUpIssueAppendComment({ entries }) },
       { env, ghCommand, run },
     );
-    return { issueNumber: existingIssueNumber, created: false };
+    return { issueNumber: resolvedIssueNumber, created: false };
   }
   const result = await createIssue(
     { repo, title: buildFollowUpIssueTitle({ repo, pr }), body: buildFollowUpIssueBody({ repo, pr, entries }) },

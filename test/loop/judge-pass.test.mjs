@@ -9,6 +9,7 @@ import {
   runJudgePass,
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const HEAD = "0123456789abcdef";
 const HEAD_8 = HEAD.slice(0, 8);
@@ -218,9 +219,10 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
 // follow-up GitHub issue. Stub `createIssue`/`commentIssue` — the same
 // dependency-injection seam create-issue.test.mjs/comment-issue.test.mjs stub
 // — so this never hits the real API.
-function stubIssueDeps({ issueNumber = 9001 } = {}) {
+function stubIssueDeps({ issueNumber = 9001, existingGithubIssues = [] } = {}) {
   const createCalls = [];
   const commentCalls = [];
+  const listCalls = [];
   const createIssue = async (opts) => {
     createCalls.push(opts);
     return { ok: true, issueNumber, url: `https://github.com/${opts.repo}/issues/${issueNumber}` };
@@ -229,7 +231,15 @@ function stubIssueDeps({ issueNumber = 9001 } = {}) {
     commentCalls.push(opts);
     return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
   };
-  return { createIssue, commentIssue, createCalls, commentCalls };
+  // #1809: ensureFollowUpIssue now searches GitHub before creating whenever the
+  // caller's own local ledger cache doesn't already know a follow-up issue
+  // number — stub it to "no match" by default (returning `existingGithubIssues`
+  // otherwise) so a test never hits the real API.
+  const listIssues = async (opts) => {
+    listCalls.push(opts);
+    return { ok: true, issues: existingGithubIssues };
+  };
+  return { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls };
 }
 
 test("judgePassCli writes the act list and enriched ledger for a wrapped ledger", async () => {
@@ -257,7 +267,7 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
     ),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, createCalls, commentCalls } = stubIssueDeps();
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -269,7 +279,7 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
       out: actPath,
       ledgerOut: outLedgerPath,
     },
-    { repoRoot: tmpDir, createIssue, commentIssue },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
   );
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1);
@@ -309,7 +319,7 @@ test("judgePassCli defer is idempotent across a re-run: the already-linked findi
   const first = stubIssueDeps({ issueNumber: 4242 });
   await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue: first.createIssue, commentIssue: first.commentIssue },
+    { repoRoot: tmpDir, createIssue: first.createIssue, commentIssue: first.commentIssue, listIssues: first.listIssues },
   );
   assert.equal(first.createCalls.length, 1);
 
@@ -318,10 +328,11 @@ test("judgePassCli defer is idempotent across a re-run: the already-linked findi
   const second = stubIssueDeps({ issueNumber: 9999 });
   await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue: second.createIssue, commentIssue: second.commentIssue },
+    { repoRoot: tmpDir, createIssue: second.createIssue, commentIssue: second.commentIssue, listIssues: second.listIssues },
   );
   assert.equal(second.createCalls.length, 0, "no duplicate issue created on re-run");
   assert.equal(second.commentCalls.length, 0, "nothing new to append on a pure retry");
+  assert.equal(second.listCalls.length, 0, "a pure retry with a known prior issue number never searches GitHub");
   const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
   assert.equal(enriched.findings[0].followUpIssueNumber, 4242, "reuses the FIRST run's issue number");
 });
@@ -336,10 +347,10 @@ test("judgePassCli reject records a fingerprint audit entry and creates no issue
   await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "out of scope" })] }));
   await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "below the defer bar", criterion: "NG-1" }] })));
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, createCalls, commentCalls } = stubIssueDeps();
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
   await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue, commentIssue },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
   );
   assert.equal(createCalls.length, 0);
   assert.equal(commentCalls.length, 0);
@@ -350,4 +361,66 @@ test("judgePassCli reject records a fingerprint audit entry and creates no issue
   assert.equal(entry.severity, "high");
   assert.equal(entry.angle, "correctness");
   assert.equal(entry.followUpIssueNumber, undefined);
+});
+
+// #1809: cross-path convergence — close-gate-findings.mjs's severity/round
+// defer may have already created this PR's follow-up issue via a thread
+// marker judge-pass never sees. judge-pass's OWN --ledger-out cache is empty
+// (first-ever run of THIS pass), so it must resolve the existing issue via
+// GitHub itself rather than mint a duplicate.
+test("judgePassCli: no local prior issue, but GitHub already has this PR's follow-up issue — appends instead of creating a duplicate", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-cross-path-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const verdictPath = path.join(tmpDir, "judge-verdict.json");
+  const outLedgerPath = path.join(tmpDir, "enriched.json");
+  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "defer this", severity: "low" })] }));
+  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls } = stubIssueDeps({
+    existingGithubIssues: [{ number: 6500, title: "Deferred gate findings for mfittko/dev-loops#1658", state: "open", labels: [] }],
+  });
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+  );
+  assert.equal(createCalls.length, 0, "must not create a duplicate — close-gate-findings already created one");
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 6500);
+  assert.equal(listCalls.length, 1, "searches GitHub exactly once since the local cache is empty");
+  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
+  assert.equal(enriched.findings[0].followUpIssueNumber, 6500);
+});
+
+// #1809 finding 4 (coverage gap): the branch where a prior --ledger-out
+// already links a follow-up issue AND this round defers a NEW (not
+// previously linked) finding — must append to that same issue via
+// commentIssue, using the local fast path (no GitHub search needed since the
+// issue number is already known).
+test("judgePassCli: a NEW deferral in a later round appends to the PR's already-linked follow-up issue (no search, no duplicate)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-append-round-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const verdictPath = path.join(tmpDir, "judge-verdict.json");
+  const outLedgerPath = path.join(tmpDir, "enriched.json");
+  // Simulate a prior round's own output: one finding already linked to issue 7000.
+  const priorFinding = finding({ summary: "already deferred", severity: "low" });
+  await writeFile(outLedgerPath, JSON.stringify({
+    overallVerdict: "findings_present",
+    findings: [{ ...priorFinding, judgeDisposition: "defer", fingerprint: fingerprintFinding(priorFinding), followUpIssueNumber: 7000 }],
+  }));
+  // This round's fresh findings-file carries a DIFFERENT finding (distinct
+  // summary -> distinct fingerprint), disposed defer.
+  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "a new finding to defer", severity: "low" })] }));
+  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls } = stubIssueDeps();
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+  );
+  assert.equal(createCalls.length, 0, "must not create a second issue for the same PR");
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 7000);
+  assert.equal(listCalls.length, 0, "the local ledger already knows the issue number — no GitHub search needed");
+  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
+  assert.equal(enriched.findings[0].followUpIssueNumber, 7000);
 });

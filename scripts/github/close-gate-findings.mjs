@@ -254,8 +254,14 @@ async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindo
 // #1807: the ONE tracked follow-up issue for this PR — reused across gate
 // rounds — is found by scanning every gate-authored thread's OWN marker
 // (resolved threads included: a resolved thread's marker never loses its
-// `issue=` field) for a previously-recorded link. `null` when this PR has
-// never deferred a finding before.
+// `issue=` field) for a previously-recorded link. `null` when this pass's OWN
+// thread markers don't know of one yet — this is a fast-path cache (skips a
+// GitHub round-trip), not the authority: judge-pass.mjs's relevance defer
+// never stamps a thread marker's `issue=` field at all (it runs before any
+// finding is posted as a thread), so a PR whose only prior deferral went
+// through judge-pass always reads `null` here. `ensureFollowUpIssue`
+// (_gate-finding-surface.mjs) closes that gap by resolving against GitHub
+// itself before creating whenever this returns `null`.
 function findExistingFollowUpIssueNumber(threads, login) {
   for (const thread of threads) {
     if (thread.author !== login) continue;

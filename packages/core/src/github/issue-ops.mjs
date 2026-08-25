@@ -288,6 +288,13 @@ export async function listIssues(options, { env = process.env, ghCommand = "gh",
   for (const label of options.labels ?? []) {
     args.push("--label", label);
   }
+  // `--search` narrows the result set to gh's own full-text search (title,
+  // body, comments) rather than the bare paged listing — needed by a caller
+  // that must find one specific issue by title without trusting that it falls
+  // within the default 30-issue page.
+  if (typeof options.search === "string" && options.search.length > 0) {
+    args.push("--search", options.search);
+  }
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;

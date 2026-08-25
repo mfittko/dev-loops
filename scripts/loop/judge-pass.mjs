@@ -303,6 +303,14 @@ async function readJudgeVerdict(judgePath, parseErr) {
 // there. Tolerates a missing/malformed prior artifact (first-ever run) by
 // returning an empty link set — never fails the pass over a stale/partial
 // read of its own prior output.
+//
+// This is a FAST-PATH cache only, not the authority: this pass's own
+// --ledger-out is a disjoint store from close-gate-findings.mjs's thread
+// markers, so a `null` here does not mean no follow-up issue exists — it only
+// means this run doesn't know of one locally. `ensureFollowUpIssue`
+// (_gate-finding-surface.mjs) resolves against GitHub itself before creating
+// whenever the number passed in here is `null`, which is what actually closes
+// the cross-path duplicate-issue gap between the two independent defer paths.
 async function readPriorFollowUpLinks(ledgerOutPath) {
   if (!ledgerOutPath) return { issueNumber: null, linkedFingerprints: new Set() };
   let parsed;
@@ -362,7 +370,7 @@ async function applyFollowUpIssues(enriched, { repo, pr, ledgerOutPath }, deps) 
 
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue, listIssues } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
@@ -378,7 +386,7 @@ export async function judgePassCli(
   await applyFollowUpIssues(
     result.enriched,
     { repo: options.repo, pr: Number(options.pr), ledgerOutPath: options.ledgerOut ? path.resolve(resolvedRoot, options.ledgerOut) : null },
-    { env, ghCommand, run, createIssue, commentIssue },
+    { env, ghCommand, run, createIssue, commentIssue, listIssues },
   );
 
   const written = new Set();
