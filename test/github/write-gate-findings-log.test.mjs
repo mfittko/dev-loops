@@ -129,6 +129,38 @@ test("writeGateFindingsLog rejects non-array findings JSON", async () => {
   }, /array/);
 });
 
+test("writeGateFindingsLog fails closed on a malformed fingerprint shape", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x", fingerprint: "not-16-hex" }]),
+    });
+  }, /fingerprint must be a 16-char lowercase hex string/);
+});
+
+test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-fp-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x", fingerprint: "0123456789abcdef" }]),
+      tmpRoot: dir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.findings[0].fingerprint, "0123456789abcdef");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseWriteGateFindingsLogCliArgs rejects missing required args", () => {
   assert.throws(() => {
     parseWriteGateFindingsLogCliArgs([

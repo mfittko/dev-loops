@@ -162,11 +162,17 @@ function validateFindingsArray(parsed, flagLabel) {
     // #1807: a judge-pass-enriched finding carries a stable `fingerprint`
     // (act/defer/reject — the reject audit entry keys on it too) and a
     // `defer` finding additionally carries `followUpIssueNumber` — the PR's
-    // ONE tracked follow-up GitHub issue. Pass both through unvalidated
-    // beyond shape: they are produced by the sanctioned judge-pass bridge,
-    // never hand-authored.
+    // ONE tracked follow-up GitHub issue. Both come from the sanctioned
+    // judge-pass bridge; absent/empty is tolerated (skipped), but a present
+    // fingerprint is shape-validated against the marker's own `[0-9a-f]{16}`
+    // contract so a malformed / hand-edited ledger fails closed here rather
+    // than silently producing a marker the finding-marker regex never matches.
     if (typeof f.fingerprint === "string" && f.fingerprint.trim().length > 0) {
-      entry.fingerprint = f.fingerprint.trim();
+      const fp = f.fingerprint.trim();
+      if (!/^[0-9a-f]{16}$/.test(fp)) {
+        throw parseError(`${flagLabel}[${i}].fingerprint must be a 16-char lowercase hex string`);
+      }
+      entry.fingerprint = fp;
     }
     if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
       entry.followUpIssueNumber = f.followUpIssueNumber;
