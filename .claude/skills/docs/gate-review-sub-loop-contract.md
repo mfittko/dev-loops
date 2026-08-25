@@ -1727,7 +1727,7 @@ A
 `disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
 contract violation, refused fail-closed exactly like an out-of-window stamp.
 
-A `reject` (the judge's relevance axis only — see Phase 3.5 below) is never a deferral and creates
+A `reject` (the judge's relevance axis only — see Phase 3.5 above) is never a deferral and creates
 no issue: it records a one-line audit entry in the durable ledger (fingerprint, severity, angle,
 `judgeDisposition: "reject"`, rationale) and nothing else.
 

@@ -5,6 +5,7 @@ import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import {
   buildCommentableLineSet,
   buildFindingMarker,
@@ -858,13 +859,22 @@ test("ensureFollowUpIssue: close-gate-findings-style caller defers first, judge-
 // #1809: guard symmetry — a finding's own untrusted summary must not throw on
 // the append path (commentIssue's guardCommentBodyNoIssuePrIds) while
 // silently leaking on the create path.
+//
+// Round-2: entity-encoding (`&#35;123`) is NOT guard-safe — the guard decodes
+// numeric character references before scanning, so `&#35;123` resolves right
+// back to `#123` and the guard refuses it exactly like the raw form. The
+// rendered text must instead never leave a `#` adjacent to digits at all.
 // ---------------------------------------------------------------------------
 
-test("buildFollowUpIssueBody / buildFollowUpIssueAppendComment: a bare #<digits> in a finding summary is entity-encoded, never raw, on both the create and append render paths", async () => {
+test("buildFollowUpIssueBody / buildFollowUpIssueAppendComment: a bare #<digits> in a finding summary never survives to a `#`-adjacent-digits form on either render path", async () => {
   const entries = [{ fingerprint: "3333333333333333", severity: "low", angle: "naming", summary: "duplicates #123 behavior" }];
   const createBody = buildFollowUpIssueBody({ repo: "o/r", pr: 42, entries });
-  assert.doesNotMatch(createBody, /[^&]#123\b/);
-  assert.match(createBody, /&#35;123/);
+  // The hash is stripped outright: the id still reads (as "123"), but never as
+  // a `#<digits>` auto-link token, and no entity-encoded form either (the
+  // round-1 shape the guard's decode step defeats).
+  assert.doesNotMatch(createBody, /#\d/);
+  assert.doesNotMatch(createBody, /&#35;/);
+  assert.match(createBody, /duplicates 123 behavior/);
 
   const listIssues = async () => ({ ok: true, issues: [] });
   const commentCalls = [];
@@ -880,6 +890,60 @@ test("buildFollowUpIssueBody / buildFollowUpIssueAppendComment: a bare #<digits>
     { commentIssue, listIssues },
   );
   assert.equal(commentCalls.length, 1);
-  assert.doesNotMatch(commentCalls[0].body, /[^&]#123\b/);
-  assert.match(commentCalls[0].body, /&#35;123/);
+  assert.doesNotMatch(commentCalls[0].body, /#\d/);
+  assert.doesNotMatch(commentCalls[0].body, /&#35;/);
+  assert.match(commentCalls[0].body, /duplicates 123 behavior/);
+});
+
+// #1809 round-2 CRITICAL: every prior test in this section stubbed
+// `commentIssue`/`createIssue`, bypassing the REAL
+// `guardCommentBodyNoIssuePrIds` — that is exactly how the round-1
+// entity-encoding regression (guard-defeated by its own decode step) slipped
+// through review. These feed a finding summary carrying a bare `#<digits>`
+// token through the ACTUAL guard (imported directly, and via the real
+// `commentIssue`/`createIssue` from @dev-loops/core/github/issue-ops), for
+// BOTH the create body and the append comment, and assert it does not throw
+// and the rendered body carries no auto-linking bare id.
+test("#1809 round-2: buildFollowUpIssueBody survives the REAL guardCommentBodyNoIssuePrIds unchanged (create path)", () => {
+  const entries = [{ fingerprint: "4444444444444444", severity: "high", angle: "security", summary: "see #987654 for context" }];
+  const body = buildFollowUpIssueBody({ repo: "o/r", pr: 7, entries });
+  assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(body, { ref: "test create body" }));
+  assert.doesNotMatch(body, /#\d/);
+});
+
+test("#1809 round-2: ensureFollowUpIssue's create path calls the REAL createIssue (real guard exposure) without throwing, and the id is neutralized", async () => {
+  const entries = [{ fingerprint: "5555555555555555", severity: "medium", angle: "perf", summary: "duplicates #123456 behavior" }];
+  const runCalls = [];
+  const run = async (ghCommand, args) => {
+    runCalls.push(args);
+    // Mimic `gh issue create`'s stdout: the created issue URL.
+    return { code: 0, stdout: "https://github.com/o/r/issues/909\n", stderr: "" };
+  };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 7, entries, existingIssueNumber: null },
+    { run, listIssues: async () => ({ ok: true, issues: [] }) },
+  );
+  assert.deepEqual(result, { issueNumber: 909, created: true });
+  // The body actually handed to `gh issue create --body <...>` carries no bare
+  // issue/PR id.
+  const bodyArg = runCalls[0][runCalls[0].indexOf("--body") + 1];
+  assert.doesNotMatch(bodyArg, /#\d/);
+  assert.match(bodyArg, /duplicates 123456 behavior/);
+});
+
+test("#1809 round-2: ensureFollowUpIssue's append path calls the REAL commentIssue (real guard exposure) without throwing, and the id is neutralized", async () => {
+  const entries = [{ fingerprint: "6666666666666666", severity: "low", angle: "naming", summary: "references #42 in the doc" }];
+  const runCalls = [];
+  const run = async (ghCommand, args) => {
+    runCalls.push(args);
+    return { code: 0, stdout: "https://github.com/o/r/issues/909#issuecomment-1\n", stderr: "" };
+  };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 7, entries, existingIssueNumber: 909 },
+    { run },
+  );
+  assert.deepEqual(result, { issueNumber: 909, created: false });
+  const bodyArg = runCalls[0][runCalls[0].indexOf("--body") + 1];
+  assert.doesNotMatch(bodyArg, /#\d/);
+  assert.match(bodyArg, /references 42 in the doc/);
 });

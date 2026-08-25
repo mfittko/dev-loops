@@ -215,24 +215,41 @@ export function collectFingerprints(text, set) {
 // auto-link token), while the create path's `createIssue` runs no such guard
 // at all — so a raw id in a finding's own summary would silently leak via
 // GitHub's auto-link on a first-ever defer, then abort the whole pass on a
-// LATER defer of the same PR, purely because of defer ordering. Entity-encode
-// the hash here, at the one place every deferred entry renders, so neither
-// path ever sees a live `#<digits>` token to begin with — consistent with the
-// repo's entity-encode-not-escape convention (sanitizeInline/sanitizeCodeSpan
-// above); this must never be "add the throwing guard to createIssue too", or
-// ordinary finding text that happens to start a sentence with a hashtag-like
-// number would fail-close the create path as well.
+// LATER defer of the same PR, purely because of defer ordering.
+//
+// #1809 round-2: entity-encoding the hash (`&#35;123`) does NOT fix this.
+// `guardCommentBodyNoIssuePrIds` is decode-aware — it runs a single
+// renderer-like decode of numeric character references before scanning — so
+// `&#35;123` decodes straight back to `#123` and the guard refuses it exactly
+// like the raw form. The only guard-safe rendering is one that never leaves a
+// `#` immediately adjacent to digits in EITHER the raw or the decoded text, so
+// this strips the leading `#` from a bare id token instead of encoding it
+// (`#123` -> `123`): no decode path can ever reassemble a leading `#` from
+// bare digits, so this is unconditionally guard-safe rather than merely
+// guard-safe-until-decoded. This also makes GitHub's own auto-linker a
+// non-issue (auto-link syntax requires the leading `#`), so the create path
+// (still unguarded) is safe too — both paths render through this one function,
+// so they stay symmetric by construction rather than by each independently
+// avoiding the guard.
+//
+// Runs on the RAW summary/angle text, BEFORE sanitizeInline/sanitizeCodeSpan:
+// those sanitizers emit their own numeric character references (e.g. `&#91;`
+// for `[`), and this regex does not distinguish an entity's digits from a bare
+// id's — neutralizing post-sanitize would re-match and corrupt an
+// already-emitted entity (`&#91;` -> `&&#35;91;`).
 const BARE_ISSUE_PR_ID_RE = /#(\d{1,9})/g;
 function neutralizeBareIssuePrIds(value) {
-  return String(value).replace(BARE_ISSUE_PR_ID_RE, "&#35;$1");
+  return String(value).replace(BARE_ISSUE_PR_ID_RE, "$1");
 }
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
-    ? sanitizeInline(summary.trim())
-    : (typeof refUrl === "string" && refUrl.trim().length > 0 ? refUrl.trim() : "(no summary recorded)");
-  const line = `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${sanitizeCodeSpan(angle)}\`): ${detail}`;
-  return neutralizeBareIssuePrIds(line);
+    ? sanitizeInline(neutralizeBareIssuePrIds(summary.trim()))
+    : (typeof refUrl === "string" && refUrl.trim().length > 0
+      ? neutralizeBareIssuePrIds(refUrl.trim())
+      : "(no summary recorded)");
+  const safeAngle = sanitizeCodeSpan(neutralizeBareIssuePrIds(angle));
+  return `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${safeAngle}\`): ${detail}`;
 }
 
 export function buildFollowUpIssueTitle({ repo, pr }) {
@@ -322,8 +339,17 @@ export async function ensureFollowUpIssue(
     );
     return { issueNumber: resolvedIssueNumber, created: false };
   }
+  // #1809 round-2: `commentIssue` (append path, above) runs
+  // `guardCommentBodyNoIssuePrIds` internally; `createIssue` does not. Guard
+  // the create body explicitly here too — belt-and-braces symmetry with the
+  // append path, on top of (never instead of) formatDeferredFindingEntry's own
+  // guard-safe rendering — so a future rendering regression fails closed on
+  // BOTH paths identically rather than only on whichever path happens to defer
+  // second.
+  const createBody = buildFollowUpIssueBody({ repo, pr, entries });
+  guardCommentBodyNoIssuePrIds(createBody, { ref: "follow-up issue body" });
   const result = await createIssue(
-    { repo, title: buildFollowUpIssueTitle({ repo, pr }), body: buildFollowUpIssueBody({ repo, pr, entries }) },
+    { repo, title: buildFollowUpIssueTitle({ repo, pr }), body: createBody },
     { env, ghCommand, run },
   );
   return { issueNumber: result.issueNumber, created: true };
