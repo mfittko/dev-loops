@@ -7,6 +7,7 @@ import {
   applyJudgeDispositions,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
+import { ensureFollowUpIssue, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -45,6 +46,12 @@ Inputs:
   --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift }
                                to this path as JSON, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
+                               Every disposed finding also carries a \`fingerprint\`; a
+                               \`defer\` finding additionally carries \`followUpIssueNumber\`
+                               — the PR's ONE tracked follow-up GitHub issue (created or
+                               appended to, batched across every defer in the round; never
+                               one issue per finding). A re-run reads this same path back
+                               first, so an already-linked finding is not re-created (#1807).
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -288,7 +295,75 @@ async function readJudgeVerdict(judgePath, parseErr) {
   return parsed;
 }
 
-export async function judgePassCli(options, { repoRoot = process.cwd() } = {}) {
+// Best-effort read of a prior --ledger-out artifact (the same path this run
+// is about to overwrite) to recover the PR's already-linked follow-up issue
+// (#1807 idempotency, batching policy): a re-run of the judge pass over the
+// same round must reuse the PR's ONE tracked follow-up issue rather than
+// mint a duplicate, and must not re-append fingerprints it already recorded
+// there. Tolerates a missing/malformed prior artifact (first-ever run) by
+// returning an empty link set — never fails the pass over a stale/partial
+// read of its own prior output.
+async function readPriorFollowUpLinks(ledgerOutPath) {
+  if (!ledgerOutPath) return { issueNumber: null, linkedFingerprints: new Set() };
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(ledgerOutPath, "utf8"));
+  } catch {
+    return { issueNumber: null, linkedFingerprints: new Set() };
+  }
+  const priorFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+  const issueNumber = priorFindings
+    .map((f) => f?.followUpIssueNumber)
+    .find((n) => Number.isInteger(n) && n > 0) ?? null;
+  const linkedFingerprints = new Set(
+    issueNumber === null
+      ? []
+      : priorFindings.filter((f) => f?.followUpIssueNumber === issueNumber).map((f) => f.fingerprint),
+  );
+  return { issueNumber, linkedFingerprints };
+}
+
+/**
+ * Attach a stable per-finding `fingerprint` to every judge-disposed finding
+ * (act/defer/reject — #1807's one-line reject audit entry keys on it too),
+ * then — for every `defer` disposition — create or append to the PR's ONE
+ * tracked follow-up GitHub issue (batched: never one issue per finding).
+ * Mutates `enriched` in place (each element already the judge-pass's own
+ * fresh copy from `applyJudgeDispositions`). A re-run over the same
+ * `ledgerOutPath` links the already-linked findings without creating a
+ * duplicate issue or re-appending fingerprints already recorded on it.
+ */
+async function applyFollowUpIssues(enriched, { repo, pr, ledgerOutPath }, deps) {
+  for (const f of enriched) {
+    f.fingerprint = fingerprintFinding(f);
+  }
+  const deferred = enriched.filter((f) => f.judgeDisposition === "defer");
+  if (deferred.length === 0) return;
+  const { issueNumber: priorIssueNumber, linkedFingerprints } = await readPriorFollowUpLinks(ledgerOutPath);
+  const newlyDeferred = deferred.filter((f) => !linkedFingerprints.has(f.fingerprint));
+  if (priorIssueNumber !== null && newlyDeferred.length === 0) {
+    // Every currently-deferred finding is already linked to the PR's
+    // follow-up issue — a pure retry. No gh call at all.
+    for (const f of deferred) f.followUpIssueNumber = priorIssueNumber;
+    return;
+  }
+  const entries = (newlyDeferred.length > 0 ? newlyDeferred : deferred).map((f) => ({
+    fingerprint: f.fingerprint,
+    severity: f.severity,
+    angle: f.angle,
+    summary: f.summary,
+  }));
+  const { issueNumber } = await ensureFollowUpIssue(
+    { repo, pr, entries, existingIssueNumber: priorIssueNumber },
+    deps,
+  );
+  for (const f of deferred) f.followUpIssueNumber = issueNumber;
+}
+
+export async function judgePassCli(
+  options,
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue } = {},
+) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
   const judgeVerdict = await readJudgeVerdict(
@@ -296,6 +371,15 @@ export async function judgePassCli(options, { repoRoot = process.cwd() } = {}) {
     parseError,
   );
   const result = runJudgePass(findings, judgeVerdict, options.headSha);
+
+  // #1807: a `defer` disposition always tracks a GitHub issue — never only the
+  // ephemeral tmp ledger. One issue per PR, batched; idempotent across re-runs
+  // via the prior --ledger-out artifact this run is about to overwrite.
+  await applyFollowUpIssues(
+    result.enriched,
+    { repo: options.repo, pr: Number(options.pr), ledgerOutPath: options.ledgerOut ? path.resolve(resolvedRoot, options.ledgerOut) : null },
+    { env, ghCommand, run, createIssue, commentIssue },
+  );
 
   const written = new Set();
   if (options.ledgerOut) {

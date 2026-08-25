@@ -214,6 +214,24 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
 });
 
+// #1807: a `defer` disposition creates (or appends to) the PR's ONE tracked
+// follow-up GitHub issue. Stub `createIssue`/`commentIssue` — the same
+// dependency-injection seam create-issue.test.mjs/comment-issue.test.mjs stub
+// — so this never hits the real API.
+function stubIssueDeps({ issueNumber = 9001 } = {}) {
+  const createCalls = [];
+  const commentCalls = [];
+  const createIssue = async (opts) => {
+    createCalls.push(opts);
+    return { ok: true, issueNumber, url: `https://github.com/${opts.repo}/issues/${issueNumber}` };
+  };
+  const commentIssue = async (opts) => {
+    commentCalls.push(opts);
+    return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
+  };
+  return { createIssue, commentIssue, createCalls, commentCalls };
+}
+
 test("judgePassCli writes the act list and enriched ledger for a wrapped ledger", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-"));
   const ledgerPath = path.join(tmpDir, "ledger.json");
@@ -239,6 +257,7 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
     ),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, createCalls, commentCalls } = stubIssueDeps();
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -250,7 +269,7 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
       out: actPath,
       ledgerOut: outLedgerPath,
     },
-    { repoRoot: tmpDir },
+    { repoRoot: tmpDir, createIssue, commentIssue },
   );
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1);
@@ -261,6 +280,74 @@ test("judgePassCli writes the act list and enriched ledger for a wrapped ledger"
   const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
   assert.equal(enriched.overallVerdict, "findings_present");
   assert.equal(enriched.findings[0].judgeDisposition, "act");
+  assert.ok(typeof enriched.findings[0].fingerprint, "string");
   assert.equal(enriched.findings[1].judgeDisposition, "defer");
+  assert.equal(enriched.findings[1].followUpIssueNumber, 9001);
   assert.equal(enriched.scopeDrift.verdict, "within_scope");
+  // ONE issue created for the round's batch of defers; no comment-append call
+  // on a first-ever run (nothing prior to append to).
+  assert.equal(createCalls.length, 1);
+  assert.equal(commentCalls.length, 0);
+  assert.match(createCalls[0].body, /defer this/);
+});
+
+// #1807 idempotency: re-running the pass over the SAME --ledger-out path
+// (a retry, or the next round re-linking the same PR) must not create a
+// duplicate issue for a finding it already linked.
+test("judgePassCli defer is idempotent across a re-run: the already-linked finding reuses its issue with no gh call", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-idempotent-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const verdictPath = path.join(tmpDir, "judge-verdict.json");
+  const outLedgerPath = path.join(tmpDir, "enriched.json");
+  const deferredFinding = finding({ summary: "defer this", severity: "medium" });
+  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [deferredFinding] }));
+  await writeFile(
+    verdictPath,
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const first = stubIssueDeps({ issueNumber: 4242 });
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
+    { repoRoot: tmpDir, createIssue: first.createIssue, commentIssue: first.commentIssue },
+  );
+  assert.equal(first.createCalls.length, 1);
+
+  // Re-run with the SAME inputs (same fresh findings-file, same verdict) —
+  // the prior enriched.json already links fingerprint -> 4242.
+  const second = stubIssueDeps({ issueNumber: 9999 });
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
+    { repoRoot: tmpDir, createIssue: second.createIssue, commentIssue: second.commentIssue },
+  );
+  assert.equal(second.createCalls.length, 0, "no duplicate issue created on re-run");
+  assert.equal(second.commentCalls.length, 0, "nothing new to append on a pure retry");
+  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
+  assert.equal(enriched.findings[0].followUpIssueNumber, 4242, "reuses the FIRST run's issue number");
+});
+
+// #1807 AC3: a `reject` disposition records fingerprint/severity/angle in the
+// ledger and creates no issue.
+test("judgePassCli reject records a fingerprint audit entry and creates no issue", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-reject-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const verdictPath = path.join(tmpDir, "judge-verdict.json");
+  const outLedgerPath = path.join(tmpDir, "enriched.json");
+  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "out of scope" })] }));
+  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "below the defer bar", criterion: "NG-1" }] })));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, createCalls, commentCalls } = stubIssueDeps();
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
+    { repoRoot: tmpDir, createIssue, commentIssue },
+  );
+  assert.equal(createCalls.length, 0);
+  assert.equal(commentCalls.length, 0);
+  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
+  const [entry] = enriched.findings;
+  assert.equal(entry.judgeDisposition, "reject");
+  assert.equal(typeof entry.fingerprint, "string");
+  assert.equal(entry.severity, "high");
+  assert.equal(entry.angle, "correctness");
+  assert.equal(entry.followUpIssueNumber, undefined);
 });

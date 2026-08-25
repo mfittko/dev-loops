@@ -1280,6 +1280,16 @@ to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails clo
 head, malformed verdict, out-of-range index, undisposed finding), the conductor re-runs the judge at the
 current head rather than degrading to severity-only disposition for a wired gate.
 
+`judge-pass` is also where a judge `defer` creates its tracked follow-up issue (#1807,
+`GATE-EXEC-DEFERRAL-RECORD`): every `defer`-disposed finding gets a stable `fingerprint`, and the
+PR's ONE follow-up issue is created (first defer on the PR) or appended to (a later defer on the
+same PR) via the sanctioned `scripts/github/create-issue.mjs` / `comment-issue.mjs` wrappers —
+never a raw `gh` call. Each `defer` finding's ledger entry carries the resulting
+`followUpIssueNumber`; a `reject` carries neither an issue link nor a follow-up draft, only its
+`fingerprint` and rationale (the one-line audit entry). Re-running `judge-pass` for the same round
+reads back its own prior `--ledger-out` to recover the PR's already-linked issue number and already
+-linked fingerprints, so a retry links the existing issue rather than creating a duplicate.
+
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
 PR?); the fixer owns **reproduction** (does this finding reproduce / is it a real defect?).
@@ -1672,7 +1682,7 @@ when one named shared root cause genuinely closed them all.
 third summary comment: the finding's own posted surface — the resolving reply on its thread for a
 locatable finding, or its body-filed entry on the round's review for a non-locatable one — and the
 durable findings-log ledger under `tmp/gate-findings/...`. Both carry the finding marker's optional `disposition=deferred`
-field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
+field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred][ issue=<n>] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
 defers it (a medium thread past the gate's configured medium fix window
@@ -1685,6 +1695,25 @@ non-locatable (body-filed) marker is stamped `disposition=deferred` unconditiona
 severity other than `high`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a
 resolvable thread through which the standard fix loop could otherwise close it.
+
+A `defer` is never parked ONLY in the thread marker and the ephemeral tmp findings ledger: it
+ALWAYS creates or appends to a tracked GitHub issue — the
+durable, tracker-first record that survives a `tmp/` wipe. Every `defer` for one PR shares ONE
+follow-up issue, batched: the first deferral on a PR creates it (title `Deferred gate findings for
+<repo>#<pr>`, body listing every deferred finding's fingerprint/severity/angle); every later
+deferral on the same PR — a later round's newly out-of-window medium, a fixer-triaged low, a
+judge `defer` — appends a comment to that SAME issue rather than minting a second one. Both the
+thread marker (`issue=<n>`) and the durable ledger entry (`followUpIssueNumber`) record the issue
+number — the re-attachment pointer that lets a reader recover the tracked record even after the
+ephemeral ledger is gone. Idempotency is per-PR, not per-fingerprint: a re-run of the disposition
+pass links the PR's existing follow-up issue (found on an already-stamped thread marker, or, for
+the judge's own bridge, on the prior `--ledger-out` artifact) rather than creating a duplicate. A
+`disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
+contract violation, refused fail-closed exactly like an out-of-window stamp.
+
+A `reject` (the judge's relevance axis only — see Phase 3.5 below) is never a deferral and creates
+no issue: it records a one-line audit entry in the durable ledger (fingerprint, severity, angle,
+`judgeDisposition: "reject"`, rationale) and nothing else.
 
 ## Execution mode and fan-out evidence enforcement
 

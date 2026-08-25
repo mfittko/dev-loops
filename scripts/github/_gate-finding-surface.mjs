@@ -13,6 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
+import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
@@ -121,12 +122,20 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
 // this module's own reader disagree on the accepted vocabulary.
 const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 
-export function buildFindingMarker({ fp, severity, angle, round, disposition }) {
+// `issue` is the follow-up GitHub issue number a `disposition=deferred`
+// finding is tracked on (#1807, GATE-EXEC-DEFERRAL-RECORD): a deferral must
+// never live only in the thread marker and the ephemeral tmp ledger, so the
+// marker itself carries the re-attachment pointer.
+export function buildFindingMarker({ fp, severity, angle, round, disposition, issue }) {
   if (disposition !== undefined && !VALID_MARKER_DISPOSITIONS.has(disposition)) {
     throw new Error(`buildFindingMarker: disposition must be "deferred" (or omitted), got ${JSON.stringify(disposition)}`);
   }
+  if (issue !== undefined && (!Number.isInteger(issue) || issue <= 0)) {
+    throw new Error(`buildFindingMarker: issue must be a positive integer (or omitted), got ${JSON.stringify(issue)}`);
+  }
   const dispositionField = disposition ? ` disposition=${slugForMarker(disposition)}` : "";
-  return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round}${dispositionField} -->`;
+  const issueField = issue !== undefined ? ` issue=${issue}` : "";
+  return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round}${dispositionField}${issueField} -->`;
 }
 
 // Anchored to the START of a line (multiline `m`): a marker quoted mid-line
@@ -134,13 +143,20 @@ export function buildFindingMarker({ fp, severity, angle, round, disposition }) 
 // marker as an example) must never be honored as a real marker. Every marker
 // this module renders is always the first character of its own line, so this
 // anchor costs nothing against genuine markers.
-export const FINDING_MARKER_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+disposition=(deferred))?\s*-->/m;
+export const FINDING_MARKER_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+disposition=(deferred))?(?:\s+issue=(\d+))?\s*-->/m;
 const FINDING_MARKER_FP_ONLY_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
 
 export function parseFindingMarker(text) {
   const match = typeof text === "string" ? text.match(FINDING_MARKER_RE) : null;
   if (!match) return null;
-  return { fp: match[1], severity: normalizeSeverity(match[2]), angle: match[3], round: Number(match[4]), disposition: match[5] ?? null };
+  return {
+    fp: match[1],
+    severity: normalizeSeverity(match[2]),
+    angle: match[3],
+    round: Number(match[4]),
+    disposition: match[5] ?? null,
+    issue: match[6] ? Number(match[6]) : null,
+  };
 }
 
 // Round is embedded here (an addition beyond the finding marker's own round=,
@@ -176,6 +192,77 @@ export function collectFingerprints(text, set) {
   for (const match of text.matchAll(FINDING_MARKER_FP_ONLY_RE)) {
     set.add(match[1]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up issue for deferred findings (#1807)
+// ---------------------------------------------------------------------------
+//
+// A `defer` disposition — the judge's relevance-based defer (judge-pass.mjs)
+// or the severity/round-based auto-defer (close-gate-findings.mjs's
+// disposition pass) — must never live only in a thread marker and the
+// ephemeral tmp findings ledger; it always creates or appends to ONE tracked
+// GitHub issue per PR (batched: every finding a PR ever defers is one entry
+// on that same issue, never one issue per finding). `existingIssueNumber`,
+// when the caller already knows one (a prior round's ledger, or an existing
+// thread marker's own `issue=` field), is reused: new entries are appended as
+// a comment instead of minting a second issue.
+
+function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
+  const detail = typeof summary === "string" && summary.trim().length > 0
+    ? sanitizeInline(summary.trim())
+    : (typeof refUrl === "string" && refUrl.trim().length > 0 ? refUrl.trim() : "(no summary recorded)");
+  return `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${sanitizeCodeSpan(angle)}\`): ${detail}`;
+}
+
+export function buildFollowUpIssueTitle({ repo, pr }) {
+  return `Deferred gate findings for ${repo}#${pr}`;
+}
+
+export function buildFollowUpIssueBody({ repo, pr, entries }) {
+  const lines = [
+    `Gate review findings deferred out of https://github.com/${repo}/pull/${pr}, tracked here instead of only in the gate's thread markers and the ephemeral tmp findings ledger.`,
+    "",
+    ...entries.map(formatDeferredFindingEntry),
+  ];
+  return lines.join("\n");
+}
+
+export function buildFollowUpIssueAppendComment({ entries }) {
+  return [
+    "Additional gate finding(s) deferred to this issue:",
+    "",
+    ...entries.map(formatDeferredFindingEntry),
+  ].join("\n");
+}
+
+/**
+ * Create (or, when `existingIssueNumber` is already known, append a comment
+ * to) the ONE tracked follow-up issue for a batch of `defer`-disposed
+ * findings on one PR. Returns `{ issueNumber, created }`. The `createIssue` /
+ * `commentIssue` dependencies default to the sanctioned core wrappers
+ * (`@dev-loops/core/github/issue-ops`) — never a raw `gh` call — and are
+ * injectable so a caller/test can stub them without hitting the real API.
+ */
+export async function ensureFollowUpIssue(
+  { repo, pr, entries, existingIssueNumber },
+  { env = process.env, ghCommand = "gh", run = defaultRunChild, createIssue = coreCreateIssue, commentIssue = coreCommentIssue } = {},
+) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error("ensureFollowUpIssue: entries must be a non-empty array");
+  }
+  if (Number.isInteger(existingIssueNumber) && existingIssueNumber > 0) {
+    await commentIssue(
+      { repo, issue: existingIssueNumber, body: buildFollowUpIssueAppendComment({ entries }) },
+      { env, ghCommand, run },
+    );
+    return { issueNumber: existingIssueNumber, created: false };
+  }
+  const result = await createIssue(
+    { repo, title: buildFollowUpIssueTitle({ repo, pr }), body: buildFollowUpIssueBody({ repo, pr, entries }) },
+    { env, ghCommand, run },
+  );
+  return { issueNumber: result.issueNumber, created: true };
 }
 
 // ---------------------------------------------------------------------------

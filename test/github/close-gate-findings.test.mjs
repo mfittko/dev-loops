@@ -181,6 +181,26 @@ function patchReviewCommentEntry(commentId) {
   };
 }
 
+// #1807: before stamping any target, the disposition pass creates (or, when
+// this PR already has one, appends to) the PR's ONE tracked follow-up issue
+// for the round's whole batch. `gh issue create` prints the created issue's
+// bare URL on stdout (not JSON) — matches core createIssue's own parsing.
+function createFollowUpIssueEntry(issueNumber = 9500) {
+  return {
+    assertArgs: ["issue", "create", "--repo", REPO],
+    stdout: `https://github.com/${REPO}/issues/${issueNumber}\n`,
+  };
+}
+
+// The append path (an existing follow-up issue already found on a thread
+// marker): `gh issue comment` prints the new comment's URL on stdout.
+function appendFollowUpIssueEntry(issueNumber) {
+  return {
+    assertArgs: ["issue", "comment", String(issueNumber), "--repo", REPO],
+    stdout: `https://github.com/${REPO}/issues/${issueNumber}#issuecomment-1\n`,
+  };
+}
+
 // closeGateFindings' fixed gh call order: `api user`, reviews, issue comments,
 // then the thread listing + full-body walk that feed the disposition pass.
 function roundEntries({ reviews = [], issueComments = [{ id: 1, body: verdictBody("draft_gate") }], threads = [], fullBodyThreads = threads } = {}) {
@@ -461,6 +481,7 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6002, wfnBody("1111111111111111")),
       patchReviewCommentEntry(6002),
       postReplyEntry(6002, { id: 7001 }),
@@ -470,6 +491,7 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 1);
+      assert.equal(result.followUpIssueNumber, 9500);
     },
   ));
 });
@@ -480,6 +502,7 @@ test("an unresolved nice-to-have thread is replied-to + resolved immediately, at
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6200, niceToHaveBody),
       patchReviewCommentEntry(6200),
       postReplyEntry(6200, { id: 7100 }),
@@ -501,6 +524,7 @@ test("an unresolved nit thread is replied-to + resolved immediately, at round 1"
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6250, nitBody),
       patchReviewCommentEntry(6250),
       {
@@ -546,6 +570,7 @@ test("a legacy severity=defer marker posts a reply in the canonical vocabulary",
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6300, legacyBody),
       patchReviewCommentEntry(6300),
       {
@@ -589,6 +614,7 @@ test("a deferral target whose REST-fetched body has LEADING WHITESPACE before th
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6600, ` ${wfnBody("5555555555555555")}`),
       patchReviewCommentEntry(6600),
       postReplyEntry(6600, { id: 7600 }),
@@ -608,6 +634,7 @@ test("a finding whose own text quotes the literal 'disposition=deferred' token s
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6500, body),
       patchReviewCommentEntry(6500),
       postReplyEntry(6500, { id: 7500 }),
@@ -620,11 +647,16 @@ test("a finding whose own text quotes the literal 'disposition=deferred' token s
 });
 
 test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition field is already deferred", async () => {
-  const alreadyStamped = `${buildFindingMarker({ fp: "1111000011110000", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred" })}\n**worth-fixing-now** (\`perf\`): stale cache`;
+  // Already carries its follow-up issue link (#1807): a legitimately-stamped,
+  // still-unresolved marker (e.g. an interrupted retry) always does.
+  const alreadyStamped = `${buildFindingMarker({ fp: "1111000011110000", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache`;
   const thread = threadNode({ id: "THREAD_D", path: "src/cache.mjs", line: 9, commentId: 6501, body: alreadyStamped });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      // The batch's follow-up issue is already known from this same thread's
+      // own marker, so the pass APPENDS to it rather than creating a new one.
+      appendFollowUpIssueEntry(9500),
       getReviewCommentEntry(6501, alreadyStamped),
       // No patchReviewCommentEntry: a PATCH here would overflow the stub and
       // fail the test — the already-stamped guard must skip straight to
@@ -633,7 +665,9 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
       resolveThreadEntry("THREAD_D"),
     ],
     async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 1);
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.followUpIssueNumber, 9500);
     },
   ));
 });
@@ -688,6 +722,7 @@ test("#1672 (c): a round-4 medium thread IS defer-closed (past the default windo
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(9003, mediumBody),
       patchReviewCommentEntry(9003),
       postReplyEntry(9003, { id: 9103 }),
@@ -731,7 +766,7 @@ test("#1672 guard: a disposition=deferred stamp on a question thread is rejected
     async ({ env, ghCommand, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*isDeferredAtRound=false/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*reason=out-of-window/s,
       );
     },
   ));
@@ -749,7 +784,27 @@ test("#1672 guard: a disposition=deferred stamp on an in-window medium thread is
     async ({ env, ghCommand, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*round=1.*isDeferredAtRound=false/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*round=1.*reason=out-of-window/s,
+      );
+    },
+  ));
+});
+
+// #1807 AC6: GATE-EXEC-THREAD-DISPOSITION also refuses a disposition=deferred
+// stamp that carries no linked follow-up issue number — an in-window
+// deferral is otherwise legitimate (a nit at round 1), so only the missing
+// issue link trips this guard.
+test("#1807 guard: a disposition=deferred stamp with no linked follow-up issue number is rejected (throws, does not silently skip)", async () => {
+  const stampedNoIssue = `${buildFindingMarker({ fp: "0101010101010101", severity: "nit", angle: "naming", round: 1, disposition: "deferred" })}\n**nit** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_NIT_NO_ISSUE", path: "src/naming.mjs", line: 4, commentId: 9007, body: stampedNoIssue });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No issue-create/GET/PATCH/reply/resolve entries: the scan runs before
+    // any of those, and a regression that proceeded would overflow the stub.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=missing-issue-link/s,
       );
     },
   ));
@@ -835,6 +890,7 @@ test("a thread whose body exceeds the 200-char listing excerpt is disposed from 
   await withLedgerFile(makeLedger({ findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("pre_approval_gate", 4), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(6400, longBody),
       patchReviewCommentEntry(6400),
       postReplyEntry(6400, { id: 7400 }),
@@ -954,6 +1010,7 @@ test("#1581 (a): a per-gate worthFixingNowFixWindow is honored by the dispositio
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(7100, wfnBody("1111111111111111")),
       patchReviewCommentEntry(7100),
       postReplyEntry(7100, { id: 8100 }),
@@ -1051,6 +1108,7 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
     [
       ...roundEntries({ threads: [mustFix, niceToHave] }),
       // The disposition pass defers ONLY the nice-to-have (must-fix never defers).
+      createFollowUpIssueEntry(9500),
       getReviewCommentEntry(8002, niceToHaveBodyStr),
       patchReviewCommentEntry(8002),
       postReplyEntry(8002, { id: 7800 }),

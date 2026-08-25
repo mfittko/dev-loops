@@ -159,6 +159,18 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
+    // #1807: a judge-pass-enriched finding carries a stable `fingerprint`
+    // (act/defer/reject — the reject audit entry keys on it too) and a
+    // `defer` finding additionally carries `followUpIssueNumber` — the PR's
+    // ONE tracked follow-up GitHub issue. Pass both through unvalidated
+    // beyond shape: they are produced by the sanctioned judge-pass bridge,
+    // never hand-authored.
+    if (typeof f.fingerprint === "string" && f.fingerprint.trim().length > 0) {
+      entry.fingerprint = f.fingerprint.trim();
+    }
+    if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
+      entry.followUpIssueNumber = f.followUpIssueNumber;
+    }
     if (f.followUpDraft !== undefined && f.followUpDraft !== null) {
       // Mirrors validateJudgeVerdict's followUpDraft shape rule
       // (packages/core/src/loop/gate-fanin.mjs): gate on presence, carving

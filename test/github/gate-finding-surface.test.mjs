@@ -8,10 +8,13 @@ import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
 import {
   buildCommentableLineSet,
   buildFindingMarker,
+  buildFollowUpIssueBody,
+  buildFollowUpIssueTitle,
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   collectVerdictHeadShas,
   createGateReview,
+  ensureFollowUpIssue,
   fingerprintFinding,
   isDeferredAtRound,
   isLocatableFinding,
@@ -67,18 +70,39 @@ test("fingerprintFinding trims files[0]: an untrimmed path fingerprints identica
 
 test("buildFindingMarker / parseFindingMarker round-trip", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "high", angle: "security", round: 2 });
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null, issue: null });
 });
 
 test("buildFindingMarker / parseFindingMarker round-trip: a legacy-spelled severity still parses and normalizes on read", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2 });
   assert.ok(marker.includes("severity=must-fix"), "the marker itself carries the spelling it was built with");
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null, issue: null });
 });
 
 test("buildFindingMarker with a disposition round-trips through parseFindingMarker", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "nice-to-have", angle: "naming", round: 1, disposition: "deferred" });
   assert.equal(parseFindingMarker(marker).disposition, "deferred");
+});
+
+// #1807: the follow-up issue number a `disposition=deferred` finding is
+// tracked on (GATE-EXEC-DEFERRAL-RECORD) round-trips through the marker too.
+test("buildFindingMarker with an issue number round-trips through parseFindingMarker", () => {
+  const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "nice-to-have", angle: "naming", round: 1, disposition: "deferred", issue: 42 });
+  assert.match(marker, /disposition=deferred issue=42 -->$/);
+  const parsed = parseFindingMarker(marker);
+  assert.equal(parsed.disposition, "deferred");
+  assert.equal(parsed.issue, 42);
+});
+
+test("buildFindingMarker rejects a non-positive-integer issue", () => {
+  assert.throws(
+    () => buildFindingMarker({ fp: "0123456789abcdef", severity: "nice-to-have", angle: "naming", round: 1, disposition: "deferred", issue: 0 }),
+    /issue must be a positive integer/,
+  );
+  assert.throws(
+    () => buildFindingMarker({ fp: "0123456789abcdef", severity: "nice-to-have", angle: "naming", round: 1, disposition: "deferred", issue: 1.5 }),
+    /issue must be a positive integer/,
+  );
 });
 
 test("buildFindingMarker throws on a disposition value other than \"deferred\"", () => {
@@ -665,5 +689,64 @@ test("#1731: updateGateReview refuses a verdict body containing a raw issue/PR i
       { ghCommand: "gh", runChild },
     ),
     /comment-id-guard refused to emit gate verdict comment body.*#1731/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1807: follow-up issue for deferred findings — one issue per PR, batched
+// ---------------------------------------------------------------------------
+
+function followUpEntries() {
+  return [
+    { fingerprint: "1111111111111111", severity: "low", angle: "naming", summary: "casing nit" },
+    { fingerprint: "2222222222222222", severity: "medium", angle: "perf", summary: "stale cache" },
+  ];
+}
+
+test("buildFollowUpIssueTitle / buildFollowUpIssueBody: one issue per PR, every entry listed", () => {
+  const title = buildFollowUpIssueTitle({ repo: "o/r", pr: 42 });
+  assert.equal(title, "Deferred gate findings for o/r#42");
+  const body = buildFollowUpIssueBody({ repo: "o/r", pr: 42, entries: followUpEntries() });
+  assert.match(body, /https:\/\/github\.com\/o\/r\/pull\/42/);
+  assert.match(body, /`1111111111111111`.*\*\*low\*\*.*casing nit/);
+  assert.match(body, /`2222222222222222`.*\*\*medium\*\*.*stale cache/);
+});
+
+test("ensureFollowUpIssue: no existing issue creates ONE issue for the whole batch", async () => {
+  const createCalls = [];
+  const createIssue = async (opts) => {
+    createCalls.push(opts);
+    return { ok: true, issueNumber: 101, url: `https://github.com/${opts.repo}/issues/101` };
+  };
+  const commentIssue = async () => { throw new Error("must not append when no issue exists yet"); };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: null },
+    { createIssue, commentIssue },
+  );
+  assert.deepEqual(result, { issueNumber: 101, created: true });
+  assert.equal(createCalls.length, 1);
+  assert.equal(createCalls[0].repo, "o/r");
+});
+
+test("ensureFollowUpIssue: an existing issue number appends a comment instead of creating a duplicate", async () => {
+  const createIssue = async () => { throw new Error("must not create a duplicate issue"); };
+  const commentCalls = [];
+  const commentIssue = async (opts) => {
+    commentCalls.push(opts);
+    return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
+  };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 42, entries: followUpEntries(), existingIssueNumber: 101 },
+    { createIssue, commentIssue },
+  );
+  assert.deepEqual(result, { issueNumber: 101, created: false });
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 101);
+});
+
+test("ensureFollowUpIssue rejects an empty entries array", async () => {
+  await assert.rejects(
+    () => ensureFollowUpIssue({ repo: "o/r", pr: 42, entries: [], existingIssueNumber: null }, {}),
+    /entries must be a non-empty array/,
   );
 });
