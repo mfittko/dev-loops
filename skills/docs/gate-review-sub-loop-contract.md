@@ -1723,8 +1723,7 @@ already-stamped thread marker's `issue=` field) — a PR that defers through bot
 the SAME one issue because `ensureFollowUpIssue` (`scripts/github/_gate-finding-surface.mjs`)
 resolves against GitHub itself (an open-issue title search) whenever a pass's own local cache
 doesn't already know a number, not because either pass's cache is authoritative on its own (#1809).
-A
-`disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
+A `disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
 contract violation, refused fail-closed exactly like an out-of-window stamp.
 
 A `reject` (the judge's relevance axis only — see Phase 3.5 above) is never a deferral and creates
