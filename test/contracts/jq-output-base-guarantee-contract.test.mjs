@@ -97,7 +97,7 @@ const EXCLUDED = new Map([
   ],
   [
     "generate-config-schema.mjs",
-    "Derived-artifact generator (npm run schema:check): JSON.stringify writes schemas/dev-loop-config.schema.json to disk; stdout is a one-line human status, never a JSON tool-result to filter with --jq — same class as claude/generate-claude-assets.mjs.",
+    "Derived-artifact checker (npm run schema:check): runs the generator with --check, which reads schemas/dev-loop-config.schema.json and compares it to the rendered content, exiting non-zero when stale; stdout is a one-line human status, never a JSON tool-result to filter with --jq — same class as claude/generate-claude-assets.mjs.",
   ],
   [
     "pages/render-article.mjs",
