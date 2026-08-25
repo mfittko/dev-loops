@@ -1686,11 +1686,16 @@ round) and states the window/disposition reason (see `dispositionMessage` in
 when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
-`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in exactly THREE places, never a
-standalone summary comment as a fourth: the finding's own posted surface — the resolving reply on
+`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, never a
+standalone summary comment as an extra: the finding's own posted surface — the resolving reply on
 its thread for a locatable finding, or its body-filed entry on the round's review for a
 non-locatable one — the durable findings-log ledger under `tmp/gate-findings/...`, and (#1807,
 below) the PR's ONE tracked GitHub follow-up issue, the durable record that survives a `tmp/` wipe.
+The third place — the tracked issue — is created for every deferral that flows through the
+disposition pass or the judge defer path (a locatable thread stamped `disposition=deferred`). The
+body-filed non-locatable case is the one disclosed exception (#1807 known limitation): it is
+stamped and body-filed durably (the first two places) but does not itself create the tracked
+issue, because that render-time call site has no GitHub I/O.
 The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred][ issue=<n>] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a

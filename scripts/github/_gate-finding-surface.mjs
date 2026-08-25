@@ -237,9 +237,14 @@ export function collectFingerprints(text, set) {
 // for `[`), and this regex does not distinguish an entity's digits from a bare
 // id's — neutralizing post-sanitize would re-match and corrupt an
 // already-emitted entity (`&#91;` -> `&&#35;91;`).
-const BARE_ISSUE_PR_ID_RE = /#(\d{1,9})/g;
+// Strip EVERY number-sign in a consecutive run immediately before a digit, not
+// just the innermost one: `#123` and `##123` alike must leave `123` with no
+// residual number-sign, or the leftover still auto-links AND trips the
+// decode-aware guard. A lookahead consumes only the number-sign(s), keeping the
+// digits.
+const BARE_ISSUE_PR_ID_RE = /#+(?=\d)/g;
 function neutralizeBareIssuePrIds(value) {
-  return String(value).replace(BARE_ISSUE_PR_ID_RE, "$1");
+  return String(value).replace(BARE_ISSUE_PR_ID_RE, "");
 }
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {

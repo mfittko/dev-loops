@@ -911,6 +911,31 @@ test("#1809 round-2: buildFollowUpIssueBody survives the REAL guardCommentBodyNo
   assert.doesNotMatch(body, /#\d/);
 });
 
+// #1809 pre-approval: a CONSECUTIVE-run of number-signs before digits (e.g. a
+// doubled sign) must be fully stripped — an earlier regex removed only the
+// innermost sign, leaving a residual that still auto-links and trips the guard.
+test("#1809 pre-approval: doubled/tripled number-signs before digits are fully stripped on both paths", async () => {
+  const entries = [{ fingerprint: "8888888888888888", severity: "medium", angle: "run-of-###55", summary: "duplicate of ##987 and also ###12" }];
+  const body = buildFollowUpIssueBody({ repo: "o/r", pr: 7, entries });
+  assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(body, { ref: "test doubled-sign create body" }));
+  assert.doesNotMatch(body, /#\d/);
+  assert.match(body, /duplicate of 987 and also 12/);
+  assert.match(body, /run-of-55/);
+
+  const runCalls = [];
+  const run = async (ghCommand, args) => {
+    runCalls.push(args);
+    return { code: 0, stdout: "https://github.com/o/r/issues/909#issuecomment-1\n", stderr: "" };
+  };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 7, entries, existingIssueNumber: 909 },
+    { run },
+  );
+  assert.deepEqual(result, { issueNumber: 909, created: false });
+  const bodyArg = runCalls[0][runCalls[0].indexOf("--body") + 1];
+  assert.doesNotMatch(bodyArg, /#\d/);
+});
+
 test("#1809 round-2: ensureFollowUpIssue's create path calls the REAL createIssue (real guard exposure) without throwing, and the id is neutralized", async () => {
   const entries = [{ fingerprint: "5555555555555555", severity: "medium", angle: "perf", summary: "duplicates #123456 behavior" }];
   const runCalls = [];
