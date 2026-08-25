@@ -947,3 +947,31 @@ test("#1809 round-2: ensureFollowUpIssue's append path calls the REAL commentIss
   assert.doesNotMatch(bodyArg, /#\d/);
   assert.match(bodyArg, /references 42 in the doc/);
 });
+
+// #1809 round-3: the untrusted `angle` field flows through the SAME
+// neutralizeBareIssuePrIds render path as `summary` and lands inside the
+// guarded body. The summary-only real-guard tests above would pass while an
+// angle-path neutralization regression reproduced the round-2 defer-ordering
+// abort, so exercise a hash-digit angle through the REAL guard on both paths.
+test("#1809 round-3: a bare id in the untrusted angle field survives the REAL guard on create and append", async () => {
+  const entries = [{ fingerprint: "7777777777777777", severity: "medium", angle: "regression-of-#321", summary: "plain summary" }];
+  const body = buildFollowUpIssueBody({ repo: "o/r", pr: 7, entries });
+  assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(body, { ref: "test angle create body" }));
+  assert.doesNotMatch(body, /#\d/);
+  assert.match(body, /regression-of-321/);
+
+  // Append path through the real commentIssue guard must not throw either.
+  const runCalls = [];
+  const run = async (ghCommand, args) => {
+    runCalls.push(args);
+    return { code: 0, stdout: "https://github.com/o/r/issues/909#issuecomment-1\n", stderr: "" };
+  };
+  const result = await ensureFollowUpIssue(
+    { repo: "o/r", pr: 7, entries, existingIssueNumber: 909 },
+    { run },
+  );
+  assert.deepEqual(result, { issueNumber: 909, created: false });
+  const bodyArg = runCalls[0][runCalls[0].indexOf("--body") + 1];
+  assert.doesNotMatch(bodyArg, /#\d/);
+  assert.match(bodyArg, /regression-of-321/);
+});
