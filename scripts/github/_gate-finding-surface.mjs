@@ -225,12 +225,21 @@ export function collectFingerprints(text, set) {
 // `#` immediately adjacent to digits in EITHER the raw or the decoded text, so
 // this strips the leading `#` from a bare id token instead of encoding it
 // (`#123` -> `123`): no decode path can ever reassemble a leading `#` from
-// bare digits, so this is unconditionally guard-safe rather than merely
-// guard-safe-until-decoded. This also makes GitHub's own auto-linker a
-// non-issue (auto-link syntax requires the leading `#`), so the create path
-// (still unguarded) is safe too — both paths render through this one function,
-// so they stay symmetric by construction rather than by each independently
-// avoiding the guard.
+// bare digits. This also makes GitHub's own auto-linker a non-issue (auto-link
+// syntax requires the leading `#`), so the create path (still unguarded) is
+// safe too — both paths render through this one function, so they stay
+// symmetric by construction rather than by each independently avoiding the
+// guard.
+//
+// ponytail: this strips only a LITERAL `#` before digits — every form a review
+// agent actually authors (prose ids like `#123`). It does NOT mirror the guard's
+// full entity-decode surface, so untrusted text that ALREADY contains an HTML
+// entity encoding of the number-sign adjacent to digits (`&num;123`, `&#x23;123`)
+// still decodes to a bare id under the guard. That input is unreachable from
+// reviewer-authored finding prose, and when it does occur the guard fail-closes
+// (the defer pass aborts — no silent leak), which is the correct backstop.
+// Mirroring the guard's decoder here would duplicate its evolving entity table
+// against input that never arrives; the guard stays the single authority.
 //
 // Runs on the RAW summary/angle text, BEFORE sanitizeInline/sanitizeCodeSpan:
 // those sanitizers emit their own numeric character references (e.g. `&#91;`
