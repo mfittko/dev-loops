@@ -22,6 +22,7 @@
     "./debt/signal": "./src/debt/debt-signal.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/comment-id-guard": "./src/github/comment-id-guard.mjs",
+    "./github/gh": "./src/github/gh.mjs",
     "./github/issue-ops": "./src/github/issue-ops.mjs",
     "./github/ownership-helpers": "./src/github/ownership-helpers.mjs",
     "./github/repo-slug": "./src/github/repo-slug.mjs",
