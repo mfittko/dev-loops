@@ -385,6 +385,23 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
 
 /**
+ * Env var that exempts an orchestrator-owned-commit dispatch from the SubagentStop
+ * uncommitted-work guard (#1786).
+ *
+ * A "LOCAL EDITS ONLY: no commit" dispatch (e.g. the `developer`/`quality`/`docs` delegation
+ * pattern in `skills/local-implementation/SKILL.md` "Delegation contract") tells the subagent to
+ * make local edits and report changed files, leaving commit + push to the dispatching
+ * orchestrator once it consolidates results. Without an exemption, that subagent's own
+ * SubagentStop event still sees the dirty worktree it was told not to commit and deadlocks. The
+ * dispatcher sets `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` for that dispatch to declare it owns the
+ * commit — same opt-in `DEVLOOPS_*` signal shape as `DEVLOOPS_COMMIT_AUTH_PENDING`, but distinct:
+ * this one exempts a non-interactive delegated dispatch whose commit responsibility sits with its
+ * caller, not an interactive session awaiting operator authorization. Left unset, an ordinary
+ * dispatch's commit-before-exit obligation stays enforced (fail closed by default).
+ */
+export const DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR = "DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT";
+
+/**
  * Decide whether a SubagentStop must be blocked because the subagent's worktree has
  * uncommitted changes (#1619).
  *
@@ -392,7 +409,8 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * uncommitted changes in a worktree are destroyed with no warning. `LOCAL-COMMIT-BEFORE-EXIT`
  * existed only as prose. This decider makes it mechanical: refuse the subagent stop when the
  * cwd is under `tmp/worktrees/` and `git status --porcelain` is non-empty, unless the session
- * is an interactive one awaiting commit authorization (exempt). A clean worktree, a cwd
+ * is an interactive one awaiting commit authorization, or the dispatch is an explicit
+ * orchestrator-owned-commit exemption (#1786) (either exempt). A clean worktree, a cwd
  * outside `tmp/worktrees/`, and a git-error/empty-porcelain case all allow the stop.
  *
  * Pure and side-effect free. The hook script gathers `cwd` and the `git status --porcelain`
@@ -407,13 +425,16 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * @param {boolean} [params.pendingCommitAuthorization] - True when the interactive session is
  *   awaiting commit authorization (exempt) — derived by the hook script from the
  *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.
+ * @param {boolean} [params.orchestratorOwnsCommit] - True when this dispatch is an explicit
+ *   orchestrator-owned-commit exemption (exempt) — derived by the hook script from the
+ *   `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` opt-in env signal.
  * @returns {HookDecision}
  */
-export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false }) {
+export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false, orchestratorOwnsCommit = false }) {
   if (typeof cwd !== "string" || !isUnderWorktreePath(cwd)) {
     return ALLOW;
   }
-  if (pendingCommitAuthorization) {
+  if (pendingCommitAuthorization || orchestratorOwnsCommit) {
     return ALLOW;
   }
   if (typeof porcelain !== "string" || porcelain.trim() === "") {

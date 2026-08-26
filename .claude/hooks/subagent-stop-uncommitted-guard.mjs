@@ -16,6 +16,12 @@
  * opt-in operator/coordination-path signal, like `DEVLOOPS_MAIN_AGENT_READONLY`) and are
  * exempt — they legitimately hold uncommitted work while waiting for the operator.
  *
+ * An orchestrator-owned-commit dispatch ("LOCAL EDITS ONLY: no commit" — see the
+ * `developer`/`quality`/`docs` delegation contract in skills/local-implementation/SKILL.md) sets
+ * `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` and is likewise exempt — it legitimately leaves the
+ * worktree dirty because the dispatching orchestrator owns the commit after consolidating
+ * results. Left unset, the commit-before-exit obligation stays enforced.
+ *
  * A cwd outside `tmp/worktrees/` is unaffected; a clean worktree stops normally; a non-git cwd
  * (git unavailable) allows the stop (nothing to guard).
  *
@@ -24,13 +30,18 @@
  */
 import { execFileSync } from "node:child_process";
 
-import { decideSubagentStopGuard, DEVLOOPS_COMMIT_AUTH_PENDING_VAR } from "./_hook-decisions.mjs";
+import {
+  decideSubagentStopGuard,
+  DEVLOOPS_COMMIT_AUTH_PENDING_VAR,
+  DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR,
+} from "./_hook-decisions.mjs";
 import { readHookInput } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
 const pendingCommitAuthorization = process.env[DEVLOOPS_COMMIT_AUTH_PENDING_VAR] === "1";
+const orchestratorOwnsCommit = process.env[DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR] === "1";
 
 let porcelain = "";
 try {
@@ -50,7 +61,7 @@ try {
   porcelain = "";
 }
 
-const decision = decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization });
+const decision = decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization, orchestratorOwnsCommit });
 if (decision.decision === "block") {
   process.stderr.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
   process.exit(2);
