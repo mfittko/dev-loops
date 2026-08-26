@@ -255,6 +255,12 @@ function formatConfigValue(value) {
   }
 }
 
+// The three GatesConfig keys whose value is a GateConfig (i.e. carries its
+// own blockCleanOnFindingSeverities) — kept in sync with the `gates:
+// { draft, preApproval, spike }` keys below by construction (both list the
+// same three names; a fourth GateConfig-typed gate would need both updated).
+const GATE_KEYS_WITH_BLOCKING_SEVERITIES = /** @type {const} */ (["draft", "preApproval", "spike"]);
+
 const GateConfig = z.strictObject({
   angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier."),
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
@@ -1938,6 +1944,51 @@ export function resolveRefinement(config) {
 }
 
 /**
+ * Resolve and validate ONE gate's raw `blockCleanOnFindingSeverities` value
+ * against the schema's severity vocabulary, returning the normalized/deduped
+ * list (or the ["high"] default when the key is absent). Shared by
+ * resolveGateConfig, which calls this for every GateConfig-typed gate on
+ * every invocation (see that function's @throws doc) so an invalid list on
+ * any gate refuses eagerly, not only when that specific gate is requested.
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"|"spike"} gate
+ * @returns {string[]}
+ * @throws {Error} when `gate`'s PRESENT `blockCleanOnFindingSeverities` key
+ *   is schema-invalid (non-array, empty, or containing an out-of-vocabulary
+ *   entry).
+ */
+function resolveBlockingSeverities(config, gate) {
+  const rawBlocking = config?.gates?.[gate]?.blockCleanOnFindingSeverities;
+  if (rawBlocking === undefined) return ["high"];
+  if (!Array.isArray(rawBlocking)) {
+    throw new Error(
+      `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities must be an array ` +
+      `of defect severities, got ${formatConfigValue(rawBlocking)}. ` +
+      `Fix the config before gate operations can proceed.`
+    );
+  }
+  if (rawBlocking.length === 0) {
+    throw new Error(
+      `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities is empty; ` +
+      `the schema requires at least one blocking severity, and an empty list would make the gate block on nothing. ` +
+      `Fix the config before gate operations can proceed.`
+    );
+  }
+  const invalid = rawBlocking.filter((s) => typeof s !== "string" || !BLOCKING_SEVERITY_SPELLING_SET.has(s));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities contains ` +
+      `value(s) outside the schema's severity vocabulary: ${invalid.map((s) => formatConfigValue(s)).join(", ")}. ` +
+      `Allowed (exact spellings): ${BLOCKING_SEVERITY_SPELLINGS.join(", ")} ` +
+      `(the legacy spellings normalize to high/medium/low). ` +
+      `Fix the config before gate operations can proceed.`
+    );
+  }
+  return [...new Set(rawBlocking.map((s) => normalizeSeverity(s)))];
+}
+
+/**
  * Resolve one gate configuration object from the merged dev-loop config.
  *
  * Returns the configured gate angles when present, or null for angles when the
@@ -1957,56 +2008,41 @@ export function resolveRefinement(config) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
- * @throws {Error} when THIS gate's PRESENT `blockCleanOnFindingSeverities`
- *   key is any schema-invalid shape: a non-array value, an empty array, or an
- *   entry that is not one of the schema enum's exact spellings. Every such
- *   shape can only arrive through a config that failed schema validation (the
+ * @throws {Error} when ANY gate's (draft, preApproval, or spike — not only
+ *   the requested `gate`'s) PRESENT `blockCleanOnFindingSeverities` key is
+ *   any schema-invalid shape: a non-array value, an empty array, or an entry
+ *   that is not one of the schema enum's exact spellings. Every such shape
+ *   can only arrive through a config that failed schema validation (the
  *   schema requires a min-1 array of the enum spellings; the guard
  *   exact-matches raw entries against the same spelling list, so its accept
  *   set is byte-identical to the schema's), and passing it through would make
- *   the gate block on the wrong severities or on nothing at all. The refusal
- *   reaches every caller that resolves the affected gate — including ones
- *   reading unrelated fields from it (resolveRefinement's preApproval
- *   requireCi read, angle and tier resolution, state detection) — because no
- *   gate operation should proceed on a config whose verdict-semantics key
- *   failed validation; a caller resolving a DIFFERENT gate of the same config
- *   is untouched. This is the stated boundary with the module's
- *   degrade-quietly convention for dispatch-ergonomics keys
- *   (resolveMaxAnglesPerGroup substitutes its default, resolveFanoutGroups
- *   drops malformed entries): those keys only shape dispatch, so they degrade;
- *   the key that decides what blocks a clean verdict refuses. An ABSENT key
- *   still falls back to the default unchanged.
+ *   the affected gate block on the wrong severities or on nothing at all.
+ *   Validated EAGERLY across all three gates on every call — not lazily,
+ *   only for the requested `gate` — so that a single-gate consumer (e.g. a
+ *   draft-only fan-in consolidation) can never proceed and produce a
+ *   side-effect (write a ledger artifact, flip ready-for-review) while a
+ *   DIFFERENT gate's severity list is invalid; that invalid gate would only
+ *   have surfaced later, lazily, at a dual-gate call site (e.g. verdict
+ *   posting), after the single-gate side effect already happened. This is
+ *   the stated boundary with the module's degrade-quietly convention for
+ *   dispatch-ergonomics keys (resolveMaxAnglesPerGroup substitutes its
+ *   default, resolveFanoutGroups drops malformed entries): those keys only
+ *   shape dispatch, so they degrade; the key that decides what blocks a
+ *   clean verdict refuses, fail-closed, before any gate proceeds. An ABSENT
+ *   key still falls back to the default unchanged.
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
-  const rawBlocking = gateConfig?.blockCleanOnFindingSeverities;
+  // Eagerly validate every gate's blockCleanOnFindingSeverities together
+  // (not just the requested `gate`'s) so an invalid list on ANY gate refuses
+  // up front, before this call's single-gate result can be used for a
+  // side effect that a later, different-gate call would otherwise still be
+  // able to reach lazily. See the @throws doc above for the reachability
+  // this closes.
   let blockCleanOnFindingSeverities = ["high"];
-  if (rawBlocking !== undefined) {
-    if (!Array.isArray(rawBlocking)) {
-      throw new Error(
-        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities must be an array ` +
-        `of defect severities, got ${formatConfigValue(rawBlocking)}. ` +
-        `Fix the config before gate operations can proceed.`
-      );
-    }
-    if (rawBlocking.length === 0) {
-      throw new Error(
-        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities is empty; ` +
-        `the schema requires at least one blocking severity, and an empty list would make the gate block on nothing. ` +
-        `Fix the config before gate operations can proceed.`
-      );
-    }
-    const invalid = rawBlocking.filter((s) => typeof s !== "string" || !BLOCKING_SEVERITY_SPELLING_SET.has(s));
-    if (invalid.length > 0) {
-      throw new Error(
-        `Config validation failed: gates.${gate}.blockCleanOnFindingSeverities contains ` +
-        `value(s) outside the schema's severity vocabulary: ${invalid.map((s) => formatConfigValue(s)).join(", ")}. ` +
-        `Allowed (exact spellings): ${BLOCKING_SEVERITY_SPELLINGS.join(", ")} ` +
-        `(the legacy spellings normalize to high/medium/low). ` +
-        `Fix the config before gate operations can proceed.`
-      );
-    }
-    blockCleanOnFindingSeverities = [...new Set(rawBlocking.map((s) => normalizeSeverity(s)))];
+  for (const g of GATE_KEYS_WITH_BLOCKING_SEVERITIES) {
+    const resolved = resolveBlockingSeverities(config, g);
+    if (g === gate) blockCleanOnFindingSeverities = resolved;
   }
   const entries = normalizeAngleEntries(gateConfig?.angles);
   // An explicitly-empty (or all-garbage/malformed) array is a real configured
