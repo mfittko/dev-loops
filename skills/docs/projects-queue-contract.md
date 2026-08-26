@@ -911,11 +911,10 @@ message applies when that file has no pending entries. The operator-facing live 
 (`/dev-loops:loop-continue`) enforces the same source; see
 [Live pickup path](#live-pickup-path-dev-loopsloop-continue) above for the exact outcomes.
 
-> **Limitation:** the normative `Next Up` rule (and `--next-up`, `queue add`/`list`/`move`)
-> currently assumes the **default** `Next Up` display name. Renaming the logical column via
-> `queue.statusColumns.next_up` (and siblings) is respected by board-sync but **not** yet by the
-> ordering + projects-script layer, so a renamed Next Up column is not fully supported here.
-> Honoring `statusColumns` across those layers is tracked in #1098.
+> **Limitation:** a renamed logical `Next Up` column (via `queue.statusColumns`) is not yet
+> honored by the ordering + projects-script layer — see
+> [Limitation: default `Next Up` display name](#limitation-default-next-up-display-name) above
+> for the full statement and the tracking issue.
 
 #### Issue-less lightweight PRs on the board
 
