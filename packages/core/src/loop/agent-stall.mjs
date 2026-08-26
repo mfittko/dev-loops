@@ -19,6 +19,8 @@
  * sources those signals from pi run artifacts + runner-coordination state.
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+
 export const AGENT_STALL_STATUS = Object.freeze({
   STALLED: "stalled",
   NOT_STALLED: "not_stalled",
@@ -178,8 +180,8 @@ export function buildAgentStallRecoveryBrief({
   lastAction = null,
   reason = "",
 } = {}) {
-  const r = typeof runId === "string" && runId.trim().length > 0 ? runId.trim() : null;
-  const work = typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : null;
+  const r = trimmedOrNull(runId);
+  const work = trimmedOrNull(cwd);
   const action = typeof lastAction === "string" && lastAction.trim().length > 0
     ? lastAction.trim()
     : "unknown last action";

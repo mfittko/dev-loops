@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { classifyFile } from "../analysis/diff-analyzer.mjs";
 import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
+import { trimmedOrNull } from "../loop/normalize.mjs";
 
 // ============================================================================
 // Sub-schemas
@@ -1155,7 +1156,7 @@ function resolveTierMapping(config, tierAlias, harness) {
   if (!builtinMapping && !configMapping) return null;
   const mapping = { ...builtinMapping, ...configMapping };
   const model = mapping[harness];
-  return typeof model === "string" && model.trim().length > 0 ? model.trim() : null;
+  return trimmedOrNull(model);
 }
 
 /**
@@ -2911,7 +2912,7 @@ export function resolveUiReviewRunRecipe(config) {
     readyUrl: run.readyUrl.trim(),
     readyTimeoutMs: Number.isInteger(run.readyTimeoutMs) ? run.readyTimeoutMs : 60000,
     readyIntervalMs: Number.isInteger(run.readyIntervalMs) ? run.readyIntervalMs : 1000,
-    cwd: typeof run.cwd === "string" && run.cwd.trim().length > 0 ? run.cwd.trim() : null,
+    cwd: trimmedOrNull(run.cwd),
     migrate,
     rowTeardown,
   };
@@ -2939,7 +2940,7 @@ export function resolvePostMergeActions(config) {
       onlyIfChanged: Array.isArray(a.onlyIfChanged)
         ? a.onlyIfChanged.filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.trim())
         : null,
-      verify: typeof a.verify === "string" && a.verify.trim().length > 0 ? a.verify.trim() : null,
+      verify: trimmedOrNull(a.verify),
       timeoutMs: Number.isInteger(a.timeoutMs) ? a.timeoutMs : POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS,
       verifyTimeoutMs: Number.isInteger(a.verifyTimeoutMs) ? a.verifyTimeoutMs : POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS,
       verifyIntervalMs: Number.isInteger(a.verifyIntervalMs) ? a.verifyIntervalMs : POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS,
@@ -2975,7 +2976,7 @@ export function resolveUiReviewDriveRecipe(config) {
   if (!login || typeof login.loginUrl !== "string" || login.loginUrl.trim().length === 0) return null;
   if (typeof login.submitSelector !== "string" || login.submitSelector.trim().length === 0) return null;
   if (typeof login.successSelector !== "string" || login.successSelector.trim().length === 0) return null;
-  const serverLogPath = typeof ui.serverLogPath === "string" && ui.serverLogPath.trim().length > 0 ? ui.serverLogPath.trim() : null;
+  const serverLogPath = trimmedOrNull(ui.serverLogPath);
   return {
     login: {
       loginUrl: login.loginUrl.trim(),

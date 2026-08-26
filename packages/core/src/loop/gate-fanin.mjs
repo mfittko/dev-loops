@@ -34,6 +34,7 @@
  */
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 
 /**
  * Schedule fan-out dispatch units into bounded-concurrency waves (issue #1601).
@@ -534,7 +535,7 @@ function* freshEntries(perAngle) {
     if (typeof entry.carriedFromHead === "string" && entry.carriedFromHead.trim().length > 0) continue;
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
     if (!angle) continue;
-    const group = typeof entry.group === "string" && entry.group.trim().length > 0 ? entry.group.trim() : null;
+    const group = trimmedOrNull(entry.group);
     yield { entry, angle, group };
   }
 }

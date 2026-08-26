@@ -19,6 +19,8 @@
  * rather than fabricating an answer to force convergence.
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+
 export const GRILL_STATE = Object.freeze({
   LOAD_TARGET: "load_target",
   DETECT_GAPS: "detect_gaps",
@@ -85,10 +87,6 @@ function normalizeCount(value) {
     : 0;
 }
 
-function normalizeStringOrNull(value) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
 /**
  * Canonicalize a raw grill snapshot into a deterministic shape.
  *
@@ -102,7 +100,7 @@ export function normalizeGrillSnapshot(raw) {
 
   return {
     surface: VALID_SURFACES.has(raw.surface) ? raw.surface : "issue",
-    targetRef: normalizeStringOrNull(raw.targetRef),
+    targetRef: trimmedOrNull(raw.targetRef),
 
     loaded: Boolean(raw.loaded),
     loadFailed: Boolean(raw.loadFailed),

@@ -24,6 +24,8 @@
  * posting, visual-regression/pixel-diffing, cross-browser matrix.
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+
 const MUST_FIX = "must-fix";
 
 /** Request header the drive advertises its drive-session id on, so a cooperating
@@ -282,7 +284,7 @@ export async function driveUiReview(
   // No-retry is a fixed policy — log it every run so the bound is never implicit.
   record(`caps: maxScreenshots=${resolvedCaps.maxScreenshots}, maxFlows=${resolvedCaps.maxFlows}, maxStepsPerFlow=${resolvedCaps.maxStepsPerFlow}, retries=${resolvedCaps.retries} (no-retry)`);
 
-  const session = typeof driveSession === "string" && driveSession.trim().length > 0 ? driveSession.trim() : null;
+  const session = trimmedOrNull(driveSession);
   const base = () => ({ appUrl: appUrl ?? null, logs, driveSession: session });
 
   // 1. Authenticate as the target role. Fail closed: no session -> STOP, drive

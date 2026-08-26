@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 export const FORBIDDEN_PROSE_PATTERNS = [
@@ -214,24 +215,8 @@ export async function loadTreeOnline({ issue, repo, cwd = process.cwd(), ghComma
   };
 }
 
-export function extractSection(body, headingText) {
-  if (typeof body !== "string" || body.length === 0) {
-    return null;
-  }
-  const escapedHeading = headingText.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const headingPattern = new RegExp(`^##\\s+${escapedHeading}\\s*$`, "imu");
-  const match = headingPattern.exec(body);
-  if (!match || match.index === undefined) {
-    return null;
-  }
-  const start = match.index + match[0].length;
-  const remaining = body.slice(start);
-  const nextHeadingMatch = /^##\s+/imu.exec(remaining);
-  const end = nextHeadingMatch && nextHeadingMatch.index !== undefined
-    ? start + nextHeadingMatch.index
-    : body.length;
-  return body.slice(start, end).trim();
-}
+// Re-exported for checker/refiner scripts that import extractSection from here.
+export { extractSection };
 
 /**
  * Shared base-section checker for the phase-doc-format validators (plan + spike).
