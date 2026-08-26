@@ -1280,6 +1280,24 @@ to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails clo
 head, malformed verdict, out-of-range index, undisposed finding), the conductor re-runs the judge at the
 current head rather than degrading to severity-only disposition for a wired gate.
 
+`judge-pass` is also where a judge `defer` creates its tracked follow-up issue (#1807,
+`GATE-EXEC-DEFERRAL-RECORD`): every `defer`-disposed finding gets a stable `fingerprint`, and the
+PR's ONE follow-up issue is created (first defer on the PR) or appended to (a later defer on the
+same PR) via `ensureFollowUpIssue` (`scripts/github/_gate-finding-surface.mjs`), which calls the
+sanctioned `createIssue` / `commentIssue` functions imported from `@dev-loops/core/github/issue-ops`
+(the same module the `create-issue.mjs` / `comment-issue.mjs` CLI wrappers themselves call) —
+never a raw `gh` call. `close-gate-findings.mjs`'s own severity/round-based defer routes through
+the SAME `ensureFollowUpIssue`, and both callers' local idempotency caches (`judge-pass`'s
+`--ledger-out`, `close-gate-findings`'s thread `issue=` marker) are fast-path optimizations only —
+`ensureFollowUpIssue` resolves against GitHub itself (an open-issue title search) before creating
+whenever the calling pass doesn't already know a number, so the two independent defer paths always
+converge on the SAME one issue per PR (#1809). Each `defer` finding's ledger entry carries the
+resulting `followUpIssueNumber`; a `reject` carries neither an issue link nor a follow-up draft,
+only its `fingerprint` and rationale (the one-line audit entry). Re-running `judge-pass` for the
+same round reads back its own prior `--ledger-out` to recover the PR's already-linked issue number
+and already-linked fingerprints, so a retry links the existing issue rather than creating a
+duplicate.
+
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
 PR?); the fixer owns **reproduction** (does this finding reproduce / is it a real defect?).
@@ -1668,11 +1686,18 @@ round) and states the window/disposition reason (see `dispositionMessage` in
 when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
-`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in exactly two places, never a
-third summary comment: the finding's own posted surface — the resolving reply on its thread for a
-locatable finding, or its body-filed entry on the round's review for a non-locatable one — and the
-durable findings-log ledger under `tmp/gate-findings/...`. Both carry the finding marker's optional `disposition=deferred`
-field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred] -->`),
+`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, never a
+standalone summary comment as an extra: the finding's own posted surface — the resolving reply on
+its thread for a locatable finding, or its body-filed entry on the round's review for a
+non-locatable one — the durable findings-log ledger under `tmp/gate-findings/...`, and (#1807,
+below) the PR's ONE tracked GitHub follow-up issue, the durable record that survives a `tmp/` wipe.
+The third place — the tracked issue — is created for every deferral that flows through the
+disposition pass or the judge defer path (a locatable thread stamped `disposition=deferred`). The
+body-filed non-locatable case is the one disclosed exception (#1807 known limitation): it is
+stamped and body-filed durably (the first two places) but does not itself create the tracked
+issue, because that render-time call site has no GitHub I/O.
+The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
+field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred][ issue=<n>] -->`),
 which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
 fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
 defers it (a medium thread past the gate's configured medium fix window
@@ -1685,6 +1710,30 @@ non-locatable (body-filed) marker is stamped `disposition=deferred` unconditiona
 severity other than `high`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a
 resolvable thread through which the standard fix loop could otherwise close it.
+
+A `defer` is never parked ONLY in the thread marker and the ephemeral tmp findings ledger: it
+ALWAYS creates or appends to a tracked GitHub issue — the
+durable, tracker-first record that survives a `tmp/` wipe. Every `defer` for one PR shares ONE
+follow-up issue, batched: the first deferral on a PR creates it (title `Deferred gate findings for
+<repo>#<pr>`, body listing every deferred finding's fingerprint/severity/angle); every later
+deferral on the same PR — a later round's newly out-of-window medium, a fixer-triaged low, a
+judge `defer` — appends a comment to that SAME issue rather than minting a second one. Both the
+thread marker (`issue=<n>`) and the durable ledger entry (`followUpIssueNumber`) record the issue
+number — the re-attachment pointer that lets a reader recover the tracked record even after the
+ephemeral ledger is gone. Idempotency is per-PR, not per-fingerprint: a re-run of the disposition
+pass links the PR's existing follow-up issue rather than creating a duplicate. The judge's own
+bridge (`judge-pass.mjs`) and `close-gate-findings.mjs`'s severity/round-based defer are two
+INDEPENDENT passes with disjoint local caches (the judge's prior `--ledger-out` artifact vs. an
+already-stamped thread marker's `issue=` field) — a PR that defers through both paths converges on
+the SAME one issue because `ensureFollowUpIssue` (`scripts/github/_gate-finding-surface.mjs`)
+resolves against GitHub itself (an open-issue title search) whenever a pass's own local cache
+doesn't already know a number, not because either pass's cache is authoritative on its own (#1809).
+A `disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
+contract violation, refused fail-closed exactly like an out-of-window stamp.
+
+A `reject` (the judge's relevance axis only — see Phase 3.5 above) is never a deferral and creates
+no issue: it records a one-line audit entry in the durable ledger (fingerprint, severity, angle,
+`judgeDisposition: "reject"`, rationale) and nothing else.
 
 ## Execution mode and fan-out evidence enforcement
 
