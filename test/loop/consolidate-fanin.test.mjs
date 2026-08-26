@@ -1022,6 +1022,35 @@ test("consolidateGateFanin passes when every --resolved-angles angle has a real 
   });
 });
 
+// #1783: the resolved-angle-evidence backstop only guards a "clean" round — a
+// round that already computed findings_present must NOT be refused for a
+// missing resolved angle (that would mask the real findings behind a
+// RESOLVED-ANGLE error). Pins the `consolidated.verdict === "clean"` skip.
+test("consolidateGateFanin does NOT apply --resolved-angles refusal on a findings_present round", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "correctness.json": {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "real defect", file: "src/a.mjs", line: 1 }],
+        },
+      },
+      async (dir) => {
+        // "dry" has neither an artifact nor a proven carry — on a clean round
+        // this refuses, but here the round is already findings_present.
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          resolvedAngles: ["correctness", "dry"],
+        });
+        assert.equal(result.overallVerdict, "findings_present");
+      },
+    );
+  });
+});
+
 test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", "not json"]),
