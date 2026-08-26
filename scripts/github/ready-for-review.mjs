@@ -4,6 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
@@ -63,12 +64,6 @@ export function parseReadyForReviewCliArgs(argv) {
   parseRepoSlug(opts.repo);
   if (opts.waiveSizeBudget && !opts.reason) throw parseError("--waive-size-budget requires --reason <text>");
   return opts;
-}
-
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
-  return parseJsonText(result.stdout);
 }
 
 async function fetchPrState({ repo, pr }, { env, ghCommand }) {

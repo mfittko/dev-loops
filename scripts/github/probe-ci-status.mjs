@@ -4,6 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson } from "@dev-loops/core/github/gh";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   summarizeHeadScopedCheckRunsSignal,
@@ -151,19 +152,6 @@ function parsePositiveMs(raw, flag) {
   return value;
 }
 
-async function ghJson(ghCommand, args, env) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
-}
-
 function extractPrVisibleCheckNames(statusCheckRollup) {
   if (!Array.isArray(statusCheckRollup)) return [];
   return statusCheckRollup
@@ -188,9 +176,8 @@ function extractFailedStatusContexts(statuses) {
 
 async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
   const payload = await ghJson(
-    ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
-    env,
+    { env, ghCommand },
   );
   const headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
   if (headSha.length === 0) {

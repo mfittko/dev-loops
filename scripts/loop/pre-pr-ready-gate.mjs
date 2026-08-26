@@ -3,11 +3,11 @@ import {
   buildParseError,
   formatCliError,
   isDirectCliRun,
-  parseJsonText,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -79,15 +79,6 @@ export function parsePrePrReadyGateCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout);
 }
 
 async function fetchPrState({ repo, pr }, { env, ghCommand }) {

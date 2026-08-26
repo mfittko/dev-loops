@@ -4,7 +4,6 @@ import {
   buildParseError,
   formatCliError,
   isDirectCliRun,
-  parseJsonText,
   normalizeVerdictSurface,
   parseReviewThreads,
   summarizeGateReviewCommentMarkers,
@@ -25,6 +24,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-surface.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson } from "@dev-loops/core/github/gh";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
@@ -212,20 +212,14 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
 // and fails for any other reason (auth, rate limit, a real 404) is a genuine
 // error and is never silently retried through the REST fallback (#1358).
 async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild, restFallback = null }) {
-  let result;
   try {
-    result = await runChild(ghCommand, args, env);
+    return await ghJson(args, { env, ghCommand, runChild });
   } catch (error) {
     if (restFallback && isGhBinaryMissing(error)) {
       return await restFallback();
     }
     throw error;
   }
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 2).join(" ")}` });
 }
 function normalizeIssueCommentsPayload(payload) {
   if (!Array.isArray(payload)) {
