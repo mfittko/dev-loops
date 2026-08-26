@@ -1440,6 +1440,63 @@
       },
       "additionalProperties": false,
       "description": "UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps."
+    },
+    "postMerge": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "run": {
+                "type": "string",
+                "minLength": 1
+              },
+              "onlyIfChanged": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "verify": {
+                "type": "string",
+                "minLength": 1
+              },
+              "timeoutMs": {
+                "default": 120000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600000
+              },
+              "verifyTimeoutMs": {
+                "default": 60000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600000
+              },
+              "verifyIntervalMs": {
+                "default": 2000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60000
+              }
+            },
+            "required": [
+              "name",
+              "run"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "description": "Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify)."
     }
   },
   "required": [

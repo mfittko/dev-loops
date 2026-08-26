@@ -16,7 +16,15 @@
 import { execFileSync, execSync } from "node:child_process";
 import { isMergeCapableCommand, extractPrNumberFromGhPrMergeAnywhere } from "./_bash-command-classify.mjs";
 import { parseMainWorktreePath } from "./_worktree-guard.mjs";
-import { buildMainCheckoutFastForwardCommand, WORKTREE_CLEANUP_TIMEOUT_MS, MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS, buildWorktreeCleanupCommand } from "./_main-checkout-ff.mjs";
+import {
+  buildMainCheckoutFastForwardCommand,
+  WORKTREE_CLEANUP_TIMEOUT_MS,
+  MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
+  MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
+  buildWorktreeCleanupCommand,
+  buildPostMergeActionsCommand,
+  POST_MERGE_ACTIONS_TIMEOUT_MS,
+} from "./_main-checkout-ff.mjs";
 
 import { readHookInput } from "./_hook-io.mjs";
 
@@ -76,6 +84,31 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
           `[dev-loops] post-merge: worktree cleanup skipped (best-effort): ${reason}\n`,
         );
       }
+    }
+  }
+
+  // Post-merge configured actions (postMerge.actions, #1457): a repo declaring
+  // this family in its .devloops runs its own local actions (sync checkout,
+  // restart a local service, smoke check) after merge. Existence-guarded (a
+  // checkout without the runner script is a silent no-op) and non-fatal — a
+  // runner failure never blocks this hook, which always exits 0. The runner
+  // itself stays silent (no stdout) when the repo declares no postMerge.actions,
+  // so relaying its output here produces zero new log lines for that case too.
+  if (mainCheckout) {
+    let output = "";
+    try {
+      output = execSync(buildPostMergeActionsCommand(mainCheckout, prNumber), {
+        cwd: mainCheckout,
+        timeout: POST_MERGE_ACTIONS_TIMEOUT_MS,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch (error) {
+      output = (error?.stdout ?? "").toString();
+    }
+    const trimmed = output.trim();
+    if (trimmed) {
+      process.stderr.write(`[dev-loops] post-merge: post-merge actions: ${trimmed}\n`);
     }
   }
 }

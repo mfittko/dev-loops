@@ -803,6 +803,48 @@ const UiReviewConfig = z.strictObject({
     .optional(),
 });
 
+// Default/ceiling bounds for a post-merge action's run/verify timing (#1457).
+// The default keeps a config-declared action from hanging a harness hook
+// forever when the author leaves timeoutMs unset; the ceiling caps how far a
+// config CAN push it — a config can only tighten these, never loosen past the
+// ceiling.
+export const POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS = 120000;
+export const POST_MERGE_ACTION_TIMEOUT_CEILING_MS = 600000;
+export const POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS = 60000;
+export const POST_MERGE_VERIFY_TIMEOUT_CEILING_MS = 600000;
+export const POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS = 2000;
+export const POST_MERGE_VERIFY_INTERVAL_CEILING_MS = 60000;
+
+/**
+ * One post-merge action (Stage: local consumer hook). `run` and `verify` are
+ * executed VERBATIM as the operator wrote them — same trust level as
+ * `uiReview.run.command` (this repo's own committed `.devloops`) — so callers
+ * must never build these strings by interpolating untrusted runtime data
+ * (PR titles, branch names, verify output) into them. `onlyIfChanged` is
+ * matched as DATA (plain substrings against changed file paths), never
+ * shelled out.
+ */
+const PostMergeActionConfig = z.strictObject({
+  name: z.string().trim().min(1),
+  run: z.string().trim().min(1),
+  onlyIfChanged: z.array(z.string().trim().min(1)).optional(),
+  verify: z.string().trim().min(1).optional(),
+  timeoutMs: z.number().int().min(1).max(POST_MERGE_ACTION_TIMEOUT_CEILING_MS).default(POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS),
+  verifyTimeoutMs: z.number().int().min(1).max(POST_MERGE_VERIFY_TIMEOUT_CEILING_MS).default(POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS),
+  verifyIntervalMs: z.number().int().min(1).max(POST_MERGE_VERIFY_INTERVAL_CEILING_MS).default(POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS),
+});
+
+/**
+ * `postMerge.actions`: consumer-declared local actions (sync checkout, restart
+ * a local service, smoke check) run sequentially, in declared order, after the
+ * dev-loop's merge succeeds. Mirrors `uiReview.run` as the config-shape,
+ * validation, and command-execution precedent. Absent (the default) means no
+ * action is declared — a repo without this family gets zero new hook commands.
+ */
+const PostMergeConfig = z.strictObject({
+  actions: z.array(PostMergeActionConfig).optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -856,6 +898,7 @@ export const DevLoopConfigSchema = z.strictObject({
   internalPathPatterns: InternalPatternsConfig.optional(),
   worktree: WorktreeConfig.optional(),
   uiReview: UiReviewConfig.optional(),
+  postMerge: PostMergeConfig.optional(),
 });
 
 // ============================================================================
@@ -931,6 +974,7 @@ export const FileConfigSchema = z.strictObject({
   internalPathPatterns: InternalPatternsConfig.describe("Regex whitelist for internal-only PR detection.").optional(),
   worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
+  postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
   // 1.0 hard break (no dual-form): the deprecated `localPlanning` key (removed
   // behavior in #1088, tolerated-but-unread since) is dropped from the 1.0
   // schema entirely — an unknown key now fails closed like any other typo,
@@ -2871,6 +2915,35 @@ export function resolveUiReviewRunRecipe(config) {
     migrate,
     rowTeardown,
   };
+}
+
+/**
+ * Resolve `postMerge.actions` from the merged config into normalized, runner-ready
+ * action objects. `run`/`verify` are trimmed but otherwise passed through
+ * VERBATIM (never rebuilt by concatenation) — the runner executes them exactly
+ * as declared. Returns `[]` when `postMerge` is absent — a `.devloops` without
+ * this family produces zero actions (and so zero hook commands).
+ *
+ * @param {DevLoopConfig} config
+ * @returns {{ name: string, run: string, onlyIfChanged: string[]|null, verify: string|null,
+ *   timeoutMs: number, verifyTimeoutMs: number, verifyIntervalMs: number }[]}
+ */
+export function resolvePostMergeActions(config) {
+  const actions = config?.postMerge?.actions;
+  if (!Array.isArray(actions)) return [];
+  return actions
+    .filter((a) => a && typeof a.name === "string" && a.name.trim().length > 0 && typeof a.run === "string" && a.run.trim().length > 0)
+    .map((a) => ({
+      name: a.name.trim(),
+      run: a.run.trim(),
+      onlyIfChanged: Array.isArray(a.onlyIfChanged)
+        ? a.onlyIfChanged.filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.trim())
+        : null,
+      verify: typeof a.verify === "string" && a.verify.trim().length > 0 ? a.verify.trim() : null,
+      timeoutMs: Number.isInteger(a.timeoutMs) ? a.timeoutMs : POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS,
+      verifyTimeoutMs: Number.isInteger(a.verifyTimeoutMs) ? a.verifyTimeoutMs : POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS,
+      verifyIntervalMs: Number.isInteger(a.verifyIntervalMs) ? a.verifyIntervalMs : POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS,
+    }));
 }
 
 /**
