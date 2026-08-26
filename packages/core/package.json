@@ -38,6 +38,7 @@
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
+    "./loop/markdown-sections": "./src/loop/markdown-sections.mjs",
     "./loop/issue-refinement-artifact": "./src/loop/issue-refinement-artifact.mjs",
     "./loop/phase-files": "./src/loop/phase-files.mjs",
     "./loop/policy-constants": "./src/loop/policy-constants.mjs",
@@ -83,6 +84,7 @@
     "./tracker": "./src/tracker/index.mjs",
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
     "./loop/main-checkout-ff": "./src/loop/main-checkout-ff.mjs",
+    "./loop/normalize": "./src/loop/normalize.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
   },
   "bin": {

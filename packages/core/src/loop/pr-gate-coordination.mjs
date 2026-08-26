@@ -2,6 +2,7 @@ import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-sta
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -80,14 +81,10 @@ function normalizeGateComment(summary = null) {
 
   return {
     visible: summary.visible === true,
-    headSha: typeof summary.headSha === "string" && summary.headSha.trim().length > 0 ? summary.headSha.trim() : null,
+    headSha: trimmedOrNull(summary.headSha),
     verdict: typeof summary.verdict === "string" && summary.verdict.trim().length > 0 ? summary.verdict.trim().toLowerCase() : null,
-    findingsSummary: typeof summary.findingsSummary === "string" && summary.findingsSummary.trim().length > 0
-      ? summary.findingsSummary.trim()
-      : null,
-    nextAction: typeof summary.nextAction === "string" && summary.nextAction.trim().length > 0
-      ? summary.nextAction.trim()
-      : null,
+    findingsSummary: trimmedOrNull(summary.findingsSummary),
+    nextAction: trimmedOrNull(summary.nextAction),
     contractComplete: summary.contractComplete === true,
   };
 }
@@ -679,9 +676,7 @@ export function evaluatePrGateCoordination(input = {}) {
 }
 
 function evaluatePrGateCoordinationCore(input = {}) {
-  const currentHeadSha = typeof input.currentHeadSha === "string" && input.currentHeadSha.trim().length > 0
-    ? input.currentHeadSha.trim()
-    : null;
+  const currentHeadSha = trimmedOrNull(input.currentHeadSha);
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
   const loopDisposition = typeof input.loopDisposition === "string" ? input.loopDisposition.trim().toLowerCase() : null;
   const prDraft = input.prDraft === true;

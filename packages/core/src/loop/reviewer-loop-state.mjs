@@ -2,6 +2,7 @@
  * Deterministic state machine and bounded planning/merge contracts for reviewer-side PR loops.
  */
 import { SUBMITTED_REVIEW_STATES } from "../github/copilot-helpers.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 
 export const REVIEWER_STATE = Object.freeze({
   WAITING_FOR_REVIEW_REQUEST: "waiting_for_review_request",
@@ -117,10 +118,6 @@ const SUPPORTED_REVIEW_ANGLES = Object.freeze([
 const DEFAULT_REVIEW_MAX_PARALLEL = 3;
 const HARD_REVIEW_MAX_PARALLEL = 4;
 
-function normalizeSha(value) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
 function normalizePositiveInt(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -167,7 +164,7 @@ export function normalizeReviewerSnapshot(raw) {
     prDraft: Boolean(raw.prDraft),
     prMerged: Boolean(raw.prMerged),
     prClosed: Boolean(raw.prClosed),
-    prHeadSha: prExists ? normalizeSha(raw.prHeadSha) : null,
+    prHeadSha: prExists ? trimmedOrNull(raw.prHeadSha) : null,
 
     reviewerScope,
     reviewerLogin: reviewerScope === "single_reviewer" ? reviewerLogin : null,
@@ -180,10 +177,8 @@ export function normalizeReviewerSnapshot(raw) {
 
     draftReviewPosted: Boolean(raw.draftReviewPosted),
     draftReviewId: normalizePositiveInt(raw.draftReviewId),
-    draftReviewUrl: typeof raw.draftReviewUrl === "string" && raw.draftReviewUrl.trim().length > 0
-      ? raw.draftReviewUrl.trim()
-      : null,
-    draftReviewCommitSha: normalizeSha(raw.draftReviewCommitSha),
+    draftReviewUrl: trimmedOrNull(raw.draftReviewUrl),
+    draftReviewCommitSha: trimmedOrNull(raw.draftReviewCommitSha),
     draftReviewNotificationStatus: normalizeStatus(
       raw.draftReviewNotificationStatus,
       VALID_DRAFT_NOTIFICATION_STATUSES,
@@ -191,7 +186,7 @@ export function normalizeReviewerSnapshot(raw) {
     ),
 
     submittedReviewPresent: Boolean(raw.submittedReviewPresent),
-    submittedReviewCommitSha: normalizeSha(raw.submittedReviewCommitSha),
+    submittedReviewCommitSha: trimmedOrNull(raw.submittedReviewCommitSha),
     submittedReviewState: normalizeSubmittedReviewState(raw.submittedReviewState),
     reviewSubmissionStatus: normalizeStatus(raw.reviewSubmissionStatus, VALID_SUBMISSION_STATUSES, "none"),
   };
@@ -343,7 +338,7 @@ function findingDedupKey(finding) {
  * @returns {{headSha:string|null, verdict:string, inlineComments:object[], summaryFindings:object[], totalFindings:number, runsMerged:number}}
  */
 export function mergeReviewerResults(input = {}) {
-  const headSha = normalizeSha(input.headSha);
+  const headSha = trimmedOrNull(input.headSha);
   const runResults = Array.isArray(input.runResults) ? input.runResults : [];
 
   const deduped = [];
@@ -388,7 +383,7 @@ export function mergeReviewerResults(input = {}) {
 }
 
 export function buildDraftReviewPayload(mergedResult = {}) {
-  const headSha = normalizeSha(mergedResult.headSha);
+  const headSha = trimmedOrNull(mergedResult.headSha);
   const verdict = normalizeDraftVerdict(mergedResult.verdict);
   const inlineComments = Array.isArray(mergedResult.inlineComments) ? mergedResult.inlineComments : [];
   const summaryFindings = Array.isArray(mergedResult.summaryFindings) ? mergedResult.summaryFindings : [];
@@ -396,7 +391,7 @@ export function buildDraftReviewPayload(mergedResult = {}) {
   const comments = inlineComments
     .filter((finding) => finding && typeof finding === "object")
     .map((finding) => ({
-      path: typeof finding.path === "string" && finding.path.trim().length > 0 ? finding.path.trim() : null,
+      path: trimmedOrNull(finding.path),
       line: typeof finding.line === "number" && finding.line > 0 ? Math.floor(finding.line) : null,
       body: typeof finding.message === "string" ? finding.message.trim() : "",
       side: "RIGHT",

@@ -1,4 +1,5 @@
 import { SUBMITTED_REVIEW_STATES, isCopilotLogin, normalizeTimestamp } from "../github/copilot-helpers.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 
 const ACTIVE_COPILOT_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requested"]);
 
@@ -70,7 +71,7 @@ function normalizeCommits(commits) {
       sortKey: index,
       committedAtMs: normalizeTimestamp(commit?.committedAt),
       authorLogin: typeof commit?.authorLogin === "string" ? commit.authorLogin.trim() : "",
-      sha: typeof commit?.sha === "string" && commit.sha.trim().length > 0 ? commit.sha.trim() : null,
+      sha: trimmedOrNull(commit?.sha),
     }))
     .filter((commit) => commit.committedAtMs !== null)
     .sort((left, right) => left.committedAtMs - right.committedAtMs || left.sortKey - right.sortKey);

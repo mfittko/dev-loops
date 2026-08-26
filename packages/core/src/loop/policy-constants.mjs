@@ -12,3 +12,12 @@ export const COPILOT_FIRST_DURABLE_WAIT_TIMEOUT_MS = 3_600_000;
 
 /** Copilot review wait: external healthy-wait budget */
 export const COPILOT_REVIEW_WAIT_TIMEOUT_MS = 1_800_000;
+
+/** Gate review verdict vocabulary shared by tracker/public-routing normalizers. */
+export const GATE_REVIEW_VERDICT_SET = new Set(["clean", "findings_present", "blocked"]);
+
+/** Normalize a raw gate review verdict to a member of GATE_REVIEW_VERDICT_SET, or null. */
+export function normalizeGateReviewVerdict(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return GATE_REVIEW_VERDICT_SET.has(normalized) ? normalized : null;
+}

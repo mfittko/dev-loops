@@ -20,6 +20,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
@@ -222,16 +223,8 @@ function normalizePositiveInt(v) {
   return v;
 }
 
-function normalizeString(v) {
-  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
-}
-
-function normalizeStringOrNull(v) {
-  return v === null || v === undefined ? null : normalizeString(v);
-}
-
 function requireString(v, label) {
-  const s = normalizeString(v);
+  const s = trimmedOrNull(v);
   if (s === null) throw new Error(`handoff-envelope: ${label} is required and must be a non-empty string`);
   return s;
 }
@@ -264,12 +257,12 @@ function deriveTarget(bundle, repo) {
     target.pr = pr;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_BRANCH) {
-    const branch = normalizeString(artifact.branch);
+    const branch = trimmedOrNull(artifact.branch);
     if (!branch) throw new Error("handoff-envelope: local_branch target must include a non-empty branch name");
     target.branch = branch;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
-    const phase = normalizeString(artifact.phase);
+    const phase = trimmedOrNull(artifact.phase);
     const validIssue = Number.isInteger(artifact.issue) && artifact.issue > 0;
     if (!phase && !validIssue) {
       throw new Error("handoff-envelope: local_phase target must include a non-empty phase or a valid positive issue number");
@@ -340,8 +333,8 @@ export const CANONICAL_SPEC_SOURCE = Object.freeze({
  * validateHandoffEnvelope would then reject.
  */
 function deriveSpecSource(bundle, resolverOutput) {
-  const raw = normalizeStringOrNull(resolverOutput?.canonicalSpecSource)
-    ?? normalizeStringOrNull(bundle?.canonicalSpecSource);
+  const raw = trimmedOrNull(resolverOutput?.canonicalSpecSource)
+    ?? trimmedOrNull(bundle?.canonicalSpecSource);
   return raw === CANONICAL_SPEC_SOURCE.PHASE_DOC || raw === CANONICAL_SPEC_SOURCE.PR_BODY ? raw : null;
 }
 
@@ -459,7 +452,7 @@ export const WORKTREE_NAMESPACE = "tmp/worktrees/dev-loops";
  * @returns {string} Absolute path `<repoRoot>/tmp/worktrees/dev-loops/<kind>-<number>`
  */
 export function resolveWorktreePath({ repoRoot, kind, number } = {}) {
-  const root = normalizeString(repoRoot);
+  const root = trimmedOrNull(repoRoot);
   if (!root) throw new Error("resolveWorktreePath: repoRoot is required and must be a non-empty string");
   const k = typeof kind === "string" ? kind.trim().toLowerCase() : "";
   if (k !== DEV_LOOP_TARGET_KIND.ISSUE && k !== DEV_LOOP_TARGET_KIND.PR) {
@@ -486,11 +479,11 @@ function buildWorktreeSlug(artifact, kind) {
     return `pr-${artifact.pr}`;
   }
   if (kind === DEV_LOOP_TARGET_KIND.LOCAL_BRANCH) {
-    const branch = normalizeString(artifact.branch);
+    const branch = trimmedOrNull(artifact.branch);
     return branch ? flattenSlugSegment(branch) : null;
   }
   if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
-    const phase = normalizeString(artifact.phase);
+    const phase = trimmedOrNull(artifact.phase);
     const issue = Number.isInteger(artifact.issue) && artifact.issue > 0 ? artifact.issue : null;
     if (phase && issue) return `phase-${issue}-${flattenSlugSegment(phase)}`;
     if (phase) return `phase-${flattenSlugSegment(phase)}`;
@@ -508,11 +501,11 @@ function normalizeGateState(gateState) {
   const gs = gateState ?? {};
 
   return {
-    currentHeadSha: normalizeStringOrNull(gs.currentHeadSha) ?? null,
-    ciStatus: normalizeStringOrNull(gs.ciStatus) ?? null,
+    currentHeadSha: trimmedOrNull(gs.currentHeadSha) ?? null,
+    ciStatus: trimmedOrNull(gs.ciStatus) ?? null,
     unresolvedThreadCount: normalizePositiveInt(gs.unresolvedThreadCount) ?? 0,
     copilotRoundCount: normalizePositiveInt(gs.copilotRoundCount) ?? 0,
-    currentSubGate: normalizeString(gs.currentSubGate) ?? undefined,
+    currentSubGate: trimmedOrNull(gs.currentSubGate) ?? undefined,
   };
 }
 

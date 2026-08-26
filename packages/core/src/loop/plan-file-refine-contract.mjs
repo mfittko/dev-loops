@@ -27,6 +27,7 @@ import {
   PLAN_FILE_INTAKE_STATE,
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "./plan-file-intake-contract.mjs";
+import { buildSectionHeadingPattern, extractSection } from "./markdown-sections.mjs";
 
 /** The local human-review checkpoint surface the loop stops at on success. */
 export const PLAN_FILE_REFINE_STOP = Object.freeze({
@@ -112,8 +113,7 @@ export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_S
  * Returns the markdown unchanged when the heading is absent.
  */
 function stripSection(markdownText, headingText) {
-  const escapedHeading = headingText.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const headingPattern = new RegExp(`^##\\s+${escapedHeading}\\s*$`, "imu");
+  const headingPattern = buildSectionHeadingPattern(headingText);
   const match = headingPattern.exec(markdownText);
   if (!match || match.index === undefined) return markdownText;
   const start = match.index;
@@ -131,12 +131,10 @@ function stripSection(markdownText, headingText) {
  * Whether markdown carries a `## <heading>` section marker. Used to re-derive
  * the section-presence facts from the freshly-written text so the end-state
  * check verifies the append actually happened (rather than re-asserting the
- * inputs). ponytail: local copy of the section-detect regex; the shared section
- * helper belongs in core once extractSection is lifted out of scripts/.
+ * inputs).
  */
 function hasSection(markdownText, headingText) {
-  const escaped = headingText.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  return new RegExp(`^##\\s+${escaped}\\s*$`, "imu").test(markdownText);
+  return extractSection(markdownText, headingText) !== null;
 }
 
 /** Append a `## <heading>` section with the given body to markdown. */
