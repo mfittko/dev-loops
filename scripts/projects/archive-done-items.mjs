@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, parseProjectRef, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { ghGraphql } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
        (dev-loops project archive-done … is a back-compat alias)
@@ -143,28 +144,6 @@ function parseDuration(raw) {
     throw Object.assign(new Error(`--older-than must be a positive amount, got "${raw}"`), { code: "INVALID_DURATION" });
   }
   return n * UNIT_MS[m[2]];
-}
-
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild("gh", ["api", "graphql", "--field", `query=${query}`, ...fieldArgs], env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
 }
 
 // ── GraphQL fragments ────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { runChild as _runChild } from "../cli/primitives.mjs";
-import { parseJsonText } from "../github/review-threads.mjs";
 import { resolveProjectSelector, findProject } from "./resolve-project.mjs";
+import { ghGraphql } from "../github/gh.mjs";
 
 // ── Validation ───────────────────────────────────────────────────────────
 
@@ -28,32 +28,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
 }
 
 // ── GraphQL fragments ────────────────────────────────────────────────────

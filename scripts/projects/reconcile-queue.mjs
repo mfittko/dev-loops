@@ -5,7 +5,7 @@
 // derived column differs from their current Status. Backlog/Next Up ordering is
 // left untouched (items that derive null are skipped). Idempotent: a second run
 // over a converged board performs no moves.
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
@@ -13,7 +13,7 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { main as moveQueueItem } from "./move-queue-item.mjs";
 import { detectLinkedIssuePr } from "../github/detect-linked-issue-pr.mjs";
 import { planReconcile, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
-import { runChild as _runChild } from "../_cli-primitives.mjs";
+import { ghJson } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue reconcile --repo <owner/name> [--project <number|id|board-uri>]
        (dev-loops project reconcile … is a back-compat alias)
@@ -98,70 +98,80 @@ function parseCliArgs(argv) {
   return args;
 }
 
-async function ghJson(argv, { env, runChild }) {
-  const child = runChild ?? _runChild;
-  const result = await child("gh", argv, env);
-  if (result.code !== 0) {
-    const detail = result.stderr?.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh command failed: ${detail}`), { code: "GH_API_ERROR" });
+// Fixed-bound concurrency limiter: runs `fn` over `items` in chunks of `limit`,
+// preserving result order (index-stable) regardless of per-item completion
+// order — callers that need output in input order can rely on the returned
+// array without any extra bookkeeping.
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.all(chunk.map((item) => fn(item)));
+    for (let j = 0; j < chunkResults.length; j++) results[i + j] = chunkResults[j];
   }
-  return parseJsonText(result.stdout);
+  return results;
 }
+
+const GATHER_CONCURRENCY = 4;
 
 // Real live-facts gatherer. For each item, resolve GitHub state into the fact
 // shape consumed by deriveReconcileColumn. Keyed by the stable item node id
 // (item.itemId), not the bare number, so a multi-repo board where two items
 // share a number (repo-A PR #5 vs repo-B issue #5) cannot collide. Per-item gh
 // failures are swallowed (best-effort): the item records all-null PR fields →
-// derives null → untouched.
+// derives null → untouched. Items are gathered with a fixed concurrency bound
+// (not fully sequential) — the returned Map's entry order mirrors the gathered
+// eligible items (the `items` order minus the skipped ineligible/Done ones).
 export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn } = {}) {
-  const byItemId = new Map();
-  for (const item of items) {
+  const eligible = items.filter((item) => {
     const number = item.prNumber != null ? item.prNumber : item.issueNumber;
-    if (number == null || item.itemId == null) continue;
+    if (number == null || item.itemId == null) return false;
     // Done is terminal for reconcile; planReconcile treats a missing fact as
     // unchanged. At loop startup (doneColumn set) we skip the gh calls for
     // Done items entirely — terminal + perf. An explicit `dev-loops queue
     // reconcile` run passes no doneColumn, so Done items ARE gathered and a
     // reopened/re-linked artifact can be moved back out of Done (recovery).
-    if (doneColumn != null && item.status === doneColumn) continue;
+    if (doneColumn != null && item.status === doneColumn) return false;
+    return true;
+  });
+
+  const entries = await mapConcurrent(eligible, GATHER_CONCURRENCY, async (item) => {
     try {
       if (item.prNumber != null) {
         const pr = await ghJson(["pr", "view", String(item.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
-        byItemId.set(item.itemId, {
+        return [item.itemId, {
           itemKind: "pr",
           issueState: null,
           prState: pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase(),
           prIsDraft: pr?.isDraft === true,
-        });
-      } else {
-        const issue = await ghJson(["issue", "view", String(item.issueNumber), "--repo", repo, "--json", "state"], { env, runChild });
-        const issueState = String(issue?.state ?? "").toUpperCase();
-        if (issueState === "CLOSED") {
-          byItemId.set(item.itemId, { itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null });
-          continue;
-        }
-        let prState = null;
-        let prIsDraft = null;
-        const linkage = await detectLinkedIssuePr({ repo, issue: item.issueNumber }, { env, runChild });
-        if (linkage?.hasOpenLinkedPr) {
-          const pr = await ghJson(["pr", "view", String(linkage.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
-          prState = pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase();
-          prIsDraft = pr?.isDraft === true;
-        }
-        byItemId.set(item.itemId, { itemKind: "issue", issueState: "OPEN", prState, prIsDraft });
+        }];
       }
+      const issue = await ghJson(["issue", "view", String(item.issueNumber), "--repo", repo, "--json", "state"], { env, runChild });
+      const issueState = String(issue?.state ?? "").toUpperCase();
+      if (issueState === "CLOSED") {
+        return [item.itemId, { itemKind: "issue", issueState: "CLOSED", prState: null, prIsDraft: null }];
+      }
+      let prState = null;
+      let prIsDraft = null;
+      const linkage = await detectLinkedIssuePr({ repo, issue: item.issueNumber }, { env, runChild });
+      if (linkage?.hasOpenLinkedPr) {
+        const pr = await ghJson(["pr", "view", String(linkage.prNumber), "--repo", repo, "--json", "state,isDraft,mergedAt"], { env, runChild });
+        prState = pr?.mergedAt ? "MERGED" : String(pr?.state ?? "").toUpperCase();
+        prIsDraft = pr?.isDraft === true;
+      }
+      return [item.itemId, { itemKind: "issue", issueState: "OPEN", prState, prIsDraft }];
     } catch {
       // Best-effort: record inert facts so the item derives null (untouched).
-      byItemId.set(item.itemId, {
+      return [item.itemId, {
         itemKind: item.prNumber != null ? "pr" : "issue",
         issueState: item.prNumber != null ? null : "OPEN",
         prState: null,
         prIsDraft: null,
-      });
+      }];
     }
-  }
-  return byItemId;
+  });
+
+  return new Map(entries);
 }
 
 async function main(args, { env = process.env, runChild, cwd = process.cwd(), listItems, gatherFacts, moveItem, skipTerminalColumn = false } = {}) {

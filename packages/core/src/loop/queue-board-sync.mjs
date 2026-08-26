@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { runChild as coreRunChild } from "../cli/primitives.mjs";
 import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
+import { ghGraphql } from "../github/gh.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
@@ -314,31 +314,6 @@ const LIST_ORG_PROJECTS = [
   "  }",
   "}"
 ].join("\n");
-
-async function ghGraphql(query, vars, env, runChild) {
-  const child = runChild ?? coreRunChild;
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await child(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = JSON.parse(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
 
 async function resolveOwner(login, env, runChild) {
   const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);

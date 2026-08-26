@@ -110,6 +110,24 @@ function parseCliArgs(argv) {
   return args;
 }
 
+// Fixed-bound concurrency limiter: runs `fn` over `items` in chunks of `limit`,
+// preserving result order (index-stable) regardless of per-item completion
+// order. Fail-closed: a chunk's Promise.all rejects on the first per-item
+// throw and propagates it (like a sequential loop). Unlike a sequential loop
+// it does not cancel the chunk's other in-flight calls — Promise.all cannot —
+// so siblings already started run to completion before the rejection surfaces.
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.all(chunk.map((item) => fn(item)));
+    for (let j = 0; j < chunkResults.length; j++) results[i + j] = chunkResults[j];
+  }
+  return results;
+}
+
+const BODY_FETCH_CONCURRENCY = 4;
+
 async function main(args, { env = process.env, runChild = _runChild, cwd = process.cwd() } = {}) {
   // The park column is where the enqueue fail-safe diverts un-refined issues.
   const parkedColumn = nonSuccessBoardColumn(cwd);
@@ -119,18 +137,17 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
   );
   const items = listed.items ?? [];
 
-  const unrefined = [];
-  for (const item of items) {
+  const perItem = await mapConcurrent(items, BODY_FETCH_CONCURRENCY, async (item) => {
     // Issue-only: a PR in the park column is not gated by the refinement check.
-    if (item.issueNumber == null) continue;
+    if (item.issueNumber == null) return null;
     const body = await fetchIssueBody(
       { repo: args.repo, issue: item.issueNumber },
       { env, runChild },
     );
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
     // finding !== null is the explicit "has NO refinement artifact" signal.
-    if (artifact.finding === null) continue;
-    unrefined.push({
+    if (artifact.finding === null) return null;
+    return {
       issueNumber: item.issueNumber,
       title: item.title ?? null,
       url: item.url ?? null,
@@ -140,8 +157,9 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       // The three artifact sources any ONE of which clears the gate — the same
       // single-source vocabulary the enqueue gate reports (one taxonomy, no drift).
       missing: [...REFINEMENT_ARTIFACT_SOURCES],
-    });
-  }
+    };
+  });
+  const unrefined = perItem.filter((x) => x !== null);
 
   return { ok: true, parkedColumn, items: unrefined };
 }

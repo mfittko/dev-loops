@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
 import { runPickupRefinementGate } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { ghGraphql } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -171,32 +172,6 @@ function validateRepo(repo) {
     throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
   }
   return repo;
-}
-
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild, { allowErrors = false } = {}) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (!allowErrors && payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
 }
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
