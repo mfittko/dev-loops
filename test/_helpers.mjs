@@ -242,9 +242,11 @@ function runGitFixture(cwd, args) {
 
 /**
  * Common `git init` + identity + optional initial commit + optional remote
- * fixture. Identity comes from GIT_FIXTURE_ENV's author/committer overrides
- * (the same "Test <test@example.com>" every explicit `git config user.*` in
- * these suites already resolves to), so no separate config calls are needed.
+ * fixture. Identity ("Test <test@example.com>") is written into repo-local
+ * config right after init so it persists for every later git command against
+ * the repo — including a caller's own env-less git helper — not just the
+ * commands this helper spawns through GIT_FIXTURE_ENV; a hermetic CI runner
+ * has no global user.* to fall back on.
  * @param {string} dir — an existing empty directory (e.g. a mkdtemp result)
  * @param {{ remote?: string, branch?: string, commit?: string|null }} [opts]
  *   `commit` is the initial commit message (default "init"); pass `null` to
@@ -252,12 +254,8 @@ function runGitFixture(cwd, args) {
  */
 export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
   runGitFixture(dir, branch ? ["init", "-q", "-b", branch] : ["init", "-q"]);
-  // Persist identity into repo-local config, not just GIT_FIXTURE_ENV. The env
-  // identity only reaches commands spawned through runGitFixture; callers that
-  // commit later via their own env-less git helper (or {commit: null} then a
-  // manual commit) must still resolve identity, and a hermetic CI runner has no
-  // global user.* to fall back on. Repo-local config makes the fixture
-  // self-contained, matching the inline `git config user.*` blocks it replaced.
+  // Persist identity into repo-local config (see the JSDoc above for why env
+  // identity alone is not enough for env-less callers on a hermetic runner).
   runGitFixture(dir, ["config", "user.email", "test@example.com"]);
   runGitFixture(dir, ["config", "user.name", "Test"]);
   if (commit !== null) runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", commit]);
