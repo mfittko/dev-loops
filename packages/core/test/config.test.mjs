@@ -2865,6 +2865,34 @@ describe("role resolution", () => {
       assert.throws(() => resolveGateConfig(config, "draft"), /outside the schema's severity vocabulary/);
     });
 
+    // Fail-closed posture (issue #1761): resolveGateConfig validates every
+    // GateConfig-typed gate's blockCleanOnFindingSeverities together, eagerly,
+    // on every call — not only the requested gate's. Without this, a
+    // single-gate consumer (e.g. a draft-only fan-in consolidation) could
+    // resolve draft's (valid) config, consolidate a round, and flip
+    // ready-for-review before a later dual-gate call site (e.g. verdict
+    // posting) ever resolved preApproval and threw on ITS invalid list —
+    // leaving a written ledger artifact and no verdict. Requesting "draft"
+    // here must throw on preApproval's invalid list even though draft's own
+    // list is valid and draft is the only gate being resolved.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value on a DIFFERENT gate than the one requested (eager cross-gate validation)", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: { blockCleanOnFindingSeverities: ["high"] },
+          preApproval: { blockCleanOnFindingSeverities: ["critical"] },
+        },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.preApproval.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
     test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
       const config = {
         version: 1,
