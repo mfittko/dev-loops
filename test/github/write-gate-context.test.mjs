@@ -4652,6 +4652,45 @@ test("#1635 resolveFanoutDispatch: absent carriedAngles is unchanged from today'
   assert.deepEqual(withoutCarried.preflight.carriedAngles, []);
 });
 
+test("issue 1778 resolveFanoutDispatch rejects a non-string carried-angle element with a named error (no silent String() coercion)", () => {
+  assert.throws(
+    () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: ["a", 1] }),
+    /carriedAngles must contain only non-empty angle-name strings/,
+  );
+});
+
+test("issue 1778 resolveFanoutDispatch rejects a blank (whitespace-only) carried-angle element with a named error", () => {
+  assert.throws(
+    () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: ["a", "   "] }),
+    /carriedAngles must contain only non-empty angle-name strings/,
+  );
+});
+
+test("issue 1778 resolveFanoutDispatch rejects a bare-string carriedAngles rather than spreading it into per-character angles", () => {
+  assert.throws(
+    () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: "abc" }),
+    /not a bare string/,
+  );
+});
+
+test("issue 1778 resolveFanoutDispatch rejects a non-iterable carriedAngles with a named error (not a raw TypeError)", () => {
+  assert.throws(
+    () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: 123 }),
+    /carriedAngles must be an array \(or iterable\) of angle-name strings/,
+  );
+});
+
+test("issue 1778 resolveFanoutDispatch accepts and trims a valid non-array iterable carriedAngles", () => {
+  // A Set is a legitimate iterable; the contract normalizes it like an array.
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], {
+    fullLabel: false,
+    availableReviewers: 1,
+    carriedAngles: new Set([" d ", "e"]),
+  });
+  assert.deepEqual(plan.preflight.carriedAngles, ["d", "e"]);
+  assert.equal(plan.preflight.requiredReviewers, 1);
+});
+
 test("#1507 buildGateContextArtifact carries the preflight in fanout.preflight", () => {
   const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b"], { fullLabel: false, availableReviewers: 0 });
   const artifact = buildGateContextArtifact({

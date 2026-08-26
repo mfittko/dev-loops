@@ -450,10 +450,15 @@ export function parseWriteGateContextCliArgs(argv) {
       } catch {
         throw parseError("--carried-angles must be a JSON array of angle-name strings");
       }
-      if (!Array.isArray(parsed) || parsed.some((a) => typeof a !== "string" || a.trim().length === 0)) {
+      if (!Array.isArray(parsed)) {
         throw parseError("--carried-angles must be a JSON array of non-empty angle-name strings");
       }
-      options.carriedAngles = parsed.map((a) => a.trim());
+      // Element validation shared with resolveFanoutDispatch (issue 1778); the
+      // JSON-array shape is CLI-specific so it stays here, wording unchanged.
+      options.carriedAngles = normalizeCarriedAngleElements(
+        parsed,
+        () => parseError("--carried-angles must be a JSON array of non-empty angle-name strings"),
+      );
       continue;
     }
     if (token.name === "tmp-root") {
@@ -1669,6 +1674,38 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {object} options — parsed CLI options shape
  * @returns {object}
  */
+
+// Shared carried-angles element contract (issue 1778). One definition of a valid
+// carried angle — a non-empty-after-trim string — used by BOTH the CLI parse
+// (parseWriteGateContextCliArgs) and the programmatic seam (resolveFanoutDispatch)
+// so the two cannot drift. Each caller supplies its own error via makeError; the
+// element predicate and the trim live only here. Assumes an array (each caller
+// establishes iterability first).
+function normalizeCarriedAngleElements(elements, makeError) {
+  if (elements.some((a) => typeof a !== "string" || a.trim().length === 0)) {
+    throw makeError();
+  }
+  return elements.map((a) => a.trim());
+}
+
+// Programmatic entry contract for resolveFanoutDispatch's carriedAngles: an array
+// or any iterable of angle names. Reject the two silent-corruption inputs the CLI
+// parse already blocks but this seam did not (issue 1778): a bare string (would
+// spread into per-character angles) and a non-iterable (would throw a raw
+// TypeError on spread) — both with a named error. Returns a trimmed string[]
+// (empty for null/undefined).
+function normalizeCarriedAnglesArg(carriedAngles) {
+  if (carriedAngles == null) return [];
+  if (typeof carriedAngles === "string") {
+    throw new Error("carriedAngles must be an array (or iterable) of angle-name strings, not a bare string — a string spreads into per-character angles");
+  }
+  if (!Array.isArray(carriedAngles) && typeof carriedAngles[Symbol.iterator] !== "function") {
+    throw new Error("carriedAngles must be an array (or iterable) of angle-name strings");
+  }
+  const list = Array.isArray(carriedAngles) ? carriedAngles : [...carriedAngles];
+  return normalizeCarriedAngleElements(list, () => new Error("carriedAngles must contain only non-empty angle-name strings"));
+}
+
 /**
  * Resolve the fan-out dispatch plan for a gate round (issue #1601): the
  * dispatch units (`resolveFanoutGroups`), the bounded-concurrency wave plan
@@ -1711,8 +1748,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // name is NOT rejected here (this seam has no plan-proof cross-check to
   // validate an unrecognized name against, and resolveFanoutGroups already
   // treats an unresolved angle as ungrouped rather than erroring).
-  const carriedAnglesList =
-    carriedAngles == null ? [] : Array.isArray(carriedAngles) ? carriedAngles : [...carriedAngles];
+  const carriedAnglesList = normalizeCarriedAnglesArg(carriedAngles);
   if (carriedAnglesList.length > 0) {
     const mandatoryAngles = resolveGateAngleContract(config, configGate).mandatoryAngles;
     for (const angle of carriedAnglesList) {
