@@ -1359,7 +1359,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
       ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi })
       : null;
 
-    if (!sameHeadCleanConverged && !postConvergenceReviewSuppressed && (!roundCapReached || roundCapNewCycleRequired)) {
+    // reviewMode "internal_only" (which also folds in maxCopilotRounds:0 via
+    // copilotReviewDisabled) suppresses Copilot: the handoff routes such a PR
+    // straight to pre_approval_gate, so this branch must not force a re-request
+    // for a missing Copilot convergence point that will never exist. The
+    // sibling PR_READY_NO_FEEDBACK branch already honors internal_only; this
+    // reconciles READY_TO_REREQUEST_REVIEW with it (issue 1771). Non-suppressed
+    // external-review PRs keep reviewMode null and hit the guard unchanged.
+    if (!sameHeadCleanConverged && !postConvergenceReviewSuppressed && reviewMode !== "internal_only" && (!roundCapReached || roundCapNewCycleRequired)) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1377,7 +1384,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         nextAction: PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
         reason: roundCapNewCycleRequired
           ? "The previous Copilot cycle converged at the round cap, but significant post-convergence changes landed on a newer head; start a new Copilot review cycle and re-request review before `pre_approval_gate`."
-          : "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden.",
+          : "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden. If a Copilot round just landed at this head, it may not be visible to the evaluator yet; re-check after a short propagation wait before treating this as a needed re-request.",
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,

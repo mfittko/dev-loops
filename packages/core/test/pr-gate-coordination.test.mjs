@@ -345,6 +345,50 @@ test("#1190: maxCopilotRounds: 0 (Copilot review disabled) is exempt from the ou
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+test("issue 1771: internal_only READY_TO_REREQUEST_REVIEW with no Copilot convergence point still enters pre-approval directly", () => {
+  // The suppression signal (handoff: run pre_approval_gate directly) and the
+  // gate-boundary evaluator must agree. Before the fix this combination —
+  // internal_only, but sameHeadCleanConverged false and no round cap — forced a
+  // REREQUEST_COPILOT_REVIEW for a convergence point that will never exist,
+  // which the verdict poster then refused as an illegal transition.
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "requested",
+    reviewMode: "internal_only",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+});
+
+test("issue 1771 non-goal: a non-suppressed external-review PR in the same no-convergence state still re-requests Copilot, and the refusal names the propagation wait", () => {
+  // Same lifecycle state and missing convergence point, but reviewMode is null
+  // (a normal external-review PR). The guard is unchanged for it: it must still
+  // re-request Copilot, never skip to pre-approval. The refusal reason names the
+  // just-landed-round propagation wait (AC3's "names the propagation wait").
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "requested",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /may not be visible to the evaluator yet|propagation wait/i);
+});
+
 test("draft gate with crediblyGreen CI routes to WAIT_FOR_CI — unconfirmed CI is not a hard block", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
