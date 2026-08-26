@@ -910,15 +910,24 @@ angles depends on whether the Phase 1 artifact was built with `write-gate-contex
 (fail-closed)](#angle-carry-forward-fail-closed) for when a conductor should
 pass it and how it differs from consolidate-fanin's own same-named flag):
 passed the Phase 1.2 carry-forward result, `reviewerBudgetPreflight` excludes
-any group whose angles are ALL carried-or-completed from `pendingGroups`, so
-its length already matches the dispatch-unit count over the plan's FRESH
-angles and needs no further subtraction. If the Phase 1 artifact predates
-Phase 1.2 (the common case: Phase 1 runs before Phase 1.2 in the sub-loop's
-own ordering, so a conductor that never rebuilds the artifact after
-carry-forward resolves never has this input), `pendingGroups` still includes
-the carried angles and would overcount — the caller must subtract the
-carry-forward-carried dispatch units from `pendingGroups.length` by hand
-before passing `--expected-dispatch-units`. Either way, if the resulting count
+any dispatch unit (group) whose angles are ALL carried-or-completed from
+`pendingGroups`, so its length already matches the dispatch-unit count over
+the plan's FRESH angles and needs no further subtraction for a FULLY-carried
+unit. A PARTIALLY-carried unit (only SOME of its angles carried) stays in
+`pendingGroups` whole, while Phase 2 fans out by re-resolving dispatch groups
+over the resolved-minus-carried angle set and re-chunking the leftovers
+(`resolveFanoutGroups` is run fresh, not `pendingGroups`'s own group
+boundaries) — so a carry that splits a unit can leave `pendingGroups.length`
+ahead of the unit count Phase 2 actually dispatches. `pendingGroups.length`
+is therefore a safe upper bound, never the authoritative figure; the
+authoritative `--expected-dispatch-units` value is always the dispatch-unit
+count Phase 2 actually spawned reviewers for. If the Phase 1 artifact was
+never rebuilt after Phase 1.2 resolved (Phase 1 runs before Phase 1.2 in the
+sub-loop's own ordering, so a conductor must explicitly rebuild it to pick up
+this input), `pendingGroups` still includes the carried angles and would
+overcount — the caller must subtract the carry-forward-carried dispatch units
+from `pendingGroups.length` by hand before passing
+`--expected-dispatch-units`. Either way, if the resulting count
 is `0` (an all-carried-or-complete round dispatches no reviewer at all), OMIT
 `--expected-dispatch-units` entirely rather than pass `0`:
 `consolidate-fanin.mjs` parses it as a POSITIVE integer and throws on `0`. A
@@ -1406,7 +1415,7 @@ at every re-gate that follows; that is this rule's fail-closed cost, accepted de
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
-**Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate typically rebuilds the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
+**Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate MAY rebuild the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. Rebuilding is not automatic — Phase 1 runs before Phase 1.2 in the sub-loop's own ordering, so the artifact this seam's result feeds into already exists by Phase 1.2's own point in the sequence, built without this flag; a conductor must explicitly rebuild it afterward to pick up this flag and reflect the carried angles (see Phase 3's `--expected-dispatch-units` note above for what a rebuilt vs. never-rebuilt artifact each mean for that count). That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
 
 **Review-surface mapping.** An angle's review surface is the set of file "surface kinds" whose change could implicate it, derived from the single source of truth for change-category → angle relevance (`CATEGORY_ANGLE_MAP`) via each file's `classifyFile` kind (`code` | `docs` | `config` | `test` | `ci`):
 
