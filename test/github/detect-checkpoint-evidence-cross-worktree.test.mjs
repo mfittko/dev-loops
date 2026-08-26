@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { initGitFixture } from "../_helpers.mjs";
 
 function git(cwd, args) {
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
@@ -15,10 +16,8 @@ function git(cwd, args) {
 async function makeRepoWithWorktrees() {
   const base = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-xwt-")));
   const repoA = path.join(base, "a");
-  git(base, ["init", "-q", repoA]);
-  git(repoA, ["config", "user.email", "test@example.com"]);
-  git(repoA, ["config", "user.name", "Test"]);
-  git(repoA, ["commit", "--allow-empty", "-q", "-m", "init"]);
+  await mkdir(repoA, { recursive: true });
+  initGitFixture(repoA);
   const repoB = path.join(base, "b");
   git(repoA, ["worktree", "add", "-q", "-b", "feature", repoB]);
   return { base, repoA, repoB: await realpath(repoB) };

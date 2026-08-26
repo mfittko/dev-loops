@@ -14,7 +14,7 @@ import {
   validateSuiteNames,
   buildValidationArtifact,
 } from "../../scripts/loop/run-gate-validation.mjs";
-import { runNode } from "../_helpers.mjs";
+import { initGitFixture, runNode } from "../_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 
@@ -41,9 +41,7 @@ async function makeFixtureRepo() {
     }, null, 2),
     "utf8",
   );
-  git(repoRoot, ["init", "-q"]);
-  git(repoRoot, ["config", "user.email", "test@example.com"]);
-  git(repoRoot, ["config", "user.name", "Test"]);
+  initGitFixture(repoRoot, { commit: null });
   git(repoRoot, ["add", "-A"]);
   git(repoRoot, ["commit", "-q", "-m", "fixture"]);
   const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();

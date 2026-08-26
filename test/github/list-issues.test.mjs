@@ -6,19 +6,10 @@ import {
   listIssues,
   runCli,
 } from "../../scripts/github/list-issues.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh(payload, { code = 0, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return { code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub([{ code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr }], { repeatLastOnOverflow: true });
 }
 
 const ISSUES = [

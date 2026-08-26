@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveRepoRoot, resolveLedgerCheckouts } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { initGitFixture } from "../_helpers.mjs";
 
 function git(cwd, args) {
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
@@ -13,10 +14,7 @@ function git(cwd, args) {
 
 async function makeRepo() {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-repo-root-")));
-  git(dir, ["init", "-q"]);
-  git(dir, ["config", "user.email", "test@example.com"]);
-  git(dir, ["config", "user.name", "Test"]);
-  git(dir, ["commit", "--allow-empty", "-q", "-m", "init"]);
+  initGitFixture(dir);
   return dir;
 }
 

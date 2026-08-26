@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { after, before } from "node:test";
-import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   buildCoordinationEvaluatorInput,
@@ -344,8 +344,7 @@ test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed fr
 // schema validation instead of resolving gate config from the raw merged
 // object. The refusal happens before any gh read, so no stub is needed.
 test("upsert refuses to post when the worktree config failed schema validation", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-invalid-config-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(
       path.join(tempDir, ".devloops"),
       "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverity:\n      - high\n",
@@ -363,9 +362,7 @@ test("upsert refuses to post when the worktree config failed schema validation",
     ], { cwd: tempDir, env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }) });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /could not be fully loaded\/validated; refusing to post a gate verdict/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-invalid-config-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
@@ -456,8 +453,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects --force-reason without --force
 });
 
 test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-programmatic-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const { runChild } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
@@ -482,13 +478,10 @@ test("upsertCheckpointVerdict ignores force/forceReason in programmatic API", as
     // force metadata no longer included
     assert.equal(result.forced, undefined);
     assert.equal(result.forceReason, undefined);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-force-programmatic-" });
 });
 test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR whose linked issue has no AC/DoD (poster agrees with detector)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-tracker-refinement-missing-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const { env: logEnvRaw } = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "50", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -528,9 +521,7 @@ test("upsertCheckpointVerdict refuses draft_gate for a tracker-backed draft PR w
       }, { env, repoRoot: tempDir }),
       /missing_refinement_artifact/,
     );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-tracker-refinement-missing-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force with blank --force-reason as removed flag", () => {
@@ -735,27 +726,21 @@ test("a fallback-rendered comment whose findings summary quotes the gate-finding
 });
 
 test("upsert-checkpoint-verdict rejects --force on draft_gate create", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-draft-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "Mark ready for review", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-force-draft-" });
 });
 
 test("upsert-checkpoint-verdict rejects --force on pre_approval_gate create", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-preapproval-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass.", "--findings-severity-counts", JSON.stringify({"must-fix":0,"worth-fixing-now":0}), "--next-action", "Approve and merge", "--force", "--force-reason", "CI cancelled due to infrastructure"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-force-preapproval-" });
 });
 
 test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", async () => {
@@ -764,8 +749,7 @@ test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", asyn
     { gate: "pre_approval_gate", isDraft: false, headSha: "abc1234000000000000000000000000000000000", verdict: "findings_present", findingsSummary: "CI failed", nextAction: "Fix CI and re-run", findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 1 } },
   ];
   for (const scenario of scenarios) {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), `dev-loops-upsert-gate-review-fail-closed-${scenario.gate}-`));
-    try {
+    await withTempDir(async (tempDir) => {
       const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
         isDraft: scenario.isDraft,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" }],
@@ -778,75 +762,56 @@ test("upsert-checkpoint-verdict keeps CI-blocked gate upserts fail-closed", asyn
       assert.equal(result.code, 1);
       const payload = JSON.parse(result.stderr);
       assert.match(payload.error, /Cannot enter/);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+    }, { prefix: `dev-loops-upsert-gate-review-fail-closed-${scenario.gate}-` });
   }
 });
 test("upsert-checkpoint-verdict --force rejected before update", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-update-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "CI green", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-force-update-" });
 });
 
 test("upsert-checkpoint-verdict --force rejected before noop", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-force-noop-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "Tests pass", "--next-action", "merge", "--force", "--force-reason", "CI cancelled"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-force-noop-" });
 });
 
 test("upsert-checkpoint-verdict rejects --force for non-CI pre_approval_gate refusal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-ci-preapproval-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-force-non-ci-preapproval-" });
 });
 
 test("upsert-checkpoint-verdict rejects --force for draft_gate on non-draft PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-non-draft-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "findings_present", "--findings-summary", "Some issues", "--next-action", "Fix issues", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-force-non-draft-" });
 });
 
 test("upsert-checkpoint-verdict --force rejected before stale-head check", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-force-stale-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "n/a", "--next-action", "merge", "--force", "--force-reason", "forced"]);
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--force has been removed/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-force-stale-" });
 });
 
 test("upsert-checkpoint-verdict creates a new comment when no same-head marker exists", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-create-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -903,15 +868,11 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-create-" });
 });
 
 test("upsert-checkpoint-verdict --size-budget-json records the size-budget outcome/T1-slice/waiver fields on the posted verdict", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");
     await writeFile(sizeBudgetPath, JSON.stringify({
       ok: false,
@@ -966,15 +927,11 @@ test("upsert-checkpoint-verdict --size-budget-json records the size-budget outco
     ], { env });
 
     assert.equal(result.code, 0);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-size-budget-" });
 });
 
 test("upsert-checkpoint-verdict --size-budget-json pins the t1SliceLoc > 0 boundary: 1 LOC reads as touched", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-t1min-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");
     await writeFile(sizeBudgetPath, JSON.stringify({
       ok: false,
@@ -1027,15 +984,11 @@ test("upsert-checkpoint-verdict --size-budget-json pins the t1SliceLoc > 0 bound
     ], { env });
 
     assert.equal(result.code, 0);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-size-budget-t1min-" });
 });
 
 test("upsert-checkpoint-verdict --size-budget-json pins the t1SliceLoc > 0 boundary: 0 LOC reads as not touched", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-t1zero-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");
     await writeFile(sizeBudgetPath, JSON.stringify({
       ok: false,
@@ -1088,14 +1041,11 @@ test("upsert-checkpoint-verdict --size-budget-json pins the t1SliceLoc > 0 bound
     ], { env });
 
     assert.equal(result.code, 0);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-size-budget-t1zero-" });
 });
 
 test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .outcome", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-bad-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");
     await writeFile(sizeBudgetPath, JSON.stringify({ outcome: "not-a-real-outcome" }), "utf8");
 
@@ -1141,9 +1091,7 @@ test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /must carry a \.outcome of/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-size-budget-bad-" });
 });
 
 // Shared gh call sequence for the --size-budget-json fail-closed cases below:
@@ -1184,8 +1132,7 @@ for (const [label, rawJson] of [
   ["Infinity", JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: 0, waiver: { requested: true, approvedBy: "jane-doe", t1Valid: true, defaultValid: false } }).replace('"t1SliceLoc":0', '"t1SliceLoc":1e400')],
 ]) {
   test(`upsert-checkpoint-verdict --size-budget-json fails closed when .t1SliceLoc is ${label}`, async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-t1bad-"));
-    try {
+    await withTempDir(async (tempDir) => {
       const sizeBudgetPath = path.join(tempDir, "size-budget.json");
       await writeFile(sizeBudgetPath, rawJson, "utf8");
 
@@ -1205,15 +1152,12 @@ for (const [label, rawJson] of [
 
       assert.equal(result.code, 1);
       assert.match(result.stderr, /must carry a finite, non-negative numeric \.t1SliceLoc/);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+    }, { prefix: "dev-loops-upsert-size-budget-t1bad-" });
   });
 }
 
 test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .waiver", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-size-budget-waiverbad-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");
     await writeFile(sizeBudgetPath, JSON.stringify({
       ok: false,
@@ -1241,15 +1185,11 @@ test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /must carry a \.waiver object with boolean \.t1Valid and \.defaultValid/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-size-budget-waiverbad-" });
 });
 
 test("upsert-checkpoint-verdict embeds --findings-file content with preserved newlines", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.md");
     await writeFile(findingsPath, "## Section A\n\n- item 1\n- item 2\n\n**bold note**\n");
 
@@ -1311,15 +1251,11 @@ test("upsert-checkpoint-verdict embeds --findings-file content with preserved ne
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-file-" });
 });
 
 test("upsert-checkpoint-verdict --findings-file takes precedence over --findings-summary", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-precedence-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.md");
     await writeFile(findingsPath, "file content wins\n");
 
@@ -1371,15 +1307,11 @@ test("upsert-checkpoint-verdict --findings-file takes precedence over --findings
     assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-precedence-" });
 });
 
 test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Execution mode:' line inside --findings-file content so the shared summarizer resolves the genuine trailing fields (#1552)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-injection-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.md");
     await writeFile(
       findingsPath,
@@ -1430,15 +1362,11 @@ test("upsert-checkpoint-verdict blockquotes an injected 'Next action:'/'Executio
     const summary = summarizeGateReviewComments([{ id: 102, body, updated_at: "2026-08-03T00:00:00Z" }]);
     assert.equal(summary.draft_gate?.nextAction, "stay draft and fix");
     assert.equal(summary.draft_gate?.executionMode, "inline_single_agent");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-file-injection-" });
 });
 
 test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-no-blocking-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1483,15 +1411,11 @@ test("upsert-checkpoint-verdict omits Blocking severities line on clean verdict"
     assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-no-blocking-" });
 });
 
 test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is still illegal", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-illegal-preapproval-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1546,14 +1470,10 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /request Copilot review before any/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-illegal-preapproval-" });
 
 test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-draft-preapproval-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "543", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1594,16 +1514,12 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
     assert.equal(payload.ok, false);
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /draft_gate.*is now the legal gate boundary/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-draft-preapproval-" });
 });
 });
 
 test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-approval evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-round-cap-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1696,15 +1612,11 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-round-cap-" });
 });
 
 test("upsert-checkpoint-verdict truncates verbose findings summary before comment creation", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-verbose-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1786,15 +1698,11 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-verbose-" });
 });
 
 test("upsert-checkpoint-verdict suppresses duplicate repost when the current same-head comment already matches", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-noop-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -1873,9 +1781,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
     });
     // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
     assert.equal(result.ghCallCount(), 8);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-noop-" });
 });
 
 test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-parse to the posted fields and a second same-head call is a noop (#1552)", async () => {
@@ -1938,9 +1844,7 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
 });
 
 test("upsert-checkpoint-verdict updates (not noop) when only the inline reason changed on the same head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-inline-reason-change-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2012,15 +1916,11 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
     assert.equal(parsed.action, "updated");
     assert.equal(parsed.executionMode, "inline_single_agent");
     assert.equal(parsed.inlineReason, "single-agent inline review (test)");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-inline-reason-change-" });
 });
 
 test("upsert-checkpoint-verdict noop still warns when a stale comment exists on a different head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-noop-warn-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2095,15 +1995,11 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
     assert.match(parsed.warning, /different head SHA/i);
     assert.match(parsed.warning, /def5678000000000000000000000000000000000/);
     assert.match(parsed.warning, /comment 202/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-noop-warn-" });
 });
 
 test("upsert-checkpoint-verdict updates an incomplete same-head marker in place", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-update-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2173,15 +2069,11 @@ test("upsert-checkpoint-verdict updates an incomplete same-head marker in place"
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-update-" });
 });
 
 test("upsert-checkpoint-verdict updates the current same-head marker even when another head has a newer marker", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-current-head-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2267,15 +2159,11 @@ test("upsert-checkpoint-verdict updates the current same-head marker even when a
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-current-head-" });
 });
 
 test("upsert-checkpoint-verdict prefers the latest same-head marker when it differs from the older strict summary", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-latest-marker-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2360,9 +2248,7 @@ test("upsert-checkpoint-verdict prefers the latest same-head marker when it diff
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-latest-marker-" });
 });
 
 test("upsert-checkpoint-verdict fails closed on an abbreviated --head-sha (no more current-head expansion; the primary head-sha must be FULL)", async () => {
@@ -2384,9 +2270,7 @@ test("upsert-checkpoint-verdict fails closed on an abbreviated --head-sha (no mo
 });
 
 test("upsert-checkpoint-verdict fails closed when the requested head SHA is stale", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-stale-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2423,15 +2307,11 @@ test("upsert-checkpoint-verdict fails closed when the requested head SHA is stal
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /does not match the current PR head SHA/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-stale-" });
 });
 
 test("upsert-checkpoint-verdict warns when a gate comment exists on a different head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-warn-stale-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2494,15 +2374,11 @@ test("upsert-checkpoint-verdict warns when a gate comment exists on a different 
     assert.equal(parsed.headSha, "def5678000000000000000000000000000000000");
     assert.match(parsed.warning, /different head SHA/i);
     assert.match(parsed.warning, /abc1234000000000000000000000000000000000/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-warn-stale-" });
 });
 
 test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-draft PR as an idempotent no-op (#891)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-draft-forbidden-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2560,15 +2436,11 @@ test("upsert-checkpoint-verdict treats stale clean draft_gate evidence on a non-
     assert.equal(payload.ok, true);
     assert.equal(payload.action, "noop");
     assert.equal(payload.draftGateAlreadySatisfied, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-draft-forbidden-" });
 });
 
 test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-severity findings remain", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-blocking-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
       isDraft: true,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -2594,15 +2466,11 @@ test("upsert-checkpoint-verdict rejects clean verdict when unresolved blocking-s
     // non-blocking here); assert the exact bracketed list so this fails if
     // medium ever becomes blocking again for draft_gate.
     assert.match(payload.error, /blocking severities \[high\]\./);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-blocking-" });
 });
 
 test("upsert-checkpoint-verdict's blocking-severity error reports only the canonical spelling even when the gate config uses a legacy one", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-legacy-blocking-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // gates.draft.blockCleanOnFindingSeverities is written in the legacy
     // "must-fix" spelling. resolveGateConfig normalizes it to "high" at the
     // resolve boundary, so the verdict poster must only ever see and report
@@ -2637,15 +2505,11 @@ test("upsert-checkpoint-verdict's blocking-severity error reports only the canon
     assert.equal(payload.ok, false);
     assert.match(payload.error, /blocking severities \[high\]\./);
     assert.doesNotMatch(payload.error, /must-fix/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-legacy-blocking-" });
 });
 
 test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity findings remain", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-clean-ok-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({
         isDraft: true,
@@ -2676,9 +2540,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-clean-ok-" });
 });
 
 
@@ -2690,8 +2552,7 @@ test("upsert-checkpoint-verdict allows clean verdict when no blocking-severity f
 // against the parsed findings, independent of what --findings-severity-counts
 // claims.
 test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries must-fix findings even when --findings-severity-counts is all-zero", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-mismatch-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2723,14 +2584,11 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     // that the shared scan reports unparseableBlocking only for genuinely
     // unparseable entries.
     assert.doesNotMatch(payload.error, /UNPARSEABLE/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-mismatch-" });
 });
 
 test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is genuinely all-clean, matching an all-zero --findings-severity-counts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-match-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2762,9 +2620,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-match-" });
 });
 
 // The clean-verdict cross-check's actual boundary is the blockCleanOnFindingSeverities
@@ -2773,8 +2629,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
 // allowed. This pins the mid-range case between "must-fix present (reject)" and
 // "zero findings (allow)" above.
 test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries only non-blocking (defer) findings", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-defer-only-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2806,9 +2661,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-defer-only-" });
 });
 
 // The cross-check's "unresolved" boundary is disposition, not bare severity:
@@ -2819,8 +2672,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
 // without changing its severity. A clean verdict whose only blocking-severity
 // --findings-json entry carries that disposition must still be postable.
 test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-severity --findings-json finding is operator_acknowledged", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-ack-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2856,9 +2708,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-ack-" });
 });
 
 // The resolved-disposition set is closed: "deferred" (the value
@@ -2869,8 +2719,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
 // fan-in run (or a hand-typed --findings-json) could silently defeat the
 // cross-check the same way an all-zero --findings-severity-counts did.
 test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-severity --findings-json finding carries disposition deferred", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-deferred-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2901,14 +2750,11 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     assert.equal(payload.ok, false);
     assert.match(payload.error, /own per-angle findings show unresolved findings/);
     assert.match(payload.error, /high/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-deferred-" });
 });
 
 test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-severity --findings-json finding carries an unrecognized disposition", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-findings-json-unknown-disp-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -2939,9 +2785,7 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose only blocking-seve
     assert.equal(payload.ok, false);
     assert.match(payload.error, /own per-angle findings show unresolved findings/);
     assert.match(payload.error, /high/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-findings-json-unknown-disp-" });
 });
 
 // ---------------------------------------------------------------------------
@@ -3256,8 +3100,7 @@ test("renderGateReviewCommentBody still renders a genuine sizeTouchesT1: false a
 });
 
 test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json carries an unparseable finding at a blocking severity (no summary) (#1526)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-blocking-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -3290,14 +3133,11 @@ test("upsert-checkpoint-verdict rejects a clean verdict whose --findings-json ca
     assert.match(payload.error, /Cannot set verdict "clean"/);
     assert.match(payload.error, /blocking severities \[high\]/);
     assert.match(payload.error, /UNPARSEABLE/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-unparseable-blocking-" });
 });
 
 test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries an unparseable finding WITHOUT a blocking severity, and reports it as unparseable (#1526)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-clean-unparseable-nonblocking-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -3335,15 +3175,11 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-clean-unparseable-nonblocking-" });
 });
 
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts is missing and blocking severities are configured", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-counts-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
       isDraft: true,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -3371,15 +3207,11 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     // (high only — medium would match the example text
     // regardless of what is configured).
     assert.match(payload.error, /\(blocking: \[high\]\)/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-missing-counts-" });
 });
 
 test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-counts omits a blocking severity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-missing-key-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
       isDraft: true,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -3405,15 +3237,11 @@ test("upsert-checkpoint-verdict rejects clean verdict when --findings-severity-c
     assert.equal(payload.ok, false);
     assert.match(payload.error, /must include explicit counts for all configured blocking severities/);
     assert.match(payload.error, /high/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-missing-key-" });
 });
 
 test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when already satisfied (#891)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-already-satisfied-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // Simulate a non-draft PR with an existing clean draft_gate comment. The draft
     // gate is a one-time boundary already passed; the pre-merge check accepts this
     // evidence, so re-posting must be an idempotent no-op (not a hard error that
@@ -3458,15 +3286,11 @@ test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when al
     assert.equal(payload.draftGateAlreadySatisfied, true);
     assert.equal(payload.gate, "draft_gate");
     assert.match(payload.reason, /already satisfied/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-gate-review-already-satisfied-" });
 });
 
 test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconcile is not the allowed action (#891 narrowing)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-no-self-heal-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // The self-heal draft→post→ready transition must fire ONLY when coordination
     // allows RECONCILE_DRAFT_GATE — NOT for every ready PR where RUN_DRAFT_GATE is
     // forbidden. Here the PR is ready and the post-draft external review cycle has
@@ -3502,9 +3326,7 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
     const ghLog = await readFile(path.join(tempDir, "gh-log.jsonl"), "utf8");
     assert.ok(!/convertPullRequestToDraft/.test(ghLog), "must not convert the PR to draft");
     assert.ok(!/\["pr","ready"/.test(ghLog.replace(/\s/g, "")), "must not mark the PR ready");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-no-self-heal-" });
 });
 
 test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, preserving fanout_fanin (#891)", async () => {
@@ -3514,9 +3336,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
   // The poster must convert the PR back to draft, post the draft_gate verdict
   // (preserving executionMode fanout_fanin, NOT collapsing to inline), then re-mark
   // the PR ready, and report draftTransition: true. (#891)
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-self-heal-transition-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const headSha = "abc1234000000000000000000000000000000000";
     // A clean pre_approval_gate comment on the current head — combined with a
     // submitted Copilot review on the current head and zero unresolved threads,
@@ -3628,9 +3448,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     // pinned by the review-POST stub entry's assertStdinIncludes above — the gh
     // log records args only, and the body now travels on stdin.
     assert.ok(/pulls\/17\/reviews/.test(ghLog), "expected a draft_gate verdict review to be posted");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-self-heal-transition-" });
 });
 
 test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the draft-state read lags the conversion mutation (#1020)", async () => {
@@ -3641,9 +3459,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
   // AGAIN, re-converting and re-entering without bound → indefinite recursion, eventual
   // Node exit 13 with the error swallowed. The recursion guard must short-circuit the
   // re-entry and surface a CLEAR error instead of recursing. (#1020)
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-draft-race-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const headSha = "abc1234000000000000000000000000000000000";
     const cleanPreApprovalComment = {
       id: 501,
@@ -3733,9 +3549,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
     const ghLog = await readFile(ghLogPath, "utf8");
     const conversions = (ghLog.match(/convertPullRequestToDraft/g) || []).length;
     assert.equal(conversions, 1, "expected exactly one convertPullRequestToDraft (no recursion loop)");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-draft-race-" });
 });
 
 test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", async () => {
@@ -3760,9 +3574,7 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
   // inline_single_agent`, current head SHA, and a real (non-empty) run id (the
   // production default this file's tests otherwise set to "" — see the `runNode`
   // helper above — which happens to also skip the unrelated verifyComment path).
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-1455-unsettled-await-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // This test's cwd IS the CLI's repoRoot (real subprocess spawn), so its
     // resolved config is otherwise bare defaults — disable fan-out evidence
     // enforcement explicitly; this repro is about the draft-transition
@@ -3862,9 +3674,7 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
     const ghLog = await readFile(ghLogPath, "utf8");
     assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
     assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-1455-unsettled-await-" });
 });
 
 test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode from the gate marker (#891 review)", async () => {
@@ -3873,9 +3683,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode fr
   // has none and would always collapse to inline_single_agent). Here the existing
   // clean draft_gate evidence is on the current head and was recorded fanout_fanin,
   // so the no-op must report fanout_fanin — not a misleading inline default.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-satisfied-marker-execmode-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const fanoutDraftGateComment = {
       id: 101,
       body: renderGateReviewCommentBody({
@@ -3914,9 +3722,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op sources executionMode fr
     assert.equal(payload.draftGateAlreadySatisfied, true);
     // Marker-sourced: fanout_fanin preserved, NOT the misleading inline default.
     assert.equal(payload.executionMode, "fanout_fanin");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-satisfied-marker-execmode-" });
 });
 
 test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when no current-head marker exists (#891 review)", async () => {
@@ -3924,9 +3730,7 @@ test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when
   // is a one-time boundary accepted on any head), no current-head marker exists, so
   // the marker summary carries no executionMode. Rather than report a misleading
   // inline_single_agent default, the no-op must OMIT the executionMode field.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-satisfied-no-marker-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // Clean draft_gate evidence on a DIFFERENT (stale) head than the request's head.
     const staleHeadDraftGateComment = {
       id: 101,
@@ -3967,17 +3771,13 @@ test("upsert-checkpoint-verdict already-satisfied no-op OMITS executionMode when
     assert.equal(payload.draftGateAlreadySatisfied, true);
     // No current-head marker → executionMode omitted (not a misleading default).
     assert.equal("executionMode" in payload, false);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-satisfied-no-marker-" });
 });
 
 test("upsert-checkpoint-verdict skips Copilot convergence requirement for internal-only PRs", async () => {
   // Root cause 2 fix: when all changed files are internal tooling (scripts/docs/tests/config),
   // the Copilot review cycle is suppressed and pre_approval_gate may be posted directly.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-internal-only-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     const cleanDraftGateComment = buildGateComment({
       gate: "draft_gate",
       headSha: "abc1234000000000000000000000000000000000",
@@ -4031,17 +3831,13 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
     assert.equal(payload.gate, "pre_approval_gate");
     assert.equal(payload.commentId, 200);
     assert.equal(payload.commentUrl, "https://github.com/owner/repo/pull/17#pullrequestreview-200");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-internal-only-" });
 });
 
 test("upsert-checkpoint-verdict performs stale-runner takeover before gate coordination", async () => {
   // Root cause 1 fix: when a previous run owns the coordination file but is stale,
   // the new run takes over ownership rather than being rejected.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-stale-takeover-"));
-
-  try {
+  await withTempDir(async (tempDir) => {
     // This test's cwd IS the CLI's repoRoot (real subprocess spawn); disable
     // fan-out evidence enforcement — this test is about stale-runner takeover,
     // not fan-out evidence.
@@ -4104,9 +3900,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
     assert.equal(payload.action, "created");
     assert.equal(payload.gate, "draft_gate");
     assert.equal(payload.commentId, 300);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-stale-takeover-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
@@ -4898,8 +4692,7 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
 });
 
 test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-empty shape (#898)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-bad-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // Non-empty array whose items match neither shape (no nested findings, no summary).
     await writeFile(findingsPath, JSON.stringify([{ angle: "correctness", note: "oops" }]), "utf8");
@@ -4913,16 +4706,13 @@ test("upsert-checkpoint-verdict --findings-json rejects an unrecognizable non-em
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /matches neither recognized shape/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-json-bad-" });
 });
 
 // --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
 
 test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-json is missing the gate's mandatory angle (AC1)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-missing-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // draft_gate's configured mandatory angle (pr-description) is absent.
     await writeFile(findingsPath, JSON.stringify([{ angle: "scope", verdict: "clean", findings: [] }]), "utf8");
@@ -4936,14 +4726,11 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /missing mandatory angle\(s\): pr-description/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angle-coverage-missing-" });
 });
 
 test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-json names an angle outside the configured pool (AC2)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-foreign-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -4970,14 +4757,11 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /outside the configured pool: made-up-angle/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angle-coverage-foreign-" });
 });
 
 test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix angle outside the gate's configured pool (#1494)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-synthetic-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // consolidate-fanin --out shape: draft-pool angles plus the synthetic
     // matrix entry its --pr-checklist-matrix clean flag upserts. draft_gate's
@@ -5026,14 +4810,11 @@ test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix
     ], { env });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angle-coverage-synthetic-" });
 });
 
 test("upsert-checkpoint-verdict rejects an angle-less flat finding in fanout mode with a dedicated error (not a confusing `general` pool error)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angleless-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // Flat finding without .angle: normalization would bucket it under the
     // synthetic `general` label, which would surface as a foreign-angle error.
@@ -5056,14 +4837,11 @@ test("upsert-checkpoint-verdict rejects an angle-less flat finding in fanout mod
     assert.equal(result.code, 1);
     assert.match(result.stderr, /lack a non-empty \.angle/);
     assert.doesNotMatch(result.stderr, /outside the configured pool/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angleless-" });
 });
 
 test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angle when gates.rejectForeignAngles is false", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-warn-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // Repo config opting into warn mode; extension defaults still supply the
     // draft pool + mandatory pr-description.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n", "utf8");
@@ -5092,14 +4870,11 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stderr, /WARNING: .*outside the configured pool: totally-made-up/);
     assert.match(result.stderr, /rejectForeignAngles is false/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angle-warn-" });
 });
 
 test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_single_agent verdict (AC3 exemption)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-angle-coverage-inline-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // No mandatory angle present at all — must still pass because executionMode
     // is inline_single_agent (angle coverage is a fanout_fanin-only concern).
@@ -5117,17 +4892,14 @@ test("upsert-checkpoint-verdict does NOT enforce angle coverage for an inline_si
       "--next-action", "fix then re-gate", "--inline-reason", "small change",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-angle-coverage-inline-" });
 });
 
 // --- Withheld-tier coverage: proven from --findings-ledger's provenance,
 // not from the comment (which cannot carry per-angle data at this tier) ---
 
 test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance is missing the gate's mandatory angle", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-missing-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "ledger.json");
     // Recorded provenance covers "scope" but not draft_gate's mandatory
     // "pr-description" angle.
@@ -5151,14 +4923,11 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /findings-ledger's provenance is missing mandatory angle\(s\): pr-description/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-missing-" });
 });
 
 test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance carries an angle-less entry", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-angleless-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "ledger.json");
     // provenanceConsistencyError accepts this shape (identity present), but
     // the entry attributes its review to no angle; the guard must name that
@@ -5183,14 +4952,11 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /1 entry lack a non-empty \.angle/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-angleless-" });
 });
 
 test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict whose --findings-ledger carries no provenance", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-no-provenance-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "ledger.json");
     // No `provenance` key at all — nothing to prove coverage against.
     await writeFile(ledgerPath, JSON.stringify({
@@ -5212,14 +4978,11 @@ test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict 
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /it is invalid \(provenance must be an object\)/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-no-provenance-" });
 });
 
 test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --findings-ledger carries NO valid provenance on a gate with a pool but no mandatory angle", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-pool-only-vacuous-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // Same pool-only/no-mandatory config as the foreign-angle refusal below,
     // but the ledger records no provenance at all: with nothing to prove,
     // invalid provenance blocks nothing (vacuous coverage), so the post
@@ -5256,14 +5019,11 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
       executionMode: "fanout_fanin",
     }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
     assert.equal(result.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-pool-only-vacuous-" });
 });
 
 test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance names a foreign angle on a gate with a pool but no mandatory angle", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-pool-only-foreign-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // draft_gate's only mandatory angle (pr-description) disabled via a D3
     // merge-by-name override, so mandatoryAngles resolves empty while the
     // pool (scope, coverage, ...) stays non-empty — pinning that the
@@ -5299,14 +5059,11 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
     ], { env, cwd: tempDir });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /--findings-ledger's provenance for draft_gate names angle\(s\) outside the configured pool: totally-made-up/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-pool-only-foreign-" });
 });
 
 test("upsert-checkpoint-verdict --findings-json renders structured per-angle findings end-to-end (#898)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -5346,9 +5103,7 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     const out = JSON.parse(result.stdout);
     assert.equal(out.action, "created");
     assert.equal(out.executionMode, "fanout_fanin");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-json-" });
 });
 
 test("upsert-checkpoint-verdict --findings-json structured verdict renders the gateEvidenceNote on its own labeled line (parity with free-text)", async () => {
@@ -5508,8 +5263,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
 // "existing comment" whose body is exactly what a first invocation would have
 // posted, pins both call sites to the same digest.
 test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted digest for a marker-collapsed round with --findings-severity-counts", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-digest-noop-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const structuredFindings = [
       {
         angle: "correctness",
@@ -5563,14 +5317,11 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.action, "noop", `expected noop (digest call sites coupled), got: ${JSON.stringify(payload)}`);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-digest-noop-" });
 });
 
 test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-execmode-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
@@ -5614,9 +5365,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     assert.equal(fanout.code, 0, fanout.stderr);
     assert.equal(fanout.stderr, "");
     assert.equal(JSON.parse(fanout.stdout).executionMode, "fanout_fanin");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-execmode-" });
 });
 
 // --- Post-time fan-out evidence enforcement ---
@@ -5627,8 +5376,7 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
 // carve-out is refused BEFORE it is ever posted, regardless of verdict value.
 
 test("upsert-checkpoint-verdict refuses to post an inline verdict for a required gate, for every verdict value", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-refuse-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // requireFanoutEvidence: true; the light-facts fetch (the shipped default
     // enables lightMode) is explicitly stubbed to fail below, so scope stays
     // un-derivable — fails closed deterministically, exactly like an
@@ -5656,14 +5404,11 @@ test("upsert-checkpoint-verdict refuses to post an inline verdict for a required
         /draft_gate: requireFanoutEvidence is enabled but executionMode is "inline_single_agent" \(expected "fanout_fanin"\); inline gate verdicts are not accepted/,
       );
     }
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-refuse-" });
 });
 
 test("upsert-checkpoint-verdict accepts an inline verdict under the light-mode threshold", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-light-accept-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), [
       "version: 1",
       "gates:",
@@ -5702,14 +5447,11 @@ test("upsert-checkpoint-verdict accepts an inline verdict under the light-mode t
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-light-accept-" });
 });
 
 test("upsert-checkpoint-verdict fails closed on an inline verdict when the base ref cannot be resolved (scope un-derivable)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-scope-underivable-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // lightMode is enabled, but the light-facts fetch below fails — with no
     // base ref, scope re-derivation is skipped and the light-mode carve-out
     // can never apply, so the post is refused just like the plain
@@ -5740,14 +5482,11 @@ test("upsert-checkpoint-verdict fails closed on an inline verdict when the base 
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /inline gate verdicts are not accepted/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-scope-underivable-" });
 });
 
 test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of requireFanoutEvidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-fanout-accept-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
@@ -5767,14 +5506,11 @@ test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of req
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).executionMode, "fanout_fanin");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-fanout-accept-" });
 });
 
 test("upsert-checkpoint-verdict posts an inline verdict without restriction when requireFanoutEvidence is false", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-opted-out-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
@@ -5791,9 +5527,7 @@ test("upsert-checkpoint-verdict posts an inline verdict without restriction when
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-opted-out-" });
 });
 
 // A gate:full label always forces the full fan-out — scope is not even measured
@@ -5803,8 +5537,7 @@ test("upsert-checkpoint-verdict posts an inline verdict without restriction when
 // is a first-class term of the acceptance predicate, resolved from the PR only
 // at post time on this boundary).
 test("upsert-checkpoint-verdict refuses an inline verdict at post time when the PR carries the gate:full label", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-gatefull-refuse-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), [
       "version: 1",
       "gates:",
@@ -5832,9 +5565,7 @@ test("upsert-checkpoint-verdict refuses an inline verdict at post time when the 
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /inline gate verdicts are not accepted/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-gatefull-refuse-" });
 });
 
 // pre_approval_gate is the gate that actually gates merge, so post-time
@@ -5844,8 +5575,7 @@ test("upsert-checkpoint-verdict refuses an inline verdict at post time when the 
 // ? candidateMarker : inactiveMarker` branch), which would silently exempt the
 // most important surface from enforcement.
 test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at post time under requireFanoutEvidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-preapproval-refuse-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // lightMode disabled so the lazy light-facts fetch does not fire (no fetch
     // needed to prove the marker is evaluated); requireFanoutEvidence on so the
     // pre_approval_gate candidate marker IS evaluated by enforcePostTimeFanoutMode.
@@ -5883,9 +5613,7 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
     const payload = JSON.parse(result.stderr);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /inline gate verdicts are not accepted/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-preapproval-refuse-" });
 });
 
 // One shared fixture, driven through BOTH the post-time refusal
@@ -5894,8 +5622,7 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
 // buildPreMergeGateCheck calls it) — proving the two boundaries reach the
 // SAME verdict from the SAME facts because they share the one predicate.
 test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence merge-time rejection agree on the same fixture", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-postgate-agree-"));
-  try {
+  await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
     const fixture = {
       repo: "owner/repo",
@@ -5949,9 +5676,7 @@ test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence
       postTimeError.includes(mergeTimeError),
       `expected post-time error to contain the merge-time message verbatim.\npost-time: ${postTimeError}\nmerge-time: ${mergeTimeError}`,
     );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-postgate-agree-" });
 });
 
 // The documented tier-4 (withheld) posting path: a fanout_fanin round consolidate-fanin
@@ -5964,8 +5689,7 @@ test("upsert-checkpoint-verdict post-time refusal and detect-checkpoint-evidence
 // agent, not a mechanism). See the sibling --findings-ledger tests below for the covered
 // and refused-for-missing-angle withheld shapes that DO carry proof.
 test("upsert-checkpoint-verdict refuses a withheld (tier-4) fanout_fanin round via --findings-summary alone when the gate has a mandatory angle and neither --findings-json nor --findings-ledger is supplied", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-findings-summary-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
     ]);
@@ -5977,14 +5701,11 @@ test("upsert-checkpoint-verdict refuses a withheld (tier-4) fanout_fanin round v
     ], { env });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /requires coverage proof via --findings-json or --findings-ledger/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-tier4-findings-summary-" });
 });
 
 test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findings-summary alone when the gate has NO mandatory angle configured", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-tier4-no-mandatory-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // draft_gate's only mandatory angle (pr-description) disabled via a D3
     // merge-by-name override, so mandatoryAngles resolves empty and the
     // coverage guard never engages — pinning the escape hatch every
@@ -6016,9 +5737,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findin
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.executionMode, "fanout_fanin");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-tier4-no-mandatory-" });
 });
 
 test("upsert-checkpoint-verdict CLI fails closed for inline mode without --inline-reason", async () => {
@@ -6109,8 +5828,7 @@ const BODY_FILED_FINDING = { severity: "nice-to-have", angle: "coverage", summar
 // digest, the body-filed finding, and the locatable finding as an INLINE
 // comment — each finding's text appearing exactly once across the round.
 test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locatable finding, body-filed rest, counts-only digest", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, BODY_FILED_FINDING]);
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify([
@@ -6174,16 +5892,13 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     assert.match(postedPayload.body, /^- `coverage` → `findings_present` \(1 finding\)$/m);
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-" });
 });
 
 // AC5: an own-authored thread already carrying the finding's fingerprint drops
 // it before posting; a foreign-authored one never does.
 test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-authored thread already covers, but not a foreign one", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-suppress-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const foreignFinding = { severity: "worth-fixing-now", angle: "dry", summary: "duplicated validation logic", files: ["src/utils.mjs"] };
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, foreignFinding]);
     const threadFor = (finding, author) => ({
@@ -6224,17 +5939,14 @@ test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-au
     assert.doesNotMatch(posted.body, /SQL injection in the query builder/);
     assert.match(posted.body, /duplicated validation logic/);
     assert.equal(calls.filter((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")).length, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-suppress-" });
 });
 
 // AC4: a same-head rerun corrects the existing REVIEW in place. GitHub exposes
 // no endpoint to add inline comments to a submitted review, so every
 // still-unposted finding is body-filed instead of dropped.
 test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head REVIEW in place, body-filing the findings", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-update-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING]);
     const existingReview = {
       id: 705,
@@ -6280,15 +5992,12 @@ test("upsert-checkpoint-verdict --findings-ledger corrects an existing same-head
     assert.equal(result.bodyFiled, 1);
     assert.ok(!calls.some((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")));
     assert.equal(calls.filter((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/705")).length, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-update-" });
 });
 
 // AC4: an identical same-head rerun posts nothing at all.
 test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun is a noop that posts nothing", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-noop-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, []);
     const existingReview = {
       id: 706,
@@ -6324,9 +6033,7 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
     assert.equal(result.surface, "review");
     assert.equal(result.commentId, 706);
     assert.ok(!calls.some((c) => c.args.includes("POST") || c.args.includes("PUT")));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-noop-" });
 });
 
 // The digest collapses findings to severity counts, so a rerun whose ledger
@@ -6334,8 +6041,7 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
 // verdict field byte-identical. The finding surface itself has to break the
 // noop, or the new finding would silently never be posted.
 test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAPPED finding at unchanged verdict fields is NOT a noop", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-swap-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const postedFinding = { severity: "worth-fixing-now", angle: "coverage", summary: "the retry path has no test" };
     const swappedFinding = { severity: "worth-fixing-now", angle: "coverage", summary: "the timeout path has no test" };
     // The already-posted round: its body carries postedFinding's fingerprint,
@@ -6396,15 +6102,12 @@ test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAP
     assert.equal(result.bodyFiled, 1);
     assert.equal(result.suppressed, 0);
     assert.equal(calls.filter((c) => c.args.includes("PUT")).length, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-swap-" });
 });
 
 // Fail closed rather than post one round's findings onto another's verdict.
 test("upsert-checkpoint-verdict rejects a --findings-ledger written for a different gate/head", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-mismatch-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [], { gate: "pre_approval_gate" });
     const { runChild } = makeGhMock(singleSurfaceLeadingEntries(), { repeatLastOnOverflow: true });
     await assert.rejects(
@@ -6422,17 +6125,14 @@ test("upsert-checkpoint-verdict rejects a --findings-ledger written for a differ
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
       /refuse to post another round's findings/,
     );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-mismatch-" });
 });
 
 // Withheld tier (no --findings-json), but --findings-ledger's provenance
 // fully covers the gate's mandatory angles: the round posts exactly as a
 // covered round would.
 test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --findings-ledger's provenance fully covers the gate's mandatory angles", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-withheld-covered-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // Pin draft_gate's mandatory angle explicitly rather than relying on the
     // packaged extension-defaults layer for this empty temp root: this test
     // (unlike its negative siblings above, which resolve config from the
@@ -6481,9 +6181,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
     assert.equal(result.ok, true);
     assert.equal(result.action, "created");
     assert.equal(result.bodyFiled, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-withheld-covered-" });
 });
 
 test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
@@ -6587,8 +6285,7 @@ async function runVerdictEnforcement(args, { repoRoot, headSha }) {
 }
 
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-clean-vs-findings-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
@@ -6603,14 +6300,11 @@ test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVer
     assert.match(error.error, /--verdict "findings_present"/);
     assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
     assert.match(error.error, new RegExp(VERDICT_LEDGER_HEAD));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-clean-vs-findings-" });
 });
 
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (clean posted for a findings round)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-findings-vs-clean-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
@@ -6625,14 +6319,11 @@ test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVer
     assert.match(error.error, /contradicts the consolidated ledger's overallVerdict "findings_present"/);
     assert.match(error.error, /--verdict "clean"/);
     assert.match(error.error, /GATE-COMMENT-VERDICT-VALUES/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-findings-vs-clean-" });
 });
 
 test("#1616: upsert derives the verdict from the ledger's overallVerdict when --verdict is omitted", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-derive-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
     // Inline mode (no --execution-mode): verdict enforcement is independent of
     // execution mode — the ledger's overallVerdict derives the verdict.
@@ -6648,14 +6339,11 @@ test("#1616: upsert derives the verdict from the ledger's overallVerdict when --
     assert.equal(parsed.ok, true);
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-derive-" });
 });
 
 test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-match-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
     const result = await runVerdictEnforcement([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
@@ -6669,14 +6357,11 @@ test("#1616: upsert accepts a matching explicit --verdict unchanged", async () =
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-match-" });
 });
 
 test("#1616: upsert fails closed on a present-but-malformed ledger overallVerdict", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-malformed-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "verdict-ledger.json");
     await writeFile(ledgerPath, JSON.stringify({
       repo: "owner/repo",
@@ -6698,14 +6383,11 @@ test("#1616: upsert fails closed on a present-but-malformed ledger overallVerdic
     assert.equal(result.code, 1);
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /"overallVerdict" must be clean, findings_present, or blocked/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-malformed-" });
 });
 
 test("#1616: an absent overallVerdict in the ledger preserves current behavior (explicit --verdict accepted)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-absent-ov-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // Legacy ledger shape (no overallVerdict field) — inline/fallback paths
     // must be unaffected: the explicit --verdict is accepted as before.
     const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
@@ -6721,14 +6403,11 @@ test("#1616: an absent overallVerdict in the ledger preserves current behavior (
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-absent-ov-" });
 });
 
 test("#1616: upsert fails closed when --verdict is omitted but the ledger carries no overallVerdict", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-1616-no-verdict-no-ov-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { verdict: "clean", overallVerdict: undefined });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
@@ -6741,9 +6420,7 @@ test("#1616: upsert fails closed when --verdict is omitted but the ledger carrie
     const error = JSON.parse(result.stderr);
     assert.match(error.error, /--verdict is required/);
     assert.match(error.error, /carries no overallVerdict/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-1616-no-verdict-no-ov-" });
 });
 
 // ---- #1621: verdict-write preconditions (next-action derivation, gate:full
@@ -7333,8 +7010,7 @@ test("#1621: gate:full label is re-applied on a noop rerun (idempotent retry aft
 });
 
 test("#1731: upsertCheckpointVerdict refuses a verdict body containing a raw issue/PR id (guard fires before POST)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-verdict-guard-"));
-  try {
+  await withTempDir(async (tempDir) => {
     // Coordination reads resolve, but the rendered verdict body carries a raw
     // `#1731` from the findings summary → the desiredBody guard (line ~2137)
     // must refuse BEFORE any review POST is issued.
@@ -7354,9 +7030,7 @@ test("#1731: upsertCheckpointVerdict refuses a verdict body containing a raw iss
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot }),
       /comment-id-guard refused to emit gate verdict comment body.*#1731/,
     );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-verdict-guard-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs parses --allowed-refs csv", () => {
@@ -7393,8 +7067,7 @@ test("parseUpsertCheckpointVerdictCliArgs rejects a non-numeric --allowed-refs e
 });
 
 test("upsertCheckpointVerdict posts a verdict body whose findings summary carries a deliberate cross-reference id via allowedRefs, while an unallowlisted id in the same body still refuses", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-verdict-allowed-refs-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const { runChild } = makeGhMock([
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
@@ -7436,14 +7109,11 @@ test("upsertCheckpointVerdict posts a verdict body whose findings summary carrie
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChildBlocked, repoRoot: fanoutDisabledRepoRoot }),
       /#999/,
     );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-verdict-allowed-refs-" });
 });
 
 test("upsert-checkpoint-verdict posts a --findings-json finding whose summary carries a markdown bracket (entity-encoded by the structured render's sanitizer) without the id guard mistaking the numeric character reference for an issue/PR id", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-json-entity-bracket-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -7477,9 +7147,7 @@ test("upsert-checkpoint-verdict posts a --findings-json finding whose summary ca
     // Pins that the review POST stub entry actually fired (not a vacuous pass
     // if the flow ever short-circuited before posting).
     assert.equal(payload.action, "created");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-findings-json-entity-bracket-" });
 });
 
 // The above test's finding carries no file/line, so it is body-filed rather
@@ -7499,8 +7167,7 @@ const ENTITY_AND_ALLOWED_REF_FINDING = {
 };
 
 test("upsert-checkpoint-verdict --findings-ledger posts a LOCATABLE finding as an inline comment whose entity-encoded bracket is not mistaken for an issue/PR id, and whose deliberate cross-reference id is threaded through allowedRefs", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-entity-allowedrefs-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [ENTITY_AND_ALLOWED_REF_FINDING]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
@@ -7538,9 +7205,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts a LOCATABLE finding as a
     // — the guard loop over `comments` ran with a non-empty allowedRefs and
     // did not refuse it.
     assert.match(posted.comments[0].body, /#1670/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-entity-allowedrefs-" });
 });
 
 // AC4 + the update-path guard surface: updateGateReview must thread
@@ -7548,8 +7213,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts a LOCATABLE finding as a
 // findings summary carries a deliberate cross-reference id would wrongly
 // refuse on the SECOND round even though the first round's create allowed it.
 test("upsert-checkpoint-verdict --findings-ledger threads allowedRefs into the update-path PUT (updateGateReview) when correcting an existing same-head review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-single-surface-update-allowedrefs-"));
-  try {
+  await withTempDir(async (tempDir) => {
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING]);
     const existingReview = {
       id: 705,
@@ -7591,7 +7255,5 @@ test("upsert-checkpoint-verdict --findings-ledger threads allowedRefs into the u
     assert.equal(result.action, "updated");
     assert.equal(result.commentId, 705);
     assert.equal(calls.filter((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/705")).length, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  }, { prefix: "dev-loops-upsert-single-surface-update-allowedrefs-" });
 });

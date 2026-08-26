@@ -9,24 +9,11 @@ import {
   editComment,
   runCli,
 } from "../../scripts/github/edit-comment.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 const COMMENT_URL = "https://github.com/o/n/issues/7#issuecomment-123";
 
-function stubGh(responses) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const resp = responses.shift();
-    if (!resp) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (responses) => makeGhStub(responses);
 
 test("parseEditCommentCliArgs: parses repo/comment-id/body", () => {
   const out = parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi"]);

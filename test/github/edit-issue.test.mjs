@@ -7,19 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseEditIssueCliArgs, editIssue, runCli } from "../../scripts/github/edit-issue.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh({ code = 0, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return { code, stdout: code === 0 ? "https://github.com/o/n/issues/17\n" : "", stderr };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub([{ code, stdout: code === 0 ? "https://github.com/o/n/issues/17\n" : "", stderr }], { repeatLastOnOverflow: true });
 }
 
 test("parseEditIssueCliArgs: requires --repo, --issue and at least one edit", () => {

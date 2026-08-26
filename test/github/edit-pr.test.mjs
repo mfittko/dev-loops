@@ -7,19 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseEditPrCliArgs, editPr, runCli } from "../../scripts/github/edit-pr.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh({ code = 0, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return { code, stdout: code === 0 ? "https://github.com/o/n/pull/17\n" : "", stderr };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub([{ code, stdout: code === 0 ? "https://github.com/o/n/pull/17\n" : "", stderr }], { repeatLastOnOverflow: true });
 }
 
 test("parseEditPrCliArgs: requires --repo, --pr and at least one edit", () => {

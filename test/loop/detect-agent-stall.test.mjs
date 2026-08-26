@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { describe, it } from "node:test";
-import { runNode, runIdFreeEnv } from "../_helpers.mjs";
+import { initGitFixture, runNode, runIdFreeEnv } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/detect-agent-stall.mjs");
 const REPO = "mfittko/dev-loops";
@@ -122,9 +122,7 @@ describe("detect-agent-stall CLI probe (#1669)", () => {
     // common-dir (falls back to canonicalized cwd when git is unavailable).
     const dir = await mkdtemp(path.join(os.tmpdir(), "stall-coord-"));
     try {
-      spawnSync("git", ["init", "-q"], { cwd: dir });
-      spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
-      spawnSync("git", ["config", "user.name", "Test"], { cwd: dir });
+      initGitFixture(dir, { commit: null });
       const coord = path.join(dir, ".pi", "runner-coordination", "mfittko", "dev-loops", "pr-42.json");
       await mkdir(path.dirname(coord), { recursive: true });
       // stale turn signal, but a FRESH runner heartbeat => sanctioned watch
