@@ -206,6 +206,62 @@ describe("refine-plan-file CLI", () => {
     }
   });
 
+  test("a repo-configured gates.size.tiers.default.softLoc wins over the fallback at plan time", async () => {
+    // logicLoc 900 is over check-size-budget.mjs's fallback softLoc (400) but
+    // under a repo-configured 1000, so with the config in play it is NOT over
+    // budget and needs no justification. This exercises the config-override arm
+    // (the plan-time threshold must match the post-hoc gate's configured one).
+    const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+      ...PAYLOAD,
+      sizeEstimate: { logicLoc: 900, tier: "default" },
+    });
+    try {
+      await writeFile(
+        path.join(tempDir, ".devloops"),
+        "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 1000\n",
+        "utf8",
+      );
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
+        cwd: tempDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.sizeEstimate.overBudget, false, "900 is under the configured softLoc of 1000");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a broken .devloops surfaces config errors to stderr and falls back to the default softLoc", async () => {
+    // logicLoc 90 stays under the fallback 400 so the refine still succeeds; the
+    // point is that a config error is SURFACED (not silently swallowed) and the
+    // plan-time threshold falls back to the default, matching the post-hoc gate.
+    const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+      ...PAYLOAD,
+      sizeEstimate: { logicLoc: 90, tier: "default" },
+    });
+    try {
+      // Missing `version: 1` — the config schema rejects it.
+      await writeFile(
+        path.join(tempDir, ".devloops"),
+        "gates:\n  size:\n    tiers:\n      default:\n        softLoc: 1000\n",
+        "utf8",
+      );
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
+        cwd: tempDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stderr, /\.devloops config error/u);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects missing --plan-file / --payload", async () => {
     const result = await runNode(cliPath, ["--plan-file", "x.md"], {});
     assert.equal(result.code, 1);

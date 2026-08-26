@@ -132,7 +132,19 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // #1480): a repo-configured gates.size.tiers.default.softLoc wins, else the
   // check-size-budget.mjs fallback — the plan-time estimate and the real diff
   // measurement are checked against the same number.
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+  // A broken .devloops must not silently pick the fallback threshold at plan
+  // time and diverge from the post-hoc size-budget gate (which fails closed on
+  // config errors). Plan-time is advisory — the real diff measurement re-checks
+  // fail-closed — so surface the errors rather than aborting the refine.
+  if (Array.isArray(configErrors) && configErrors.length > 0) {
+    const detail = configErrors
+      .map((e) => (typeof e === "string" ? e : e?.message ?? JSON.stringify(e)))
+      .join("; ");
+    process.stderr.write(
+      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size threshold falls back to the default softLoc, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
+    );
+  }
   const sizeSoftLoc = typeof config?.gates?.size?.tiers?.default?.softLoc === "number"
     ? config.gates.size.tiers.default.softLoc
     : DEFAULT_TIER_DEFAULTS.softLoc;
