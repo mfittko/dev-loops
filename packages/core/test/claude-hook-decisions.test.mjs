@@ -537,6 +537,25 @@ test("decideSubagentStopGuard blocks when pendingCommitAuthorization is false (n
   assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
 });
 
+test("decideSubagentStopGuard exempts an explicit orchestrator-owned-commit dispatch (#1786)", () => {
+  // A "LOCAL EDITS ONLY: no commit" delegate (developer/quality/docs) leaves the worktree dirty
+  // on purpose — the dispatching orchestrator owns the commit. The marker exempts the stop.
+  const d = decideSubagentStopGuard({
+    cwd: WT,
+    porcelain: " M src/x.mjs\n?? y",
+    orchestratorOwnsCommit: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideSubagentStopGuard still blocks a dirty worktree without the orchestrator-owned-commit marker (#1786)", () => {
+  // Mutation anchor: without the explicit marker, an ordinary dispatch's commit-before-exit
+  // obligation MUST stay enforced — the exemption must not silently regress to a blanket allow.
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", orchestratorOwnsCommit: false });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
 test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", () => {
   assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });

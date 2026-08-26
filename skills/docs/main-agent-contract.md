@@ -48,7 +48,14 @@ because "the user said yes," not because it is running from a worktree.
 - ALL file mutations in the repo (write, edit, delete)
 - ALL git operations (branch, commit, push)
 - ALL PR lifecycle (create, draft, review, merge)
-- Sub-delegation to developer, fixer, review, quality agents
+- Sub-delegation to developer, fixer, review, quality agents. `developer`/`quality`/`docs`
+  sub-delegates are LOCAL EDITS ONLY: no commit — they edit files and report changed files back;
+  the dispatching `dev-loop` session owns the commit after consolidating results. That
+  sub-delegate's own `SubagentStop` event would otherwise see the same dirty worktree it was told
+  not to commit and deadlock on `LOCAL-COMMIT-BEFORE-EXIT`, so the dispatcher sets
+  `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` on that dispatch to exempt it from the
+  `subagent-stop-uncommitted-guard` hook; an ordinary dispatch without the marker stays enforced.
+  See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
 
 ## Model tier at dispatch (Pi)
 
