@@ -172,6 +172,29 @@ describe("plan-file-promote-contract: PR body", () => {
     assert.match(body, /`Resolved #7`/u);
   });
 
+  test("carries the Size estimate section verbatim when the plan carries one", () => {
+    const body = buildPromotionPrBody({
+      ...args,
+      sizeEstimate: "- Estimated logic LOC: 550\n- Tier: default\n- Oversize: justified — cohesive migration, no clean seam",
+    });
+    assert.match(body, /## Size estimate/u);
+    assert.match(body, /Oversize: justified — cohesive migration, no clean seam/u);
+  });
+
+  test("omits the Size estimate section when the plan carries none (optional)", () => {
+    const body = buildPromotionPrBody(args);
+    assert.doesNotMatch(body, /## Size estimate/u);
+  });
+
+  test("neutralizes issue-closing keywords smuggled into the size-estimate justification", () => {
+    const body = buildPromotionPrBody({
+      ...args,
+      sizeEstimate: "- Estimated logic LOC: 550\n- Tier: default\n- Oversize: justified — closes #9 accidentally",
+    });
+    assert.doesNotMatch(body, /(?<!`)\bcloses #9\b(?!`)/u);
+    assert.match(body, /`closes #9`/u);
+  });
+
   test("marker builder round-trips through the doc-path pattern (single owner)", () => {
     const marker = buildPlanFilePromotionMarker("docs/x.md");
     const match = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(marker);

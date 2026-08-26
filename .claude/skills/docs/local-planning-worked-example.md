@@ -49,7 +49,7 @@ $ node scripts/loop/resolve-dev-loop-startup.mjs --plan-file docs/phases/phase-4
 
 ## Stage 3 — Refined in place
 
-`refine-plan-file.mjs` appends the refinement sections, the coverage matrix, and the recorded docs-grill findings to the same file, then stops at the `local_human_review` checkpoint. The file now reads (added sections shown):
+`refine-plan-file.mjs` appends the refinement sections, the per-phase size estimate, the coverage matrix, and the recorded docs-grill findings to the same file, then stops at the `local_human_review` checkpoint. The file now reads (added sections shown):
 
 ```markdown
 # phase-42 plan
@@ -84,6 +84,12 @@ dispatch order without mutating the board.
 - CLI parses `--dry-run`; unit test covers the parse path.
 - A test asserts no board-mutation call fires under `--dry-run`.
 - The queue docs note the flag.
+
+## Size estimate
+
+- Estimated logic LOC: 90
+- Tier: default
+- Oversize: n/a (within default tier's softLoc budget of 400)
 
 ## Coverage matrix
 
@@ -128,7 +134,7 @@ dispatch order without mutating the board.
 # ... base, refinement, coverage-matrix, and docs-grill sections unchanged ...
 ```
 
-The PR body references `docs/phases/phase-42.md` as the spec-of-record, completing the bidirectional plan↔PR link. No GitHub issue was minted. Re-running `promote-plan.mjs` on this file now resolves to `already_promoted` and opens nothing, because the front-matter already carries `prNumber`.
+The PR body references `docs/phases/phase-42.md` as the spec-of-record, completing the bidirectional plan↔PR link, and carries the plan's `Size estimate` section verbatim (here, under budget — an over-budget phase's `oversize: justified` note would flow through the same way). No GitHub issue was minted. Re-running `promote-plan.mjs` on this file now resolves to `already_promoted` and opens nothing, because the front-matter already carries `prNumber`.
 
 ## Relationship to other docs
 

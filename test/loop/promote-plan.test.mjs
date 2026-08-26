@@ -41,6 +41,17 @@ const READY_PLAN = [
   "",
 ].join("\n");
 
+const READY_PLAN_WITH_OVERSIZE_ESTIMATE = [
+  READY_PLAN.trimEnd(),
+  "",
+  "## Size estimate",
+  "",
+  "- Estimated logic LOC: 900",
+  "- Tier: default",
+  "- Oversize: justified — one cohesive migration; no clean seam to split on",
+  "",
+].join("\n");
+
 // gh stub entry for `gh pr create`: print a PR URL on stdout (create-pr inherits
 // stdio, so this URL flows back up to the promote CLI's captured child stdout).
 const PR_CREATE_ENTRY = {
@@ -144,6 +155,43 @@ describe("promote-plan CLI", () => {
         remoteRefs.split("\n").some((line) => line.endsWith(`refs/heads/${parsed.branch}`)),
         `remote missing refs/heads/${parsed.branch}: ${remoteRefs}`,
       );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("carries a plan's oversize-justified Size estimate note into the PR body (phase 4 of #1480)", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup(READY_PLAN_WITH_OVERSIZE_ESTIMATE);
+    try {
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      const call = JSON.parse(ghLog[0]);
+      const bodyIdx = call.indexOf("--body");
+      const body = call[bodyIdx + 1];
+      assert.match(body, /## Size estimate/u);
+      assert.match(body, /Oversize: justified — one cohesive migration; no clean seam to split on/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan without a Size estimate section still promotes (optional; omitted from the PR body)", async () => {
+    const { tempDir, repoDir, planPath, ghStub } = await setup(READY_PLAN);
+    try {
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--json"], {
+        cwd: repoDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const ghLog = (await readFile(ghStub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+      const call = JSON.parse(ghLog[0]);
+      const bodyIdx = call.indexOf("--body");
+      const body = call[bodyIdx + 1];
+      assert.doesNotMatch(body, /## Size estimate/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

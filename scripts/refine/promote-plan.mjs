@@ -10,6 +10,7 @@ import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { validatePlanFile } from "./validate-plan-file.mjs";
 import { extractSection, isDirectCliRun } from "./_refine-helpers.mjs";
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
+import { SIZE_ESTIMATE_HEADING } from "@dev-loops/core/loop/plan-file-refine-contract";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import {
   evaluatePromoteEligibility,
@@ -220,10 +221,17 @@ export async function runCli(argv = process.argv.slice(2), {
     .join("/");
   const acceptanceCriteria = extractSection(markdownText, acHeading);
   const definitionOfDone = extractSection(markdownText, dodHeading);
+  // Optional: a plan refined under phase 4 of #1480 carries a `## Size estimate`
+  // section (see plan-file-refine-contract.mjs); carrying it into the PR body
+  // flows an `oversize: justified` note through to the PR the post-hoc size
+  // budget later escalates. A plan without the section (older/hand-authored)
+  // still promotes — buildPromotionPrBody treats this as optional.
+  const sizeEstimate = extractSection(markdownText, SIZE_ESTIMATE_HEADING);
   const prBody = buildPromotionPrBody({
     planDocPath: planDocRelPath,
     acceptanceCriteria,
     definitionOfDone,
+    sizeEstimate,
   });
 
   const branch = options.branch && options.branch.trim().length > 0
