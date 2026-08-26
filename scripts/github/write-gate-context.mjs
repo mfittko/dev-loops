@@ -1696,7 +1696,9 @@ function normalizeCarriedAngleElements(elements, makeError) {
 // (empty for null/undefined).
 function normalizeCarriedAnglesArg(carriedAngles) {
   if (carriedAngles == null) return [];
-  if (typeof carriedAngles === "string") {
+  // A primitive string and a boxed String wrapper are both iterable and would
+  // spread into per-character angles; reject both as a bare string.
+  if (typeof carriedAngles === "string" || carriedAngles instanceof String) {
     throw new Error("carriedAngles must be an array (or iterable) of angle-name strings, not a bare string — a string spreads into per-character angles");
   }
   if (!Array.isArray(carriedAngles) && typeof carriedAngles[Symbol.iterator] !== "function") {

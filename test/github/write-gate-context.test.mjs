@@ -4673,6 +4673,14 @@ test("issue 1778 resolveFanoutDispatch rejects a bare-string carriedAngles rathe
   );
 });
 
+test("issue 1778 resolveFanoutDispatch rejects a boxed String wrapper as a bare string (not spread per-character)", () => {
+  assert.throws(
+    // eslint-disable-next-line no-new-wrappers
+    () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: new String("abc") }),
+    /not a bare string/,
+  );
+});
+
 test("issue 1778 resolveFanoutDispatch rejects a non-iterable carriedAngles with a named error (not a raw TypeError)", () => {
   assert.throws(
     () => resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c"], { carriedAngles: 123 }),
