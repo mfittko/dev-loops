@@ -763,18 +763,11 @@ Queue helpers never silently assume board state is correct — see the
 
 ### Configuration
 
-Queue mode configuration lives under `.devloops` at repo root:
-
-```yaml
-queue:
-  maxParallel: 3
-  maxAutoFiledIssues: 10
-  reDispatchMaxRetries: 1
-```
-
-The queue board URL and number are discoverable at runtime; recording the board in `.devloops`
-(`tracker.board`) is what lets every queue command resolve it without `--project`
-(`QUEUE-BOARD-DEVLOOPS-RESOLUTION`).
+Queue and board configuration both live under `.devloops` at repo root — see
+[Configuration shape](#configuration-shape) above for the full `queue` keys
+(`maxParallel`, `maxAutoFiledIssues`, `reDispatchMaxRetries`) and the `tracker.board` entry,
+and `QUEUE-BOARD-DEVLOOPS-RESOLUTION` for how recording the board there lets every queue
+command resolve it without `--project`.
 
 ## Usage
 

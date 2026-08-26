@@ -9,7 +9,7 @@ happens once that mode is selected.
 
 ## Plan-file contract
 
-A plan file is the persisted markdown artifact that drives work in local-planning mode. It reuses the existing phase-doc format under `docs/phases/` (for example, `docs/phases/phase-<n>.md`). The artifact authority model that selects local-planning mode lives in the [Artifact Authority Contract](artifact-authority-contract.md); this section defines the file format and its required base sections.
+A plan file is the persisted markdown artifact that drives work in local-planning mode. It reuses the existing phase-doc format under `docs/phases/` (for example, `docs/phases/phase-<n>.md`). This section defines the file format and its required base sections.
 
 ### Format
 
