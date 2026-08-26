@@ -3903,15 +3903,20 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   }, { prefix: "dev-loops-upsert-stale-takeover-" });
 });
 
-// #1785: a successful same-run-id assert must refresh activeRun.updatedAt on
-// EVERY verdict post, not only once the claim is already past the stale
-// window. Pre-claims 25 minutes in the past (fresh by the 30-min max age, so
-// detectStaleRunner alone would never trigger the old reactive-only takeover)
-// and asserts the persisted claim advances to "now" anyway — proving the
-// heartbeat is proactive, closing the gap where a long sequential
-// gate-reviewer fan-out with no intervening coordination call could tip the
-// claim into staleness before the next verdict post.
-test("upsert-checkpoint-verdict proactively refreshes a same-run-id claim that is not yet stale (#1785)", async () => {
+// A same-run-id claim must refresh activeRun.updatedAt on EVERY verdict post,
+// not only once the claim is already past the stale window — otherwise a long
+// sequential gate-reviewer fan-out with no intervening coordination call could
+// tip its own claim into staleness before the next verdict post. Pre-claims 25
+// minutes in the past (fresh by the 30-min max age, so the reactive
+// detectStaleRunner+takeover branch never fires) and asserts the persisted
+// claim advances to "now" anyway. The refresh is delivered by the coordination
+// context read (loadPrGateCoordinationContext -> detectCheckpointEvidence ->
+// ensureAsyncRunnerOwnership -> assertRunnerOwnership), which every verdict
+// post reaches unconditionally and which heartbeats the owning run
+// regardless of claim age. Pinning the history entry as "heartbeat" (never
+// "takeover"/"claim") and previousRun staying null distinguishes this refresh
+// from an ownership handoff.
+test("upsert-checkpoint-verdict refreshes an existing same-run-id claim that is not yet stale", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const staleButNotExpiredAt = new Date(Date.now() - 25 * 60 * 1000).toISOString();
@@ -3967,7 +3972,14 @@ test("upsert-checkpoint-verdict proactively refreshes a same-run-id claim that i
     // original 25-minutes-ago claim timestamp.
     assert.ok(refreshedAtMs >= beforeCall, `expected updatedAt (${state.activeRun.updatedAt}) to advance to the assert time, not stay at the original claim time`);
     assert.notEqual(state.activeRun.updatedAt, staleButNotExpiredAt);
-  }, { prefix: "dev-loops-upsert-proactive-heartbeat-" });
+    // Pin the mechanism: a plain heartbeat, never a takeover/handoff. The
+    // claim was never ownerless or foreign-owned, so no "claim"/"takeover"
+    // entry should follow the original claim, and previousRun stays unset.
+    assert.equal(state.previousRun, null);
+    const entryTypesAfterClaim = state.history.slice(1).map((entry) => entry.type);
+    assert.ok(entryTypesAfterClaim.includes("heartbeat"), `expected a heartbeat history entry, got ${JSON.stringify(entryTypesAfterClaim)}`);
+    assert.ok(!entryTypesAfterClaim.includes("takeover"), `expected no takeover history entry, got ${JSON.stringify(entryTypesAfterClaim)}`);
+  }, { prefix: "dev-loops-upsert-same-run-heartbeat-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
