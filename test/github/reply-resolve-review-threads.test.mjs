@@ -10,6 +10,19 @@ import { parseReplyResolveThreadsCliArgs } from "../../scripts/github/reply-reso
 
 const scriptPath = path.resolve("scripts/github/reply-resolve-review-threads.mjs");
 
+// Guard budget for the "must terminate, no hang" pins (#1012). The regression is
+// an INFINITE hang, so this only needs to sit safely above the honest worst-case
+// terminating time — it is not a performance assertion. The idle path serially
+// cold-starts ~4 node processes (the tool + one gh GraphQL fetch + two gh reply
+// stubs, each a `#!/usr/bin/env node` script) plus a mandatory 500ms idle-probe
+// floor. Under the full parallel `verify` run (8 suites via run-p, each with
+// CPU-count internal test parallelism, no --test-timeout) the box is heavily
+// oversubscribed and each cold-start balloons, so the old 5000ms budget could
+// elapse on a tool that was terminating fine, not hung (issue 1764, recurrence
+// of the 1639 flake class). A generous finite budget keeps the hang coverage
+// (a true infinite hang still fails) while removing the load sensitivity.
+const HANG_GUARD_MS = 30000;
+
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
 function createReviewThreadsPayload(threads) {
@@ -800,7 +813,7 @@ test("reply-resolve-review-threads terminates on an idle open stdin pipe with no
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate (hang regression #1012)"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // Intentionally do NOT write or end stdin: an idle, never-EOF pipe.
@@ -840,7 +853,7 @@ test("reply-resolve-review-threads detects a conflicting stdin source promptly o
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate on open-pipe conflict (regression #1012)"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // Write conflicting body but never end the pipe; the conflict must be
@@ -882,7 +895,7 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate on whitespace-then-data conflict"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // First a whitespace-only chunk, then real content — never end the pipe.
