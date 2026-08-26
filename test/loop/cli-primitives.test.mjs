@@ -154,7 +154,7 @@ test("parseNonNegativeInteger accepts zero and rejects invalid values", () => {
   assert.equal(parseNonNegativeInteger("0", "--timeout-ms"), 0);
   assert.throws(
     () => parseNonNegativeInteger("abc", "--timeout-ms", (message) => Object.assign(new Error(message), { usage: "usage" })),
-    (error) => error.message === "--timeout-ms must be a non-negative integer" && error.usage === "usage",
+    (error) => error.message === '--timeout-ms must be a non-negative integer, got "abc"' && error.usage === "usage",
   );
 });
 
