@@ -2893,6 +2893,28 @@ describe("role resolution", () => {
       );
     });
 
+    // Same eager cross-gate guarantee for the third GateConfig-typed gate,
+    // spike. Without a spike pin, dropping "spike" from the eager loop (or
+    // regressing spike to lazy validation) would escape the suite and silently
+    // reintroduce the side-effect race for the spike gate.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value on the spike gate when a DIFFERENT gate is requested (eager cross-gate validation)", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: { blockCleanOnFindingSeverities: ["high"] },
+          spike: { blockCleanOnFindingSeverities: ["critical"] },
+        },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.spike.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
     test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
       const config = {
         version: 1,
