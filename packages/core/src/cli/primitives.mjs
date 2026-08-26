@@ -188,7 +188,7 @@ export function runChild(command, args, env = process.env, stdinText = undefined
 export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false } = {}) {
   if (bodyFile === undefined || bodyFile === null) return body;
   // fs/promises readFile does not accept an integer fd, so stdin (fd 0) is
-  // read synchronously via the callback-style API, which does.
+  // read synchronously via readFileSync, which does accept one.
   const content = allowStdin && bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(bodyFile, "utf8");
   if (content.trim().length === 0) {
     throw new Error(`--body-file ${bodyFile} is empty`);
