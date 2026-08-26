@@ -36,7 +36,7 @@ import { parseArgs } from "node:util";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -1726,12 +1726,17 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // the preflight. Unlike consolidate-fanin.mjs, an unmapped/unknown angle
   // name is NOT rejected here (this seam has no plan-proof cross-check to
   // validate an unrecognized name against, and resolveFanoutGroups already
-  // treats an unresolved angle as ungrouped rather than erroring).
+  // treats an unresolved angle as ungrouped rather than erroring). Like
+  // consolidate-fanin.mjs, the name is baseAngleName-collapsed (+lowercase)
+  // BEFORE the check: a delta-suffixed always-include spelling (e.g.
+  // `renderer-security-delta-at-<sha>`) must still resolve to its base and be
+  // refused, not fall through as an unmapped/unknown angle.
   const carriedAnglesList = normalizeCarriedAnglesArg(carriedAngles);
   if (carriedAnglesList.length > 0) {
     const mandatoryAngles = resolveGateAngleContract(config, configGate).mandatoryAngles;
     for (const angle of carriedAnglesList) {
-      const surface = angleReviewSurface(angle, { alwaysRerun: mandatoryAngles });
+      const key = baseAngleName(angle).toLowerCase();
+      const surface = angleReviewSurface(key, { alwaysRerun: mandatoryAngles });
       if (surface.kind === "always") {
         throw new Error(`--carried-angles names "${angle}", which can never legitimately carry forward: it always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) — resolve-angle-carry-forward.mjs can never mark it carried, so refusing to exclude its dispatch unit here (fail-closed)`);
       }
