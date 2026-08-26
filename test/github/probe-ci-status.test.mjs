@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
-import { parseCiWatchCliArgs, watchCiStatus } from "../../scripts/github/probe-ci-status.mjs";
+import { parseCiWatchCliArgs, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-ci-status.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
@@ -997,6 +997,144 @@ test("watch-ci resets the stall when a stuck run starts progressing and settles 
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Commit-scoped mode (--commit): the post-merge "main jobs green" read. Stubs
+// `gh run list --commit <oid>` (GitHub Actions workflow runs), the API this
+// mode reads instead of the PR path's check-runs/commit-status combo.
+// ---------------------------------------------------------------------------
+
+function runList(runs) {
+  return JSON.stringify(runs);
+}
+
+async function withGhRunListStub(routes, fn) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-commit-ci-"));
+  try {
+    const ghPath = path.join(tempDir, "gh");
+    const counterPath = path.join(tempDir, "runlist-counter.txt");
+    await writeFile(counterPath, "0", "utf8");
+    const script = [
+      "#!/usr/bin/env node",
+      'const { readFileSync, writeFileSync } = require("node:fs");',
+      `const routes = ${JSON.stringify(routes)};`,
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      'const argv = process.argv.slice(2).join(" ");',
+      'const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
+      'writeFileSync(counterPath, String(i + 1));',
+      'const idx = Math.min(i, routes.length - 1);',
+      'const route = routes[idx];',
+      'process.stdout.write(route.stdout);',
+      'process.exit(route.exitCode ?? 0);',
+      "",
+    ].join("\n");
+    await writeFile(ghPath, script, "utf8");
+    await chmod(ghPath, 0o755);
+    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+    return await fn(env);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("watch-commit-ci settles success when every workflow run completes clean", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([
+      { name: "verify", status: "completed", conclusion: "success" },
+      { name: "pages", status: "completed", conclusion: "neutral" },
+    ]) }],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-1", pollIntervalMs: 10, timeoutMs: 100 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "success");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "success");
+      assert.equal(result.commit, "sha-main-1");
+      assert.deepEqual(result.failedRuns, []);
+      assert.equal(result.runCount, 2);
+    },
+  );
+});
+
+test("watch-commit-ci settles failure and reports the failing run", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([
+      { name: "verify", status: "completed", conclusion: "success" },
+      { name: "pages", status: "completed", conclusion: "failure" },
+    ]) }],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-2", pollIntervalMs: 10, timeoutMs: 100 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "failure");
+      assert.equal(result.settled, true);
+      assert.equal(result.ciStatus, "failure");
+      assert.deepEqual(result.failedRuns, [{ name: "pages", conclusion: "failure" }]);
+    },
+  );
+});
+
+test("watch-commit-ci returns timeout while a run is still in_progress past the budget", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([{ name: "verify", status: "in_progress", conclusion: null }]) }],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-3", pollIntervalMs: 10, timeoutMs: 25 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "timeout");
+      assert.equal(result.settled, false);
+      assert.equal(result.ciStatus, "pending");
+    },
+  );
+});
+
+test("watch-commit-ci single check (timeout-ms 0) reports live pending without waiting", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([{ name: "verify", status: "queued", conclusion: null }]) }],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-4", pollIntervalMs: 10, timeoutMs: 0 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "pending");
+      assert.equal(result.attempts, 1);
+    },
+  );
+});
+
+test("watch-commit-ci transitions pending -> success across polls", async () => {
+  await withGhRunListStub(
+    [
+      { stdout: runList([{ name: "verify", status: "in_progress", conclusion: null }]) },
+      { stdout: runList([{ name: "verify", status: "completed", conclusion: "success" }]) },
+    ],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-5", pollIntervalMs: 10, timeoutMs: 100 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "success");
+      assert.equal(result.attempts, 2);
+    },
+  );
+});
+
+test("watch-commit-ci CLI: --commit and --pr are mutually exclusive", () => {
+  assert.throws(
+    () => parseCiWatchCliArgs(["--repo", "owner/repo", "--pr", "7", "--commit", "sha-a"]),
+    /mutually exclusive/i,
+  );
+});
+
+test("watch-commit-ci CLI: --commit alone (no --pr) parses", () => {
+  const options = parseCiWatchCliArgs(["--repo", "owner/repo", "--commit", "sha-a"]);
+  assert.equal(options.commit, "sha-a");
+  assert.equal(options.pr, undefined);
 });
 
 test("watch-ci single check (timeout-ms 0) on an all-queued run reports pending, never stuck (#1631)", async () => {

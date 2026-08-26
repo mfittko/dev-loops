@@ -24,21 +24,32 @@ import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 /** Maximum interval between heartbeat outputs during watch delays.
  *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
 const WATCH_HEARTBEAT_MS = 45_000; // 45 seconds
-const USAGE = `Usage: probe-ci-status.mjs --repo <owner/name> --pr <number> [--timeout-ms <n>] [--poll-interval-ms <n>]
+const USAGE = `Usage: probe-ci-status.mjs --repo <owner/name> (--pr <number> | --commit <oid>) [--timeout-ms <n>] [--poll-interval-ms <n>]
 Block-wait on a PR's combined CI check/status state (GitHub Actions + CircleCI +
 any external commit-status / check-run) for the current head SHA, until terminal
 or timeout. Provider-agnostic — unlike \`gh run watch\`, which is Actions-only.
 Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
-  --pr <number>                 Pull request number
+  --pr <number>                 Pull request number (PR-scoped mode)
+  --commit <oid>                Commit SHA (commit-scoped mode; e.g. a merge
+                                 commit on the default branch). Mutually
+                                 exclusive with --pr.
 Optional:
   --timeout-ms <n>              Total watch budget (default 1800000; 0 = single check, no wait)
   --poll-interval-ms <n>        Delay between polls (default 60000)
 Output (stdout, JSON):
+  PR-scoped (--pr):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed"|"stuck",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
     "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
     "excludedFailureDetails": ["gate-evidence", ...] }
+  Commit-scoped (--commit): the COMBINED GitHub Actions workflow-run state for
+  that commit (e.g. the post-merge "main jobs green" check) — any run failure
+  is "failure", any run still queued/in_progress is "pending", otherwise "success".
+  { "ok": true, "status": "success"|"failure"|"pending"|"timeout",
+    "settled": bool, "ciStatus": "success"|"failure"|"pending",
+    "failedRuns": [{ "name": "...", "conclusion": "..." }], "commit": "...",
+    "runCount": N, "attempts": N }
 Statuses:
   success    Combined CI is green (or no checks present — see no-checks rule)
   failure    At least one check/status failed (failedChecks populated)
@@ -80,6 +91,7 @@ export function parseCiWatchCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      commit: { type: "string" },
       "timeout-ms": { type: "string" },
       "poll-interval-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -92,6 +104,7 @@ export function parseCiWatchCliArgs(argv) {
     help: false,
     repo: undefined,
     pr: undefined,
+    commit: undefined,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     timeoutMs: COPILOT_REVIEW_WAIT_TIMEOUT_MS,
   };
@@ -114,6 +127,10 @@ export function parseCiWatchCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
+    if (token.name === "commit") {
+      options.commit = requireTokenValue(token, parseError).trim();
+      continue;
+    }
     if (token.name === "timeout-ms") {
       options.timeoutMs = parseNonNegativeMs(requireTokenValue(token, parseError), "--timeout-ms");
       continue;
@@ -125,8 +142,11 @@ export function parseCiWatchCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.repo === undefined || options.pr === undefined) {
+  if (options.repo === undefined || (options.pr === undefined && options.commit === undefined)) {
     throw parseError("Watching CI requires both --repo <owner/name> and --pr <number>");
+  }
+  if (options.pr !== undefined && options.commit !== undefined) {
+    throw parseError("--pr and --commit are mutually exclusive");
   }
   try {
     parseRepoSlug(options.repo);
@@ -350,6 +370,38 @@ function buildPollDelayMs(watchStartedAtMs, timeoutMs, pollIntervalMs, attempt, 
   return Math.max(0, scheduledAtMs - nowMs);
 }
 
+// Sleeps `pollDelayMs` in WATCH_HEARTBEAT_MS chunks, emitting a stderr
+// watch_heartbeat between chunks (never after the final chunk). Shared by both
+// the PR-scoped and commit-scoped watch loops so heartbeat cadence/shape stay
+// identical. `onHeartbeat` runs alongside each heartbeat (best-effort,
+// caller-scoped side effect — e.g. the PR loop's runner-lease refresh).
+async function waitWithHeartbeat(
+  pollDelayMs,
+  { attempt, attemptBudget, watchStartedAtMs, timeoutMs, now, delayImpl, onHeartbeat },
+) {
+  let remainingMs = pollDelayMs;
+  while (remainingMs > 0) {
+    const chunkMs = Math.min(WATCH_HEARTBEAT_MS, remainingMs);
+    await delayImpl(chunkMs);
+    remainingMs -= chunkMs;
+    if (remainingMs > 0) {
+      process.stderr.write(
+        JSON.stringify({
+          ok: true,
+          type: "watch_heartbeat",
+          elapsedMs: now() - watchStartedAtMs,
+          totalBudgetMs: timeoutMs,
+          poll: attempt,
+          maxPolls: attemptBudget,
+        }) + "\n",
+      );
+      if (onHeartbeat) {
+        await onHeartbeat();
+      }
+    }
+  }
+}
+
 function settledResult(state, { settled, status }) {
   return {
     ok: true,
@@ -434,26 +486,18 @@ export async function watchCiStatus(
         attempt,
         now(),
       );
-      let remainingMs = pollDelayMs;
-      while (remainingMs > 0) {
-        const chunkMs = Math.min(WATCH_HEARTBEAT_MS, remainingMs);
-        await delayImpl(chunkMs);
-        remainingMs -= chunkMs;
-        if (remainingMs > 0) {
-          process.stderr.write(
-            JSON.stringify({
-              ok: true,
-              type: "watch_heartbeat",
-              elapsedMs: now() - watchStartedAtMs,
-              totalBudgetMs: options.timeoutMs,
-              poll: attempt,
-              maxPolls: attemptBudget,
-            }) + "\n",
-          );
-          // The blocking CI wait can span the full watch budget, which equals the
-          // runner-coordination stale window; refresh the lease alongside each
-          // heartbeat so the claim stays fresh for every caller of this engine.
-          // No-ops without DEVLOOPS_RUN_ID; best-effort, never affects the watch.
+      await waitWithHeartbeat(pollDelayMs, {
+        attempt,
+        attemptBudget,
+        watchStartedAtMs,
+        timeoutMs: options.timeoutMs,
+        now,
+        delayImpl,
+        // The blocking CI wait can span the full watch budget, which equals the
+        // runner-coordination stale window; refresh the lease alongside each
+        // heartbeat so the claim stays fresh for every caller of this engine.
+        // No-ops without DEVLOOPS_RUN_ID; best-effort, never affects the watch.
+        onHeartbeat: async () => {
           try {
             await ensureOwnershipImpl({
               repo: options.repo,
@@ -464,8 +508,8 @@ export async function watchCiStatus(
               requireExisting: false,
             });
           } catch { /* best-effort: never affect the watch */ }
-        }
-      }
+        },
+      });
     }
     // Re-resolve the head SHA every poll: a new push must short-circuit to
     // "changed" so the caller re-baselines instead of waiting on a stale head.
@@ -541,6 +585,115 @@ export async function watchCiStatus(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Commit-scoped mode (--commit): the post-merge "main jobs green" read. Unlike
+// the PR-scoped path above, a commit is a fixed target (no advancing head, no
+// PR-visible rollup to race against), so this combines `gh run list --commit`
+// (GitHub Actions workflow runs, the provider that gates main pushes) rather
+// than the PR path's check-run/commit-status APIs. Kept separate from the
+// PR-scoped fetch/terminal-state functions above so neither path's semantics
+// leak into the other; only the generic attempt-budget/heartbeat plumbing and
+// the --jq/--silent output contract are shared.
+// ---------------------------------------------------------------------------
+
+// Terminal (non-queued/in_progress) run conclusions that count as a failure.
+// ponytail: any other terminal conclusion (success/neutral/skipped) reads as
+// success — a narrower explicit success allowlist would need to grow every
+// time GitHub adds a conclusion value.
+const FAILURE_RUN_CONCLUSIONS = new Set([
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "startup_failure",
+  "stale",
+]);
+
+/**
+ * Read the combined GitHub Actions workflow-run state for one commit.
+ * ponytail: an empty run list reads as "pending" (no grace window) — a run
+ * that never appears bails out via the watch's own --timeout-ms budget rather
+ * than a bespoke settle-on-genuinely-none heuristic like the PR path's.
+ *
+ * @returns {{ ciStatus: "success"|"failure"|"pending", failedRuns: Array<{ name: string, conclusion: string }>, runCount: number }}
+ */
+async function fetchCommitCiState({ repo, commit }, { env, ghCommand }) {
+  const runs = await ghJson(
+    ["run", "list", "--repo", repo, "--commit", commit, "--json", "name,status,conclusion"],
+    { env, ghCommand, label: "gh run list" },
+  );
+  if (!Array.isArray(runs)) {
+    throw new Error("gh run list did not return a JSON array");
+  }
+  const failedRuns = runs
+    .filter((run) => FAILURE_RUN_CONCLUSIONS.has(run?.conclusion))
+    .map((run) => ({ name: typeof run?.name === "string" ? run.name : "unknown", conclusion: run.conclusion }));
+  const stillRunning = runs.some((run) => run?.status !== "completed");
+  let ciStatus;
+  if (failedRuns.length > 0) {
+    ciStatus = "failure";
+  } else if (runs.length === 0 || stillRunning) {
+    ciStatus = "pending";
+  } else {
+    ciStatus = "success";
+  }
+  return { ciStatus, failedRuns, runCount: runs.length };
+}
+
+function commitSettledResult(commit, state, { settled, status, attempts }) {
+  return {
+    ok: true,
+    status,
+    settled,
+    ciStatus: state.ciStatus,
+    failedRuns: state.failedRuns,
+    runCount: state.runCount,
+    commit,
+    attempts,
+  };
+}
+
+export async function watchCommitCiStatus(
+  options,
+  { env = process.env, ghCommand = "gh", delayImpl = delay, now = Date.now } = {},
+) {
+  const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
+  const watchStartedAtMs = now();
+  let lastState = null;
+  for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
+    if (attempt > 1) {
+      const pollDelayMs = buildPollDelayMs(
+        watchStartedAtMs,
+        options.timeoutMs,
+        options.pollIntervalMs,
+        attempt,
+        now(),
+      );
+      await waitWithHeartbeat(pollDelayMs, {
+        attempt,
+        attemptBudget,
+        watchStartedAtMs,
+        timeoutMs: options.timeoutMs,
+        now,
+        delayImpl,
+      });
+    }
+    lastState = await fetchCommitCiState({ repo: options.repo, commit: options.commit }, { env, ghCommand });
+    if (lastState.ciStatus === "failure" || lastState.ciStatus === "success") {
+      return commitSettledResult(options.commit, lastState, {
+        settled: true,
+        status: lastState.ciStatus,
+        attempts: attempt,
+      });
+    }
+  }
+  return commitSettledResult(options.commit, lastState, {
+    settled: false,
+    status: options.timeoutMs === 0 ? "pending" : "timeout",
+    attempts: attemptBudget,
+  });
+}
+
 export async function runCli(
   argv = process.argv.slice(2),
   {
@@ -555,7 +708,9 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await watchCiStatus(options, { env, ghCommand });
+  const result = options.commit !== undefined
+    ? await watchCommitCiStatus(options, { env, ghCommand })
+    : await watchCiStatus(options, { env, ghCommand });
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
