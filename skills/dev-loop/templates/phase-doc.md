@@ -14,13 +14,13 @@ Planning
 
 ## Acceptance criteria
 
+## Definition of done
+
 ## Size estimate
 
 - Estimated logic LOC:
 - Tier: default
 - Oversize: n/a
-
-## Definition of done
 
 ## Validation approach
 

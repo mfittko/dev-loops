@@ -14,6 +14,7 @@ import {
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { classifyDocsGrillFinding } from "../loop/docs-grill-contract.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { DEFAULT_TIER_DEFAULTS } from "../loop/check-size-budget.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -100,7 +101,7 @@ export function parseRefinePlanFileCliArgs(argv) {
   return options;
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, repoRoot = process.cwd() } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, repoRoot = resolveRepoRoot(process.cwd()) } = {}) {
   const options = parseRefinePlanFileCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
