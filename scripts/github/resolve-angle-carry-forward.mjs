@@ -38,6 +38,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
   assertWorktreeAtHead,
@@ -46,8 +47,6 @@ import {
   mapGateToConfigKey,
   parseChangedFiles,
 } from "./write-gate-context.mjs";
-
-const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>]
 Decide, per angle, whether a prior CLEAN gate verdict (recorded at --prev-head) may
@@ -69,15 +68,8 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
-function normalizeGate(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return GATE_NAMES.has(normalized) ? normalized : null;
-}
-
-function normalizeHeadSha(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
-}
+const normalizeGate = normalizeGateShared;
+const normalizeHeadSha = normalizeHeadShaShared;
 
 export function parseResolveAngleCarryForwardCliArgs(argv) {
   const { tokens } = parseArgs({

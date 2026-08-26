@@ -37,8 +37,7 @@ import {
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
-const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
-const GATE_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
+import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // Mirrors check-size-budget.mjs's computeSizeBudget outcome enum exactly —
 // this file never recomputes the outcome, only validates/renders it.
@@ -258,14 +257,8 @@ function rejectRemovedFlag(token) {
     `${token} has been removed. Force bypass requires separate operator authorization. Omit the flag.`,
   );
 }
-function normalizeGateName(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return GATE_NAMES.has(normalized) ? normalized : null;
-}
-function normalizeVerdict(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return GATE_VERDICTS.has(normalized) ? normalized : null;
-}
+const normalizeGateName = normalizeGateShared;
+const normalizeVerdict = normalizeVerdictShared;
 function normalizeExecutionMode(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;

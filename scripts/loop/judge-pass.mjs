@@ -8,6 +8,7 @@ import {
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import { ensureFollowUpIssue, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -64,7 +65,7 @@ Exit codes:
   2   Invalid --jq filter
 `.trim();
 
-const GATES = Object.freeze(["draft_gate", "pre_approval_gate"]);
+const GATES = GATE_NAMES;
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });

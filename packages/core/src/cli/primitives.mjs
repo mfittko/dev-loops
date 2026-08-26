@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 /**
@@ -165,6 +167,33 @@ export function runChild(command, args, env = process.env, stdinText = undefined
     child.on("error", reject);
     child.on("close", (code) => { resolve({ code, stdout, stderr }); });
   });
+}
+
+/**
+ * Resolve a `--body <text>` / `--body-file <path>` pair to the actual body
+ * string, the one file-reading step every `--body-file` CLI flag in this repo
+ * needs: read the file (or stdin, when `allowStdin` and `bodyFile === "-"`)
+ * and FAIL CLOSED (throw) on an empty/whitespace-only result, so a blank or
+ * unreadable `--body-file` can never silently clear a PR/comment body. When
+ * `bodyFile` is absent, `body` is returned unchanged (no emptiness check —
+ * callers that must reject an empty inline `--body` do that themselves,
+ * since not every caller enforces it).
+ *
+ * @param {object} input
+ * @param {string} [input.body] — inline body value, returned as-is when no bodyFile
+ * @param {string} [input.bodyFile] — path to read the body from ("-" = stdin, when allowStdin)
+ * @param {boolean} [input.allowStdin] — honor `bodyFile === "-"` as stdin (fd 0); default false
+ * @returns {Promise<string | undefined>}
+ */
+export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false } = {}) {
+  if (bodyFile === undefined || bodyFile === null) return body;
+  // fs/promises readFile does not accept an integer fd, so stdin (fd 0) is
+  // read synchronously via the callback-style API, which does.
+  const content = allowStdin && bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(bodyFile, "utf8");
+  if (content.trim().length === 0) {
+    throw new Error(`--body-file ${bodyFile} is empty`);
+  }
+  return content;
 }
 
 export function runCommand(command, args, { cwd = process.cwd(), env = process.env } = {}) {

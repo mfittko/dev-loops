@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseIssueNumber, runChild as _runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, resolveBodyOrFile, runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
@@ -93,6 +92,10 @@ export function extractClosingIssueNumber(body) {
   if (!match) return null;
   return Number(match[1] ?? match[2]);
 }
+// Never reads stdin (`gh pr create` doesn't either — body always comes from an
+// explicit --body/--body-file), so allowStdin stays false. An unreadable or
+// empty --body-file FAILS CLOSED (throws) rather than silently substituting ""
+// (which used to let a broken/blank --body-file open a body-less PR unnoticed).
 async function resolveBody(args) {
   const bodyIdx = args.indexOf("--body");
   if (bodyIdx !== -1 && bodyIdx + 1 < args.length) {
@@ -100,14 +103,9 @@ async function resolveBody(args) {
   }
   const bodyFileIdx = args.indexOf("--body-file");
   if (bodyFileIdx !== -1 && bodyFileIdx + 1 < args.length) {
-    try {
-      const content = await readFile(args[bodyFileIdx + 1], "utf8");
-      return content;
-    } catch {
-      return "";
-    }
+    return resolveBodyOrFile({ bodyFile: args[bodyFileIdx + 1], allowStdin: false });
   }
-  return null; // unreadable → warn
+  return null; // no --body/--body-file given
 }
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike

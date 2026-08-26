@@ -28,6 +28,7 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
 // Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
 // comment-stream shape the gate summarizers consume. Validity comes from the
@@ -58,8 +59,8 @@ export function normalizePrReviewsPayload(payload) {
     }));
 }
 
-const VALID_LEDGER_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
-const VALID_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+const VALID_LEDGER_VERDICTS = new Set(GATE_VERDICTS);
+const VALID_GATES = new Set(GATE_NAMES);
 
 // Findings at round <= this stay in the standard fix loop; from the next round
 // on, an open medium finding is deferred instead of re-fixed in-gate.
