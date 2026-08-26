@@ -6,23 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseCreateIssueCliArgs, createIssue, runCli } from "../../scripts/github/create-issue.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh({ code = 0, stdout, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return {
-      code,
-      stdout: code === 0 ? (stdout ?? "https://github.com/o/n/issues/42\n") : "",
-      stderr,
-    };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub(
+    [{ code, stdout: code === 0 ? (stdout ?? "https://github.com/o/n/issues/42\n") : "", stderr }],
+    { repeatLastOnOverflow: true },
+  );
 }
 
 test("parseCreateIssueCliArgs: requires --repo and --title", () => {

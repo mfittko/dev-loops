@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
+import { initGitFixture } from "../_helpers.mjs";
 
 import {
   assertWorktreeAtHead,
@@ -78,9 +79,7 @@ async function stubGhRun(_command, args) {
 // adjacentCode build (mirrors the buildGateContext adjacentCode fixture above).
 async function makeBaseDiffRepo() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cli-"));
-  git(repoRoot, ["init", "-q"]);
-  git(repoRoot, ["config", "user.email", "test@example.com"]);
-  git(repoRoot, ["config", "user.name", "Test"]);
+  initGitFixture(repoRoot, { commit: null });
   // Base commit: dep.mjs and caller.mjs already exist (unchanged after this),
   // so the later diff isolates changed.mjs as the only changed file, leaving
   // dep.mjs/caller.mjs to be resolved purely via the adjacent-code 1-hop scan.
@@ -175,9 +174,7 @@ const DOCS_ONLY_DIFF = {
 // --base path (which captures the diff from a real `git diff`).
 async function makeDocsOnlyDiffRepo() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-docs-"));
-  git(repoRoot, ["init", "-q"]);
-  git(repoRoot, ["config", "user.email", "test@example.com"]);
-  git(repoRoot, ["config", "user.name", "Test"]);
+  initGitFixture(repoRoot, { commit: null });
   await mkdir(path.join(repoRoot, "docs"), { recursive: true });
   await writeFile(path.join(repoRoot, "docs", "foo.md"), "# Old heading\n", "utf8");
   git(repoRoot, ["add", "-A"]);
@@ -1896,9 +1893,7 @@ test("CLI --base degrades to scope.diffPath=null but STILL writes the artifact w
 test("captureDiffFromBase: full-diff overflow (tiny maxBuffer) degrades to empty diffOutput while --name-status still resolves", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cap-"));
   try {
-    git(repoRoot, ["init", "-q"]);
-    git(repoRoot, ["config", "user.email", "test@example.com"]);
-    git(repoRoot, ["config", "user.name", "Test"]);
+    initGitFixture(repoRoot, { commit: null });
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await writeFile(path.join(repoRoot, "src/big.mjs"), "export const x = 0;\n", "utf8");
     git(repoRoot, ["add", "-A"]);
@@ -1975,9 +1970,7 @@ test("captureDiffFromBase is pinned to repoRoot, not an inherited GIT_DIR/GIT_WO
 // instead of an R pair, changing --name-status output shape.
 async function makeRenameRepo({ contraryConfig }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cross-env-"));
-  git(repoRoot, ["init", "-q"]);
-  git(repoRoot, ["config", "user.email", "test@example.com"]);
-  git(repoRoot, ["config", "user.name", "Test"]);
+  initGitFixture(repoRoot, { commit: null });
   if (contraryConfig) {
     git(repoRoot, ["config", "diff.renames", "false"]);
     git(repoRoot, ["config", "diff.algorithm", "histogram"]);

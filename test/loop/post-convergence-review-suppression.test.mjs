@@ -10,6 +10,7 @@ import {
   readSuppressionMarker,
   writeSuppressionMarker,
 } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { initGitFixture } from "../_helpers.mjs";
 
 // #1441 follow-up: the default (non-injected) marker path used to be plain
 // process.cwd()-relative (tmp/copilot-loop/...), so a marker written from one
@@ -25,10 +26,7 @@ function git(cwd, args) {
 
 async function makeRepo() {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-suppression-repo-")));
-  git(dir, ["init", "-q"]);
-  git(dir, ["config", "user.email", "test@example.com"]);
-  git(dir, ["config", "user.name", "Test"]);
-  git(dir, ["commit", "--allow-empty", "-q", "-m", "init"]);
+  initGitFixture(dir);
   return dir;
 }
 

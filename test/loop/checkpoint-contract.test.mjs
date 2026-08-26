@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runNode as runNodeHelper } from "../_helpers.mjs";
+import { initGitFixture, runNode as runNodeHelper } from "../_helpers.mjs";
 import { buildRetrospectiveCheckpointPayload, resolveCheckpointRepoRoot } from "../../scripts/loop/checkpoint-contract.mjs";
 
 const scriptPath = path.resolve("scripts/loop/checkpoint-contract.mjs");
@@ -333,10 +333,7 @@ test("resolveCheckpointRepoRoot: resolves the main checkout from inside a linked
   const worktreeParent = await mkdtemp(path.join(os.tmpdir(), "checkpoint-root-wt-parent-"));
   const worktreeDir = path.join(worktreeParent, "linked");
   try {
-    execFileSync("git", ["init", "--quiet"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: mainDir, stdio: "ignore" });
+    initGitFixture(mainDir);
     execFileSync("git", ["worktree", "add", "--quiet", worktreeDir, "-b", "linked-branch"], { cwd: mainDir, stdio: "ignore" });
 
     // git internally resolves realpaths (e.g. /var vs the macOS /private/var
@@ -359,10 +356,7 @@ test("checkpoint-contract CLI writes to the MAIN checkout when invoked from a li
   const worktreeParent = await mkdtemp(path.join(os.tmpdir(), "checkpoint-write-wt-parent-"));
   const worktreeDir = path.join(worktreeParent, "linked");
   try {
-    execFileSync("git", ["init", "--quiet"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: mainDir, stdio: "ignore" });
-    execFileSync("git", ["commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: mainDir, stdio: "ignore" });
+    initGitFixture(mainDir);
     execFileSync("git", ["worktree", "add", "--quiet", worktreeDir, "-b", "linked-branch"], { cwd: mainDir, stdio: "ignore" });
 
     const { code, stderr } = await runNode(["--state", "required"], { cwd: worktreeDir });

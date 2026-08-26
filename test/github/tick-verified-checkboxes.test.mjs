@@ -8,22 +8,9 @@ import {
   parseTickVerifiedCliArgs,
   runCli,
 } from "../../scripts/github/tick-verified-checkboxes.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
-function stubGh(responses) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const resp = responses.shift();
-    if (!resp) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (responses) => makeGhStub(responses);
 
 function bodyJson(body) {
   return { stdout: `${JSON.stringify({ body })}\n` };

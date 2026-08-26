@@ -1,7 +1,22 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+
+// Create an mkdtemp'd directory under os.tmpdir(), run `fn(dir)`, and always
+// remove it afterward (even on throw/rejection). Shared across suites so a
+// per-test temp fixture is one line instead of a hand-rolled mkdtemp/try/
+// finally/rm block. Pass `prefix` to keep a suite's directory names
+// recognizable (defaults to a generic marker for suites that don't care).
+export async function withTempDir(fn, { prefix = "dev-loops-test-" } = {}) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 // Build a test env that strips the ambient async run-id markers from process.env.
 //
@@ -117,6 +132,49 @@ export function makeGhMock(entries = [], {
   return { runChild, calls };
 }
 
+// In-memory stdout/stderr sink for CLI-level tests that pass a `{ write, get }`
+// stream stand-in instead of process.stdout/stderr. Distinct from makeGhMock/
+// writeGhStub (which stub the `gh` command itself): this only captures what a
+// script writes to a stream so a test can assert on it.
+export function captureStream() {
+  let data = "";
+  return { write: (s) => { data += s; }, get: () => data };
+}
+
+// In-memory `run(cmd, args)` stub for scripts/github/*.mjs unit tests that
+// inject a two-arg `run` (not makeGhMock's four-arg `runChild`, and without
+// makeGhMock's PATH-stub-parity exit-code-on-overflow contract or its
+// hermetic `git` passthrough). Two entry shapes:
+//   - order-based: entries are plain { code, stdout, stderr } and are
+//     consumed one per call, in array order; pass `repeatLastOnOverflow: true`
+//     to keep replaying the last entry forever instead of throwing once
+//     entries run out (a fixed-response/single-payload stub).
+//   - predicate-routed: entries are { match: (args) => boolean, resp: { code,
+//     stdout, stderr } }; the first entry whose `match` returns true for a
+//     given call answers it, regardless of call order (a same-signature
+//     drop-in for the fetch-ci-logs-style command-matcher stub).
+// Both throw (not an encoded exit code) when a call goes unanswered, matching
+// the throw-based contract every converted local `stubGh` already used.
+export function makeGhStub(entries = [], { repeatLastOnOverflow = false } = {}) {
+  const calls = [];
+  let counter = 0;
+  const toResult = (resp) => ({ code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" });
+  const run = async (_cmd, args) => {
+    calls.push(args);
+    if (entries.length > 0 && typeof entries[0].match === "function") {
+      const found = entries.find((entry) => entry.match(args));
+      if (!found) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
+      return toResult(found.resp ?? {});
+    }
+    if (counter >= entries.length) {
+      if (repeatLastOnOverflow && entries.length > 0) return toResult(entries[entries.length - 1]);
+      throw new Error(`Unexpected gh call: ${args.join(" ")}`);
+    }
+    return toResult(entries[counter++]);
+  };
+  return { run, calls };
+}
+
 // Shared fixture body: minimal issue-less PR-body-as-spec content (no linked
 // issue) that satisfies the refinement check, matching an ordinary sanctioned
 // draft PR. Tests exercising draft/ready or gate-posting logic downstream of
@@ -180,6 +238,22 @@ function runGitFixture(cwd, args) {
     throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
   }
   return result.stdout.trim();
+}
+
+/**
+ * Common `git init` + identity + optional initial commit + optional remote
+ * fixture. Identity comes from GIT_FIXTURE_ENV's author/committer overrides
+ * (the same "Test <test@example.com>" every explicit `git config user.*` in
+ * these suites already resolves to), so no separate config calls are needed.
+ * @param {string} dir — an existing empty directory (e.g. a mkdtemp result)
+ * @param {{ remote?: string, branch?: string, commit?: string|null }} [opts]
+ *   `commit` is the initial commit message (default "init"); pass `null` to
+ *   skip the initial commit (an init-only, or init+remote-only, fixture).
+ */
+export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
+  runGitFixture(dir, branch ? ["init", "-q", "-b", branch] : ["init", "-q"]);
+  if (commit !== null) runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", commit]);
+  if (remote) runGitFixture(dir, ["remote", "add", "origin", remote]);
 }
 
 /**
