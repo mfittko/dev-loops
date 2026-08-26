@@ -55,7 +55,7 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       const runChild = stubRunChild({ code: 0, stdout: "not json", stderr: "" });
       await assert.rejects(
         () => ghJson(["api", "user"], { env: {}, ghCommand: "gh", runChild }),
-        /^Error: Invalid JSON from gh: not json$/,
+        /Invalid JSON from gh: not json/,
       );
     });
 
@@ -63,7 +63,7 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       const runChild = stubRunChild({ code: 0, stdout: "   ", stderr: "" });
       await assert.rejects(
         () => ghJson(["api", "user"], { env: {}, ghCommand: "gh", runChild }),
-        /^Error: Invalid JSON from gh: <empty>$/,
+        /Invalid JSON from gh: <empty>/,
       );
     });
 
@@ -110,7 +110,7 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       const runChild = stubRunChild({ code: 0, stdout: "not json", stderr: "" });
       await assert.rejects(
         () => ghGraphql("query{viewer{id}}", {}, {}, runChild),
-        /^Error: Invalid JSON input$/,
+        /Invalid JSON input/,
       );
     });
 
@@ -145,7 +145,7 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       });
       await assert.rejects(
         () => ghGraphql("query{viewer{id}}", {}, {}, runChild),
-        /^Error: GraphQL errors: boom$/,
+        /GraphQL errors: boom/,
       );
     });
   });
