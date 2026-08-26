@@ -916,7 +916,7 @@ the plan's FRESH angles and needs no further subtraction for a FULLY-carried
 unit. A PARTIALLY-carried unit (only SOME of its angles carried) stays in
 `pendingGroups` whole, while Phase 2 fans out by re-resolving dispatch groups
 over the resolved-minus-carried angle set and re-chunking the leftovers
-(`resolveFanoutGroups` run fresh, not `pendingGroups`'s own group
+(`resolveFanoutGroups` is run fresh, not `pendingGroups`'s own group
 boundaries) — so a carry that splits a unit can leave `pendingGroups.length`
 ahead of the unit count Phase 2 actually dispatches. `pendingGroups.length`
 is therefore a safe upper bound, never the authoritative figure; the
