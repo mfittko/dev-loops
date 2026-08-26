@@ -314,7 +314,7 @@ human(s).
   board items whose issue/PR has been closed at least that long. Best-effort: run it as a standard post-merge step but ignore
   any non-zero exit (a successful run that finds nothing to archive exits 0; a board/config-resolution/API error exits
   non-zero, which the `|| true` masks) — a failure here must never block merge completion. See
-  [projects queue usage](./projects-queue-usage.md).
+  [Projects Queue Contract](./projects-queue-contract.md#archiving-completed-items).
 - Clean up stale branches
 
 ## Cross-references
