@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
