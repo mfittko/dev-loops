@@ -47,17 +47,6 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       );
     });
 
-    test("accepts the label knob without altering success or failure behavior", async () => {
-      const okRunChild = stubRunChild({ code: 0, stdout: '{"a":1}', stderr: "" });
-      const payload = await ghJson(["pr", "view"], { env: {}, ghCommand: "gh", runChild: okRunChild, label: "gh pr view" });
-      assert.deepEqual(payload, { a: 1 });
-
-      const failRunChild = stubRunChild({ code: 1, stdout: "", stderr: "boom" });
-      await assert.rejects(
-        () => ghJson(["pr", "view"], { env: {}, ghCommand: "gh", runChild: failRunChild, label: "gh pr view" }),
-        /^Error: gh command failed: boom$/,
-      );
-    });
   });
 
   describe("ghGraphql", () => {
@@ -65,6 +54,24 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       const runChild = stubRunChild({ code: 0, stdout: '{"data":{"user":{"id":"U_1"}}}', stderr: "" });
       const payload = await ghGraphql("query($login:String!){user(login:$login){id}}", { login: "octocat" }, {}, runChild);
       assert.deepEqual(payload, { data: { user: { id: "U_1" } } });
+    });
+
+    test("builds the pinned `gh api graphql` argv with a --field per variable", async () => {
+      const calls = [];
+      const captureRunChild = async (cmd, args, env) => {
+        calls.push({ cmd, args, env });
+        return { code: 0, stdout: '{"data":{}}', stderr: "" };
+      };
+      await ghGraphql("query($a:String!,$b:Int!){x}", { a: "one", b: "2" }, { GH_TOKEN: "t" }, captureRunChild);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].cmd, "gh");
+      assert.deepEqual(calls[0].args, [
+        "api", "graphql",
+        "--field", "query=query($a:String!,$b:Int!){x}",
+        "--field", "a=one",
+        "--field", "b=2",
+      ]);
+      assert.deepEqual(calls[0].env, { GH_TOKEN: "t" });
     });
 
     test("throws 'gh api graphql failed' with GH_API_ERROR on non-zero exit", async () => {

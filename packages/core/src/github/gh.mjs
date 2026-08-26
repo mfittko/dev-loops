@@ -1,13 +1,26 @@
 /**
  * Shared `gh` CLI invoke-and-parse helpers (child 6 of the simplification
- * epic #1689). Extracted byte-identically from the near-duplicate
- * `runGhJson`/`ghJson`/`ghGraphql` implementations scattered across
- * scripts/github and scripts/projects (see e.g.
- * scripts/github/upsert-checkpoint-verdict.mjs, scripts/github/post-gate-findings.mjs,
- * scripts/github/probe-ci-status.mjs, scripts/github/fetch-ci-logs.mjs, and
- * scripts/projects/add-queue-item.mjs) so a future caller migration is a
- * behavioral no-op. This module only introduces the shared implementation —
- * it does not migrate any caller.
+ * epic #1689). This module introduces the shared implementation only; the
+ * ~19 call-site migrations are the follow-up children (projects: #1696;
+ * github/loop/refine: #1697).
+ *
+ * `ghJson` reproduces the shape used by scripts/github/probe-ci-status.mjs
+ * (`gh command failed:` on non-zero exit; `Invalid JSON from gh: ...` on
+ * malformed stdout). `ghGraphql` reproduces scripts/projects/add-queue-item.mjs's
+ * superset (`gh api graphql failed` / `GraphQL errors:` with GH_API_ERROR /
+ * GRAPHQL_ERROR; `parseJsonText` → `Invalid JSON input`).
+ *
+ * Migration is NOT a uniform behavioral no-op across every current caller —
+ * the callers do not all share one message shape:
+ *   - probe-ci-status.mjs: already matches `ghJson` above (no-op).
+ *   - upsert-checkpoint-verdict.mjs / post-gate-findings.mjs: today delegate
+ *     JSON parsing to `parseJsonText`, so their malformed-stdout message is
+ *     `Invalid JSON input`, NOT `Invalid JSON from gh: ...`.
+ *   - fetch-ci-logs.mjs: today throws `<label> failed:`, NOT `gh command failed:`.
+ * Migrating those callers onto `ghJson` will change their thrown-message text;
+ * #1696/#1697 must reconcile each caller's pinned message (accept the shared
+ * shape and update its test pins, or extend this helper) — it is not a blind
+ * swap.
  */
 
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
@@ -22,13 +35,8 @@ import { parseJsonText } from "./review-threads.mjs";
  * @param {NodeJS.ProcessEnv} [opts.env]
  * @param {string} [opts.ghCommand] - defaults to `"gh"`.
  * @param {typeof defaultRunChild} [opts.runChild] - injectable child-exec seam.
- * @param {string} [opts.label] - accepted for signature parity with
- *   fetch-ci-logs.mjs's `ghJson`. ponytail: not folded into the thrown
- *   message text below — those two message shapes are pinned byte-exact
- *   across every extracted call site, so a per-call label cannot vary them.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label } = {}) {
-  void label;
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(ghCommand, args, env);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
