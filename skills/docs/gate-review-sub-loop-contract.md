@@ -958,7 +958,27 @@ mechanical refusal catching it; the only trace is the ledger's own
 carried-angle provenance. The direction stays fail-safe for budget/spend
 either way — it can under-dispatch, never over-spend or fabricate findings
 for an angle that DID run — it just does not mechanically catch every
-under-dispatch.
+under-dispatch by itself. A fan-in-side, angle-agnostic backstop for exactly
+this gap is `checkResolvedAngleEvidence` (`@dev-loops/core/loop/gate-fanin`):
+given the round's full RESOLVED angle set (not just its configured mandatory
+subset), it fails closed on any resolved angle with neither a real per-angle
+artifact nor a proven carry. `consolidate-fanin.mjs` wires it through its own
+`--resolved-angles <json>` flag — when supplied, and only when the round's
+computed verdict is `clean`, a missing resolved angle refuses the pass, naming
+the angle(s) and the artifact/proof expected. This closes the mandatory-only
+gap above whenever a caller supplies `--resolved-angles`; today no caller does
+(preventative — no live regression this catch fires against yet), so this
+does not change the mandatory-only enforcement any existing caller relies on.
+
+<!-- rule: GATE-EXEC-RESOLVED-ANGLE-EVIDENCE -->
+`GATE-EXEC-RESOLVED-ANGLE-EVIDENCE`: when `consolidate-fanin.mjs` is invoked
+with `--resolved-angles <json>` (the round's full resolved angle-name list,
+e.g. `write-gate-context.mjs`'s own context artifact `resolvedAngles`
+field) and the round's computed overall verdict is `clean`, every named
+resolved angle MUST have either a real per-angle artifact in `--findings-dir`
+or a proven carry (a name also present in `--carried-angles`, itself only
+ever populated after its own `--carry-forward-plan` proof check). A resolved
+angle with neither FAILS CLOSED (exit 1), naming the missing angle(s).
 
 <!-- rule: GATE-EXEC-PRIMER-EVIDENCE -->
 `GATE-EXEC-PRIMER-EVIDENCE`: when the round recorded primer-dispatch ordering

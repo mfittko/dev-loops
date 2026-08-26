@@ -58,12 +58,12 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
@@ -160,6 +160,20 @@ Optional:
                                  be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound;
                                  normalized trim+lowercase). Required together with --carried-angles (given
                                  without it, or vice versa, fails closed at parse time).
+  --resolved-angles <json>       JSON array of angle-name strings naming the round's FULL resolved angle
+                                 set (e.g. write-gate-context.mjs's own context artifact "resolvedAngles"
+                                 field) — independent of any single gate's configured MANDATORY
+                                 subset. When given AND the round's computed overall verdict is "clean",
+                                 every named angle must have EITHER a real per-angle artifact in
+                                 --findings-dir OR a proven carry (a name also present in --carried-angles,
+                                 which is only ever populated after its own --carry-forward-plan proof
+                                 check above) — otherwise this FAILS CLOSED (exit 1), naming the missing
+                                 angle(s) and the artifact/proof expected for each. This is the mechanical
+                                 fan-in-side catch for a resolved angle left with no evidence at all — see
+                                 checkResolvedAngleEvidence (@dev-loops/core/loop/gate-fanin) and the Gate
+                                 Review Sub-Loop Contract's Phase 3 backstop paragraph. Optional; omitted
+                                 by default (no caller supplies it yet) — the hash/mandatory-angle checks
+                                 elsewhere in this pass still run either way.
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
@@ -272,7 +286,9 @@ Exit codes:
      render budget at minimum summary length with --ledger-out not given, or a
      GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
      (a sentinel records a divergent/missing prefix hash, or the sentinel count
-     is short of --expected-dispatch-units) — #1618
+     is short of --expected-dispatch-units) — #1618, or (with --resolved-angles
+     and a "clean" verdict) a resolved angle with neither a per-angle artifact
+     nor a proven carried-forward entry
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -583,6 +599,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     prChecklistMatrix: undefined,
     carriedAngles: undefined,
     carryForwardPlan: undefined,
+    resolvedAngles: undefined,
     repoRoot: undefined,
     expectedDispatchUnits: undefined,
     primerEvidence: undefined,
@@ -602,6 +619,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "pr-checklist-matrix": { type: "string" },
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
+      "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
       "primer-evidence": { type: "string" },
@@ -684,6 +702,23 @@ export function parseConsolidateFaninCliArgs(argv) {
       } catch (err) {
         throw parseError(err instanceof Error ? err.message : String(err));
       }
+      continue;
+    }
+    if (token.name === "resolved-angles") {
+      const raw = requireTokenValue(token, parseError);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw parseError("--resolved-angles must be a JSON array of angle-name strings");
+      }
+      if (!Array.isArray(parsed)) {
+        throw parseError("--resolved-angles must be a JSON array of non-empty angle-name strings");
+      }
+      options.resolvedAngles = normalizeCarriedAngleElements(
+        parsed,
+        () => parseError("--resolved-angles must be a JSON array of non-empty angle-name strings"),
+      );
       continue;
     }
     if (token.name === "repo-root") {
@@ -1295,6 +1330,30 @@ export async function consolidateGateFanin(options) {
           .join("; ")
       : "one or more per-angle artifacts report a blocked verdict";
     throw new Error(`fan-in is blocked — refusing to emit a consolidated findings shape (${detail})`);
+  }
+
+  // GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: when the caller names the round's full
+  // resolved angle set (--resolved-angles) and this round computed a "clean"
+  // verdict, every resolved angle must have either a real per-angle artifact
+  // or a proven carry — checkFanoutAngleCoverage's own mandatory-angle check
+  // (elsewhere in the write/read paths that consume this ledger) protects
+  // only a caller-supplied MANDATORY subset, so a wrong carry-forward
+  // declaration naming only non-mandatory angles could otherwise close clean
+  // with no mechanical refusal (see the Gate Review Sub-Loop Contract's Phase
+  // 3 backstop paragraph). `rawArtifacts` already includes both real
+  // artifacts and any --carried-angles upserts at this point, so passing
+  // `options.carriedAngles` alongside it is redundant-but-harmless for those
+  // — it only makes a difference for a resolved angle with NEITHER.
+  if (options.resolvedAngles !== undefined && consolidated.verdict === "clean") {
+    const { missingAngles } = checkResolvedAngleEvidence(options.resolvedAngles, {
+      recordedAngles: rawArtifacts,
+      carriedAngles: options.carriedAngles ?? [],
+    });
+    if (missingAngles.length > 0) {
+      throw new Error(
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found`,
+      );
+    }
   }
 
   // --ledger-out is the durable, always-complete audit trail and must land on

@@ -11,6 +11,7 @@ import {
   countDistinctReviewers,
   provenanceConsistencyError,
   checkFanoutAngleCoverage,
+  checkResolvedAngleEvidence,
   countFreshDispatchUnits,
   fanoutReviewerPairingError,
   freshAngleNames,
@@ -761,6 +762,71 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
       { mandatoryAngles: [], pool: ["dry", "kiss"] },
     );
     assert.deepEqual(result.foreignAngles, []);
+  });
+});
+
+describe("checkResolvedAngleEvidence (#1783 — fan-in catch for a resolved angle with neither an artifact nor a proven carry)", () => {
+  test("refuses when a wrongly-carried NON-mandatory angle has neither an artifact nor a proven carry", () => {
+    // "correctness" and "yagni" were both freshly reviewed (real artifacts); "dry" was the
+    // round's resolved set too, but no artifact was written for it and it was never carried —
+    // the exact under-dispatch shape checkFanoutAngleCoverage's own mandatory-only check misses
+    // when "dry" is not a configured mandatory angle.
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "yagni", "dry"],
+      {
+        recordedAngles: [{ angle: "correctness" }, { angle: "yagni" }],
+        carriedAngles: [],
+      },
+    );
+    assert.deepEqual(result.missingAngles, ["dry"]);
+  });
+
+  test("passes when every resolved angle has either a real artifact or a proven carry", () => {
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "yagni", "dry"],
+      {
+        recordedAngles: [{ angle: "correctness" }, { angle: "yagni" }],
+        carriedAngles: ["dry"],
+      },
+    );
+    assert.deepEqual(result.missingAngles, []);
+  });
+
+  test("a grouped-but-ran angle (its own per-angle artifact, written by a shared-group reviewer) counts as covered", () => {
+    // Grouped dispatch still writes one per-angle artifact per angle it covers (never one
+    // merged artifact for the group) — so a grouped angle needs no special-casing here.
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "dry", "kiss"],
+      { recordedAngles: [{ angle: "correctness" }, { angle: "dry" }, { angle: "kiss" }], carriedAngles: [] },
+    );
+    assert.deepEqual(result.missingAngles, []);
+  });
+
+  test("delta-suffixed artifacts and carries count toward their base angle", () => {
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "dry"],
+      { recordedAngles: [{ angle: "correctness-delta-at-abc123" }], carriedAngles: ["dry"] },
+    );
+    assert.deepEqual(result.missingAngles, []);
+  });
+
+  test("matches case-insensitively — a resolved angle differing only in case from its artifact/carry is not falsely missing", () => {
+    // Per-angle artifacts are independently authored, so a resolved "Dry" must still match a
+    // recorded/carried "dry" — same base+lowercase rule consolidate-fanin.mjs applies to its own
+    // angle keys (realAngleKeys/exemptCarriedKeys).
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "Dry", "KISS"],
+      { recordedAngles: [{ angle: "correctness" }, { angle: "dry" }], carriedAngles: ["kiss"] },
+    );
+    assert.deepEqual(result.missingAngles, []);
+  });
+
+  test("tolerates malformed/missing input (non-array resolvedAngles/recordedAngles, entries without a usable .angle)", () => {
+    assert.deepEqual(checkResolvedAngleEvidence(undefined, {}).missingAngles, []);
+    assert.deepEqual(
+      checkResolvedAngleEvidence(["dry"], { recordedAngles: [null, { angle: "" }, "nope"] }).missingAngles,
+      ["dry"],
+    );
   });
 });
 
