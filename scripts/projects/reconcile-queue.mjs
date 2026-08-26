@@ -120,7 +120,8 @@ const GATHER_CONCURRENCY = 4;
 // share a number (repo-A PR #5 vs repo-B issue #5) cannot collide. Per-item gh
 // failures are swallowed (best-effort): the item records all-null PR fields →
 // derives null → untouched. Items are gathered with a fixed concurrency bound
-// (not fully sequential) — order of the returned Map's entries mirrors `items`.
+// (not fully sequential) — the returned Map's entry order mirrors the gathered
+// eligible items (the `items` order minus the skipped ineligible/Done ones).
 export async function gatherLiveFacts(items, repo, { env, runChild, doneColumn } = {}) {
   const eligible = items.filter((item) => {
     const number = item.prNumber != null ? item.prNumber : item.issueNumber;

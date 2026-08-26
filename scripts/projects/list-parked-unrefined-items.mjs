@@ -112,8 +112,10 @@ function parseCliArgs(argv) {
 
 // Fixed-bound concurrency limiter: runs `fn` over `items` in chunks of `limit`,
 // preserving result order (index-stable) regardless of per-item completion
-// order — same fail-closed semantics as a sequential loop (a chunk's
-// Promise.all rejects immediately on the first per-item throw).
+// order. Fail-closed: a chunk's Promise.all rejects on the first per-item
+// throw and propagates it (like a sequential loop). Unlike a sequential loop
+// it does not cancel the chunk's other in-flight calls — Promise.all cannot —
+// so siblings already started run to completion before the rejection surfaces.
 async function mapConcurrent(items, limit, fn) {
   const results = new Array(items.length);
   for (let i = 0; i < items.length; i += limit) {
