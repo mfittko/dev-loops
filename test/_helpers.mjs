@@ -252,6 +252,14 @@ function runGitFixture(cwd, args) {
  */
 export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
   runGitFixture(dir, branch ? ["init", "-q", "-b", branch] : ["init", "-q"]);
+  // Persist identity into repo-local config, not just GIT_FIXTURE_ENV. The env
+  // identity only reaches commands spawned through runGitFixture; callers that
+  // commit later via their own env-less git helper (or {commit: null} then a
+  // manual commit) must still resolve identity, and a hermetic CI runner has no
+  // global user.* to fall back on. Repo-local config makes the fixture
+  // self-contained, matching the inline `git config user.*` blocks it replaced.
+  runGitFixture(dir, ["config", "user.email", "test@example.com"]);
+  runGitFixture(dir, ["config", "user.name", "Test"]);
   if (commit !== null) runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", commit]);
   if (remote) runGitFixture(dir, ["remote", "add", "origin", remote]);
 }
