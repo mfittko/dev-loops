@@ -14,7 +14,7 @@ import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-check
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { assertRunnerOwnership, claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -1706,16 +1706,27 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
+  //
+  // Proactive heartbeat first: a successful same-run-id assert refreshes
+  // activeRun.updatedAt to now regardless of how long it has been since the last
+  // touch, so a verdict post at the end of a long sequential gate-reviewer
+  // fan-out (which can exceed the 30-min stale window with no intervening
+  // coordination calls) keeps the claim fresh instead of racing detectStaleRunner.
+  // Only when the assert fails (claim owned by a different run, or genuinely
+  // stale) does the existing reactive stale-takeover recovery below run.
   const envRunId = resolveRunId(env) ?? "";
   if (envRunId) {
     try {
-      const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
-      if (staleCheck.status === "stale_runner") {
-        await claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, mode: "takeover" });
+      const asserted = await assertRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot });
+      if (!asserted.ok) {
+        const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
+        if (staleCheck.status === "stale_runner") {
+          await claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, mode: "takeover" });
+        }
       }
     } catch {
-      // Non-fatal: stale-runner takeover is best-effort. If it fails, the subsequent
-      // loadPrGateCoordinationContext call will surface the real error.
+      // Non-fatal: heartbeat/stale-runner takeover is best-effort. If it fails,
+      // the subsequent loadPrGateCoordinationContext call will surface the real error.
     }
   }
   // Thread the light-dispatch signal (#1210) so the context interpreter and the

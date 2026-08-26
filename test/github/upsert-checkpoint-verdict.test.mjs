@@ -15,7 +15,7 @@ import {
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -3901,6 +3901,73 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
     assert.equal(payload.gate, "draft_gate");
     assert.equal(payload.commentId, 300);
   }, { prefix: "dev-loops-upsert-stale-takeover-" });
+});
+
+// #1785: a successful same-run-id assert must refresh activeRun.updatedAt on
+// EVERY verdict post, not only once the claim is already past the stale
+// window. Pre-claims 25 minutes in the past (fresh by the 30-min max age, so
+// detectStaleRunner alone would never trigger the old reactive-only takeover)
+// and asserts the persisted claim advances to "now" anyway — proving the
+// heartbeat is proactive, closing the gap where a long sequential
+// gate-reviewer fan-out with no intervening coordination call could tip the
+// claim into staleness before the next verdict post.
+test("upsert-checkpoint-verdict proactively refreshes a same-run-id claim that is not yet stale (#1785)", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const staleButNotExpiredAt = new Date(Date.now() - 25 * 60 * 1000).toISOString();
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "same-run-id",
+      cwd: tempDir,
+      now: staleButNotExpiredAt,
+    });
+
+    const { env: ghEnv } = await writeGhStubHelper(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+
+    const beforeCall = Date.now();
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], {
+      cwd: tempDir,
+      env: { ...ghEnv, DEVLOOPS_RUN_ID: "same-run-id" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+
+    const { state } = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(state.activeRun.runId, "same-run-id");
+    const refreshedAtMs = Date.parse(state.activeRun.updatedAt);
+    // Refreshed to "now" (within this test run's window), NOT left at the
+    // original 25-minutes-ago claim timestamp.
+    assert.ok(refreshedAtMs >= beforeCall, `expected updatedAt (${state.activeRun.updatedAt}) to advance to the assert time, not stay at the original claim time`);
+    assert.notEqual(state.activeRun.updatedAt, staleButNotExpiredAt);
+  }, { prefix: "dev-loops-upsert-proactive-heartbeat-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
