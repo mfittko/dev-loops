@@ -161,8 +161,8 @@ Optional:
                                  normalized trim+lowercase). Required together with --carried-angles (given
                                  without it, or vice versa, fails closed at parse time).
   --resolved-angles <json>       JSON array of angle-name strings naming the round's FULL resolved angle
-                                 set (e.g. write-gate-context.mjs's own context artifact "resolvedAngles"/
-                                 "angles" field) — independent of any single gate's configured MANDATORY
+                                 set (e.g. write-gate-context.mjs's own context artifact "resolvedAngles"
+                                 field) — independent of any single gate's configured MANDATORY
                                  subset. When given AND the round's computed overall verdict is "clean",
                                  every named angle must have EITHER a real per-angle artifact in
                                  --findings-dir OR a proven carry (a name also present in --carried-angles,

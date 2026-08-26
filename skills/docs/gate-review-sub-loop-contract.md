@@ -973,7 +973,7 @@ does not change the mandatory-only enforcement any existing caller relies on.
 <!-- rule: GATE-EXEC-RESOLVED-ANGLE-EVIDENCE -->
 `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE`: when `consolidate-fanin.mjs` is invoked
 with `--resolved-angles <json>` (the round's full resolved angle-name list,
-e.g. `write-gate-context.mjs`'s own context artifact `resolvedAngles`/`angles`
+e.g. `write-gate-context.mjs`'s own context artifact `resolvedAngles`
 field) and the round's computed overall verdict is `clean`, every named
 resolved angle MUST have either a real per-angle artifact in `--findings-dir`
 or a proven carry (a name also present in `--carried-angles`, itself only
