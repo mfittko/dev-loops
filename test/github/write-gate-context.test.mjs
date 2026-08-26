@@ -4816,6 +4816,22 @@ test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never
   assert.deepEqual(unmapped.preflight.skippedGroups, []);
 });
 
+test("issue 1784 resolveFanoutDispatch refuses a delta-suffixed always-include spelling (baseAngleName-collapsed before the check, mirroring consolidate-fanin.mjs)", () => {
+  const config = draftConfig({ dynamicAngles: false, mandatoryAngles: ["gate-evidence"] });
+  // `<angle>-delta-at-<sha>` must collapse to its base BEFORE the always-rerun
+  // check, same as consolidate-fanin.mjs's own baseAngleName+lowercase key —
+  // otherwise the name resolves as "unknown", is wrongly accepted, and the
+  // preflight's trim+lowercase match then silently drops the dispatch unit.
+  assert.throws(
+    () => resolveFanoutDispatch(config, "draft", ["scope", "gate-evidence"], { carriedAngles: ["gate-evidence-delta-at-abc1234"] }),
+    /can never legitimately carry forward/,
+  );
+  assert.throws(
+    () => resolveFanoutDispatch(config, "draft", ["scope", "pr-description"], { carriedAngles: ["pr-description-delta-at-abc1234"] }),
+    /can never legitimately carry forward/,
+  );
+});
+
 test("#1635 resolveFanoutDispatch excludes a carried group and round-trips carriedAngles provenance for a one-shot iterable (generator / Set.values()), not just an array", () => {
   // Regression pin: resolveFanoutDispatch used to materialize carriedAngles
   // into carriedAnglesList for the refusal guard, then pass the ORIGINAL
