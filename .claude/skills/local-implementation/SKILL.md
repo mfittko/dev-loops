@@ -411,7 +411,7 @@ For each delegated task:
 - tell the subagent whether it should implement, verify, or review
 - require the subagent to report blockers, verification results, and changed files
 - avoid circular delegation and overlapping scopes
-- `developer`/`quality`/`docs` dispatches are LOCAL EDITS ONLY: no commit — the delegate edits files and reports changed files; the dispatcher (this dev-loop session) owns the commit once it consolidates results (see [Commit policy](#commit-policy) step 12 below). Because that delegate's own `SubagentStop` event would otherwise see the same dirty worktree it was told not to commit and block on `LOCAL-COMMIT-BEFORE-EXIT`, the dispatcher sets `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` on that dispatch to declare it owns the commit; the `subagent-stop-uncommitted-guard` hook exempts that dispatch's stop while it stays enforced for any dispatch without the marker. `fixer` is unaffected — it commits and pushes its own fix directly.
+- `developer`/`quality`/`docs` dispatches are LOCAL EDITS ONLY: no commit — the delegate edits files and reports changed files; the dispatcher (this dev-loop session) owns the commit once it consolidates results (see [Implementation loop for the phase](#implementation-loop-for-the-phase) step 12 below). Because that delegate's own `SubagentStop` event would otherwise see the same dirty worktree it was told not to commit and block on `LOCAL-COMMIT-BEFORE-EXIT`, the dispatcher sets `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` on that dispatch to declare it owns the commit; the `subagent-stop-uncommitted-guard` hook exempts that dispatch's stop while it stays enforced for any dispatch without the marker. `fixer` is unaffected — it commits and pushes its own fix directly.
 
 ### Status monitoring
 
