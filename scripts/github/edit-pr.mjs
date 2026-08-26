@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
@@ -176,18 +174,10 @@ export function parseEditPrCliArgs(argv) {
 }
 
 async function resolveBody(options) {
-  if (options.bodyFile === undefined) return options.body;
-  // Stdin (fd 0): the fs/promises readFile does NOT accept an integer fd, so read
-  // it synchronously via the callback-style API (which does). A real path stays on
-  // the async promise read.
-  const body =
-    options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
   // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
   // silently clear the PR body (USAGE promises --body/--title reject empties).
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
-  return body;
+  // allowStdin: `--body-file -` reads stdin (fd 0).
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
 }
 
 // Build the `gh pr edit` args and the parallel `edited` list (which fields were

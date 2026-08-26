@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
-import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -119,19 +117,11 @@ export function parseEditCommentCliArgs(argv) {
 }
 
 async function resolveBody(options) {
-  if (options.bodyFile === undefined) {
-    if (options.body.trim().length === 0) {
-      throw new Error("--body must not be empty");
-    }
-    return options.body;
+  if (options.bodyFile === undefined && options.body.trim().length === 0) {
+    throw new Error("--body must not be empty");
   }
-  // Read stdin ("-") synchronously via fd 0 — fs/promises.readFile(0) is
-  // unreliable on this Node target (mirrors edit-issue.mjs).
-  const body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
-  return body;
+  // allowStdin: `--body-file -` reads stdin (fd 0), mirroring edit-issue.mjs.
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
 }
 
 // Update the comment via `gh api -X PATCH .../issues/comments/{id}`. Issue

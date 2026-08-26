@@ -21,7 +21,7 @@ import { parseArgs } from "node:util";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "../github/_gate-names.mjs";
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -62,16 +62,8 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
-function normalizeGate(value) {
-  const gates = new Set(GATE_NAMES);
-  const normalized = String(value).trim().toLowerCase();
-  return gates.has(normalized) ? normalized : null;
-}
-
-function normalizeHeadSha(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
-}
+const normalizeGate = normalizeGateShared;
+const normalizeHeadSha = normalizeHeadShaShared;
 
 export function parseRunGateValidationCliArgs(argv) {
   const { tokens } = parseArgs({

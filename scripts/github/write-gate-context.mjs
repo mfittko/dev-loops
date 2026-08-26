@@ -48,7 +48,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
-import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -162,16 +162,8 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
-function normalizeGate(value) {
-  const gates = new Set(GATE_NAMES);
-  const normalized = String(value).trim().toLowerCase();
-  return gates.has(normalized) ? normalized : null;
-}
-
-function normalizeHeadSha(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
-}
+const normalizeGate = normalizeGateShared;
+const normalizeHeadSha = normalizeHeadShaShared;
 
 // ponytail: a DENYLIST, not an allowlist — the `git diff` call runs via
 // execFileSync's argv array (no shell), so `base` cannot inject shell syntax
@@ -480,9 +472,14 @@ export function parseWriteGateContextCliArgs(argv) {
 }
 
 /**
- * Build the deterministic artifact path for a gate-review context handoff.
- * Mirrors write-gate-findings-log.mjs buildLogPath. Exported for reuse by the
- * fork fan-out reviewers so producer and consumer agree on the path.
+ * Internal deterministic-path builder shared by every gate-artifact path
+ * function below (buildGateContextPath, buildGateReviewsDir, buildGateDiffPath,
+ * buildGateBriefingPrefixPath, buildGateBriefingScopePath,
+ * buildValidationResultsPath): validates/sanitizes the repo/pr/gate/headSha
+ * segments once and joins `<tmpRoot>/<dir>/<repo-slug>/pr-<N>/<gate>-<headSha><suffix>`.
+ * `dir` distinguishes the "gate-context" artifact family from the
+ * "gate-reviews" per-angle findings directory; `suffix` (empty for the
+ * directory case) distinguishes the file extension within a family.
  *
  * @param {object} input
  * @param {string} input.repo — owner/name
@@ -490,32 +487,30 @@ export function parseWriteGateContextCliArgs(argv) {
  * @param {string} input.gate — draft_gate | pre_approval_gate
  * @param {string} input.headSha
  * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative artifact path
+ * @param {string} [input.dir] — top-level artifact-family directory, default "gate-context"
+ * @param {string} [input.suffix] — filename suffix (extension), default ""
+ * @returns {string} relative path
  */
-export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+function buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot = "tmp", dir = "gate-context", suffix = "" }) {
   const repoSlug = repoSlugFor(repo);
   const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.json`);
+  return path.join(tmpRoot, dir, repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}${suffix}`);
 }
 
-/**
- * Build the deterministic per-angle findings-artifact directory a gate-review
- * fan-out writes to (one `<angle>.json` per angle). Mirrors the path
- * `consolidate-fanin.mjs` reads from, so producer and consumer agree.
- * Exported for reuse by the same-head skip-completed resume scan.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative directory path
- */
+// Deterministic artifact path for a gate-review context handoff. Mirrors
+// write-gate-findings-log.mjs buildLogPath. Exported for reuse by the fork
+// fan-out reviewers so producer and consumer agree on the path. Param shapes:
+// see buildGateArtifactPath above.
+export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".json" });
+}
+
+// Deterministic per-angle findings-artifact directory a gate-review fan-out
+// writes to (one `<angle>.json` per angle). Mirrors the path
+// `consolidate-fanin.mjs` reads from. Exported for reuse by the same-head
+// skip-completed resume scan.
 export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-reviews", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}`);
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-reviews" });
 }
 
 /**
@@ -632,96 +627,43 @@ function repoSlugFor(repo) {
   return parts.join("-");
 }
 
-/**
- * Build the deterministic path for the FULL diff captured alongside the gate
- * context artifact. Mirrors buildGateContextPath but with a `.diff` extension so
- * scoped reviewers can read the entire change set (not just hunks) from a stable
- * location. Exported for reuse by the fork fan-out reviewers.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative diff path
- */
+// Deterministic path for the FULL diff captured alongside the gate context
+// artifact. Mirrors buildGateContextPath but with a `.diff` extension so
+// scoped reviewers can read the entire change set (not just hunks). Exported
+// for reuse by the fork fan-out reviewers.
 export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.diff`);
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".diff" });
 }
 
-/**
- * Build the deterministic path for the rendered invariant briefing prefix
- * (GATE-EXEC-BRIEFING-PREFIX): the byte-identical block every per-angle
- * reviewer of this gate pass is seeded with, before their angle-specific
- * suffix. Mirrors buildGateContextPath/buildGateDiffPath. Exported so the
- * fan-out reviewers and `verify-fresh-review-context.mjs --prefix-file` agree
- * on the path with the context-builder.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative briefing-prefix path
- */
+// Deterministic path for the rendered invariant briefing prefix
+// (GATE-EXEC-BRIEFING-PREFIX): the byte-identical block every per-angle
+// reviewer of this gate pass is seeded with, before their angle-specific
+// suffix. Exported so the fan-out reviewers and
+// `verify-fresh-review-context.mjs --prefix-file` agree on the path.
 export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.briefing-prefix.txt`);
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-prefix.txt" });
 }
 
-/**
- * Build the deterministic path for a per-scope briefing companion file (AC3,
- * #1572): a narrower slice of the same bundle for angles whose configured
- * `scope` is not "full" (see GATE_ANGLE_SCOPES). Mirrors
- * buildGateBriefingPrefixPath, one file per distinct non-full scope actually
- * declared by this round's resolved angles.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {"changed-files"|"docs-only"} input.scope — a non-"full" GATE_ANGLE_SCOPES value
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative scoped-briefing path
- */
+// Deterministic path for a per-scope briefing companion file (AC3, #1572): a
+// narrower slice of the same bundle for angles whose configured `scope` is
+// not "full" (see GATE_ANGLE_SCOPES). `scope` must be a non-"full"
+// GATE_ANGLE_SCOPES value (e.g. "changed-files" | "docs-only") — validated
+// here since the shared internal builder has no scope-vocabulary awareness.
 export function buildGateBriefingScopePath({ repo, pr, gate, headSha, scope, tmpRoot = "tmp" }) {
   if (scope === "full" || !GATE_ANGLE_SCOPES.includes(scope)) {
     throw new Error(`buildGateBriefingScopePath: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
   }
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.briefing-${scope}.txt`);
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: `.briefing-${scope}.txt` });
 }
 
-/**
- * Build the deterministic path for the shared validation-results artifact
- * (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
- * this round's validation suites, run once and read (not re-run) by every
- * per-angle reviewer via the briefing-prefix section {@link renderBriefingPrefix}
- * appends when `validationResultsPath` is threaded. Mirrors
- * buildGateContextPath/buildGateDiffPath/buildGateBriefingPrefixPath. Exported
- * so `run-gate-validation.mjs` (the producer) and this module's CLI/context
- * artifact (the consumer that records the path) agree on the location without
- * re-implementing the slug/segment-safety logic.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative validation-results path
- */
+// Deterministic path for the shared validation-results artifact
+// (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
+// this round's validation suites, run once and read (not re-run) by every
+// per-angle reviewer via the briefing-prefix section. Exported so
+// `run-gate-validation.mjs` (the producer) and this module's CLI/context
+// artifact (the consumer that records the path) agree on the location.
 export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, "gate-context", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.validation.json`);
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".validation.json" });
 }
 
 /**

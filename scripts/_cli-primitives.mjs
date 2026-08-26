@@ -8,6 +8,7 @@ export {
   parseAllowedRefsCsv,
   parsePrNumber,
   parseIssueNumber,
+  resolveBodyOrFile,
   runChild,
   runCommand,
 } from "@dev-loops/core/cli/primitives";

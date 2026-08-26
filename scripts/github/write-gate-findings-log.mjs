@@ -13,6 +13,7 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -45,16 +46,8 @@ ${JQ_OUTPUT_USAGE}
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
-function normalizeGate(value) {
-  const gates = new Set(["draft_gate", "pre_approval_gate"]);
-  const normalized = String(value).trim().toLowerCase();
-  return gates.has(normalized) ? normalized : null;
-}
-function normalizeVerdict(value) {
-  const verdicts = new Set(["clean", "findings_present", "blocked"]);
-  const normalized = String(value).trim().toLowerCase();
-  return verdicts.has(normalized) ? normalized : null;
-}
+const normalizeGate = normalizeGateShared;
+const normalizeVerdict = normalizeVerdictShared;
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
 // RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
 // disposition vocabulary instead of hand-copying it out of sync.
@@ -491,9 +484,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // comparison: a bare-array input never persists a null/undefined/
   // non-string/out-of-domain verdict un-normalized, and a wrapper input
   // compares against an already-normalized caller verdict so a domain failure
-  // is never misattributed as a contradiction. typeof is checked before
-  // normalizeVerdict, which coerces via String() and would otherwise let a
-  // non-string (e.g. an array) silently pass as its stringified form.
+  // is never misattributed as a contradiction. The shared normalizeVerdict
+  // (scripts/github/_gate-names.mjs) already guards non-strings internally
+  // (typeof check, never String() coercion), so this outer typeof check is
+  // redundant defense-in-depth, not load-bearing.
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
   if (!callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");
@@ -506,11 +500,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // across calls.
   let persistedVerdict = callerVerdict;
   if (overallVerdict !== undefined) {
-    // The wrapper's overallVerdict must itself be a string BEFORE
-    // normalization runs — normalizeVerdict coerces via String(), which would
-    // otherwise let an array-wrapped wrapper verdict (e.g. ["clean"], whose
-    // String() form is the bare string "clean") silently pass as a valid
-    // wrapper instead of being rejected as malformed.
+    // The wrapper's overallVerdict must itself be a string; the shared
+    // normalizeVerdict already rejects any non-string internally, so this
+    // outer typeof check is redundant defense-in-depth, not load-bearing.
     const verdict = typeof overallVerdict === "string" ? normalizeVerdict(overallVerdict) : null;
     if (!verdict) {
       throw parseError(

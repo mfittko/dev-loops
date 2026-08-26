@@ -376,13 +376,11 @@ test("create-pr --body-file without closing keyword emits no warning when --issu
   }
 });
 
-test("create-pr --body-file with missing file emits no warning and exits 0 when --issue is absent (#1626)", async () => {
+test("create-pr --body-file with an unreadable file fails closed: nonzero exit, clear error, gh never invoked", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-bodyfile-missing-"));
 
   try {
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      { stdout: "https://github.com/owner/repo/pull/1\n" },
-    ]);
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
 
     const result = await runNode([
       "--repo", "owner/repo",
@@ -393,10 +391,10 @@ test("create-pr --body-file with missing file emits no warning and exits 0 when 
       "--body-file", "/nonexistent/path/pr-body.md",
     ], { env });
 
-    assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
-    assert.equal(result.stderr, "");
-    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /ok":false/);
+    assert.match(result.stderr, /\/nonexistent\/path\/pr-body\.md/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

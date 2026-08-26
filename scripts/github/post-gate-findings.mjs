@@ -10,6 +10,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
 Post (or idempotently update) a visible, marker-tagged PR issue comment that lists the
@@ -59,17 +60,10 @@ function parseError(message) {
 // The one gate vocabulary this module knows about. Shared by normalizeGate
 // (CLI --gate parsing) and validateAndSanitizeRenderInputs's own membership
 // check below, so the two can never name a different set of "real" gates.
-const KNOWN_GATES = new Set(["draft_gate", "pre_approval_gate"]);
+const KNOWN_GATES = new Set(GATE_NAMES);
 
-function normalizeGate(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return KNOWN_GATES.has(normalized) ? normalized : null;
-}
-
-function normalizeHeadSha(value) {
-  const normalized = String(value).trim().toLowerCase();
-  return /^[0-9a-f]{7,64}$/i.test(normalized) ? normalized : null;
-}
+const normalizeGate = normalizeGateShared;
+const normalizeHeadSha = normalizeHeadShaShared;
 
 // Validate via the centralized repo-slug validator shared by sibling GitHub
 // scripts (parseRepoSlug). It enforces owner/name structure and rejects unsafe
