@@ -375,6 +375,26 @@ test("SubagentStop hook still blocks a dirty worktree WITHOUT the orchestrator-o
   }
 });
 
+test("SubagentStop hook still blocks when the orchestrator-owned-commit marker is a non-\"1\" value (#1786)", () => {
+  // Mutation anchor for the strict `=== "1"` read: the exemption is opt-in on the exact value "1",
+  // not any truthy value. A marker of "0" (or any non-"1" string) must NOT exempt — a loosened
+  // `Boolean(env[VAR])` read would wrongly allow here and this assertion catches it.
+  const dir = makeWorktree("orchestrator-owns-commit-nonone", true);
+  try {
+    const { code, stderrJson } = runHook(
+      "subagent-stop-uncommitted-guard.mjs",
+      { cwd: dir },
+      { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "0" },
+    );
+    assert.equal(code, 2, "a non-\"1\" marker value must still be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/worktrees/ (#1685)", () => {
   // Every makeWorktree() fixture calls `git init`, so the hook always sees a valid git repo and
   // the fail-safe-allow catch path (`execFileSync("git", ["status","--porcelain"], { timeout:
