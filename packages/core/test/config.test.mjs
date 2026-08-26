@@ -11,7 +11,9 @@ import {
   DevLoopConfigSchema,
   FileConfigSchema,
   BUILT_IN_DEFAULTS,
+  BLOCKING_SEVERITY_SPELLINGS,
 } from "../src/config/config.mjs";
+import { LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
@@ -2824,34 +2826,45 @@ describe("role resolution", () => {
     // The schema requires min 1; an empty list reaches this resolver only
     // through a config that failed validation, and passing it through would
     // make the gate block on nothing (and severity consumers diverge on it).
-    test("resolveGateConfig throws on an explicitly-empty blockCleanOnFindingSeverities array", () => {
+    test("resolveGateConfig throws on an explicitly-empty blockCleanOnFindingSeverities array, naming the gate key", () => {
       const config = {
         version: 1,
         gates: { draft: { blockCleanOnFindingSeverities: [] } },
       };
-      assert.throws(() => resolveGateConfig(config, "draft"), /is empty/);
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) => err instanceof Error && err.message.includes("gates.draft.blockCleanOnFindingSeverities") && /is empty/.test(err.message),
+      );
     });
 
     // The schema requires an array; a scalar or mapping here is the same
     // failed-validation channel and previously fell back to the high default
     // silently, under-blocking relative to the author's intent.
-    test("resolveGateConfig throws on a present-but-non-array blockCleanOnFindingSeverities value", () => {
+    test("resolveGateConfig throws on a present-but-non-array blockCleanOnFindingSeverities value, naming the gate key", () => {
       for (const value of ["medium", { medium: true }, 3, null]) {
         assert.throws(
           () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: value } } }, "draft"),
-          /must be an array/,
+          (err) => err instanceof Error && err.message.includes("gates.draft.blockCleanOnFindingSeverities") && /must be an array/.test(err.message),
           String(value),
         );
       }
     });
 
     // Parity pin for the derived vocabulary: every spelling the schema enum
-    // accepts must resolve without refusal, so the guard can never drift
-    // ahead of the schema.
-    test("resolveGateConfig accepts every schema-enum blockCleanOnFindingSeverities spelling", () => {
-      for (const spelling of ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]) {
+    // accepts must resolve to its canonical value without refusal, so the
+    // guard can never drift ahead of the schema. Derives the expected
+    // spelling set from BLOCKING_SEVERITY_SPELLINGS (config.mjs's single
+    // source for the vocabulary) instead of a hand-typed literal copy, so
+    // widening the vocabulary can't silently strand this pin behind the real
+    // list, and asserts the actual canonical resolved value (not just a
+    // length) so a resolver that returns the WRONG canonical spelling still
+    // fails this test.
+    test("resolveGateConfig accepts every schema-enum blockCleanOnFindingSeverities spelling and resolves it to its canonical value", () => {
+      for (const spelling of BLOCKING_SEVERITY_SPELLINGS) {
         const result = resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [spelling] } } }, "draft");
-        assert.equal(result.blockCleanOnFindingSeverities.length, 1, spelling);
+        const canonical = Object.hasOwn(LEGACY_SEVERITY_ALIASES, spelling) ? LEGACY_SEVERITY_ALIASES[spelling] : spelling;
+        assert.deepEqual(result.blockCleanOnFindingSeverities, [canonical], spelling);
+        assert.ok(BLOCKING_SEVERITY_SPELLINGS.includes(canonical), `canonical value "${canonical}" for "${spelling}" must itself be schema-enum vocabulary`);
       }
     });
 
