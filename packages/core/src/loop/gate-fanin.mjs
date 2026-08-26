@@ -748,7 +748,8 @@ export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist-matrix"]);
  * targeted, independent of any single gate's configured MANDATORY subset —
  * against the evidence actually recorded for it: every resolved angle must
  * have either a per-angle artifact in `recordedAngles` (matched by
- * {@link baseAngleName}, same rule as {@link checkFanoutAngleCoverage}) or be
+ * {@link baseAngleName} plus a case-insensitive compare — same base+lowercase
+ * rule consolidate-fanin.mjs applies to its own angle keys) or be
  * named in `carriedAngles` (angle names a caller has already PROVEN carried
  * forward from a prior clean head — never a bare, unverified name; the
  * consolidate-fanin CLI's own `--carried-angles` is only ever populated after
@@ -782,12 +783,18 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
       .map((e) => (e && typeof e === "object" && typeof e.angle === "string" ? e.angle.trim() : ""))
       .filter((a) => a.length > 0)
     : [];
-  const recordedBases = new Set(recorded.map(baseAngleName));
+  // Matched base+lowercase, same as checkFanoutAngleCoverage's callers
+  // (consolidate-fanin's realAngleKeys/exemptCarriedKeys) and
+  // reviewerBudgetPreflight's normalizeAngleKey: per-angle artifacts are
+  // independently authored, so a case difference between a resolved angle
+  // name and its recorded/carried evidence must not read as missing.
+  const normalizeAngleBase = (a) => baseAngleName(a).toLowerCase();
+  const recordedBases = new Set(recorded.map(normalizeAngleBase));
   const carriedBases = new Set(
-    [...(carriedAngles ?? [])].map((a) => baseAngleName(String(a).trim())),
+    [...(carriedAngles ?? [])].map((a) => normalizeAngleBase(String(a).trim())),
   );
   const missingAngles = resolved.filter((a) => {
-    const base = baseAngleName(a);
+    const base = normalizeAngleBase(a);
     return !recordedBases.has(base) && !carriedBases.has(base);
   });
   return { missingAngles };

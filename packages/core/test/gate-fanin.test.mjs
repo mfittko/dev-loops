@@ -810,6 +810,17 @@ describe("checkResolvedAngleEvidence (#1783 — fan-in catch for a resolved angl
     assert.deepEqual(result.missingAngles, []);
   });
 
+  test("matches case-insensitively — a resolved angle differing only in case from its artifact/carry is not falsely missing", () => {
+    // Per-angle artifacts are independently authored, so a resolved "Dry" must still match a
+    // recorded/carried "dry" — same base+lowercase rule consolidate-fanin.mjs applies to its own
+    // angle keys (realAngleKeys/exemptCarriedKeys).
+    const result = checkResolvedAngleEvidence(
+      ["correctness", "Dry", "KISS"],
+      { recordedAngles: [{ angle: "correctness" }, { angle: "dry" }], carriedAngles: ["kiss"] },
+    );
+    assert.deepEqual(result.missingAngles, []);
+  });
+
   test("tolerates malformed/missing input (non-array resolvedAngles/recordedAngles, entries without a usable .angle)", () => {
     assert.deepEqual(checkResolvedAngleEvidence(undefined, {}).missingAngles, []);
     assert.deepEqual(
