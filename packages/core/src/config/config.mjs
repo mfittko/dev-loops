@@ -1944,22 +1944,6 @@ export function resolveRefinement(config) {
 }
 
 /**
- * Resolve one gate configuration object from the merged dev-loop config.
- *
- * Returns the configured gate angles when present, or null for angles when the
- * config omits them (caller falls back to skill-defined defaults). Boolean gate
- * flags always resolve to stable defaults.
- *
- * The returned shape is the STABLE, resolved view every other angle resolver
- * and consumer builds on — `mandatoryAngles`/`excludeAngles`/`dynamicAngles`/
- * `additiveAngles` are derived here from the unified `gates.<gate>.angles`
- * array (`mandatory: true` / `enabled: false` per-entry, D3) and the
- * `gates.<gate>.dynamic` sub-object, so downstream consumers keep reading the
- * same field names the pre-1.0 flat config keys used. (`extraAngles` no
- * longer exists as a concept: D3's merge-by-name lets a later config layer add
- * a plain, non-mandatory angle to `angles` directly, without restating the
- * list — the exact ergonomic `extraAngles` used to provide.)
- *
  * Resolve and validate ONE gate's raw `blockCleanOnFindingSeverities` value
  * against the schema's severity vocabulary, returning the normalized/deduped
  * list (or the ["high"] default when the key is absent). Shared by
@@ -2005,6 +1989,22 @@ function resolveBlockingSeverities(config, gate) {
 }
 
 /**
+ * Resolve one gate configuration object from the merged dev-loop config.
+ *
+ * Returns the configured gate angles when present, or null for angles when the
+ * config omits them (caller falls back to skill-defined defaults). Boolean gate
+ * flags always resolve to stable defaults.
+ *
+ * The returned shape is the STABLE, resolved view every other angle resolver
+ * and consumer builds on — `mandatoryAngles`/`excludeAngles`/`dynamicAngles`/
+ * `additiveAngles` are derived here from the unified `gates.<gate>.angles`
+ * array (`mandatory: true` / `enabled: false` per-entry, D3) and the
+ * `gates.<gate>.dynamic` sub-object, so downstream consumers keep reading the
+ * same field names the pre-1.0 flat config keys used. (`extraAngles` no
+ * longer exists as a concept: D3's merge-by-name lets a later config layer add
+ * a plain, non-mandatory angle to `angles` directly, without restating the
+ * list — the exact ergonomic `extraAngles` used to provide.)
+ *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
