@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard, parseItemRef } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { ghGraphql } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage:
   dev-loops queue reorder --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> [--after <number|node-id>]
@@ -153,32 +154,6 @@ function validateRepo(repo) {
   return repo;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── GraphQL fragments ────────────────────────────────────────────────────
 
 const GET_USER_ID = [
@@ -235,30 +210,6 @@ const GET_PROJECT_ITEMS_BY_CONTENT = [
   "            ... on Issue { __typename number repository { nameWithOwner } }",
   "            ... on PullRequest { __typename number repository { nameWithOwner } }",
   "          }",
-  "        }",
-  "      }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const GET_PROJECT_ITEM = [
-  "query($projectId:ID!, $itemId:ID!) {",
-  "  node(id:$projectId) {",
-  "    ... on ProjectV2 {",
-  "      item: item(id:$itemId) {",
-  "        id",
-  "        fieldValues(first:20) {",
-  "          nodes {",
-  "            ... on ProjectV2ItemFieldSingleSelectValue {",
-  "              field { ... on ProjectV2SingleSelectField { id name } }",
-  "              name",
-  "            }",
-  "          }",
-  "        }",
-  "        content {",
-  "          ... on Issue { __typename number title url }",
-  "          ... on PullRequest { __typename number title url }",
   "        }",
   "      }",
   "    }",
@@ -407,83 +358,6 @@ function resolveFromItems(items, itemRef, repo) {
   return describeItem(match);
 }
 
-// ── Resolve an item in a project by reference (number or node ID) ──────
-
-async function resolveProjectItem(projectId, itemRef, owner, repoName, repo, env, runChild) {
-  let itemId;
-  let issueNumber = null;
-  let prNumber = null;
-  let status = null;
-
-  if (itemRef.kind === "id") {
-    // Direct item node ID lookup
-    const itemPayload = await ghGraphql(GET_PROJECT_ITEM, {
-      projectId,
-      itemId: itemRef.value,
-    }, env, runChild);
-    const item = itemPayload?.data?.node?.item;
-    if (!item) {
-      throw Object.assign(
-        new Error(`Item "${itemRef.value}" not found in project`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-    itemId = item.id;
-    const fvs = item.fieldValues?.nodes ?? [];
-    for (const fv of fvs) {
-      if (fv && fv.field && fv.field.name === "Status") {
-        status = fv.name;
-        break;
-      }
-    }
-    if (item.content) {
-      if (item.content.__typename === "Issue") {
-        issueNumber = item.content.number;
-      } else {
-        prNumber = item.content.number;
-      }
-    }
-  } else {
-    // Look up by issue/PR number in the project (paginated)
-    const targetNumber = itemRef.value;
-    const allItems = await fetchAllItems(projectId, env, runChild);
-
-    // Filter by matching repo AND number exactly
-    const matchingItems = allItems.filter((it) => {
-      if (!it.content) return false;
-      if (it.content.repository?.nameWithOwner !== repo) return false;
-      return it.content.number === targetNumber;
-    });
-
-    if (matchingItems.length === 0) {
-      throw Object.assign(
-        new Error(`Item #${targetNumber} not found in project for repo "${repo}"`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-
-    // Use the first match (by position order)
-    const match = matchingItems[0];
-    itemId = match.id;
-    const fvs = match.fieldValues?.nodes ?? [];
-    for (const fv of fvs) {
-      if (fv && fv.field && fv.field.name === "Status") {
-        status = fv.name;
-        break;
-      }
-    }
-    if (match.content) {
-      if (match.content.__typename === "Issue") {
-        issueNumber = match.content.number;
-      } else {
-        prNumber = match.content.number;
-      }
-    }
-  }
-
-  return { itemId, issueNumber, prNumber, status };
-}
-
 // ── Exit code classification ────────────────────────────────────────────
 
 function classifyExitCode(err) {
@@ -519,16 +393,21 @@ function executePosition(projectId, itemId, afterId) {
 
 // ── Legacy flag form: --item [--after] ────────────────────────────────────
 
-async function mainFlagForm(args, { env, child, repo, owner, repoName, project }) {
+async function mainFlagForm(args, { env, child, repo, project }) {
   const itemRef = parseItemRef(args.item);
   let afterRef = null;
   if (args.after !== undefined) afterRef = parseItemRef(args.after, "--after");
 
-  const item = await resolveProjectItem(project.id, itemRef, owner, repoName, repo, env, child);
+  // Fetch the board item list ONCE, then resolve item/afterItem (and the
+  // dry-run snapshot) from that single list — mirrors mainSubcommand, avoiding
+  // up to 3 full-board re-scans (item lookup, after-item lookup, before snapshot).
+  const items = await fetchAllItems(project.id, env, child);
+
+  const item = resolveFromItems(items, itemRef, repo);
 
   let afterItem = null;
   if (afterRef) {
-    afterItem = await resolveProjectItem(project.id, afterRef, owner, repoName, repo, env, child);
+    afterItem = resolveFromItems(items, afterRef, repo);
     if (afterItem.itemId === item.itemId) {
       throw Object.assign(new Error("Cannot reorder an item after itself"), { code: "INVALID_AFTER" });
     }
@@ -538,7 +417,8 @@ async function mainFlagForm(args, { env, child, repo, owner, repoName, project }
 
   if (args.dryRun) {
     // Include the before snapshot for parity with the subcommand dry-run form.
-    const before = await snapshotOrder(project.id, repo, item.status ?? null, env, child);
+    // Reuses the already-fetched list (no extra fetch).
+    const before = snapshotFromItems(items, repo, item.status ?? null);
     return {
       ok: true,
       dryRun: true,
@@ -712,7 +592,7 @@ async function mainSubcommand(args, { env, child, repo, project }) {
 async function main(args, { env = process.env, runChild } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
-  const [owner, repoName] = repo.split("/");
+  const [owner] = repo.split("/");
   const selector = resolveProjectSelector(args);
 
   // Fail closed: the legacy flag form takes no positional arguments. A stray
@@ -729,7 +609,7 @@ async function main(args, { env = process.env, runChild } = {}) {
   if (args._subcommand) {
     return mainSubcommand(args, { env, child, repo, project });
   }
-  return mainFlagForm(args, { env, child, repo, owner, repoName, project });
+  return mainFlagForm(args, { env, child, repo, project });
 }
 
 // ── CLI entrypoint ──────────────────────────────────────────────────────
