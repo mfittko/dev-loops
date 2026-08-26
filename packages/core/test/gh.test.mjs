@@ -15,11 +15,27 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       assert.deepEqual(payload, { ok: true });
     });
 
-    test("throws 'gh command failed:' with detail on non-zero exit", async () => {
+    test("non-zero exit without a label throws 'gh command failed:' + GH_API_ERROR", async () => {
       const runChild = stubRunChild({ code: 1, stdout: "", stderr: "not found\n" });
       await assert.rejects(
         () => ghJson(["api", "user"], { env: {}, ghCommand: "gh", runChild }),
-        /^Error: gh command failed: not found$/,
+        (error) => {
+          assert.equal(error.message, "gh command failed: not found");
+          assert.equal(error.code, "GH_API_ERROR");
+          return true;
+        },
+      );
+    });
+
+    test("non-zero exit with a label throws '<label> failed:' + GH_API_ERROR", async () => {
+      const runChild = stubRunChild({ code: 1, stdout: "", stderr: "not found\n" });
+      await assert.rejects(
+        () => ghJson(["api", "user"], { env: {}, ghCommand: "gh", runChild, label: "fetch CI logs" }),
+        (error) => {
+          assert.equal(error.message, "fetch CI logs failed: not found");
+          assert.equal(error.code, "GH_API_ERROR");
+          return true;
+        },
       );
     });
 
@@ -27,7 +43,11 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       const runChild = stubRunChild({ code: 7, stdout: "", stderr: "" });
       await assert.rejects(
         () => ghJson(["api", "user"], { env: {}, ghCommand: "gh", runChild }),
-        /^Error: gh command failed: exit code 7$/,
+        (error) => {
+          assert.equal(error.message, "gh command failed: exit code 7");
+          assert.equal(error.code, "GH_API_ERROR");
+          return true;
+        },
       );
     });
 
