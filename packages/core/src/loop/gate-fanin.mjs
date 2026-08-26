@@ -744,6 +744,56 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
 export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist-matrix"]);
 
 /**
+ * Validate a round's RESOLVED angle set — the full angle list the round
+ * targeted, independent of any single gate's configured MANDATORY subset —
+ * against the evidence actually recorded for it: every resolved angle must
+ * have either a per-angle artifact in `recordedAngles` (matched by
+ * {@link baseAngleName}, same rule as {@link checkFanoutAngleCoverage}) or be
+ * named in `carriedAngles` (angle names a caller has already PROVEN carried
+ * forward from a prior clean head — never a bare, unverified name; the
+ * consolidate-fanin CLI's own `--carried-angles` is only ever populated after
+ * its `--carry-forward-plan` proof check, so passing it straight through here
+ * keeps that same guarantee).
+ *
+ * This closes a gap {@link checkFanoutAngleCoverage} leaves open: that check
+ * only protects a CALLER-SUPPLIED mandatory subset, so a wrong carry-forward
+ * declaration naming only NON-mandatory angles under-dispatches with no
+ * mechanical refusal — visible only in the ledger's own carried-angle
+ * provenance (see the Gate Review Sub-Loop Contract's Phase 3 backstop
+ * paragraph). This function protects every resolved angle, not just the
+ * mandatory ones. Pure.
+ *
+ * @param {unknown} resolvedAngles — the round's full resolved angle-name list
+ * @param {object} [evidence]
+ * @param {unknown} [evidence.recordedAngles] — array of `{ angle: string, ... }` entries (per-angle artifacts this round consolidated)
+ * @param {Iterable<string>} [evidence.carriedAngles] — angle names already proven carried forward
+ * @returns {{ missingAngles: string[] }}
+ */
+export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, carriedAngles } = {}) {
+  const resolved = Array.isArray(resolvedAngles)
+    ? [...new Set(
+        resolvedAngles
+          .map((a) => (typeof a === "string" ? a.trim() : ""))
+          .filter((a) => a.length > 0),
+      )]
+    : [];
+  const recorded = Array.isArray(recordedAngles)
+    ? recordedAngles
+      .map((e) => (e && typeof e === "object" && typeof e.angle === "string" ? e.angle.trim() : ""))
+      .filter((a) => a.length > 0)
+    : [];
+  const recordedBases = new Set(recorded.map(baseAngleName));
+  const carriedBases = new Set(
+    [...(carriedAngles ?? [])].map((a) => baseAngleName(String(a).trim())),
+  );
+  const missingAngles = resolved.filter((a) => {
+    const base = baseAngleName(a);
+    return !recordedBases.has(base) && !carriedBases.has(base);
+  });
+  return { missingAngles };
+}
+
+/**
  * Default cap on parallel fan-out reviewers when a caller does not supply one.
  * Mirrors the config default (gates.maxFanoutReviewers).
  */

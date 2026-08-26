@@ -959,6 +959,69 @@ test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --
   );
 });
 
+test("parseConsolidateFaninCliArgs parses --resolved-angles", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--resolved-angles", '["correctness","dry"]',
+  ]);
+  assert.deepEqual(result.resolvedAngles, ["correctness", "dry"]);
+});
+
+test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --resolved-angles", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", "not json"]),
+    /--resolved-angles must be a JSON array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", '{"angle":"dry"}']),
+    /--resolved-angles must be a JSON array of non-empty angle-name strings/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", '["dry",""]']),
+    /--resolved-angles must be a JSON array of non-empty angle-name strings/,
+  );
+});
+
+// #1783: checkFanoutAngleCoverage's own mandatory-angle check misses a wrong
+// carry-forward declaration naming only a NON-mandatory angle — it never
+// looks past the caller-supplied mandatory subset. --resolved-angles is the
+// fan-in-side backstop that protects every resolved angle, not just the
+// mandatory ones.
+test("consolidateGateFanin refuses a clean verdict when --resolved-angles names a wrongly-carried NON-mandatory angle with no artifact and no proven carry", async () => {
+  await withFindingsDir(
+    { "correctness.json": { angle: "correctness", verdict: "clean", findings: [] } },
+    async (dir) => {
+      // "dry" is part of this round's resolved set but was neither reviewed
+      // (no artifact) nor declared carried — exactly the gap a wrong
+      // write-gate-context.mjs --carried-angles list leaves behind.
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, resolvedAngles: ["correctness", "dry"] }),
+        /GATE-EXEC-RESOLVED-ANGLE-EVIDENCE.*"clean".*dry/s,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin passes when every --resolved-angles angle has a real artifact or a proven carry", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "correctness.json": { angle: "correctness", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["dry"])).carried,
+          resolvedAngles: ["correctness", "dry"],
+        });
+        assert.equal(result.overallVerdict, "clean");
+        assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["correctness", "dry"]);
+      },
+    );
+  });
+});
+
 test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", "not json"]),

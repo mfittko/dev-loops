@@ -299,6 +299,11 @@
       "id": "GATE-EXEC-REGATE-MANDATORY"
     },
     {
+      "id": "GATE-EXEC-RESOLVED-ANGLE-EVIDENCE",
+      "enforcement": "runtime",
+      "enforcementNote": "consolidate-fanin.mjs's --resolved-angles refuses a clean verdict via gate-fanin.mjs checkResolvedAngleEvidence when a resolved angle has neither an artifact nor a proven carry"
+    },
+    {
       "id": "GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT"
     },
     {
