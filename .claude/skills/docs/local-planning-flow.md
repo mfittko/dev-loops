@@ -41,7 +41,7 @@ The refine step writes the refiner output back into the same plan file:
 node scripts/refine/refine-plan-file.mjs --plan-file docs/phases/phase-<n>.md --payload <payload.json>
 ```
 
-`refinePlanFileInPlace` appends the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section, and a `Docs-grill findings` section, then advances the intake state to `plan_refined_ready_for_promotion` and stops at the `local_human_review` checkpoint. The docs-grill runs as a step within refinement: each finding is classified with `classifyDocsGrillFinding` (see the [Docs-Grill Step](./docs-grill-step.md)) and the dispositions are recorded into the plan. The step makes no GitHub or network call; the human reviews the refined plan before anything is promoted.
+`refinePlanFileInPlace` appends the `Acceptance criteria`, `Definition of done`, `Size estimate`, `Coverage matrix`, and `Docs-grill findings` sections, then advances the intake state to `plan_refined_ready_for_promotion` and stops at the `local_human_review` checkpoint. The docs-grill runs as a step within refinement: each finding is classified with `classifyDocsGrillFinding` (see the [Docs-Grill Step](./docs-grill-step.md)) and the dispositions are recorded into the plan. The `Size estimate` section carries a per-phase `logicLoc`/`tier` estimate against the same threshold `check-size-budget.mjs` escalates on; an over-threshold estimate needs a non-empty `oversizeJustification` in the payload or the refine fails closed (see the [Plan-file Contract](plan-file-contract.md#size-estimate-refinement)). The step makes no GitHub or network call; the human reviews the refined plan before anything is promoted.
 
 ## 4. Promote to a single draft PR
 
@@ -51,7 +51,7 @@ Once the human approves the refined plan, promote it:
 node scripts/refine/promote-plan.mjs --plan-file docs/phases/phase-<n>.md
 ```
 
-Promotion is PR-first: it commits the plan doc and opens exactly one draft PR via the canonical PR wrapper, and mints no GitHub issue. It records the plan↔PR link bidirectionally — the PR body references the committed plan-doc path, and the plan's front-matter gains a `prNumber:` entry. The committed plan doc is the spec-of-record; the draft PR enters the standard draft → pre-approval → human-merge flow. Promotion is idempotent: re-running on a plan that already carries `prNumber` resolves to `already_promoted` and opens nothing.
+Promotion is PR-first: it commits the plan doc and opens exactly one draft PR via the canonical PR wrapper, and mints no GitHub issue. It records the plan↔PR link bidirectionally — the PR body references the committed plan-doc path, and the plan's front-matter gains a `prNumber:` entry. When the plan carries a `Size estimate` section, its full body (including an `oversize: justified` note) is carried into the PR body verbatim, so a plan-time size justification flows into the same PR the post-hoc `gates.size` budget later escalates. The committed plan doc is the spec-of-record; the draft PR enters the standard draft → pre-approval → human-merge flow. Promotion is idempotent: re-running on a plan that already carries `prNumber` resolves to `already_promoted` and opens nothing.
 
 ## Relationship to other docs
 

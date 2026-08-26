@@ -29,6 +29,7 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
+  sizeEstimate: { logicLoc: 90, tier: "default" },
   grillFindings: [{ kind: "drift", docOnly: false, summary: "claim contradicts contract" }],
 };
 
@@ -62,9 +63,12 @@ describe("refine-plan-file CLI", () => {
       const written = await readFile(planPath, "utf8");
       assert.match(written, /^## Acceptance criteria$/mu);
       assert.match(written, /^## Definition of done$/mu);
+      assert.match(written, /^## Size estimate$/mu);
+      assert.match(written, /- Estimated logic LOC: 90/u);
       assert.match(written, /^## Coverage matrix$/mu);
       assert.match(written, /^## Docs-grill findings$/mu);
       assert.match(written, /\[record_finding\] \(drift\) claim contradicts contract/u);
+      assert.equal(parsed.sizeEstimate.overBudget, false);
 
       // Zero tracker mutation: the gh call log is empty.
       const ghLog = await readFile(ghStub.ghLogPath, "utf8");
@@ -151,6 +155,52 @@ describe("refine-plan-file CLI", () => {
       assert.equal(after, before, "plan file must be untouched on fail-closed");
       const ghLog = await readFile(ghStub.ghLogPath, "utf8");
       assert.equal(ghLog.trim(), "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fail closed: an over-softLoc size estimate with no oversizeJustification prompts a seam search", async () => {
+    // No .devloops in the temp dir, so gates.size.tiers.default.softLoc falls back to
+    // check-size-budget.mjs's own default of 400 — 900 is over it.
+    const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+      ...PAYLOAD,
+      sizeEstimate: { logicLoc: 900, tier: "default" },
+    });
+    try {
+      const before = await readFile(planPath, "utf8");
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
+        cwd: tempDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.reason, "size_estimate_oversize_not_justified");
+      const after = await readFile(planPath, "utf8");
+      assert.equal(after, before, "plan file must be untouched on fail-closed");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a cohesive over-softLoc size estimate with oversizeJustification proceeds and the note flows into the file", async () => {
+    const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+      ...PAYLOAD,
+      sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam" },
+    });
+    try {
+      const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
+        cwd: tempDir,
+        env: ghStub.env,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.sizeEstimate.overBudget, true);
+      assert.equal(parsed.sizeEstimate.oversizeNote, "one cohesive migration; no clean seam");
+      const written = await readFile(planPath, "utf8");
+      assert.match(written, /- Oversize: justified — one cohesive migration; no clean seam/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

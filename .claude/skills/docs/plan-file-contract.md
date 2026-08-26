@@ -17,7 +17,15 @@ A plan file carries these base sections when it is authored, before refinement a
 | `## In scope` | The bounded work this plan covers. |
 | `## Explicit non-goals` | What this plan leaves out. |
 
-Each base section has a non-empty body. Refinement is a later phase that adds acceptance criteria and a definition of done; those are outside the base authoring contract this document defines.
+Each base section has a non-empty body. Refinement is a later phase that adds acceptance criteria, a definition of done, and a per-phase size estimate; those are outside the base authoring contract this document defines.
+
+## Size estimate (refinement)
+
+Refinement (`scripts/refine/refine-plan-file.mjs`, `refinePlanFileInPlace` in `@dev-loops/core/loop/plan-file-refine-contract`) also writes a `## Size estimate` section, using the same vocabulary and thresholds as the fail-closed PR size budget (`scripts/loop/check-size-budget.mjs`): `logicLoc`, `tier` (`default`|`t1`|`t3`), and the default tier's `softLoc` escalation threshold. The refiner supplies `payload.sizeEstimate = { logicLoc, tier?, oversizeJustification? }`; `validatePhaseSizeEstimate` checks it against `sizeSoftLoc` (threaded from `gates.size.tiers.default.softLoc`, falling back to `check-size-budget.mjs`'s own default).
+
+An estimate at or under the threshold needs no justification. An estimate over the threshold must carry a non-empty `oversizeJustification` — the refiner looked for a seam to split the phase and, finding none, records why the phase is cohesive — or the refine fails closed (`size_estimate_oversize_not_justified`), prompting that seam search before the plan advances. Splitting stays the cheapest option before generation, but it is never mandatory: a cohesive over-budget phase proceeds with an `oversize: justified` note.
+
+`scripts/refine/promote-plan.mjs` carries the `## Size estimate` section verbatim into the promoted PR's body when present, so the plan-time justification flows into the same PR the post-hoc size budget later escalates.
 
 ## Validator
 

@@ -209,7 +209,11 @@ export function parseNumstatZ(output) {
 
 const DEFAULT_TEST_DISCOUNT = 0.25;
 const DEFAULT_ABSOLUTE_HARD_LOC = 2000;
-const DEFAULT_TIER_DEFAULTS = Object.freeze({ softLoc: 400, waiverLoc: 1500 });
+// Exported so a caller that needs the same fallback numbers (e.g. the refiner
+// phase-doc size estimate — see plan-file-refine-contract.mjs) uses the exact
+// same vocabulary/thresholds instead of a divergent copy. This is the ONLY
+// export of the default-tier fallback; `gates.size` config still wins when set.
+export const DEFAULT_TIER_DEFAULTS = Object.freeze({ softLoc: 400, waiverLoc: 1500 });
 // Fail-closed threshold for the "substantially unclassified" case: the
 // shared classifier only recognizes JS/TS as `code` (see diff-analyzer.mjs),
 // so a non-JS-source PR (e.g. Ruby) classifies every file `unknown` and would

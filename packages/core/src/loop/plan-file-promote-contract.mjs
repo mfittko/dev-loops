@@ -219,16 +219,28 @@ function neutralizeIssueCloseKeywords(text) {
  * authority. Issue-closing keywords inside the embedded AC/DoD are neutralized
  * so untrusted plan content cannot smuggle one in.
  *
+ * The plan's `## Size estimate` section (phase 4 of #1480's plan-time size budget —
+ * see `validatePhaseSizeEstimate` in `plan-file-refine-contract.mjs`) is carried
+ * through verbatim when present, so an over-budget-but-cohesive phase's
+ * `oversize: justified` note flows into the PR the fail-closed post-hoc size
+ * budget (`check-size-budget.mjs`, wired at draft-exit) later escalates: a human
+ * reading that PR's escalated review sees the plan-time reasoning right in the
+ * body, not just that the diff came out large. Optional — an already-promoted
+ * or hand-authored plan without the section still promotes; the section is
+ * simply omitted from the PR body.
+ *
  * @param {object} params
  * @param {string} params.planDocPath  repo-relative path of the committed plan doc
  * @param {string} params.acceptanceCriteria  full Acceptance criteria section body
  * @param {string} params.definitionOfDone  full Definition of done section body
+ * @param {string} [params.sizeEstimate]  full Size estimate section body, if present
  * @returns {string}
  */
-export function buildPromotionPrBody({ planDocPath, acceptanceCriteria, definitionOfDone } = {}) {
+export function buildPromotionPrBody({ planDocPath, acceptanceCriteria, definitionOfDone, sizeEstimate } = {}) {
   const docPath = String(planDocPath ?? "").trim();
   const ac = String(acceptanceCriteria ?? "").trim();
   const dod = String(definitionOfDone ?? "").trim();
+  const size = String(sizeEstimate ?? "").trim();
   if (docPath.length === 0) {
     throw new Error("buildPromotionPrBody requires a planDocPath");
   }
@@ -252,5 +264,6 @@ export function buildPromotionPrBody({ planDocPath, acceptanceCriteria, definiti
     "",
     safeDod,
     "",
+    ...(size.length > 0 ? ["## Size estimate", "", neutralizeIssueCloseKeywords(size), ""] : []),
   ].join("\n");
 }
