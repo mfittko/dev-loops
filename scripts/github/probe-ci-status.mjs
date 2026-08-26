@@ -143,7 +143,7 @@ export function parseCiWatchCliArgs(argv) {
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || (options.pr === undefined && options.commit === undefined)) {
-    throw parseError("Watching CI requires both --repo <owner/name> and --pr <number>");
+    throw parseError("Watching CI requires --repo <owner/name> and either --pr <number> or --commit <oid>");
   }
   if (options.pr !== undefined && options.commit !== undefined) {
     throw parseError("--pr and --commit are mutually exclusive");
@@ -619,7 +619,7 @@ const FAILURE_RUN_CONCLUSIONS = new Set([
  */
 async function fetchCommitCiState({ repo, commit }, { env, ghCommand }) {
   const runs = await ghJson(
-    ["run", "list", "--repo", repo, "--commit", commit, "--json", "name,status,conclusion"],
+    ["run", "list", "--repo", repo, "--commit", commit, "--limit", "100", "--json", "name,status,conclusion"],
     { env, ghCommand, label: "gh run list" },
   );
   if (!Array.isArray(runs)) {

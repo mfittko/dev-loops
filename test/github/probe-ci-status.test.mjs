@@ -476,7 +476,7 @@ test("watch-ci parses defaults and flags", () => {
 test("watch-ci rejects malformed arguments deterministically", async () => {
   const missingPr = await runNode(["--repo", "owner/repo"]);
   assert.equal(missingPr.code, 1);
-  assert.match(JSON.parse(missingPr.stderr).error, /requires both --repo/i);
+  assert.match(JSON.parse(missingPr.stderr).error, /requires --repo.*and either --pr.*or --commit/i);
 
   const badTimeout = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout-ms", "-1"]);
   assert.equal(badTimeout.code, 1);
@@ -1120,6 +1120,36 @@ test("watch-commit-ci transitions pending -> success across polls", async () => 
       );
       assert.equal(result.status, "success");
       assert.equal(result.attempts, 2);
+    },
+  );
+});
+
+test("watch-commit-ci reports pending when gh run list returns no runs yet", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([]) }],
+    async (env) => {
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-6", pollIntervalMs: 10, timeoutMs: 0 },
+        fastDeps(env),
+      );
+      assert.equal(result.status, "pending");
+      assert.equal(result.ciStatus, "pending");
+      assert.equal(result.runCount, 0);
+    },
+  );
+});
+
+test("watch-commit-ci throws when gh run list does not return a JSON array", async () => {
+  await withGhRunListStub(
+    [{ stdout: JSON.stringify({ not: "an array" }) }],
+    async (env) => {
+      await assert.rejects(
+        () => watchCommitCiStatus(
+          { repo: "owner/repo", commit: "sha-main-7", pollIntervalMs: 10, timeoutMs: 0 },
+          fastDeps(env),
+        ),
+        /gh run list did not return a JSON array/,
+      );
     },
   );
 });
