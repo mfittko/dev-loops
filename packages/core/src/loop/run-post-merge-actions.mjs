@@ -74,7 +74,10 @@ async function pollVerify(exec, verifyCommand, cwd, verifyTimeoutMs, verifyInter
       result = { code: 1, killed: false, stdout: "", stderr: (err && err.message) || String(err) };
     }
     if (!result?.killed && result?.code === 0) return { ok: true, detail: null };
-    lastDetail = result?.killed ? "verify command timed out" : `exit code ${result?.code}`;
+    const verifyStderr = typeof result?.stderr === "string" ? result.stderr.trim() : "";
+    lastDetail = result?.killed
+      ? "verify command timed out"
+      : `exit code ${result?.code}${verifyStderr ? `: ${verifyStderr}` : ""}`;
     if (now() + verifyIntervalMs > deadline) break; // would overshoot the deadline
     await delay(verifyIntervalMs);
   }

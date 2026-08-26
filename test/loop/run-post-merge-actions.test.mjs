@@ -185,10 +185,10 @@ describe("runPostMergeActions (#1457)", () => {
     assert.equal(result.results[0].status, "ok");
   });
 
-  test("verify: exhausting the verify timeout without a 0 exit fails the action", async () => {
+  test("verify: exhausting the verify timeout without a 0 exit fails the action and surfaces the verify stderr", async () => {
     const exec = async (command) => {
       if (command === "run-it") return { code: 0, killed: false, stdout: "", stderr: "" };
-      return { code: 1, killed: false, stdout: "", stderr: "" }; // verify never succeeds
+      return { code: 1, killed: false, stdout: "", stderr: "  curl: (7) connection refused\n" }; // verify never succeeds
     };
     const actions = [action({ name: "svc", run: "run-it", verify: "curl -f /health", verifyTimeoutMs: 3000, verifyIntervalMs: 1000 })];
 
@@ -196,6 +196,8 @@ describe("runPostMergeActions (#1457)", () => {
 
     assert.equal(result.results[0].status, "failed");
     assert.match(result.results[0].detail, /verify exhausted after 3000ms/);
+    // The actual verify failure reason (trimmed stderr) must be surfaced for debuggability.
+    assert.match(result.results[0].detail, /curl: \(7\) connection refused/);
     assert.equal(result.ok, false);
   });
 
