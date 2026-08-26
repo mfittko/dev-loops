@@ -49,6 +49,7 @@ import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -444,21 +445,10 @@ export function parseWriteGateContextCliArgs(argv) {
       // with no mechanical catch, traceable only through this artifact's own
       // carried-angle provenance.
       const raw = requireTokenValue(token, parseError);
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        throw parseError("--carried-angles must be a JSON array of angle-name strings");
-      }
-      if (!Array.isArray(parsed)) {
-        throw parseError("--carried-angles must be a JSON array of non-empty angle-name strings");
-      }
-      // Element validation shared with resolveFanoutDispatch (issue 1778); the
-      // JSON-array shape is CLI-specific so it stays here, wording unchanged.
-      options.carriedAngles = normalizeCarriedAngleElements(
-        parsed,
-        () => parseError("--carried-angles must be a JSON array of non-empty angle-name strings"),
-      );
+      // Parse shared with consolidate-fanin.mjs's own --carried-angles flag
+      // (issue 1782), so the two CLIs' accepted shape and wording can never
+      // drift.
+      options.carriedAngles = parseCarriedAnglesJsonArray(raw, parseError);
       continue;
     }
     if (token.name === "tmp-root") {
@@ -1674,19 +1664,6 @@ export function hasRenameEntry(nameStatusOutput) {
  * @param {object} options — parsed CLI options shape
  * @returns {object}
  */
-
-// Shared carried-angles element contract (issue 1778). One definition of a valid
-// carried angle — a non-empty-after-trim string — used by BOTH the CLI parse
-// (parseWriteGateContextCliArgs) and the programmatic seam (resolveFanoutDispatch)
-// so the two cannot drift. Each caller supplies its own error via makeError; the
-// element predicate and the trim live only here. Assumes an array (each caller
-// establishes iterability first).
-function normalizeCarriedAngleElements(elements, makeError) {
-  if (elements.some((a) => typeof a !== "string" || a.trim().length === 0)) {
-    throw makeError();
-  }
-  return elements.map((a) => a.trim());
-}
 
 // Programmatic entry contract for resolveFanoutDispatch's carriedAngles: an array
 // or any iterable of angle names. Reject the two silent-corruption inputs the CLI

@@ -115,7 +115,7 @@ export function parsePositiveInteger(value, flag, parseError = null) {
 
 export function parseNonNegativeInteger(value, flag, parseError = null) {
   if (!/^\d+$/.test(value)) {
-    throw toCliError(`${flag} must be a non-negative integer`, parseError);
+    throw toCliError(`${flag} must be a non-negative integer, got "${value}"`, parseError);
   }
   return Number(value);
 }

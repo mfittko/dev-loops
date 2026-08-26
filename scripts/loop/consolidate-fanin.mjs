@@ -58,6 +58,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
@@ -664,17 +665,10 @@ export function parseConsolidateFaninCliArgs(argv) {
       continue;
     }
     if (token.name === "carried-angles") {
-      const raw = requireTokenValue(token, parseError);
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        throw parseError("--carried-angles must be a JSON array of angle-name strings");
-      }
-      if (!Array.isArray(parsed) || parsed.some((a) => typeof a !== "string" || a.trim().length === 0)) {
-        throw parseError("--carried-angles must be a JSON array of non-empty angle-name strings");
-      }
-      options.carriedAngles = parsed.map((a) => a.trim());
+      // Parse shared with write-gate-context.mjs's own --carried-angles flag
+      // (issue 1782), so the two CLIs' accepted shape and wording can never
+      // drift.
+      options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
       continue;
     }
     if (token.name === "carry-forward-plan") {
