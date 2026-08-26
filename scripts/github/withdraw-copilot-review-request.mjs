@@ -57,6 +57,7 @@ import { isCopilotLogin, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "./request-copilot-review.mjs";
@@ -183,20 +184,8 @@ function parseCliArgs(argv) {
   return args;
 }
 
-async function ghJson(runChild, env, ghArgs) {
-  const result = await runChild("gh", ghArgs, env);
-  if (result.code !== 0) {
-    throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
-}
-
 async function fetchCopilotRequested(args, { env, runChild }) {
-  const requested = await ghJson(runChild, env, ["api", `repos/${args.repo}/pulls/${args.pr}/requested_reviewers`]);
+  const requested = await ghJson(["api", `repos/${args.repo}/pulls/${args.pr}/requested_reviewers`], { env, runChild });
   const users = Array.isArray(requested?.users) ? requested.users : [];
   return users.some((user) => isCopilotLogin(user?.login));
 }
@@ -204,9 +193,9 @@ async function fetchCopilotRequested(args, { env, runChild }) {
 async function collectState(args, { env, runChild }) {
   const copilotRequested = await fetchCopilotRequested(args, { env, runChild });
 
-  const pr = await ghJson(runChild, env, [
+  const pr = await ghJson([
     "pr", "view", String(args.pr), "--repo", args.repo, "--json", "headRefOid,reviews",
-  ]);
+  ], { env, runChild });
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
   const submittedCopilotReviews = reviews.filter(
     (review) => isCopilotLogin(review?.author?.login)
@@ -230,13 +219,13 @@ async function collectState(args, { env, runChild }) {
   // missing isResolved as unresolved, so an unfamiliar payload refuses rather
   // than reading as clean.
   const { owner, name } = parseRepoSlug(args.repo);
-  const threadsPayload = await ghJson(runChild, env, [
+  const threadsPayload = await ghJson([
     "api", "graphql",
     "-f", `query=${REVIEW_THREADS_QUERY}`,
     "-F", `owner=${owner}`,
     "-F", `name=${name}`,
     "-F", `pr=${args.pr}`,
-  ]);
+  ], { env, runChild });
   const unresolvedThreadCount = parseReviewThreads(threadsPayload).summary.unresolvedThreads;
 
   return {

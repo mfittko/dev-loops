@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 
 import { buildParseError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson } from "@dev-loops/core/github/gh";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 export const FORBIDDEN_PROSE_PATTERNS = [
@@ -130,15 +131,6 @@ export async function loadTreeFromInput(inputPath) {
   return normalizeTreePayload(parseJsonText(raw));
 }
 
-async function ghApiJson(args, { ghCommand = "gh", env = process.env } = {}) {
-  const result = await runChild(ghCommand, ["api", ...args], env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh api command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout);
-}
-
 export async function loadTreeOnline({ issue, repo, cwd = process.cwd(), ghCommand = "gh", env = process.env }) {
   const resolvedRepo = typeof repo === "string" && repo.trim().length > 0
     ? repo.trim()
@@ -160,9 +152,9 @@ export async function loadTreeOnline({ issue, repo, cwd = process.cwd(), ghComma
       continue;
     }
 
-    const issuePayload = await ghApiJson([
-      `repos/${owner}/${name}/issues/${current.number}`,
-    ], { ghCommand, env });
+    const issuePayload = await ghJson([
+      "api", `repos/${owner}/${name}/issues/${current.number}`,
+    ], { ghCommand, env, label: "gh api command" });
 
     const number = issuePayload?.number;
     if (!Number.isInteger(number) || number <= 0) {
@@ -183,9 +175,9 @@ export async function loadTreeOnline({ issue, repo, cwd = process.cwd(), ghComma
       existing.parentNumber = current.parentNumber;
     }
 
-    const subIssuesPayload = await ghApiJson([
-      `repos/${owner}/${name}/issues/${number}/sub_issues`,
-    ], { ghCommand, env });
+    const subIssuesPayload = await ghJson([
+      "api", `repos/${owner}/${name}/issues/${number}/sub_issues`,
+    ], { ghCommand, env, label: "gh api command" });
 
     const currentIssue = byNumber.get(number);
     const children = [];

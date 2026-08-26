@@ -5,6 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
@@ -115,18 +116,6 @@ export function parseDetectReviewerCliArgs(argv) {
     throw new Error("Provide either --input <path> or --repo <owner/name> --pr <number>");
   }
   return options;
-}
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
 }
 async function fetchPrView({ repo, pr }, deps) {
   const result = await runChild(

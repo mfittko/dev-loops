@@ -1,6 +1,6 @@
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { inspectRun } from "./inspect-run.mjs";
-import { runChild } from "../_cli-primitives.mjs";
+import { ghJson } from "@dev-loops/core/github/gh";
 const ASSIGNED_PR_LIST_CACHE_TTL_MS = 15_000;
 const DEFAULT_UPDATED_WITHIN_DAYS = 7;
 const DEFAULT_RESULT_LIMIT = 25;
@@ -196,17 +196,8 @@ export function normalizeInspectionTarget(target) {
     pr: parsePositivePr(target.pr),
   };
 }
-export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, runGhJsonImpl = null, nowImpl = () => Date.now() } = {}) {
-  const runGhJson = async (args, { env = process.env, ghCommand = "gh" } = {}) => {
-    if (typeof runGhJsonImpl === "function") {
-      return runGhJsonImpl(args, { env, ghCommand });
-    }
-    const result = await runChild(ghCommand, args, env);
-    if (result.code !== 0) {
-      throw new Error(`Command failed: ${ghCommand} ${args.join(" ")}\n${result.stderr.trim() || "(no stderr output)"}`);
-    }
-    return parseGhJsonOutput(result.stdout);
-  };
+export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, runGhJsonImpl = ghJson, nowImpl = () => Date.now() } = {}) {
+  const runGhJson = (args, { env = process.env, ghCommand = "gh" } = {}) => runGhJsonImpl(args, { env, ghCommand });
   const toRepoSlug = (repository) => {
     if (repository === null || typeof repository !== "object") {
       return null;

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 // Severity vocabulary and its most-urgent-first ordering are owned by gate-fanin.
 import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
@@ -752,19 +753,10 @@ export function flattenPaginatedSlurp(payload) {
   return Array.isArray(payload) ? payload : [];
 }
 
-// Shared `gh` invoke-and-parse helper: run a `gh` subcommand, fail loudly on a
-// non-zero exit (naming the command so a failure is traceable back to the
-// call site), and parse its stdout as JSON. Exported so sibling GitHub
-// scripts that only ever need a stdin-less `gh` call (no `--input -` payload)
-// can reuse this instead of re-implementing the same exit-code check.
-export async function runGhJson(args, { env, ghCommand, runChild: run = runChild }) {
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
-}
+// Re-exported so sibling GitHub scripts (close-gate-findings.mjs,
+// _gate-finding-surface.mjs) can keep importing `runGhJson` from here without
+// changing their imports.
+export { runGhJson };
 
 export async function listIssueComments({ repo, pr }, { env, ghCommand, runChild: run }) {
   const payload = await runGhJson(

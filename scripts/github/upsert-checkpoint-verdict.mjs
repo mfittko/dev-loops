@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -1294,14 +1295,6 @@ function detectStaleGateCommentWarning({ strict, headSha, gate }) {
     return null;
   }
   return `A gate comment for \`${gate}\` already exists on a different head SHA \`${strict.headSha}\` (comment ${strict.commentId}). The old comment is stale for the current head.`;
-}
-async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 3).join(" ")}` });
 }
 function parseCommentMutationResponse(payload) {
   const commentId = Number.isInteger(payload?.id) ? payload.id : null;
