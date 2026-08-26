@@ -13,9 +13,11 @@ import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
   buildMainCheckoutFastForwardCommand,
   buildWorktreeCleanupCommand,
+  buildPostMergeActionsCommand,
   WORKTREE_CLEANUP_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
+  POST_MERGE_ACTIONS_TIMEOUT_MS,
 } from '@dev-loops/core/loop/main-checkout-ff';
 
 // The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
@@ -69,6 +71,11 @@ type PostMergeUpdateHookState = {
   updateInFlight: boolean;
   pendingRepoRoot: string | null;
   pendingPrNumber: number | null;
+  // Set on ANY successful merge-capable command in ANY repo (not slug-gated like
+  // pendingPostMergeUpdate, which only tracks the dev-loops self-update flow):
+  // postMerge.actions (#1457) is a consumer-repo opt-in feature, so it must run
+  // for the repo that merged regardless of its slug.
+  pendingPostMergeActionsRoot: string | null;
 };
 
 type CreatePostMergeUpdateHookOptions = {
@@ -168,6 +175,13 @@ async function resolveRepoContextSafe(
   }
 }
 
+function markPendingPostMergeActions(state: PostMergeUpdateHookState, repoContext: RepoContext): void {
+  if (!repoContext.repoRoot) {
+    return;
+  }
+  state.pendingPostMergeActionsRoot ??= repoContext.repoRoot;
+}
+
 async function queueIfEligible(
   state: PostMergeUpdateHookState,
   resolveRepoContext: (cwd: string) => Promise<RepoContext>,
@@ -179,11 +193,20 @@ async function queueIfEligible(
   }
 
   const repoContext = await resolveRepoContextSafe(resolveRepoContext, cwd);
-  if (!repoContext?.repoRoot || repoContext.repoSlug !== TARGET_REPO_SLUG) {
+  if (!repoContext?.repoRoot) {
     return false;
   }
 
-  markPendingUpdate(state, command, repoContext);
+  // postMerge.actions (#1457) runs for the repo that merged regardless of slug.
+  markPendingPostMergeActions(state, repoContext);
+
+  if (repoContext.repoSlug === TARGET_REPO_SLUG) {
+    markPendingUpdate(state, command, repoContext);
+  }
+
+  // A resolved repo root means the caller should still capture the PR number (used
+  // by both the dev-loops update pipeline and postMerge.actions), even for a repo
+  // whose slug doesn't match TARGET_REPO_SLUG.
   return true;
 }
 
@@ -304,6 +327,56 @@ async function removeMergedWorktree(
   }
 }
 
+/**
+ * Run the repo's declared `postMerge.actions` (#1457), for the repo that
+ * merged — regardless of its slug (unlike the dev-loops self-update pipeline,
+ * this is a consumer opt-in feature). Resolves the main checkout the same way
+ * fastForwardMainCheckout/removeMergedWorktree do, then runs the shared
+ * existence-guarded runner command. The runner itself stays silent (no
+ * stdout) when the repo declares no postMerge.actions, so this only notifies
+ * when the runner actually produced output (something ran/skipped/failed) or
+ * genuinely errored — never throws out of `onAgentEnd`.
+ */
+async function runPostMergeActionsForRepo(
+  runCommand: (args: RunCommandArgs) => Promise<RunCommandResult>,
+  pendingRoot: string,
+  prNumber: number | null,
+  ctx: Pick<HarnessContext, 'hasUI' | 'ui'>,
+): Promise<void> {
+  let mainCheckout = pendingRoot;
+  try {
+    const wtResult = await runCommand({
+      command: 'git worktree list',
+      cwd: pendingRoot,
+      timeout: MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
+    });
+    if (wtResult.code === 0 && !wtResult.killed) {
+      const resolved = parseMainWorktreePath(wtResult.stdout ?? '');
+      if (resolved) mainCheckout = resolved;
+    }
+  } catch {
+    // fall back to pendingRoot
+  }
+
+  try {
+    const result = await runCommand({
+      command: buildPostMergeActionsCommand(mainCheckout, prNumber ?? undefined),
+      cwd: mainCheckout,
+      timeout: POST_MERGE_ACTIONS_TIMEOUT_MS,
+    });
+    // Only the runner's own stdout (its final JSON result line) drives notification —
+    // the wrapped command is `... || true`, so a non-zero exit never surfaces here; a
+    // repo with no postMerge.actions produces no stdout at all (stays silent, AC11).
+    const output = trimToNull(result.stdout);
+    if (output) {
+      notify(ctx, `Post-merge actions: ${output}`, 'info');
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    notify(ctx, `Post-merge actions skipped (warning only): ${detail}`, 'warning');
+  }
+}
+
 export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOptions = {}) {
   const exec = options.exec ?? null;
 
@@ -321,6 +394,7 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
     updateInFlight: false,
     pendingRepoRoot: null,
     pendingPrNumber: null,
+    pendingPostMergeActionsRoot: null,
   };
 
   function reset(): void {
@@ -328,6 +402,7 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
     state.updateInFlight = false;
     state.pendingRepoRoot = null;
     state.pendingPrNumber = null;
+    state.pendingPostMergeActionsRoot = null;
   }
 
   return {
@@ -347,6 +422,8 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       if (!command || event.isError) {
         return;
       }
+      // `pending`: a merge-capable command whose repo root resolved (any slug) — used
+      // by both the dev-loops update pipeline and postMerge.actions (#1457).
       const pending = await queueIfEligible(state, resolveRepoContext, command, ctx.cwd);
       if (pending) {
         const pr = extractPrNumberFromGhPrMergeAnywhere(command);
@@ -465,6 +542,7 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
 
         if (result.code === 0 && !result.killed) {
           markPendingUpdate(state, event.command, repoContext);
+          markPendingPostMergeActions(state, repoContext);
           const pr = extractPrNumberFromGhPrMergeAnywhere(event.command);
           if (pr !== null) state.pendingPrNumber = pr;
         }
@@ -491,7 +569,9 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
     },
 
     async onAgentEnd(_event: unknown, ctx: Pick<HarnessContext, 'cwd' | 'hasUI' | 'ui'>): Promise<void> {
-      if (!state.pendingPostMergeUpdate || state.updateInFlight) {
+      const shouldRunUpdate = state.pendingPostMergeUpdate;
+      const actionsRoot = state.pendingPostMergeActionsRoot;
+      if ((!shouldRunUpdate && !actionsRoot) || state.updateInFlight) {
         return;
       }
 
@@ -500,41 +580,57 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       const pendingRoot = state.pendingRepoRoot ?? ctx.cwd;
 
       state.updateInFlight = true;
-      notify(ctx, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+
+      if (shouldRunUpdate) {
+        notify(ctx, `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+
+        try {
+          const result = await runCommand({
+            command: POST_MERGE_UPDATE_COMMAND,
+            cwd: pendingRoot,
+            timeout: POST_MERGE_UPDATE_TIMEOUT_MS,
+          });
+
+          if (result.code === 0 && !result.killed) {
+            notify(ctx, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
+          } else {
+            notify(
+              ctx,
+              `Post-merge update failed (warning only): ${buildFailureSummary(result)}`,
+              'warning',
+            );
+          }
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          notify(ctx, `Post-merge update failed (warning only): ${detail}`, 'warning');
+        }
+      }
 
       try {
-        const result = await runCommand({
-          command: POST_MERGE_UPDATE_COMMAND,
-          cwd: pendingRoot,
-          timeout: POST_MERGE_UPDATE_TIMEOUT_MS,
-        });
-
-        if (result.code === 0 && !result.killed) {
-          notify(ctx, `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, 'info');
-        } else {
-          notify(
-            ctx,
-            `Post-merge update failed (warning only): ${buildFailureSummary(result)}`,
-            'warning',
-          );
+        if (shouldRunUpdate) {
+          // Best-effort main-checkout fast-forward (#1596): the dev-loop merges remotely
+          // but never fast-forwarded the main checkout's local main, so read-only gate
+          // scripts ran stale code. Never throw out of onAgentEnd; reset() must still run.
+          await fastForwardMainCheckout(runCommand, pendingRoot, ctx).catch((error) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            notify(ctx, `Post-merge main-checkout fast-forward skipped (warning only): ${detail}`, 'warning');
+          });
+          // Post-merge worktree removal (#1627): remove the merged branch's worktree from
+          // the main checkout, non-fatal (never throws out of onAgentEnd).
+          await removeMergedWorktree(runCommand, pendingRoot, state.pendingPrNumber, ctx).catch((error) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            notify(ctx, `Post-merge worktree cleanup skipped (warning only): ${detail}`, 'warning');
+          });
         }
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        notify(ctx, `Post-merge update failed (warning only): ${detail}`, 'warning');
+        if (actionsRoot) {
+          // postMerge.actions (#1457): runs for the repo that merged regardless of
+          // slug, independently of the dev-loops-only update/FF/cleanup pipeline above.
+          await runPostMergeActionsForRepo(runCommand, actionsRoot, state.pendingPrNumber, ctx).catch((error) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            notify(ctx, `Post-merge actions skipped (warning only): ${detail}`, 'warning');
+          });
+        }
       } finally {
-        // Best-effort main-checkout fast-forward (#1596): the dev-loop merges remotely
-        // but never fast-forwarded the main checkout's local main, so read-only gate
-        // scripts ran stale code. Never throw out of onAgentEnd; reset() must still run.
-        await fastForwardMainCheckout(runCommand, pendingRoot, ctx).catch((error) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          notify(ctx, `Post-merge main-checkout fast-forward skipped (warning only): ${detail}`, 'warning');
-        });
-        // Post-merge worktree removal (#1627): remove the merged branch's worktree from
-        // the main checkout, non-fatal (never throws out of onAgentEnd).
-        await removeMergedWorktree(runCommand, pendingRoot, state.pendingPrNumber, ctx).catch((error) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          notify(ctx, `Post-merge worktree cleanup skipped (warning only): ${detail}`, 'warning');
-        });
         reset();
       }
     },

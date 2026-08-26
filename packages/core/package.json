@@ -63,6 +63,7 @@
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
     "./loop/run-context": "./src/loop/run-context.mjs",
     "./loop/run-inspection": "./src/loop/run-inspection.mjs",
+    "./loop/run-post-merge-actions": "./src/loop/run-post-merge-actions.mjs",
     "./loop/spike-exit-contract": "./src/loop/spike-exit-contract.mjs",
     "./loop/spike-intake-contract": "./src/loop/spike-intake-contract.mjs",
     "./loop/steering": "./src/loop/steering.mjs",

@@ -15,7 +15,7 @@ import {
   extractRepoFlagFromGhPrReady,
   normalizeGitHubRepoSlug,
 } from "../extension/post-merge-update.ts";
-import { buildMainCheckoutFastForwardCommand, buildWorktreeCleanupCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
+import { buildMainCheckoutFastForwardCommand, buildWorktreeCleanupCommand, buildPostMergeActionsCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
 
 function createUiCalls() {
   const notifications = [];
@@ -102,6 +102,8 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildPostMergeActionsCommand("/repo", 373), cwd: "/repo" },
   ]);
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
@@ -109,11 +111,12 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
     { message: "Post-merge main-checkout fast-forward completed: local main advanced to origin/main", level: "info" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
+    { message: "Post-merge actions: updated", level: "info" },
   ]);
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
 
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 7);
 });
 
 test("successful user_bash git merge queues and flushes one update", async () => {
@@ -147,6 +150,8 @@ test("successful user_bash git merge queues and flushes one update", async () =>
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildPostMergeActionsCommand("/repo", undefined), cwd: "/repo" },
   ]);
 });
 
@@ -200,6 +205,75 @@ test("non-merge commands and non-target repos never trigger the update", async (
   assert.equal(result, undefined);
   assert.deepEqual(calls, []);
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
+});
+
+// --- postMerge.actions: runs for the repo that merged, regardless of slug (#1457) ---
+
+test("postMerge.actions runs for a consumer repo via the agent bash tool, while pi-update stays gated to dev-loops", async () => {
+  const calls = [];
+  const runnerResult = { ok: true, results: [{ name: "sync-checkout", status: "ok", detail: null }] };
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "other/repo" }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: JSON.stringify(runnerResult), stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 55 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  assert.equal(hook.getState().pendingPostMergeUpdate, false, "pi-update stays gated to the dev-loops repo");
+  assert.equal(hook.getState().pendingPostMergeActionsRoot, "/repo");
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  assert.deepEqual(calls, [
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildPostMergeActionsCommand("/repo", 55), cwd: "/repo" },
+  ]);
+  assert.deepEqual(notifications, [
+    { message: `Post-merge actions: ${JSON.stringify(runnerResult)}`, level: "info" },
+  ]);
+  assert.equal(hook.getState().pendingPostMergeActionsRoot, null);
+});
+
+test("postMerge.actions stays silent when the runner produces no output (no postMerge.actions declared)", async () => {
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "other/repo" }),
+    runCommand: async () => ({ code: 0, stdout: "", stderr: "", killed: false }),
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({ toolName: "bash", input: { command: "gh pr merge 55" }, isError: false }, ctx);
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  assert.deepEqual(notifications, []);
+});
+
+test("postMerge.actions runner failure is a warning, never throws out of onAgentEnd", async () => {
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "other/repo" }),
+    runCommand: async ({ command }) => {
+      if (command === "git worktree list") return { code: 0, stdout: "", stderr: "", killed: false };
+      throw new Error("runner spawn failed");
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({ toolName: "bash", input: { command: "gh pr merge 55" }, isError: false }, ctx);
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  assert.deepEqual(notifications, [
+    { message: "Post-merge actions skipped (warning only): runner spawn failed", level: "warning" },
+  ]);
 });
 
 
@@ -265,6 +339,8 @@ test("multiple merge signals in one turn still run only one update", async () =>
     { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
+    { command: "git worktree list", cwd: "/repo" },
+    { command: buildPostMergeActionsCommand("/repo", 373), cwd: "/repo" },
   ]);
 });
 

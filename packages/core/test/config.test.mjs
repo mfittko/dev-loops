@@ -50,6 +50,7 @@ import {
   resolveBaseBranch,
   resolveTrackerProvider,
   resolveTrackerBoard,
+  resolvePostMergeActions,
 } from "../src/config/config.mjs";
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -543,6 +544,107 @@ describe("schema validation", () => {
       version: 1,
       uiReview: { serverLogExceptionPattern: "[" },
     }).success);
+  });
+
+  // postMerge.actions (#1457): a repo's local post-merge hook actions.
+  test("S36b: postMerge.actions with only name+run parses, applying default timeouts", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "git pull" }] },
+    });
+    assert.ok(result.success);
+    const [action] = result.data.postMerge.actions;
+    assert.equal(action.name, "sync-checkout");
+    assert.equal(action.run, "git pull");
+    assert.equal(action.onlyIfChanged, undefined);
+    assert.equal(action.verify, undefined);
+    assert.equal(action.timeoutMs, 120000);
+    assert.equal(action.verifyTimeoutMs, 60000);
+    assert.equal(action.verifyIntervalMs, 2000);
+  });
+
+  test("S36c: postMerge.actions with the full optional shape parses", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: {
+        actions: [
+          {
+            name: "restart-service",
+            run: "make restart",
+            onlyIfChanged: ["src/", "config/"],
+            verify: "curl -sf http://localhost:3000/health",
+            timeoutMs: 30000,
+            verifyTimeoutMs: 15000,
+            verifyIntervalMs: 1000,
+          },
+        ],
+      },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S36d: postMerge.actions rejects an action missing name or run", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ run: "git pull" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "", run: "git pull" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "" }] },
+    }).success);
+  });
+
+  test("S36e: postMerge.actions rejects an empty-string onlyIfChanged pattern", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "git pull", onlyIfChanged: [""] }] },
+    }).success);
+  });
+
+  test("S36f: postMerge.actions rejects a timeoutMs/verifyTimeoutMs/verifyIntervalMs past the ceiling or non-positive", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", timeoutMs: 600001 }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", verifyTimeoutMs: 0 }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", verifyIntervalMs: 60001 }] },
+    }).success);
+  });
+
+  test("S36g: an unknown key inside postMerge or a postMerge action is rejected", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [], unknownKey: true },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", unknownKey: true }] },
+    }).success);
+  });
+
+  test("S36h: a config without postMerge still parses exactly as before", () => {
+    const result = DevLoopConfigSchema.safeParse({ version: 1 });
+    assert.ok(result.success);
+    assert.equal(result.data.postMerge, undefined);
+  });
+
+  test("S36i: FileConfigSchema accepts postMerge.actions the same as DevLoopConfigSchema", () => {
+    const config = { version: 1, postMerge: { actions: [{ name: "sync-checkout", run: "git pull" }] } };
+    assert.ok(FileConfigSchema.safeParse(config).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, postMerge: { actions: [{ run: "git pull" }] } }).success);
   });
 
   // gates.size (fail-closed PR size/tier budget, Phase 1 — check-size-budget.mjs's
@@ -5580,4 +5682,81 @@ test("gates.fanout.sequential: a .devloops merging it loads cleanly through the 
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+describe("resolvePostMergeActions (#1457)", () => {
+  test("absent postMerge resolves to an empty array", () => {
+    assert.deepEqual(resolvePostMergeActions({ version: 1 }), []);
+    assert.deepEqual(resolvePostMergeActions(undefined), []);
+  });
+
+  test("resolves a full action verbatim, applying defaults for absent optional timing fields", () => {
+    const config = {
+      version: 1,
+      postMerge: { actions: [{ name: "  sync-checkout  ", run: "  git pull  " }] },
+    };
+    assert.deepEqual(resolvePostMergeActions(config), [
+      {
+        name: "sync-checkout",
+        run: "git pull",
+        onlyIfChanged: null,
+        verify: null,
+        timeoutMs: 120000,
+        verifyTimeoutMs: 60000,
+        verifyIntervalMs: 2000,
+      },
+    ]);
+  });
+
+  test("passes through onlyIfChanged, verify, and explicit timeouts unchanged", () => {
+    const config = {
+      version: 1,
+      postMerge: {
+        actions: [
+          {
+            name: "restart-service",
+            run: "make restart",
+            onlyIfChanged: ["src/", "config/"],
+            verify: "curl -sf http://localhost:3000/health",
+            timeoutMs: 30000,
+            verifyTimeoutMs: 15000,
+            verifyIntervalMs: 1000,
+          },
+        ],
+      },
+    };
+    assert.deepEqual(resolvePostMergeActions(config), [
+      {
+        name: "restart-service",
+        run: "make restart",
+        onlyIfChanged: ["src/", "config/"],
+        verify: "curl -sf http://localhost:3000/health",
+        timeoutMs: 30000,
+        verifyTimeoutMs: 15000,
+        verifyIntervalMs: 1000,
+      },
+    ]);
+  });
+
+  test("preserves declared order across multiple actions", () => {
+    const config = {
+      version: 1,
+      postMerge: {
+        actions: [
+          { name: "a", run: "run-a" },
+          { name: "b", run: "run-b" },
+          { name: "c", run: "run-c" },
+        ],
+      },
+    };
+    assert.deepEqual(resolvePostMergeActions(config).map((a) => a.name), ["a", "b", "c"]);
+  });
+
+  test("filters out a malformed action (blank name/run) rather than throwing", () => {
+    const config = {
+      version: 1,
+      postMerge: { actions: [{ name: "", run: "git pull" }, { name: "ok", run: "git pull" }] },
+    };
+    assert.deepEqual(resolvePostMergeActions(config).map((a) => a.name), ["ok"]);
+  });
 });

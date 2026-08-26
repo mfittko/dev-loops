@@ -95,3 +95,37 @@ export function buildWorktreeCleanupCommand(mainCheckout, prNumber) {
   // non-fatal with `|| true` — removal must never break a merge-completion flow.
   return `if [ -f ${script} ]; then node ${script} --repo-root ${quotedMain} --pr "${pr}"; fi || true`;
 }
+
+/**
+ * Overall timeout (ms) for the post-merge actions runner invocation. Generous:
+ * the runner itself bounds each declared action by its own timeoutMs/verify
+ * budget (each individually capped at the config-schema ceiling), and this is
+ * only the outer harness-hook guard against a runner that never returns.
+ */
+export const POST_MERGE_ACTIONS_TIMEOUT_MS = 900_000;
+
+/**
+ * Build the best-effort `postMerge.actions` runner command (#1457): the shared,
+ * dependency-free command string both harness hooks (Pi `post-merge-update`,
+ * Claude `post-tool-use-merge`) run after a successful merge, for the repo that
+ * merged. Existence-guarded (a checkout without the runner script is a silent
+ * no-op) and non-fatal (`|| true` — a runner failure must never break a
+ * merge-completion flow; the runner itself reports per-action failures in its
+ * own JSON result). `mainCheckout` and the script path are POSIX
+ * single-quoted; `prNumber` (when a valid positive integer) is passed as a
+ * double-quoted `--pr` argument — never interpolated into `run`/`verify`
+ * command strings, which the runner executes verbatim from the repo's own
+ * `.devloops`.
+ *
+ * @param {string} mainCheckout - Absolute path to the main (primary) git checkout.
+ * @param {string | number | undefined} [prNumber] - Merged PR number, when known.
+ * @returns {string} the runner command (always non-empty; a missing PR number
+ *   just omits `--pr`, since `onlyIfChanged` scoping bypasses cleanly without one).
+ */
+export function buildPostMergeActionsCommand(mainCheckout, prNumber) {
+  const quotedMain = shellQuotePath(mainCheckout);
+  const script = shellQuotePath(path.join(mainCheckout, "scripts", "loop", "run-post-merge-actions.mjs"));
+  const pr = String(prNumber ?? "").trim();
+  const prArg = /^[0-9]+$/u.test(pr) ? ` --pr "${pr}"` : "";
+  return `if [ -f ${script} ]; then node ${script} --repo-root ${quotedMain}${prArg}; fi || true`;
+}

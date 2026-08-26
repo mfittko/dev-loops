@@ -138,6 +138,7 @@ Key surfaces:
 - **Gates** — per-gate `requireCi` CI-precondition toggle (`gates.draft.requireCi`, `gates.preApproval.requireCi`; default `true`). Set a gate's `requireCi: false` to opt that gate out of the CI precondition — e.g. a repo with no CI can run the loop end-to-end instead of blocking at the gate.
 - **Refinement** — fan-out count and mode for parallel review variants; `refinement.maxCopilotRounds` caps Copilot re-review rounds (default `5`). Set `maxCopilotRounds: 0` to disable the Copilot gate entirely — local-harness-only review (`draft_gate → pre_approval_gate`), useful when the repo has no Copilot reviewer configured.
 - **UI review** — the `uiReview` surface configures the `/loop-review-ui` route (per-project run/boot command, login recipe, log/exception patterns)
+- **Post-merge actions** — `postMerge.actions` declares local actions (sync checkout, restart a local service, smoke check) a harness hook runs sequentially, in order, after the dev-loop's merge succeeds. Each action needs `name` + `run`; optional `onlyIfChanged` scopes it to the merged PR's changed files (plain substring matching, not a glob/regex — a pattern matches when any changed file path *contains* it), `verify` polls a command until it exits 0, and `timeoutMs`/`verifyTimeoutMs`/`verifyIntervalMs` bound the run/verify/poll timing. Absent (the default) means no action runs. See `packages/core/src/loop/run-post-merge-actions.mjs` for the runner and `scripts/loop/run-post-merge-actions.mjs` for the CLI both harness hooks invoke.
 - **Autonomy** — which gates require operator confirmation
 - **Workflow defaults** — retrospective enforcement, draft-first posture, dev-mode policy
 
@@ -147,7 +148,7 @@ Full details: the shipped defaults in `packages/core/src/config/extension-defaul
 
 From **1.0**, `dev-loops` follows [semantic versioning](https://semver.org/) for its public surface — breaking changes to it bump the major version:
 
-- **The `.devloops` configuration surface** — gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, `uiReview.*`, `autonomy.*`, and `workflow.*`. The authoritative validator is the config loader in `packages/core/src/config/config.mjs`; `schemas/dev-loop-config.schema.json` is generated from it (`node scripts/generate-config-schema.mjs`) and covers the full file-level surface — only cross-field refinements stay zod-only.
+- **The `.devloops` configuration surface** — gate angles, personas, `gates.*` (including each gate's `requireCi` toggle and `gates.preApproval.requireCi`), `refinement.*`, `uiReview.*`, `postMerge.*`, `autonomy.*`, and `workflow.*`. The authoritative validator is the config loader in `packages/core/src/config/config.mjs`; `schemas/dev-loop-config.schema.json` is generated from it (`node scripts/generate-config-schema.mjs`) and covers the full file-level surface — only cross-field refinements stay zod-only.
 - **The public `dev-loop` command and skill surface** — the natural-language `dev-loop` router and the named `/loop-*` entrypoints.
 - **The routing contract** — the [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md).
 

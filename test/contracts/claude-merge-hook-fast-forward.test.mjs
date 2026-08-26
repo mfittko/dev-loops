@@ -180,3 +180,89 @@ test("post-tool-use-merge hook runs post-merge worktree cleanup for the merged P
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("post-tool-use-merge hook invokes the postMerge.actions runner for the merged PR when it exists (#1457)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-post-merge-actions-hook-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+
+    // The runner script exists in this main checkout; the hook must invoke it, running
+    // from the main checkout, and print its stdout as its own stderr note.
+    const scriptPath = path.join(mainDir, "scripts", "loop", "run-post-merge-actions.mjs");
+    await mkdir(path.dirname(scriptPath), { recursive: true });
+    const runLog = path.join(tmp, "actions.log");
+    await writeFile(
+      scriptPath,
+      `import fs from "node:fs";const a=process.argv.slice(2);` +
+        `fs.writeFileSync(${JSON.stringify(runLog)}, a.join(" "));` +
+        `process.stdout.write(JSON.stringify({ok:true,results:[{name:"sync",status:"ok",detail:null}]}));\n`,
+      { mode: 0o755 },
+    );
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    // Mutation anchor: if the postMerge.actions block in post-tool-use-merge.mjs is
+    // reverted, the runner is never invoked and this assertion fails.
+    const argv = execFileSync("cat", [runLog], { encoding: "utf8" }).trim();
+    assert.ok(argv.includes("--repo-root"), `expected --repo-root, got: ${argv}`);
+    assert.ok(argv.includes(mainDir), `expected the main checkout path (${mainDir}), got: ${argv}`);
+    assert.ok(argv.includes("--pr 42"), `expected --pr 42, got: ${argv}`);
+    assert.match(res.stderr, /post-merge actions: /, "hook must relay the runner's stdout");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook is a silent no-op for postMerge.actions when the runner script is absent (#1457)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-post-merge-actions-noop-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    // No scripts/loop/run-post-merge-actions.mjs in this checkout.
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.doesNotMatch(res.stderr, /post-merge actions/, "a checkout without the runner script must produce zero new log lines");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
