@@ -1008,6 +1008,90 @@ test("reply-resolve-review-threads posts a distinct mapped reply body per thread
   }
 });
 
+test("reply-resolve-review-threads --message-map --resolve pins true matched/replied/resolved counts across a multi-thread run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-resolve-counts-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_3",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_303", databaseId: 303, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        stdout: '{"id":3001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3001"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_1"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_1","isResolved":true}}}}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
+        stdout: '{"id":3002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3002"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_2"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_2","isResolved":true}}}}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/303/replies"],
+        stdout: '{"id":3003,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3003"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_3"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_3","isResolved":true}}}}\n',
+      },
+      {
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_1", isResolved: true, comments: { nodes: [] } },
+          { id: "THREAD_2", isResolved: true, comments: { nodes: [] } },
+          { id: "THREAD_3", isResolved: true, comments: { nodes: [] } },
+        ]),
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, {
+      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
+      THREAD_3: "Fixed the missing await in file-c.mjs in 93cd7f8.",
+    });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath, "--resolve"],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 3);
+    assert.equal(parsed.repliedThreadCount, 3);
+    assert.equal(parsed.resolvedThreadCount, 3);
+    assert.equal(parsed.results.length, 3);
+    assert.equal(parsed.matchedThreadCount, parsed.results.length);
+    assert.equal(parsed.repliedThreadCount, parsed.results.length);
+    assert.equal(parsed.resolvedThreadCount, parsed.results.length);
+    assert.ok(parsed.results.every((entry) => entry.resolved === true));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("reply-resolve-review-threads sanitizes Copilot summon tokens in --message-map bodies exactly like --message", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-sanitize-"));
 
