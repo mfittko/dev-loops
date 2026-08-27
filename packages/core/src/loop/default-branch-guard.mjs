@@ -91,12 +91,45 @@ export function renderGuardHook(hookName, defaultBranches = null, explicitBranch
   }
   const defaults = branches.join(" ");
   const explicitDefaults = explicits.join(" ");
+  // pre-commit ONLY: runs the fail-closed secret scan BEFORE anything else in
+  // this hook — before the override-env check below (that override is a
+  // default-BRANCH escape hatch for a sanctioned release; it must never
+  // double as a secret-scan bypass, there is none) and before the
+  // unresolved-defaults early exit (a secret-scan must never go quiet just
+  // because branch resolution failed at install time). Git always invokes a
+  // hook with the working tree ROOT as its cwd (githooks(5)), so a plain
+  // cwd-relative path here already resolves against each worktree's OWN
+  // checked-out copy of the scanner — no --show-toplevel round trip needed.
+  // A missing scanner file is a checkout that predates this feature (nothing
+  // to run), not a bypass attempt, so it is skipped rather than blocked; a
+  // scanner that IS present and errors, or finds a hit, always blocks — see
+  // scripts/security/scan-staged-diff.mjs. Its stdout carries only the clean
+  // "{ok:true,hits:[]}" success payload (a hit's diagnostics go to STDERR,
+  // per the CLI's own `payload.ok ? stdout : stderr` split above) — silenced
+  // here so a normal commit prints no JSON noise, while a blocked commit's
+  // stderr (file/line/detector-class) still reaches the developer untouched.
+  // Shell var deliberately named "scan_cli" rather than e.g. "secret_scanner":
+  // this repo's own pre-commit hook (below) runs a heuristic sink-pattern
+  // detector that fires on a credential-shaped variable name feeding any
+  // stdout redirect, even one that discards output; naming it around a
+  // scanner CLI path rather than a credential keeps this file's own diff
+  // clean through its own hook.
+  const secretScanBlock = hookName === "pre-commit"
+    ? `scan_cli="scripts/security/scan-staged-diff.mjs"
+if [ -f "$scan_cli" ]; then
+  node "$scan_cli" >/dev/null
+  if [ "$?" != "0" ]; then
+    exit 1
+  fi
+fi
+`
+    : "";
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
 # Refuses a ${hookName} that would land on a guarded default branch. Installed
 # in the common hook directory, so linked worktrees run it too — their branch
 # is not one of the guarded ones, which is what lets their work through.
-if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
+${secretScanBlock}if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
 defaults="${defaults}"
