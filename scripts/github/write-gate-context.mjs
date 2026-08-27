@@ -73,14 +73,18 @@ export function mapGateToConfigKey(gate) {
  * review; it always sees the full union), never resolveGateAnglesDynamic.
  *
  * `acceptance-criteria` is dropped from that union (with a rationale entry,
- * reason "no spec-of-record") when the PR carries no spec-of-record at all —
- * it closes no issue AND its own body carries no AC checklist. It is kept
- * when either is true: a linked issue is presumed to carry the real spec even
- * when its body could not be classified, and a PR that inlines its own AC
- * checklist is its own spec-of-record.
+ * reason "no spec-of-record") only when both facts are DEFINITIVELY known
+ * false — it closes no issue AND its own body carries no AC checklist. It is
+ * kept when either is true: a linked issue is presumed to carry the real spec
+ * even when its body could not be classified, and a PR that inlines its own
+ * AC checklist is its own spec-of-record. `hasClosingIssue` is `undefined`
+ * (not `false`) when the caller never queried GitHub — e.g. `--prefix-file`
+ * mode, which never touches GitHub — and an unknown fact must never be
+ * coerced to "false": we cannot prove there is no spec-of-record, so this
+ * fails CLOSED and keeps acceptance-criteria.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
- * @param {{ hasClosingIssue: boolean, hasAcChecklist: boolean }} facts
+ * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
  * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
@@ -88,8 +92,10 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
     ...(resolveGateAngles(config, "draft") ?? []),
     ...(resolveGateAngles(config, "preApproval") ?? []),
   ])];
-  const hasSpecOfRecord = hasClosingIssue === true || hasAcChecklist === true;
-  const dropAcceptanceCriteria = !hasSpecOfRecord && union.includes("acceptance-criteria");
+  // Definitively-false, not merely falsy: `undefined` (unknown) must not
+  // collapse into the same branch as a real "no" answer from GitHub.
+  const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
+  const dropAcceptanceCriteria = provablyNoSpecOfRecord && union.includes("acceptance-criteria");
   return {
     recommendedAngles: dropAcceptanceCriteria ? union.filter((a) => a !== "acceptance-criteria") : union,
     skippedAngles: dropAcceptanceCriteria ? ["acceptance-criteria"] : [],
@@ -2554,7 +2560,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // looked at the labels can never grant the reduced tier on a labelled PR.
   const resolverResult = isReviewGate
     ? resolveReviewGateAngles(input.config, {
-        hasClosingIssue: input.hasClosingIssue === true,
+        // Pass through verbatim — undefined means "never queried GitHub"
+        // (e.g. --prefix-file mode) and must reach the resolver as undefined,
+        // not be coerced to false, so it fails closed (keeps
+        // acceptance-criteria) rather than fail-open (drops it).
+        hasClosingIssue: input.hasClosingIssue,
         hasAcChecklist: detectIssueRefinementArtifact({ body: input.prBody ?? "" }).hasACs,
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
@@ -2969,8 +2979,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // resolveGateAnglesDynamic.
       let resolverResult;
       if (options.gate === "review") {
+        // Pass through verbatim — see buildGateContext's identical call for
+        // why undefined (never queried GitHub, e.g. --prefix-file mode) must
+        // not be coerced to false here.
         resolverResult = resolveReviewGateAngles(config, {
-          hasClosingIssue: options.hasClosingIssue === true,
+          hasClosingIssue: options.hasClosingIssue,
           hasAcChecklist: detectIssueRefinementArtifact({ body: options.prBody ?? "" }).hasACs,
         });
       } else {

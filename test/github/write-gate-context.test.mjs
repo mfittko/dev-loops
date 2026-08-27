@@ -641,6 +641,23 @@ test("resolveReviewGateAngles DROPS acceptance-criteria (with a \"no spec-of-rec
   assert.deepEqual(result.reasons, { "acceptance-criteria": "no spec-of-record" });
 });
 
+// #1839 Copilot round 1: --prefix-file mode never queries GitHub, so
+// options.hasClosingIssue is `undefined` (unknown), not `false` (a real "no"
+// answer). Coercing unknown to false would fail OPEN (drop a review angle we
+// cannot prove should be dropped). This must fail CLOSED: keep
+// acceptance-criteria, and record no "no spec-of-record" rationale, since we
+// never proved there is no spec-of-record.
+test("resolveReviewGateAngles KEEPS acceptance-criteria (no drop, no rationale) when hasClosingIssue is UNKNOWN (undefined, e.g. --prefix-file mode never queried GitHub)", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria"],
+    preApprovalAngles: ["docs"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: undefined, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "docs"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.deepEqual(result.reasons, {});
+});
+
 test("resolveReviewGateAngles KEEPS acceptance-criteria when the PR closes an issue (even with no AC checklist in its own body)", () => {
   const config = reviewAnglesConfig({
     draftAngles: ["correctness", "acceptance-criteria"],
