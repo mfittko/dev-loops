@@ -13,13 +13,13 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
-const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
+import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
+const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
   --repo <owner/name>
   --pr <number>
-  --gate <draft_gate|pre_approval_gate>
+  --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
@@ -382,7 +382,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     }
     if (token.name === "gate") {
       const gate = normalizeGate(requireTokenValue(token, parseError));
-      if (!gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
+      if (!gate) throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       options.gate = gate;
       continue;
     }

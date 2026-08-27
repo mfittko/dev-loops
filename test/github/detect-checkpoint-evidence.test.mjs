@@ -26,11 +26,13 @@ import test from "node:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
@@ -157,6 +159,107 @@ test("summarizeGateReviewComments keeps the newest valid comment for each gate",
   assert.equal(summary.draft_gate?.headSha, "abc1234");
   assert.equal(summary.pre_approval_gate?.commentId, 12);
   assert.equal(summary.pre_approval_gate?.nextAction, "await final human approval");
+});
+
+// #1808 AC3: a `review` verdict is a THIRD, non-evidence gate — it must never
+// satisfy draft_gate or pre_approval_gate evidence. `review` IS a recognized
+// gate header (RECOGNIZED_GATE_NAMES in packages/core/src/github/
+// copilot-helpers.mjs) — recognized, not absent — and parseGateReviewCommentFields
+// explicitly short-circuits to null the instant its header identifies the
+// gate as `review`, before the lenient draft_gate/pre_approval_gate
+// token-scan fallback ever runs. Absence would have left the fallback free
+// to misread findings text that merely mentions "draft_gate" as real
+// evidence (see the regression test below).
+test("summarizeGateReviewComments ignores a review-gate comment (#1808 AC3: review carries no draft/pre-approval evidence)", () => {
+  const summary = summarizeGateReviewComments([
+    {
+      id: 20,
+      body: [
+        "Gate review: review",
+        "Reviewed head SHA: abc1234",
+        "Verdict: clean",
+        "Findings summary: no issues found",
+        "Next action: none — informational review, no re-gate required",
+      ].join("\n"),
+      updated_at: "2026-05-29T23:00:00Z",
+    },
+  ]);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+});
+
+// End-to-end proof against the REAL renderer (upsert-checkpoint-verdict.mjs's
+// own renderGateReviewCommentBody), including the gate-findings-review marker
+// a --findings-ledger round renders: the whole comment is excluded even
+// before field parsing (isGateMachineArtifactBody: true, since the raw
+// marker-bearing body carries no genuine gate verdict header per
+// GATE_REVIEW_COMMENT_HEADER_RE — that regex recognizes only draft_gate/
+// pre_approval_gate, so a review render with a marker is never mistaken for
+// the SAME surface's own verdict), and a PR carrying ONLY this comment
+// reports no draft_gate/pre_approval_gate evidence either way.
+test("a real review-gate verdict comment (with a findings-review marker) never satisfies draft_gate/pre_approval_gate evidence (#1808 AC3)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "none — informational review, no re-gate required",
+    round: 1,
+  });
+  assert.equal(isGateMachineArtifactBody(body), true);
+  const comments = [{ id: 21, body, updated_at: "2026-05-29T23:30:00Z" }];
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+  const markerSummary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(markerSummary.draft_gate, null);
+  assert.equal(markerSummary.pre_approval_gate, null);
+});
+
+// Regression (#1808 HIGH, draft-gate bypass): the bare `upsert-checkpoint-verdict
+// --gate review` path (no --findings-ledger) never renders the
+// gate-findings-review marker, so isGateMachineArtifactBody does NOT exclude
+// it — the body reaches parseGateReviewCommentFields on its structured-field
+// merits alone. Before the fix, a `review` header normalized to null (not
+// recognized), so the parser fell through to the lenient whole-body
+// draft_gate/pre_approval_gate token scan; a clean `review` verdict whose
+// findings text merely MENTIONED "draft_gate" (a plausible thing to say when
+// reporting on this very mechanism) was then recorded as real draft_gate
+// evidence — a draft-gate bypass. The fix recognizes `review` as an
+// identified, non-evidence gate and returns null before that scan ever runs.
+test("a marker-less review-gate verdict comment whose findings text mentions draft_gate/pre_approval_gate is never recorded as evidence (#1808 HIGH regression)", () => {
+  const draftGateMentionBody = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "confirmed this PR never bypasses draft_gate evidence",
+    nextAction: "none — informational review, no re-gate required",
+  });
+  // No --findings-ledger round was supplied, so no marker is rendered — the
+  // exact bare-path shape the HIGH describes.
+  assert.equal(isGateMachineArtifactBody(draftGateMentionBody), false);
+
+  const preApprovalGateMentionBody = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "def5678",
+    verdict: "clean",
+    findingsSummary: "confirmed this PR never bypasses pre_approval_gate evidence",
+    nextAction: "none — informational review, no re-gate required",
+  });
+  assert.equal(isGateMachineArtifactBody(preApprovalGateMentionBody), false);
+
+  const comments = [
+    { id: 30, body: draftGateMentionBody, updated_at: "2026-05-29T23:40:00Z" },
+    { id: 31, body: preApprovalGateMentionBody, updated_at: "2026-05-29T23:41:00Z" },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+
+  const markerSummary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(markerSummary.draft_gate, null);
+  assert.equal(markerSummary.pre_approval_gate, null);
 });
 
 test("summarizeGateReviewCommentMarkers can target the newest marker for the current gate+head pair", () => {

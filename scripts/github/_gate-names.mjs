@@ -2,7 +2,13 @@
 // across the gate-review tooling. Imported by write-gate-context.mjs (artifact
 // gate validation) and verify-briefing-prefixes.mjs (wrong-gate scope check) so
 // the two can never drift.
-export const GATE_NAMES = ["draft_gate", "pre_approval_gate"];
+//
+// `review` (#1808) is a THIRD, standalone gate: reachable on any PR with NO
+// gate obligations (it never blocks merge/ready, never satisfies draft_gate or
+// pre_approval_gate evidence, and carries no config section of its own — see
+// resolveReviewGateAngles in write-gate-context.mjs and the deliberate absence
+// of a "review" entry in GATE_CONFIG_KEY, @dev-loops/core/loop/gate-fanin).
+export const GATE_NAMES = ["draft_gate", "pre_approval_gate", "review"];
 
 // Canonical gate-verdict vocabulary — the single source of truth shared by
 // every gate-review script that parses/validates a --verdict or ledger

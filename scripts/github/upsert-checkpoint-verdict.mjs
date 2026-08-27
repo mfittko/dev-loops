@@ -49,7 +49,7 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>] [--findings-ledger <path>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
@@ -62,7 +62,9 @@ A legacy verdict ISSUE comment for the same gate+head is still read and correcte
 in place (back-compat); new rounds always post a review.
 The gate (draft_gate or pre_approval_gate) is auto-resolved from the PR gate
 coordination state when --gate is not provided. Explicit --gate is still accepted
-but must match the coordination state's allowed next actions.
+but must match the coordination state's allowed next actions. --gate review is
+NEVER auto-resolved (must be passed explicitly): it carries no gate obligation,
+skips coordination-state/CI entirely, and always posts fresh.
 Required:
   --repo <owner/name>
   --pr <number>
@@ -167,7 +169,7 @@ Optional:
                                             (gates.<gate>.angles entries with
                                             mandatory: true) REQUIRES this
                                             flag; omitting both is refused.
-  --gate <draft_gate|pre_approval_gate>     Auto-resolved from coordination state
+  --gate <draft_gate|pre_approval_gate|review>     Auto-resolved from coordination state (draft_gate/pre_approval_gate only; review is never auto-resolved)
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
   --lightweight                             This PR is light-dispatched (#1210):
@@ -1612,7 +1614,9 @@ function deriveEffectiveNextAction(verdict, gate) {
   }
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
-  // address the findings and re-run the gate.
+  // address the findings and re-run the gate. review: informational only —
+  // carries no re-gate obligation of its own.
+  if (gate === "review") return "none — informational review, no re-gate required";
   return gate === "draft_gate" ? "stay draft and fix" : "rerun gate";
 }
 
@@ -1718,154 +1722,173 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // loadPrGateCoordinationContext call will surface the real error.
     }
   }
-  // Thread the light-dispatch signal (#1210) so the context interpreter and the
-  // maxCopilotRounds resolution below both use the composed lightweight cap —
-  // the two must never disagree at the cap boundary (#1126).
-  const coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
-  const evidence = coordinationContext.gateEvidence;
-  const canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
-  const draftGateConfig = resolveGateConfig(config, "draft");
-  const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
-  const maxCopilotRounds = options.lightweight === true
-    ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
-    : resolveRefinementConfig(config, "maxCopilotRounds");
-  // Root cause 2: detect internal-only PRs so the Copilot convergence requirement
-  // is suppressed. Docs-only / tooling-only PRs should go straight to pre_approval_gate
-  // without requiring an external Copilot review cycle.
-  let reviewMode = null;
-  try {
-    const internalResult = await detectInternalOnly({ repo: options.repo, pr: options.pr }, gh);
-    if (internalResult?.ok && internalResult.internalOnly) {
-      reviewMode = "internal_only";
+  // `review` (#1808) is reachable on ANY PR with NO gate obligations: it never
+  // waits on CI, never auto-resolves, is never forbidden by draft/pre-approval
+  // lifecycle state, and never satisfies/consults draft_gate or pre_approval_gate
+  // evidence. It therefore skips the coordination-context load below entirely
+  // (the one place this function would otherwise read CI status) and posts
+  // straight from the caller-supplied --head-sha.
+  const isReviewGate = options.gate === "review";
+  let coordinationContext = null;
+  let evidence = null;
+  let coordination = null;
+  let canonicalHeadSha = options.headSha;
+  let draftGateConfig = null;
+  let preApprovalGateConfig = null;
+  if (!isReviewGate) {
+    // Thread the light-dispatch signal (#1210) so the context interpreter and the
+    // maxCopilotRounds resolution below both use the composed lightweight cap —
+    // the two must never disagree at the cap boundary (#1126).
+    coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
+    evidence = coordinationContext.gateEvidence;
+    canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
+    draftGateConfig = resolveGateConfig(config, "draft");
+    preApprovalGateConfig = resolveGateConfig(config, "preApproval");
+    const maxCopilotRounds = options.lightweight === true
+      ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
+      : resolveRefinementConfig(config, "maxCopilotRounds");
+    // Root cause 2: detect internal-only PRs so the Copilot convergence requirement
+    // is suppressed. Docs-only / tooling-only PRs should go straight to pre_approval_gate
+    // without requiring an external Copilot review cycle.
+    let reviewMode = null;
+    try {
+      const internalResult = await detectInternalOnly({ repo: options.repo, pr: options.pr }, gh);
+      if (internalResult?.ok && internalResult.internalOnly) {
+        reviewMode = "internal_only";
+      }
+    } catch {
+      // Non-fatal: internal-only detection failure is best-effort.
+      // Proceed with the default (external Copilot review) mode.
     }
-  } catch {
-    // Non-fatal: internal-only detection failure is best-effort.
-    // Proceed with the default (external Copilot review) mode.
-  }
-  const coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
-    coordinationContext,
-    maxCopilotRounds,
-    draftGateConfig,
-    preApprovalGateConfig,
-    reviewMode,
-  }));
-  if (!options.gate) {
-    if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE)) {
-      options.gate = "draft_gate";
-    } else if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE)) {
-      options.gate = "pre_approval_gate";
-    } else if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)) {
-      options.gate = "draft_gate";
-    } else {
-      throw new Error(`Cannot auto-resolve gate for ${options.repo}#${options.pr}: no gate action is currently allowed (${coordination.reason})`);
+    coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+      coordinationContext,
+      maxCopilotRounds,
+      draftGateConfig,
+      preApprovalGateConfig,
+      reviewMode,
+    }));
+    if (!options.gate) {
+      if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE)) {
+        options.gate = "draft_gate";
+      } else if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE)) {
+        options.gate = "pre_approval_gate";
+      } else if (coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)) {
+        options.gate = "draft_gate";
+      } else {
+        throw new Error(`Cannot auto-resolve gate for ${options.repo}#${options.pr}: no gate action is currently allowed (${coordination.reason})`);
+      }
     }
-  }
-  const requestedGateAction = resolveGateAction(options.gate);
-  const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
-  if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied) {
-    // The draft gate is a one-time boundary: a non-draft PR with clean draft_gate
-    // evidence (on any head) has already passed it, and the pre-merge gate check
-    // accepts that evidence. Re-posting is therefore a no-op, not an error —
-    // return idempotent success so scripted/automated callers are not dead-ended
-    // by a hard throw. (#891)
-    const satisfied = coordinationContext.gateEvidence?.draftGate ?? {};
-    // executionMode lives on the gate MARKER summary, not the COMMENT (strict)
-    // summary: the strict `draftGate` summary is parsed from the visible comment
-    // body via normalizeGateSummary, which carries no executionMode field, so it
-    // would always collapse to inline_single_agent — misleading when the satisfied
-    // gate actually ran fanout_fanin. Prefer the marker's executionMode; if the
-    // marker is unavailable, OMIT the field rather than report a misleading default.
-    const satisfiedExecutionMode =
-      coordinationContext.gateEvidence?.draftGateMarker?.executionMode
-      ?? satisfied.executionMode
-      ?? null;
-    return {
-      ok: true,
-      action: "noop",
-      reason: "draft_gate already satisfied (clean evidence exists; draft→ready boundary recorded)",
-      repo: options.repo,
-      pr: options.pr,
-      gate: "draft_gate",
-      // Report the head the existing clean evidence was recorded on (which may be a
-      // stale head — the draft gate is a one-time boundary accepted on any head),
-      // not the request's canonical head, so the field is not misleading.
-      headSha: satisfied.headSha ?? canonicalHeadSha,
-      currentHeadSha: evidence.currentHeadSha,
-      draftGateAlreadySatisfied: true,
-      // Mirror the field shape of the other success paths for consistent consumers.
-      blockCleanOnFindingSeverities: draftGateConfig.blockCleanOnFindingSeverities,
-      ...(satisfiedExecutionMode != null ? { executionMode: satisfiedExecutionMode } : {}),
-      ...(satisfied.commentId != null ? { commentId: satisfied.commentId } : {}),
-      ...(satisfied.commentUrl ? { commentUrl: satisfied.commentUrl } : {}),
-    };
-  }
-  const gateActionForbidden = coordination.forbiddenActions.includes(requestedGateAction);
-  // Draft gate can only be posted while the PR is a draft (RUN_DRAFT_GATE is
-  // forbidden once the PR is ready). A PR opened directly as ready — or any ready
-  // PR that still needs clean draft_gate evidence for the pre-merge check — would
-  // otherwise dead-end: the poster refuses, yet the pre-merge gate check fails
-  // closed on "missing visible clean draft_gate comment". Rather than force the
-  // operator to manually toggle the PR back to draft, perform the
-  // draft→post→ready transition here, preserving the caller's verdict, execution
-  // mode (e.g. fanout_fanin), findings, and ledger. This is the fanout-aware
-  // analogue of `reconcile-draft-gate` (which only posts inline and so cannot
-  // satisfy requireFanoutEvidence on draft_gate). (#891)
-  //
-  // Trigger ONLY when coordination explicitly allows RECONCILE_DRAFT_GATE — i.e. the
-  // state machine determined this ready PR genuinely needs draft-gate evidence
-  // reconciled (a converged/merge-progression state with no clean draft evidence).
-  // RUN_DRAFT_GATE is forbidden on a ready PR in many OTHER states too (merge
-  // conflicts, waiting-for-CI, unresolved feedback, blocked); converting those to
-  // draft would be wrong, so we must NOT key off `gateActionForbidden` alone. (#891)
-  if (
-    options.gate === "draft_gate"
-    && !prIsDraft
-    && !options._draftTransitionInProgress
-    && !coordination.draftGateAlreadySatisfied
-    && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
-  ) {
-    return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
-  }
-  // Fail closed on a lagged draft-state read: we are re-entering FROM
-  // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
-  // coordination context still reports the PR as non-draft. Recursing would loop
-  // indefinitely (the original #1020 hang → exit 13, error swallowed). Surface a
-  // clear, actionable error instead so the operator knows the draft conversion did
-  // not take (or GitHub's read lags the mutation) and can retry. (#1020)
-  if (
-    options.gate === "draft_gate"
-    && !prIsDraft
-    && options._draftTransitionInProgress
-  ) {
-    throw new Error(
-      `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
-      `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
-      `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
-      `once the PR reflects the draft state, or reconcile manually with ` +
-      `\`gh pr ready ${options.pr} --repo ${options.repo}\` / ` +
-      `\`node scripts/github/reconcile-draft-gate.mjs --repo ${options.repo} --pr ${options.pr}\`.`,
+    const requestedGateAction = resolveGateAction(options.gate);
+    const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
+    if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied) {
+      // The draft gate is a one-time boundary: a non-draft PR with clean draft_gate
+      // evidence (on any head) has already passed it, and the pre-merge gate check
+      // accepts that evidence. Re-posting is therefore a no-op, not an error —
+      // return idempotent success so scripted/automated callers are not dead-ended
+      // by a hard throw. (#891)
+      const satisfied = coordinationContext.gateEvidence?.draftGate ?? {};
+      // executionMode lives on the gate MARKER summary, not the COMMENT (strict)
+      // summary: the strict `draftGate` summary is parsed from the visible comment
+      // body via normalizeGateSummary, which carries no executionMode field, so it
+      // would always collapse to inline_single_agent — misleading when the satisfied
+      // gate actually ran fanout_fanin. Prefer the marker's executionMode; if the
+      // marker is unavailable, OMIT the field rather than report a misleading default.
+      const satisfiedExecutionMode =
+        coordinationContext.gateEvidence?.draftGateMarker?.executionMode
+        ?? satisfied.executionMode
+        ?? null;
+      return {
+        ok: true,
+        action: "noop",
+        reason: "draft_gate already satisfied (clean evidence exists; draft→ready boundary recorded)",
+        repo: options.repo,
+        pr: options.pr,
+        gate: "draft_gate",
+        // Report the head the existing clean evidence was recorded on (which may be a
+        // stale head — the draft gate is a one-time boundary accepted on any head),
+        // not the request's canonical head, so the field is not misleading.
+        headSha: satisfied.headSha ?? canonicalHeadSha,
+        currentHeadSha: evidence.currentHeadSha,
+        draftGateAlreadySatisfied: true,
+        // Mirror the field shape of the other success paths for consistent consumers.
+        blockCleanOnFindingSeverities: draftGateConfig.blockCleanOnFindingSeverities,
+        ...(satisfiedExecutionMode != null ? { executionMode: satisfiedExecutionMode } : {}),
+        ...(satisfied.commentId != null ? { commentId: satisfied.commentId } : {}),
+        ...(satisfied.commentUrl ? { commentUrl: satisfied.commentUrl } : {}),
+      };
+    }
+    const gateActionForbidden = coordination.forbiddenActions.includes(requestedGateAction);
+    // Draft gate can only be posted while the PR is a draft (RUN_DRAFT_GATE is
+    // forbidden once the PR is ready). A PR opened directly as ready — or any ready
+    // PR that still needs clean draft_gate evidence for the pre-merge check — would
+    // otherwise dead-end: the poster refuses, yet the pre-merge gate check fails
+    // closed on "missing visible clean draft_gate comment". Rather than force the
+    // operator to manually toggle the PR back to draft, perform the
+    // draft→post→ready transition here, preserving the caller's verdict, execution
+    // mode (e.g. fanout_fanin), findings, and ledger. This is the fanout-aware
+    // analogue of `reconcile-draft-gate` (which only posts inline and so cannot
+    // satisfy requireFanoutEvidence on draft_gate). (#891)
+    //
+    // Trigger ONLY when coordination explicitly allows RECONCILE_DRAFT_GATE — i.e. the
+    // state machine determined this ready PR genuinely needs draft-gate evidence
+    // reconciled (a converged/merge-progression state with no clean draft evidence).
+    // RUN_DRAFT_GATE is forbidden on a ready PR in many OTHER states too (merge
+    // conflicts, waiting-for-CI, unresolved feedback, blocked); converting those to
+    // draft would be wrong, so we must NOT key off `gateActionForbidden` alone. (#891)
+    if (
+      options.gate === "draft_gate"
+      && !prIsDraft
+      && !options._draftTransitionInProgress
+      && !coordination.draftGateAlreadySatisfied
+      && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
+    ) {
+      return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
+    }
+    // Fail closed on a lagged draft-state read: we are re-entering FROM
+    // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
+    // coordination context still reports the PR as non-draft. Recursing would loop
+    // indefinitely (the original #1020 hang → exit 13, error swallowed). Surface a
+    // clear, actionable error instead so the operator knows the draft conversion did
+    // not take (or GitHub's read lags the mutation) and can retry. (#1020)
+    if (
+      options.gate === "draft_gate"
+      && !prIsDraft
+      && options._draftTransitionInProgress
+    ) {
+      throw new Error(
+        `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
+        `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
+        `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
+        `once the PR reflects the draft state, or reconcile manually with ` +
+        `\`gh pr ready ${options.pr} --repo ${options.repo}\` / ` +
+        `\`node scripts/github/reconcile-draft-gate.mjs --repo ${options.repo} --pr ${options.pr}\`.`,
+      );
+    }
+    if (gateActionForbidden) {
+      throw new Error(buildGateEntryRefusalError({ options, coordination }));
+    }
+    // Post-time fan-out evidence enforcement: refuse an under-qualified inline
+    // verdict here, before it is posted, for every verdict value. No override
+    // flag — requireFanoutEvidence: false is the only opt-out, and that is
+    // already handled inside buildFanoutEnforcement.
+    await enforcePostTimeFanoutMode(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        gate: options.gate,
+        executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+        inlineReason: options.inlineReason,
+        headSha: canonicalHeadSha,
+        config,
+      },
+      { env, ghCommand, repoRoot, runChild },
     );
   }
-  if (gateActionForbidden) {
-    throw new Error(buildGateEntryRefusalError({ options, coordination }));
-  }
-  // Post-time fan-out evidence enforcement: refuse an under-qualified inline
-  // verdict here, before it is posted, for every verdict value. No override
-  // flag — requireFanoutEvidence: false is the only opt-out, and that is
-  // already handled inside buildFanoutEnforcement.
-  await enforcePostTimeFanoutMode(
-    {
-      repo: options.repo,
-      pr: options.pr,
-      gate: options.gate,
-      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
-      inlineReason: options.inlineReason,
-      headSha: canonicalHeadSha,
-      config,
-    },
-    { env, ghCommand, repoRoot, runChild },
-  );
-  const activeGateConfig = options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig;
+  // review carries no gate obligations, so no configured blocking severities
+  // apply to it (a "clean" review claim is advisory, never merge-blocking).
+  const activeGateConfig = isReviewGate
+    ? { blockCleanOnFindingSeverities: [] }
+    : (options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig);
   // Normalized at the CONSUME site, not only in the CLI parser: a direct
   // programmatic caller may pass legacy-keyed counts, and the guard below
   // must compare canonical keys on both sides.
@@ -2241,9 +2264,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const effectiveFindingsSummary = structuredFindings
     ? buildStructuredFindingsDigest(structuredFindings, options.findingsSeverityCounts)
     : options.findingsSummary;
-  const gateEvidence = selectGateEvidence(evidence, options.gate);
-  const existing = summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
-  const warning = detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // review consults no draft_gate/pre_approval_gate evidence (it must never
+  // match, dedupe against, or overwrite either gate's posted verdict) and is a
+  // single-shot post with no re-run dedup of its own — it always creates a
+  // fresh review.
+  const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
+  const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
+  const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
@@ -2256,7 +2283,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
-    gateEvidenceNote: coordination.gateEvidenceNote ?? null,
+    gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable } : {}),
   });
@@ -2284,7 +2311,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // structuredFindings is finalized) and applied on the created/updated/noop
   // paths — noop re-applies it too (idempotent) so a prior post whose label
   // application failed is retried at the same head, never left un-escalated.
-  const escalateGateFullLabel = resolveRequireFanoutEvidence(config)
+  // review never escalates to gate:full — it has no fan-out obligation of its
+  // own to escalate, and never re-gates.
+  const escalateGateFullLabel = !isReviewGate
+    && resolveRequireFanoutEvidence(config)
     && desiredExecutionMode === "inline_single_agent"
     && roundCarriesBlockingSeverity({
       verdict: options.verdict,
@@ -2455,7 +2485,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     pr: options.pr,
     gate: options.gate,
     headSha: canonicalHeadSha,
-    currentHeadSha: evidence.currentHeadSha,
+    currentHeadSha: evidence?.currentHeadSha ?? canonicalHeadSha,
     surface: "review",
     commentId: created.commentId,
     commentUrl: created.commentUrl,
