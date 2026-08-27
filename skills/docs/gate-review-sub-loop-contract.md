@@ -1315,7 +1315,9 @@ Consolidation:
   gate-close exactly like an open defect. A NON-LOCATABLE `question` has no resolvable
   thread to answer through — it is body-filed and deferred by construction, exactly like
   every other non-`high` body-filed finding (`GATE-EXEC-DEFERRAL-RECORD`). A `nit` is a
-  cosmetic, non-defect finding deferred immediately, with no fixer cycle.
+  cosmetic, non-defect finding resolved-with-rationale immediately, with no fixer cycle
+  and no tracked follow-up issue: a `nit` is NEVER filed (net-reduction disposition
+  policy, `GATE-EXEC-THREAD-DISPOSITION`).
 - write the disposition ledger: every finding receives a severity classification and a
   disposition (accepted-for-fix, deferred, needs-answer, disputed, or operator_acknowledged) —
   needs-answer applies only to a LOCATABLE question; a non-locatable one gets deferred
@@ -1791,9 +1793,18 @@ resolved. A low finding is a fixer TRIAGE target, not a silent auto-defer (#1585
 fixer receives it as a fix/triage target alongside high and medium, and may
 fix-if-cheap-in-the-same-commit (free polish when already touching that code) or defer. Defer is
 permitted from round 1 on for low findings — no forced fix window. A low finding the fixer
-defers is still reply+resolved (stamped `disposition=deferred`) via an explicit fixer triage
-decision by the disposition pass (`close-gate-findings.mjs`), which runs AFTER the fixer triage
-— not a silent post-hoc pass that can skip threads. A question thread is never deferred: the
+defers is still reply+resolved via an explicit fixer triage decision by the disposition pass
+(`close-gate-findings.mjs`), which runs AFTER the fixer triage — not a silent post-hoc pass that
+can skip threads. Whether that reply+resolve ALSO stamps `disposition=deferred` and files the
+finding onto the PR's tracked follow-up issue is a SEPARATE, further-gated decision (#1846,
+net-reduction disposition policy): a low is filed only when its own marker carries the explicit
+`operatorVisible` signal (the finding's own `operatorVisible: true`, set by its producer — see
+`buildFindingMarker` in `_gate-finding-surface.mjs` for the full contract); the DEFAULT (absent or
+`false`) is NOT operator visible, so the thread is still resolved-with-rationale by the
+disposition pass, just never filed or stamped `disposition=deferred`. This governs the
+severity-axis disposition only — distinct from the judge's own relevance-axis defer bar (Phase
+3.5 above), which uses "operator-visible outcome" language for the same conservative-default
+intent on a different axis. A question thread is never deferred: the
 fixer replies with an answer (promoting the finding to a defect severity when the answer reveals
 one, or escalating to the author when the fixer cannot answer it) and resolves the thread once
 answered; an unanswered question stays unresolved through the same round cap/escalation path a
@@ -1802,11 +1813,14 @@ enforced and tested). Which of the three replies a fixer sends — a plain answe
 promoting-to-defect-severity answer, or an escalation to the author — is a per-thread fixer
 judgment call, not a state machine this codebase drives or unit-tests; only the
 never-auto-deferred invariant above is. A nit thread is
-deferred immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no triage cycle
-(unlike low, it is not handed to the fixer as a fix/triage target on the severity axis; the one
-exception is a judge `act` on a nit, which reaches the fixer through judge-pass's severity-blind
-act filter); the closing sweep defer-closes a still-unresolved nit thread regardless of whether
-the fixer looked at it. GATE-CLOSE requires 0 unresolved
+resolved-with-rationale immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no
+triage cycle (unlike low, it is not handed to the fixer as a fix/triage target on the severity
+axis; the one exception is a judge `act` on a nit, which reaches the fixer through judge-pass's
+severity-blind act filter); the closing sweep resolves a still-unresolved nit thread regardless of
+whether the fixer looked at it. A nit is NEVER filed to the PR's follow-up issue and NEVER stamped
+`disposition=deferred` (#1846, net-reduction disposition policy) — its resolving reply names the
+rationale in-thread and nothing more; this is unconditional, unlike the low gate above, which at
+least has an opt-in path. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: high, medium, low,
 question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`
@@ -1814,13 +1828,17 @@ question, OR nit) is resolved before the gate is considered satisfied and before
 defect finding (high, medium, AND low) on EVERY gate round (clean verdict or
 not): fix-if-cheap-in-the-same-commit, else defer — defer is permitted from round 1 on for
 low findings (#1585) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
-(`close-gate-findings`) then defer-closes every still-open DEFERRABLE gate-authored thread
+(`close-gate-findings`) then resolves every still-open DEFERRABLE gate-authored thread
 (low, nit, and out-of-window medium) as the closing sweep AFTER the fixer's
 triage — it never fix-closes, and it deliberately leaves high, question, and in-window
 medium threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
-blocks gate close until the fixer/fix-loop resolves them). A thread left unresolved after the
+blocks gate close until the fixer/fix-loop resolves them). Resolving and FILING (to the tracked
+follow-up issue, stamping `disposition=deferred`) are two separate decisions (#1846): out-of-window
+medium always files; a low files only when operator-visible; a nit never files — the unfiled
+subset is still resolved-with-rationale, so `unresolvedGateThreadCount` reaches 0 either way. A
+thread left unresolved after the
 sweep fails the gate closed (not silently satisfied); a low finding the fixer did not fix is
-defer-close by the sweep (the fixer had its chance first), never a silent pre-fixer auto-defer. Because an unresolved review thread routes the PR to the
+resolved by the sweep (the fixer had its chance first), never a silent pre-fixer auto-defer. Because an unresolved review thread routes the PR to the
 `unresolved_feedback_present` state ([Copilot Loop State Graph](./copilot-loop-state-graph.md))
 and forbids the next pre-approval gate action, an in-window
 medium thread forces a fix round even after the current round's severity set is
@@ -1834,11 +1852,14 @@ with the resolving commit — nothing was fixed for a thread the fix loop never 
 requirement cannot apply verbatim there. An ANSWER reply to a question names the answer (and, when
 the answer promotes the finding, the new severity and follow-up thread it becomes). A DEFERRAL
 reply (`close-gate-findings.mjs` past the
-medium window, or a low/nit finding the fixer triaged and chose to defer via
+medium window, or an operator-visible low the fixer triaged and chose to defer via
 the post-fixer disposition sweep (#1585)) is instead distinct by
 construction through the marker fields it stamps on the thread (fingerprint, severity, angle,
 round) and states the window/disposition reason (see `dispositionMessage` in
-`close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
+`close-gate-findings.mjs`). A RESOLVED-NOT-FILED reply (a nit, or a low the fixer triaged with no
+operator-visibility signal; #1846) is distinct again — it names the net-reduction disposition
+policy rationale instead of a follow-up issue link, and stamps no `disposition=deferred` (see
+`unfiledResolutionMessage` in `close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
 when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
@@ -1853,27 +1874,36 @@ body-filed non-locatable case is the one disclosed exception (#1807 known limita
 stamped and body-filed durably (the first two places) but does not itself create the tracked
 issue, because that render-time call site has no GitHub I/O.
 The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
-field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ disposition=deferred][ issue=<n>] -->`),
-which is what tells a deferred thread apart from one the fix loop genuinely resolved with a
-fixing commit. A THREAD marker is stamped `disposition=deferred` only when the disposition pass
-defers it (a medium thread past the gate's configured medium fix window
-(default 3, round 4 under the default; #1581), or a low/nit thread the fixer triaged (a nit skips
-the fixer on the severity axis, judge-acted nits excepted) and
-chose to defer — closed by the post-fixer disposition sweep, never a silent pre-fixer auto-defer
-(#1585)). A question thread is never stamped `disposition=deferred` — it is answered, not
+field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ ov=1][ disposition=deferred][ issue=<n>] -->`
+— `ov=1` is the #1846 operator-visibility signal, present only when the finding's own producer set
+`operatorVisible: true`), which is what tells a deferred thread apart from one the fix loop
+genuinely resolved with a fixing commit. A THREAD marker is stamped `disposition=deferred`
+(and files onto the tracked follow-up issue below) only when the disposition pass DEFERS it — a
+medium thread past the gate's configured medium fix window
+(default 3, round 4 under the default; #1581), or an OPERATOR-VISIBLE low thread (its own marker
+carries `ov=1`) the fixer triaged and chose to defer — closed by the post-fixer disposition sweep,
+never a silent pre-fixer auto-defer (#1585). A nit is NEVER stamped `disposition=deferred` and
+NEVER filed, regardless of round (a nit skips the fixer on the severity axis, judge-acted nits
+excepted); a low the fixer triaged and chose to defer that carries no `ov=1` signal is likewise
+resolved-with-rationale but NOT stamped or filed — the conservative, net-negative-backlog default
+(#1846, net-reduction disposition policy). A question thread is never stamped `disposition=deferred` — it is answered, not
 deferred; its resolution is the answer reply itself. A
 non-locatable (body-filed) marker is stamped `disposition=deferred` unconditionally, for any
 severity other than `high`, at the round it is first posted — permanently deferred by
 construction, since a body-filed finding has no code location and so can never become a
-resolvable thread through which the standard fix loop could otherwise close it.
+resolvable thread through which the standard fix loop could otherwise close it. (The #1846 filing
+bar governs the THREAD-based disposition pass only; a body-filed finding's render-time stamp is
+unaffected — it never creates the tracked issue either way, per the disclosed #1807 exception
+above.)
 
 A `defer` is never parked ONLY in the thread marker and the ephemeral tmp findings ledger: it
 ALWAYS creates or appends to a tracked GitHub issue — the
 durable, tracker-first record that survives a `tmp/` wipe. Every `defer` for one PR shares ONE
 follow-up issue, batched: the first deferral on a PR creates it (title `Deferred gate findings for
 <repo>#<pr>`, body listing every deferred finding's fingerprint/severity/angle); every later
-deferral on the same PR — a later round's newly out-of-window medium, a fixer-triaged low, a
-judge `defer` — appends a comment to that SAME issue rather than minting a second one. Both the
+deferral on the same PR — a later round's newly out-of-window medium, a fixer-triaged
+operator-visible low, a judge `defer` — appends a comment to that SAME issue rather than minting a
+second one. Both the
 thread marker (`issue=<n>`) and the durable ledger entry (`followUpIssueNumber`) record the issue
 number — the re-attachment pointer that lets a reader recover the tracked record even after the
 ephemeral ledger is gone. Idempotency is per-PR, not per-fingerprint: a re-run of the disposition

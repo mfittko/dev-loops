@@ -19,6 +19,7 @@ import {
   findFollowUpIssueOnGitHub,
   fingerprintFinding,
   isDeferredAtRound,
+  isFileableDeferral,
   isLocatableFinding,
   listPrReviews,
   normalizePrReviewsPayload,
@@ -72,13 +73,50 @@ test("fingerprintFinding trims files[0]: an untrimmed path fingerprints identica
 
 test("buildFindingMarker / parseFindingMarker round-trip", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "high", angle: "security", round: 2 });
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null, issue: null });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, operatorVisible: false, disposition: null, issue: null });
 });
 
 test("buildFindingMarker / parseFindingMarker round-trip: a legacy-spelled severity still parses and normalizes on read", () => {
   const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "must-fix", angle: "security", round: 2 });
   assert.ok(marker.includes("severity=must-fix"), "the marker itself carries the spelling it was built with");
-  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, disposition: null, issue: null });
+  assert.deepEqual(parseFindingMarker(marker), { fp: "0123456789abcdef", severity: "high", angle: "security", round: 2, operatorVisible: false, disposition: null, issue: null });
+});
+
+// #1846: the explicit operator-visibility signal round-trips through the
+// marker's `ov=1` field — absent/false renders no field at all (the
+// conservative default `isFileableDeferral` treats as NOT operator visible).
+test("buildFindingMarker / parseFindingMarker round-trip: operatorVisible", () => {
+  const visible = buildFindingMarker({ fp: "0123456789abcdef", severity: "low", angle: "naming", round: 1, operatorVisible: true });
+  assert.match(visible, / ov=1( |-->)/);
+  assert.equal(parseFindingMarker(visible).operatorVisible, true);
+
+  const notVisible = buildFindingMarker({ fp: "0123456789abcdef", severity: "low", angle: "naming", round: 1, operatorVisible: false });
+  assert.doesNotMatch(notVisible, /ov=1/);
+  assert.equal(parseFindingMarker(notVisible).operatorVisible, false);
+
+  // Omitted renders byte-identically to explicit false.
+  const omitted = buildFindingMarker({ fp: "0123456789abcdef", severity: "low", angle: "naming", round: 1 });
+  assert.equal(omitted, notVisible);
+});
+
+test("buildFindingMarker rejects a non-boolean operatorVisible", () => {
+  assert.throws(
+    () => buildFindingMarker({ fp: "0123456789abcdef", severity: "low", angle: "naming", round: 1, operatorVisible: "true" }),
+    /operatorVisible must be a boolean/,
+  );
+});
+
+// The ov=1 field, when present, renders BEFORE disposition/issue (matching
+// the order stampDeferredDisposition's trailing-`-->` PATCH later appends
+// them in), so a filed operator-visible low's fully-stamped marker still
+// round-trips every field.
+test("buildFindingMarker: operatorVisible + disposition + issue all round-trip together", () => {
+  const marker = buildFindingMarker({ fp: "0123456789abcdef", severity: "low", angle: "naming", round: 1, operatorVisible: true, disposition: "deferred", issue: 42 });
+  assert.match(marker, /round=1 ov=1 disposition=deferred issue=42 -->$/);
+  const parsed = parseFindingMarker(marker);
+  assert.equal(parsed.operatorVisible, true);
+  assert.equal(parsed.disposition, "deferred");
+  assert.equal(parsed.issue, 42);
 });
 
 test("buildFindingMarker with a disposition round-trips through parseFindingMarker", () => {
@@ -206,6 +244,42 @@ test("isDeferredAtRound: a per-gate window parameter overrides the built-in cons
 });
 
 // ---------------------------------------------------------------------------
+// #1846: net-reduction filing bar — resolving a thread vs. FILING it to a
+// tracked follow-up issue are separate decisions; isFileableDeferral governs
+// the latter only.
+// ---------------------------------------------------------------------------
+
+test("isFileableDeferral: a nit is NEVER fileable, any round, regardless of operatorVisible", () => {
+  assert.equal(isFileableDeferral("nit", false, 1), false);
+  assert.equal(isFileableDeferral("nit", true, 99), false, "operatorVisible never applies to nit");
+});
+
+test("isFileableDeferral: a low is fileable only when operatorVisible is exactly true (conservative default)", () => {
+  assert.equal(isFileableDeferral("low", undefined, 1), false);
+  assert.equal(isFileableDeferral("low", false, 1), false);
+  assert.equal(isFileableDeferral("low", "true", 1), false, "a truthy non-boolean never counts as the explicit signal");
+  assert.equal(isFileableDeferral("low", true, 1), true);
+});
+
+test("isFileableDeferral: medium is unchanged (fileable only past the fix window), regardless of operatorVisible", () => {
+  assert.equal(isFileableDeferral("medium", false, 3), false);
+  assert.equal(isFileableDeferral("medium", false, 4), true);
+  assert.equal(isFileableDeferral("medium", false, 4, 5), false);
+  assert.equal(isFileableDeferral("medium", false, 6, 5), true);
+});
+
+test("isFileableDeferral: high/question are never fileable (they are never resolved by the disposition pass to begin with)", () => {
+  assert.equal(isFileableDeferral("high", true, 99), false);
+  assert.equal(isFileableDeferral("question", true, 99), false);
+});
+
+test("isFileableDeferral: legacy severity spellings behave identically to their canonical replacement", () => {
+  assert.equal(isFileableDeferral("nice-to-have", true, 1), true);
+  assert.equal(isFileableDeferral("nice-to-have", false, 1), false);
+  assert.equal(isFileableDeferral("worth-fixing-now", false, 4), true);
+});
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -223,6 +297,16 @@ test("renderInlineCommentBody: the marker is the body's first line", () => {
 test("renderInlineCommentBody neutralizes Copilot summon tokens", () => {
   const body = renderInlineCommentBody({ severity: "nice-to-have", angle: "dry", summary: "ask @copilot to re-review this" }, { round: 1 });
   assert.equal(containsBareCopilotSummon(body), false);
+});
+
+// #1846: a finding's own operatorVisible: true carries onto the posted
+// marker's ov=1 field — this is the ONE place a producer marks a low
+// operator-visible; absent renders no field (the conservative default).
+test("renderInlineCommentBody: a finding's operatorVisible: true renders the marker's ov=1 field", () => {
+  const visible = { severity: "low", angle: "correctness", summary: "stale cache", operatorVisible: true };
+  const notVisible = { severity: "low", angle: "correctness", summary: "stale cache" };
+  assert.match(renderInlineCommentBody(visible, { round: 1 }).split("\n")[0], /ov=1/);
+  assert.doesNotMatch(renderInlineCommentBody(notVisible, { round: 1 }).split("\n")[0], /ov=1/);
 });
 
 test("renderNonLocatableBlock: every content line after the marker is blockquoted", () => {
@@ -491,6 +575,20 @@ test("readGateFindingsLedger rejects a malformed finding entry, naming its index
   await rejects(withFinding({ severity: "nice-to-have", angle: "coverage", summary: "x", line: "2" }), /findings\[1\]\.line must be a positive integer/);
   await rejects(withFinding({ severity: "nice-to-have", angle: "coverage", summary: "x", files: "src/a.mjs" }), /findings\[1\]\.files must be an array/);
   await rejects(withFinding({ severity: "nice-to-have", angle: "coverage", summary: "x", files: { path: "src/a.mjs" } }), /findings\[1\]\.files must be an array/);
+  await rejects(withFinding({ severity: "low", angle: "coverage", summary: "x", operatorVisible: "true" }), /findings\[1\]\.operatorVisible must be a boolean/);
+});
+
+// #1846: a "low" finding's own operatorVisible signal survives the ledger
+// read unchanged — this is the field close-gate-findings.mjs's disposition
+// pass reads (via the rendered marker's ov=1 field) to decide the filing bar.
+test("readGateFindingsLedger passes a finding's operatorVisible through unchanged", async () => {
+  await withLedgerFile(
+    { ...VALID_LEDGER, findings: [{ ...VALID_LEDGER.findings[0], severity: "low", operatorVisible: true }] },
+    async (ledgerPath) => {
+      const ledger = await readGateFindingsLedger(ledgerPath);
+      assert.equal(ledger.findings[0].operatorVisible, true);
+    },
+  );
 });
 
 test("readGateFindingsLedger returns the normalized ledger for a valid file", async () => {
