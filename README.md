@@ -50,6 +50,7 @@ See the canonical shorthand mapping in the [Public Dev Loop Contract](./skills/d
 | enqueue | `/loop-enqueue <issue\|pr\|text>` | — | Queue an issue/PR, or capture an idea as a grilled issue |
 | grill | `/loop-grill <issue\|plan> [--auto]` | — | Socratic Q&A grill of an issue or plan before the loop |
 | queue-status | `/loop-queue-status` | — | Show the queue board grouped by column |
+| review | `/loop-review <pr>` | — | Run a standalone, on-demand review pass over a PR (no gate obligations) |
 | review-ui | `/loop-review-ui <pr>` | — | Review a PR in a running-app UI loop |
 
 Beyond the per-issue loop entrypoints, the Pi `/dev-loops` command and the `dev-loops` CLI also expose standalone utilities: `help`, `status`, `doctor`, `gates` (`status` is the same readiness check as `loop-status` above). `hide` works only inside Pi — the `dev-loops hide` CLI subcommand is recognized but intentionally exits non-zero (session-local Pi UI behavior). Everything above is also available as a skill/agent — inside Pi, hand work to the `dev-loop` skill rather than calling internal routed skills (`local-implementation`, `copilot-pr-followup`, `final-approval`) directly.
