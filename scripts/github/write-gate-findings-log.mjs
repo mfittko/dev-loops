@@ -192,6 +192,17 @@ function validateFindingsArray(parsed, flagLabel) {
       // silently renormalized.
       entry.followUpDraft = f.followUpDraft;
     }
+    // Mirrors validateJudgeVerdict's own defer rule (packages/core/src/loop/
+    // gate-fanin.mjs): followUpDraft is mandatory on a defer judgeDisposition
+    // (soft-cap contract — a deferred finding always carries a fileable
+    // follow-up draft). validateJudgeVerdict enforces this on the judge's own
+    // artifact before applyJudgeDispositions ever merges it in, but a
+    // hand-authored --findings/--findings-file array bypasses that path
+    // entirely, so this durable-ledger validator needs its own copy of the
+    // same rule rather than trusting an upstream check it never runs through.
+    if (entry.judgeDisposition === "defer" && entry.followUpDraft === undefined) {
+      throw parseError(`${flagLabel}[${i}].followUpDraft is required when judgeDisposition is "defer"`);
+    }
     return entry;
   });
 }

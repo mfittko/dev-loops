@@ -161,6 +161,45 @@ test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
   }
 });
 
+test("writeGateFindingsLog rejects a defer judgeDisposition with no followUpDraft", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "defer" }]),
+    });
+  }, /\[0\]\.followUpDraft is required when judgeDisposition is "defer"/);
+});
+
+test("writeGateFindingsLog accepts a defer judgeDisposition carrying a followUpDraft", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-defer-draft-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{
+        severity: "low",
+        angle: "scope",
+        summary: "x",
+        judgeDisposition: "defer",
+        followUpDraft: { title: "follow up", body: "details" },
+      }]),
+      tmpRoot: dir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.findings[0].judgeDisposition, "defer");
+    assert.deepEqual(written.findings[0].followUpDraft, { title: "follow up", body: "details" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseWriteGateFindingsLogCliArgs rejects missing required args", () => {
   assert.throws(() => {
     parseWriteGateFindingsLogCliArgs([
