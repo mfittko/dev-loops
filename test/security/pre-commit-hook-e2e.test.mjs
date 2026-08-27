@@ -33,8 +33,11 @@ function commitAttempt(dir, file, content, env = {}) {
   fs.writeFileSync(path.join(dir, file), content);
   git(dir, ["add", file]);
   try {
-    git(dir, ["commit", "--quiet", "-m", `add ${file}`], env);
-    return { blocked: false, stdout: "", stderr: "" };
+    // No --quiet: a hook's own stdout is what leaks through git commit's
+    // stdout, so keeping the commit summary visible alongside it lets the
+    // "no scanner JSON noise" assertion below tell the two apart.
+    const stdout = git(dir, ["commit", "-m", `add ${file}`], env);
+    return { blocked: false, stdout, stderr: "" };
   } catch (err) {
     return { blocked: true, stdout: String(err.stdout ?? ""), stderr: String(err.stderr ?? "") };
   }
@@ -80,6 +83,9 @@ test("pre-commit hook e2e: a clean staged diff commits normally", async () => {
     const result = commitAttempt(dir, "clean.txt", "nothing sensitive here\n");
     assert.equal(result.blocked, false, `expected a clean commit to succeed: ${result.stderr}`);
     assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "2");
+    // Quiet on success: the scanner's own `{"ok":true,...}` payload must not
+    // leak into a normal commit's stdout.
+    assert.ok(!result.stdout.includes('"ok":true'), `expected no scanner JSON noise on a clean commit: ${result.stdout}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

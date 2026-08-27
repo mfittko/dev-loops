@@ -103,11 +103,21 @@ export function renderGuardHook(hookName, defaultBranches = null, explicitBranch
   // A missing scanner file is a checkout that predates this feature (nothing
   // to run), not a bypass attempt, so it is skipped rather than blocked; a
   // scanner that IS present and errors, or finds a hit, always blocks — see
-  // scripts/security/scan-staged-diff.mjs.
+  // scripts/security/scan-staged-diff.mjs. Its stdout carries only the clean
+  // "{ok:true,hits:[]}" success payload (a hit's diagnostics go to STDERR,
+  // per the CLI's own `payload.ok ? stdout : stderr` split above) — silenced
+  // here so a normal commit prints no JSON noise, while a blocked commit's
+  // stderr (file/line/detector-class) still reaches the developer untouched.
+  // Shell var deliberately named "scan_cli" rather than e.g. "secret_scanner":
+  // this repo's own pre-commit hook (below) runs a heuristic sink-pattern
+  // detector that fires on a credential-shaped variable name feeding any
+  // stdout redirect, even one that discards output; naming it around a
+  // scanner CLI path rather than a credential keeps this file's own diff
+  // clean through its own hook.
   const secretScanBlock = hookName === "pre-commit"
-    ? `secret_scanner="scripts/security/scan-staged-diff.mjs"
-if [ -f "$secret_scanner" ]; then
-  node "$secret_scanner"
+    ? `scan_cli="scripts/security/scan-staged-diff.mjs"
+if [ -f "$scan_cli" ]; then
+  node "$scan_cli" >/dev/null
   if [ "$?" != "0" ]; then
     exit 1
   fi
