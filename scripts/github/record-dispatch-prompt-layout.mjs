@@ -9,16 +9,21 @@ import { DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-d
 const USAGE = `Usage: record-dispatch-prompt-layout.mjs --scope <name> --head-sha <sha> --prefix-path <path> --prompt-file <path> [--help]
 Capture the LEADING bytes of a dispatched reviewer's ACTUAL composed prompt
 (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841/completes #1468) as a fan-in
-dispatch artifact. The orchestrator composes the reviewer prompt at fan-out
-time with no code template — this is the minimal capture point that gives
+dispatch artifact — the minimal capture point that gives
 verify-dispatch-prompt-layout.mjs / consolidate-fanin.mjs's fan-in something
 mechanical to check: whether the prompt actually LEADS with the round's
 byte-identical invariant prefix (inline mode) or its byte-identical pointer
 line (pointer-seeding mode), never angle-first.
 
-Call this ONCE per dispatched reviewer/group, right after composing its
-prompt and BEFORE (or immediately after) spawning it, from the SAME
-orchestrator step that already runs write-gate-context.mjs's Phase 1.
+The sanctioned fan-out path (issue #1852) calls
+compose-reviewer-prompt.mjs, which composes the prompt AND records this
+capture atomically via this module's exported recordDispatchPromptLayout —
+so a canonical-path dispatch is never left unrecorded by agent discretion.
+This CLI is the underlying primitive (still directly callable when a caller
+already has an already-composed prompt file on disk); call it ONCE per
+dispatched reviewer/group, right after composing its prompt and BEFORE (or
+immediately after) spawning it, from the SAME orchestrator step that already
+runs write-gate-context.mjs's Phase 1.
 
 Required:
   --scope <name>       Reviewer/group scope, same vocabulary as
@@ -61,8 +66,11 @@ Exit codes:
      --head-sha, or --prompt-file is missing/unreadable
   2  Usage or internal error, or invalid --jq filter`.trim();
 
-const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
-const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+// Exported so compose-reviewer-prompt.mjs (issue #1852) validates scope/head-sha
+// with the IDENTICAL rules this CLI's own arg parsing uses, never a hand-copied
+// regex that could drift from this one.
+export const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+export const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {
@@ -107,6 +115,51 @@ export function dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha) {
   return path.join(tmpRoot, `checkpoint-dispatch-prompt-${scope}-${headSha}.json`);
 }
 
+/**
+ * Core record-writing logic, factored out of `main()` so a programmatic
+ * caller that already holds the composed prompt TEXT in memory (issue
+ * #1852's compose-reviewer-prompt.mjs) never has to round-trip it through a
+ * temp file + subprocess argv just to record it — the composer calls this
+ * directly. `scope`/`headSha` are assumed ALREADY validated/normalized by the
+ * caller (CLI callers validate via VALID_SCOPE_RE/HEAD_SHA_RE + lowercase
+ * before reaching here, exactly as `main()` does below); this function's own
+ * fail-closed surface is the canonical-basename check
+ * (`validateBriefingPrefixPath`) plus a non-empty `promptText`, mirroring
+ * `main()`'s two "recorded: false" (never a usage error) refusal cases.
+ *
+ * @param {object} input
+ * @param {string} input.scope
+ * @param {string} input.headSha — already lowercased
+ * @param {string} input.prefixPath
+ * @param {string} input.promptText — the ACTUAL composed prompt bytes (UTF-8)
+ * @param {string} [input.tmpRoot]
+ * @returns {Promise<{ok: true, recorded: boolean, scope: string, headSha: string, prefixPath?: string, reason?: string, truncated?: boolean}>}
+ */
+export async function recordDispatchPromptLayout({ scope, headSha, prefixPath, promptText, tmpRoot = path.join(process.cwd(), "tmp") } = {}) {
+  const pathCheck = validateBriefingPrefixPath(prefixPath, headSha);
+  if (!pathCheck.ok) {
+    return { ok: true, recorded: false, scope, headSha, reason: pathCheck.reason };
+  }
+  if (typeof promptText !== "string" || promptText.length === 0) {
+    return { ok: true, recorded: false, scope, headSha, reason: "promptText is empty" };
+  }
+  const truncated = promptText.length > DISPATCH_PROMPT_LEADING_CAP_BYTES;
+  const leading = truncated ? promptText.slice(0, DISPATCH_PROMPT_LEADING_CAP_BYTES) : promptText;
+  const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
+  await mkdir(path.dirname(recordPath), { recursive: true });
+  const record = {
+    scope,
+    headSha,
+    prefixPath,
+    gate: pathCheck.gate,
+    leading,
+    truncated,
+    capturedAt: new Date().toISOString(),
+  };
+  await writeFile(recordPath, JSON.stringify(record, null, 2) + "\n", "utf8");
+  return { ok: true, recorded: true, scope, headSha, prefixPath, truncated };
+}
+
 export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp") } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
@@ -148,42 +201,24 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
-  const pathCheck = validateBriefingPrefixPath(prefixPathArg, headSha);
-  if (!pathCheck.ok) {
-    return finish({ ok: true, recorded: false, scope, headSha, reason: pathCheck.reason }, false);
-  }
   let promptText;
   try {
     promptText = await readFile(path.resolve(process.cwd(), promptFileArg), "utf8");
   } catch (err) {
     return finish({ ok: true, recorded: false, scope, headSha, reason: `--prompt-file "${promptFileArg}" is unreadable (${err.code ?? "error"})` }, false);
   }
-  const truncated = promptText.length > DISPATCH_PROMPT_LEADING_CAP_BYTES;
-  const leading = truncated ? promptText.slice(0, DISPATCH_PROMPT_LEADING_CAP_BYTES) : promptText;
 
-  const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
+  let result;
   try {
-    await mkdir(path.dirname(recordPath), { recursive: true });
+    result = await recordDispatchPromptLayout({ scope, headSha, prefixPath: prefixPathArg, promptText, tmpRoot });
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
-  const record = {
-    scope,
-    headSha,
-    prefixPath: prefixPathArg,
-    gate: pathCheck.gate,
-    leading,
-    truncated,
-    capturedAt: new Date().toISOString(),
-  };
-  try {
-    await writeFile(recordPath, JSON.stringify(record, null, 2) + "\n", "utf8");
-  } catch (err) {
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
+  if (!result.recorded) {
+    return finish({ ok: true, recorded: false, scope, headSha, reason: result.reason }, false);
   }
-  return finish({ ok: true, recorded: true, scope, headSha, prefixPath: prefixPathArg, truncated }, true);
+  return finish({ ok: true, recorded: true, scope, headSha, prefixPath: prefixPathArg, truncated: result.truncated }, true);
 }
 
 if (isDirectCliRun(import.meta.url)) {
