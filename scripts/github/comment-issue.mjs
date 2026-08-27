@@ -4,7 +4,13 @@ import { parseIssueNumber, parseAllowedRefsCsv, requireTokenValue, runChild } fr
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import {
+  JQ_OUTPUT_PARSE_OPTIONS,
+  JQ_OUTPUT_USAGE,
+  emitResult,
+  matchJqOutputToken,
+  preflightJqFilter,
+} from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: comment-issue.mjs --repo <owner/name> --issue <number> (--body <text> | --body-file <path>)
 Post a comment on a GitHub issue. Thin wrapper over \`gh issue comment\` — use this
@@ -134,6 +140,12 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never post the comment then fail (BASE-JQ-OUTPUT-
+  // GUARANTEE would otherwise catch it after the fact -> ok:false on a call
+  // that already succeeded -> a caller retry double-posts).
+  const jqSyntaxError = preflightJqFilter(options.jq, { stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
   let result;
   try {
     result = await commentIssue(options, { env, ghCommand, run });

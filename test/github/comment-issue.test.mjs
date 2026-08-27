@@ -130,11 +130,18 @@ test("runCli: --jq extracts the comment URL", async () => {
   assert.equal(stdout.get().trim(), COMMENT_URL);
 });
 
-test("runCli: invalid --jq filter fails closed with exit 2", async () => {
-  const { run } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+test("runCli: invalid --jq filter fails closed with exit 2 BEFORE posting (no mutation)", async () => {
+  // Zero stubbed gh responses: if the comment gets posted despite the invalid
+  // filter, `run` throws "Unexpected gh call" and this test fails loudly
+  // instead of silently passing on a false-positive exit code (issue #1817:
+  // a mutation-then-fail ordering caused a caller retry to double-post).
+  const { run, calls } = stubGh([]);
   const stderr = captureStream();
-  const code = await runCli(["--repo", "o/n", "--issue", "7", "--body", "x", "--jq", "not!valid"], { run, stderr: stderr, stdout: captureStream() });
+  const code = await runCli(["--repo", "o/n", "--issue", "7", "--body", "x", "--jq", "not!valid"], { run, stderr, stdout: captureStream() });
   assert.equal(code, 2);
+  assert.match(stderr.get(), /--jq/);
+  assert.match(stderr.get(), /BASE-JQ-OUTPUT-GUARANTEE/);
+  assert.deepEqual(calls, [], "the comment must never post when --jq is syntactically invalid");
 });
 
 test("runCli: --silent maps success to exit 0 with no stdout", async () => {

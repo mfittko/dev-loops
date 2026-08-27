@@ -9,7 +9,7 @@ import {
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
@@ -91,6 +91,13 @@ async function run(argv) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never reply/resolve the thread then fail
+  // (BASE-JQ-OUTPUT-GUARANTEE would otherwise catch it after the fact ->
+  // ok:false on a call that already succeeded -> a caller retry double-applies).
+  const jqSyntaxError = preflightJqFilter(parsed.jq, { stderr: process.stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
 
   const { repo: repoSlug, pr, commentId, threadId, bodyFile, allowedRefs } = parsed;
   const rawBody = await readFile(bodyFile, "utf8");
