@@ -400,7 +400,14 @@ async function waitWithHeartbeat(
         }) + "\n",
       );
       if (onHeartbeat) {
-        await onHeartbeat();
+        // Best-effort per the contract above: a throw/rejection here is a
+        // caller-side side-effect failure, not a CI-watch failure — swallow
+        // it so it can't abort the watch loop.
+        try {
+          await onHeartbeat();
+        } catch {
+          // intentionally ignored
+        }
       }
     }
   }
@@ -500,19 +507,17 @@ export async function watchCiStatus(
         // The blocking CI wait can span the full watch budget, which equals the
         // runner-coordination stale window; refresh the lease alongside each
         // heartbeat so the claim stays fresh for every caller of this engine.
-        // No-ops without DEVLOOPS_RUN_ID; best-effort, never affects the watch.
-        onHeartbeat: async () => {
-          try {
-            await ensureOwnershipImpl({
-              repo: options.repo,
-              pr: options.pr,
-              env,
-              cwd: leaseCwd,
-              claimIfMissing: true,
-              requireExisting: false,
-            });
-          } catch { /* best-effort: never affect the watch */ }
-        },
+        // No-ops without DEVLOOPS_RUN_ID; waitWithHeartbeat swallows any throw,
+        // so a lease-refresh failure here never affects the watch.
+        onHeartbeat: () =>
+          ensureOwnershipImpl({
+            repo: options.repo,
+            pr: options.pr,
+            env,
+            cwd: leaseCwd,
+            claimIfMissing: true,
+            requireExisting: false,
+          }),
       });
     }
     // Re-resolve the head SHA every poll: a new push must short-circuit to

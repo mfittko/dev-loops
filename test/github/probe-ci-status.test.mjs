@@ -146,6 +146,20 @@ test("watch-ci transitions pending -> success across polls", async () => {
   });
 });
 
+test("watch-ci swallows a throwing onHeartbeat lease refresh instead of aborting the watch", async () => {
+  // pollIntervalMs above WATCH_HEARTBEAT_MS (45s) forces a heartbeat (and its
+  // onHeartbeat lease refresh) to fire mid-poll. A throwing ensureOwnershipImpl
+  // must not stop the watch from reaching its second, terminal poll.
+  await withGhStubFlip(async (env) => {
+    const result = await watchCiStatus(
+      { repo: "owner/repo", pr: 7, pollIntervalMs: 100_000, timeoutMs: 200_000 },
+      { ...fastDeps(env), ensureOwnershipImpl: async () => { throw new Error("boom"); } },
+    );
+    assert.equal(result.status, "success");
+    assert.equal(result.attempts, 2);
+  });
+});
+
 test("watch-ci returns timeout when CI stays pending past the budget", async () => {
   await withGhStub(
     {
@@ -1058,7 +1072,7 @@ async function withGhRunListStub(routes, fn, { expectedCommit } = {}) {
   }
 }
 
-test("watch-commit-ci settles success when every workflow run completes clean", async () => {
+test("watch-commit-ci settles success when every workflow run completes cleanly", async () => {
   await withGhRunListStub(
     [{ stdout: runList([
       { name: "verify", status: "completed", conclusion: "success" },
