@@ -1022,7 +1022,10 @@ test("#1846 guard: a disposition=deferred stamp on a nit thread is rejected (nit
     async ({ env, ghCommand, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=out-of-window/s,
+        // #1853 hygiene: the error message itself names the nit rejection
+        // case (diagnosable without cross-referencing the code), in addition
+        // to the per-thread detail already asserted.
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=out-of-window.*a nit must never be stamped deferred/s,
       );
     },
   ));
@@ -1040,7 +1043,9 @@ test("#1846 guard: a disposition=deferred stamp on a NON-operator-visible low th
     async ({ env, ghCommand, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=out-of-window/s,
+        // #1853 hygiene: the error message names the low/operatorVisible
+        // rejection case explicitly, in addition to the per-thread detail.
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=out-of-window.*a low must carry operatorVisible=true/s,
       );
     },
   ));

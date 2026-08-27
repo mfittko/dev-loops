@@ -2615,6 +2615,92 @@ test("buildGateContext omits the Linked issue section for an issue-less PR (no c
 });
 
 // ---------------------------------------------------------------------------
+// Filtered-diff inlining into the shared per-head block (issue #1853)
+// ---------------------------------------------------------------------------
+
+test("buildGateContext: a lockfile's hunk is filtered out of the inlined diff, but the file still appears in the changed-files summary and stays fully readable at scope.diffPath", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-filter-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const diff = {
+      nameStatusOutput: "M\tsrc/a.mjs\nM\tpackage-lock.json\n",
+      diffOutput: [
+        "diff --git a/src/a.mjs b/src/a.mjs",
+        "--- a/src/a.mjs",
+        "+++ b/src/a.mjs",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new line in a.mjs",
+        "diff --git a/package-lock.json b/package-lock.json",
+        "--- a/package-lock.json",
+        "+++ b/package-lock.json",
+        "@@ -1 +1 @@",
+        '-  "version": "1.0.0"',
+        '+  "version": "1.0.1"',
+        "",
+      ].join("\n"),
+    };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 53, headSha: "1234567890abcdef" },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.prefixMode, "inline");
+    const onDisk = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+
+    // AC1: the lockfile hunk is dropped from the inlined diff.
+    assert.ok(onDisk.includes("new line in a.mjs"), "the review-relevant hunk still inlines");
+    assert.ok(!onDisk.includes('"version": "1.0.1"'), "the lockfile hunk body is filtered out");
+    assert.ok(!onDisk.includes("diff --git a/package-lock.json"), "the lockfile's diff header is filtered out");
+
+    // AC3: the file's CHANGE is still disclosed (changed-files summary), and
+    // the FULL unfiltered diff (including the lockfile hunk) stays available
+    // on demand at scope.diffPath — filtering only narrows what's INLINED.
+    assert.ok(onDisk.includes("- package-lock.json"), "the changed-files summary still lists the lockfile");
+    const fullDiskDiff = await readFile(path.resolve(repoRoot, result.artifact.scope.diffPath), "utf8");
+    assert.ok(fullDiskDiff.includes('"version": "1.0.1"'), "the persisted .diff pointer target stays FULL/unfiltered");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext: AC2 — the static-only leading span (before the diff section) is unchanged by a diff-content change", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-static-span-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false });
+    const baseInput = {
+      config, gate: "draft_gate", repo: "owner/repo", pr: 54, headSha: "abcdef1234567890",
+      prBody: "Same PR body", acceptanceCriteria: "#7", issueBody: "Same issue body",
+    };
+    const diffA = { nameStatusOutput: "M\tsrc/a.mjs\n", diffOutput: "diff --git a/src/a.mjs b/src/a.mjs\n+first version\n" };
+    const diffB = {
+      nameStatusOutput: "M\tsrc/a.mjs\nM\tyarn.lock\n",
+      diffOutput: "diff --git a/src/a.mjs b/src/a.mjs\n+SECOND, DIFFERENT version\ndiff --git a/yarn.lock b/yarn.lock\n+lockfile churn\n",
+    };
+    const resultA = await buildGateContext({ ...baseInput, diff: diffA }, { repoRoot });
+    const onDiskA = await readFile(path.resolve(repoRoot, resultA.prefixPath), "utf8");
+    const resultB = await buildGateContext({ ...baseInput, diff: diffB }, { repoRoot });
+    const onDiskB = await readFile(path.resolve(repoRoot, resultB.prefixPath), "utf8");
+
+    const diffHeadingIdx = onDiskA.indexOf("## Diff at reviewed head");
+    assert.ok(diffHeadingIdx > 0);
+    assert.equal(onDiskB.indexOf("## Diff at reviewed head"), diffHeadingIdx, "the diff heading sits at the same offset regardless of diff content");
+    const staticSpanA = onDiskA.slice(0, diffHeadingIdx);
+    const staticSpanB = onDiskB.slice(0, diffHeadingIdx);
+    assert.equal(staticSpanA, staticSpanB, "the static-only leading span (header/PR-body/issue-body) is byte-identical across a diff content change");
+
+    // Ordering (AC2/AC4): the filtered diff sits strictly AFTER the static
+    // span and BEFORE the changed-files summary; the lockfile hunk in diffB
+    // never reaches the rendered prefix.
+    const summaryIdx = onDiskB.indexOf("## Changed files + adjacent-code summary");
+    const diffContentIdx = onDiskB.indexOf("SECOND, DIFFERENT version");
+    assert.ok(diffHeadingIdx < diffContentIdx && diffContentIdx < summaryIdx);
+    assert.ok(!onDiskB.includes("lockfile churn"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Dogfood round-trip (#1220 AC4): real gate-pass shape — build via the CLI,
 // two reviewer sentinels via --prefix-file, fan-in verify — verified:true.
 // Reuses verify-fresh-review-context.mjs / verify-briefing-prefixes.mjs UNCHANGED.

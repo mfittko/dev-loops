@@ -763,30 +763,6 @@ export function renderBriefingPointerLine(prefixPath) {
 }
 
 /**
- * Decide whether a dispatched reviewer prompt's LEADING bytes are
- * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841): either the
- * prompt's leading bytes are byte-identical to the round's invariant prefix
- * (inline mode), or the prompt leads with the byte-identical pointer line
- * naming the round's invariant-prefix path (pointer-seeding mode), with any
- * angle-specific text strictly AFTER it. An angle-first prompt (dynamic
- * per-unit prose ahead of the prefix/pointer) matches neither and is
- * REJECTED — this is the mechanical proof the prose-only rule lacked.
- *
- * Pure and offline: takes the already-captured leading bytes and the already-
- * read prefix bytes/path, never reads a file itself (the CLI wrapper owns
- * I/O), so this is directly unit-testable with in-memory strings.
- *
- * @param {object} input
- * @param {string} input.promptLeading — the captured leading bytes of the
- *   ACTUAL reviewer prompt (record-dispatch-prompt-layout.mjs's capture).
- * @param {string} input.prefixBytes — the round's recorded byte-identical
- *   invariant-prefix content (the `<gate>-<headSha>.briefing-prefix.txt`
- *   bytes).
- * @param {string} input.prefixPath — the path used to render this round's
- *   pointer line (must be the SAME path every reviewer was pointed at).
- * @returns {{ aligned: boolean, mode: "inline"|"pointer"|null, reason: string|null }}
- */
-/**
  * Deterministically compose a full reviewer prompt: the round's
  * byte-identical invariant prefix INLINED as the leading bytes, followed by
  * the (also round-invariant) volatile tail, followed by the per-group angle
@@ -829,6 +805,30 @@ export function composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuf
   return prefixBytes + volatile + angleSuffix;
 }
 
+/**
+ * Decide whether a dispatched reviewer prompt's LEADING bytes are
+ * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841): either the
+ * prompt's leading bytes are byte-identical to the round's invariant prefix
+ * (inline mode), or the prompt leads with the byte-identical pointer line
+ * naming the round's invariant-prefix path (pointer-seeding mode), with any
+ * angle-specific text strictly AFTER it. An angle-first prompt (dynamic
+ * per-unit prose ahead of the prefix/pointer) matches neither and is
+ * REJECTED — this is the mechanical proof the prose-only rule lacked.
+ *
+ * Pure and offline: takes the already-captured leading bytes and the already-
+ * read prefix bytes/path, never reads a file itself (the CLI wrapper owns
+ * I/O), so this is directly unit-testable with in-memory strings.
+ *
+ * @param {object} input
+ * @param {string} input.promptLeading — the captured leading bytes of the
+ *   ACTUAL reviewer prompt (record-dispatch-prompt-layout.mjs's capture).
+ * @param {string} input.prefixBytes — the round's recorded byte-identical
+ *   invariant-prefix content (the `<gate>-<headSha>.briefing-prefix.txt`
+ *   bytes).
+ * @param {string} input.prefixPath — the path used to render this round's
+ *   pointer line (must be the SAME path every reviewer was pointed at).
+ * @returns {{ aligned: boolean, mode: "inline"|"pointer"|null, reason: string|null }}
+ */
 export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefixPath } = {}) {
   const leading = typeof promptLeading === "string" ? promptLeading : "";
   if (typeof prefixBytes === "string" && prefixBytes.length > 0 && leading.startsWith(prefixBytes)) {
@@ -845,4 +845,190 @@ export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefi
     mode: null,
     reason: "reviewer prompt does not LEAD with the round's byte-identical invariant prefix (inline mode) or its byte-identical pointer line (pointer-seeding mode) — an angle-first prompt (dynamic per-unit prose ahead of the prefix/pointer) defeats prefix matching (GATE-EXEC-BRIEFING-PREFIX)",
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * 7. Diff filtering for the shared per-head block (issue #1853)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Default excluded path patterns for the diff INLINED into a reviewer
+ * prompt's shared per-head block: lockfiles (high-churn, not
+ * review-relevant — the file's CHANGE is still listed in the changed-files
+ * summary, only its hunk text is dropped from the inlined diff) and common
+ * generated/vendored trees. ALWAYS applied on top of any caller-supplied
+ * `excludeGlobs` in {@link filterDiffForInline} — never replaced by it, so a
+ * project-specific config gap can't silently un-exclude a lockfile. A file
+ * excluded here is not deleted from the repo or the diff on disk; it stays
+ * readable on demand (`git diff -- <path>` in the reviewed worktree, or the
+ * full unfiltered `.diff` pointer file), only not inlined by default.
+ *
+ * Glob subset: `**\/` matches zero-or-more whole path segments, a lone `**`
+ * matches any suffix, a single `*` matches within one path segment only —
+ * see {@link matchesDiffExcludeGlob}.
+ */
+export const DEFAULT_DIFF_EXCLUDE_GLOBS = Object.freeze([
+  // Lockfiles.
+  "package-lock.json", "**/package-lock.json",
+  "npm-shrinkwrap.json", "**/npm-shrinkwrap.json",
+  "yarn.lock", "**/yarn.lock",
+  "pnpm-lock.yaml", "**/pnpm-lock.yaml",
+  "*-lock.yaml", "**/*-lock.yaml",
+  "*-lock.yml", "**/*-lock.yml",
+  "Cargo.lock", "**/Cargo.lock",
+  "Gemfile.lock", "**/Gemfile.lock",
+  "composer.lock", "**/composer.lock",
+  // Generated/vendored trees.
+  "dist/**", "**/dist/**",
+  "lib/**", "**/lib/**",
+  "coverage/**", "**/coverage/**",
+  "node_modules/**", "**/node_modules/**",
+  ".claude/**", "**/.claude/**",
+]);
+
+function escapeDiffGlobLiteral(ch) {
+  return /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+}
+
+const diffGlobPatternCache = new Map();
+
+/**
+ * Minimal shell-glob subset compiler (mirrors the established pattern used
+ * elsewhere in this repo for config-driven path patterns): `**\/` matches
+ * zero-or-more whole path segments, a lone `**` matches any suffix
+ * (including `/`), a single `*` matches within one path segment only,
+ * everything else is literal. No glob dependency is installed in this repo
+ * and none of the callers need more than this subset.
+ * @param {string} relPath — POSIX-normalized repo-relative path
+ * @param {string} pattern
+ * @returns {boolean}
+ */
+export function matchesDiffExcludeGlob(relPath, pattern) {
+  if (typeof relPath !== "string" || typeof pattern !== "string" || pattern.length === 0) return false;
+  let compiled = diffGlobPatternCache.get(pattern);
+  if (!compiled) {
+    let re = "";
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (ch === "*" && pattern[i + 1] === "*") {
+        if (pattern[i + 2] === "/") {
+          re += "(?:.*/)?";
+          i += 2;
+        } else {
+          re += ".*";
+          i += 1;
+        }
+      } else if (ch === "*") {
+        re += "[^/]*";
+      } else {
+        re += escapeDiffGlobLiteral(ch);
+      }
+    }
+    compiled = new RegExp(`^${re}$`);
+    diffGlobPatternCache.set(pattern, compiled);
+  }
+  return compiled.test(relPath);
+}
+
+/**
+ * Classify why a diff file is excluded from inlining, or `null` when it
+ * should be inlined. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
+ * any caller-supplied `excludeGlobs` — the default set can never be
+ * disabled by a caller's config.
+ * @param {string} relPath
+ * @param {{ excludeGlobs?: string[] }} [opts]
+ * @returns {"default"|"configured"|null}
+ */
+export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
+  const posix = String(relPath).replace(/\\/g, "/");
+  for (const pattern of DEFAULT_DIFF_EXCLUDE_GLOBS) {
+    if (matchesDiffExcludeGlob(posix, pattern)) return "default";
+  }
+  for (const pattern of excludeGlobs) {
+    if (matchesDiffExcludeGlob(posix, pattern)) return "configured";
+  }
+  return null;
+}
+
+/**
+ * Extract a diff file-block's resulting path. Prefers the `+++ b/<path>`
+ * line (present for every non-deletion block), falls back to `--- a/<path>`
+ * (deletions), then to the `diff --git a/X b/Y` header's second token. This
+ * is a best-effort extraction for FILTERING purposes only (unlike a
+ * content-fidelity transform, a path this misses just fails open to
+ * "inlined" — never mis-drops a file), so it does not attempt full
+ * git-quoted-path decoding (rare: a path containing a quote/control
+ * byte/non-ASCII byte under core.quotePath) — see
+ * `scripts/github/write-gate-context.mjs`'s `decodeGitDiffPathToken` for
+ * that fuller decode if this ever needs it.
+ * @param {string[]} blockLines
+ * @returns {string|null}
+ */
+function extractDiffBlockPath(blockLines) {
+  for (const line of blockLines) {
+    if (line.startsWith("+++ ") && !line.includes("/dev/null")) {
+      return line.slice(4).trim().replace(/^[abiwco]\//, "");
+    }
+  }
+  for (const line of blockLines) {
+    if (line.startsWith("--- ") && !line.includes("/dev/null")) {
+      return line.slice(4).trim().replace(/^[abiwco]\//, "");
+    }
+  }
+  const header = blockLines[0] ?? "";
+  const m = /^diff --git \S+ (\S+)$/.exec(header);
+  return m ? m[1].replace(/^[abiwco]\//, "") : null;
+}
+
+/**
+ * Filter a unified diff (`git diff` output) down to the files that should be
+ * INLINED into a reviewer prompt's shared per-head block (issue #1853):
+ * lockfiles, generated/vendored trees, and any caller-configured
+ * `excludeGlobs` are dropped whole-file (header + all hunks), every other
+ * file's block passes through byte-for-byte unchanged. Excluding a file here
+ * only affects what this function returns — it never touches the diff on
+ * disk or in the reviewed worktree, so an excluded file stays readable on
+ * demand.
+ *
+ * Pure and offline: string in, string out, no I/O — the caller (currently
+ * `write-gate-context.mjs`, before rendering the invariant prefix) supplies
+ * already-captured diff text.
+ *
+ * @param {string} diffText — `git diff` output (or `""`/absent).
+ * @param {{ excludeGlobs?: string[] }} [opts] — additional exclude globs,
+ *   layered on top of {@link DEFAULT_DIFF_EXCLUDE_GLOBS} (never replacing it).
+ * @returns {{ filteredDiff: string, excludedFiles: Array<{path: string, reason: "default"|"configured"}>, includedFiles: string[] }}
+ */
+export function filterDiffForInline(diffText, { excludeGlobs = [] } = {}) {
+  if (typeof diffText !== "string" || diffText.length === 0) {
+    return { filteredDiff: typeof diffText === "string" ? diffText : "", excludedFiles: [], includedFiles: [] };
+  }
+  const lines = diffText.split("\n");
+  const blockStarts = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("diff --git ")) blockStarts.push(i);
+  }
+  // No recognizable `diff --git` file boundary — not a shape this filter
+  // understands; pass through unfiltered rather than guess.
+  if (blockStarts.length === 0) {
+    return { filteredDiff: diffText, excludedFiles: [], includedFiles: [] };
+  }
+  const keptChunks = [];
+  const excludedFiles = [];
+  const includedFiles = [];
+  if (blockStarts[0] > 0) keptChunks.push(lines.slice(0, blockStarts[0]).join("\n"));
+  for (let b = 0; b < blockStarts.length; b++) {
+    const start = blockStarts[b];
+    const end = b + 1 < blockStarts.length ? blockStarts[b + 1] : lines.length;
+    const blockLines = lines.slice(start, end);
+    const relPath = extractDiffBlockPath(blockLines);
+    const reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
+    if (reason) {
+      excludedFiles.push({ path: relPath, reason });
+    } else {
+      if (relPath) includedFiles.push(relPath);
+      keptChunks.push(blockLines.join("\n"));
+    }
+  }
+  return { filteredDiff: keptChunks.join("\n"), excludedFiles, includedFiles };
 }

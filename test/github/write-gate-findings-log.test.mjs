@@ -445,6 +445,32 @@ test("writeGateFindingsLog rejects a non-boolean operatorVisible", async () => {
   }, /operatorVisible must be a boolean/);
 });
 
+test("writeGateFindingsLog fails closed on operatorVisible set for a non-'low' severity (accepted-but-ignored is loose; #1853 hygiene)", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "naming", summary: "x", operatorVisible: true }]),
+    });
+  }, /operatorVisible is only meaningful for a "low" finding/);
+});
+
+test("writeGateFindingsLog fails closed on operatorVisible: false for a non-'low' severity too (the key's mere presence is the signal, not just true)", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "nit", angle: "naming", summary: "x", operatorVisible: false }]),
+    });
+  }, /operatorVisible is only meaningful for a "low" finding/);
+});
+
 test("writeGateFindingsLog rejects malformed repo format in buildLogPath", async () => {
   await assert.rejects(async () => {
     await writeGateFindingsLog({

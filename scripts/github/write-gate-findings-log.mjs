@@ -27,6 +27,7 @@ Required:
                                  explicit signal close-gate-findings.mjs's disposition pass requires before filing a "low"
                                  to the PR's tracked follow-up issue; absent/false is the conservative default (resolved
                                  in-thread, never filed). A "nit" is never filed regardless of operatorVisible.
+                                 operatorVisible on any OTHER severity fails closed (exit 2) — it has no meaning there.
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
@@ -135,6 +136,14 @@ function validateFindingsArray(parsed, flagLabel) {
     if ("operatorVisible" in f) {
       if (typeof f.operatorVisible !== "boolean") {
         throw parseError(`${flagLabel}[${i}].operatorVisible must be a boolean`);
+      }
+      // Fail closed rather than accept-and-ignore: operatorVisible only has
+      // meaning for a "low" finding (the net-reduction disposition policy's
+      // signal close-gate-findings.mjs requires before filing a low) — setting
+      // it on any other severity is a caller error the ledger must not
+      // silently swallow.
+      if (f.severity !== "low") {
+        throw parseError(`${flagLabel}[${i}].operatorVisible is only meaningful for a "low" finding (got severity ${JSON.stringify(f.severity)})`);
       }
       entry.operatorVisible = f.operatorVisible;
     }
