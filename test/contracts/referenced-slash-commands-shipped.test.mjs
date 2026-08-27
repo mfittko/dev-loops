@@ -83,25 +83,35 @@ function computeBareSlashFailures(repoRoot, surfaceFile) {
   return computeBareSlashFailuresForContent(path.relative(repoRoot, surfaceFile), content);
 }
 
+// The selection predicate (existing on disk, not allowlisted) — the SINGLE
+// source of which surface files the scan actually inspects. Shared by
+// `collectFailures` and the vacuous-pass guard below so a skip condition
+// added to one can never drift from what the other counts.
+function scannedSurfaceFiles(repoRoot) {
+  return surfaceFiles(repoRoot).filter(
+    (surfaceFile) => fs.existsSync(surfaceFile) && !isAllowlisted(repoRoot, surfaceFile),
+  );
+}
+
 function collectFailures(repoRoot) {
   const failures = [];
-  for (const surfaceFile of surfaceFiles(repoRoot)) {
-    if (!fs.existsSync(surfaceFile)) continue;
-    if (isAllowlisted(repoRoot, surfaceFile)) continue;
+  for (const surfaceFile of scannedSurfaceFiles(repoRoot)) {
     failures.push(...computeBareSlashFailures(repoRoot, surfaceFile));
   }
   return failures;
 }
 
 test("no shipped surface instructs a bare /loop-* slash command without the namespaced alternative", () => {
-  // Vacuous-pass guard (mirrors referenced-scripts-shipped.test.mjs's
-  // references.length check): counts the files the scan actually inspects —
-  // existing and not allowlisted — so neither an empty surface set nor an
-  // all-allowlisted one can pass the contract without scanning anything.
-  const scannedSurfaces = surfaceFiles(REPO_ROOT).filter(
-    (surfaceFile) => fs.existsSync(surfaceFile) && !isAllowlisted(REPO_ROOT, surfaceFile),
-  );
+  // Vacuous-pass guard, two layers deep — mirrors referenced-scripts-shipped's
+  // `references.length` check at the same depth (scan-OUTPUT, not just file
+  // selection):
+  const scannedSurfaces = scannedSurfaceFiles(REPO_ROOT);
   assert.ok(scannedSurfaces.length > 0, "expected the scanned surface set to be non-empty (vacuous-pass guard)");
+  const totalBareTokens = scannedSurfaces.reduce(
+    (count, surfaceFile) => count + [...fs.readFileSync(surfaceFile, "utf8").matchAll(BARE_LOOP_CMD_RE)].length,
+    0,
+  );
+  assert.ok(totalBareTokens > 0, "expected at least one bare /loop-* token across the scanned surfaces (vacuous-pass guard)");
   const failures = collectFailures(REPO_ROOT);
   assert.deepEqual(failures, [], `bare /loop-* slash references without a namespaced alternative:\n${failures.join("\n")}`);
 });
