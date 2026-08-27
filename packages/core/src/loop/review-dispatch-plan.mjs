@@ -728,3 +728,78 @@ export function partitionPrimerGroups(requestGroups, capabilities = {}) {
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * 6. Dispatch-prompt layout alignment (issue #1841, completes #1468)
+ * ------------------------------------------------------------------ */
+
+// Leading-bytes capture cap for a dispatched reviewer prompt (issue #1841's
+// record-dispatch-prompt-layout.mjs). Sized comfortably above
+// write-gate-context.mjs's BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES (200 KiB) so
+// a full byte-for-byte alignment check never runs out of captured bytes for
+// an inline-mode round.
+export const DISPATCH_PROMPT_LEADING_CAP_BYTES = 512 * 1024;
+
+/**
+ * Render the byte-identical pointer LINE a reviewer prompt must lead with
+ * under pointer-seeding mode (GATE-EXEC-BRIEFING-PREFIX's "Cache alignment"
+ * paragraph): the orchestrator points every reviewer of the round at the SAME
+ * invariant-prefix file path rather than inlining its bytes. Deterministic in
+ * `prefixPath` alone, so two reviewers given the same path render the
+ * identical line, and a per-reviewer/angle-varying path (which would defeat
+ * prefix matching) renders a DIFFERENT line, exactly reproducing the defect
+ * this line exists to catch.
+ *
+ * @param {string} prefixPath — the invariant-prefix file path every reviewer
+ *   of the round is pointed at (e.g. the `<gate>-<headSha>.briefing-prefix.txt`
+ *   path).
+ * @returns {string}
+ */
+export function renderBriefingPointerLine(prefixPath) {
+  if (typeof prefixPath !== "string" || prefixPath.trim().length === 0) {
+    throw new Error("renderBriefingPointerLine requires a non-empty prefixPath");
+  }
+  return `Read ${prefixPath.trim()} FIRST, in full, before anything else in this prompt — it is this round's byte-identical invariant briefing prefix (GATE-EXEC-BRIEFING-PREFIX). Your angle-specific instructions follow below, after it.`;
+}
+
+/**
+ * Decide whether a dispatched reviewer prompt's LEADING bytes are
+ * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841): either the
+ * prompt's leading bytes are byte-identical to the round's invariant prefix
+ * (inline mode), or the prompt leads with the byte-identical pointer line
+ * naming the round's invariant-prefix path (pointer-seeding mode), with any
+ * angle-specific text strictly AFTER it. An angle-first prompt (dynamic
+ * per-unit prose ahead of the prefix/pointer) matches neither and is
+ * REJECTED — this is the mechanical proof the prose-only rule lacked.
+ *
+ * Pure and offline: takes the already-captured leading bytes and the already-
+ * read prefix bytes/path, never reads a file itself (the CLI wrapper owns
+ * I/O), so this is directly unit-testable with in-memory strings.
+ *
+ * @param {object} input
+ * @param {string} input.promptLeading — the captured leading bytes of the
+ *   ACTUAL reviewer prompt (record-dispatch-prompt-layout.mjs's capture).
+ * @param {string} input.prefixBytes — the round's recorded byte-identical
+ *   invariant-prefix content (the `<gate>-<headSha>.briefing-prefix.txt`
+ *   bytes).
+ * @param {string} input.prefixPath — the path used to render this round's
+ *   pointer line (must be the SAME path every reviewer was pointed at).
+ * @returns {{ aligned: boolean, mode: "inline"|"pointer"|null, reason: string|null }}
+ */
+export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefixPath } = {}) {
+  const leading = typeof promptLeading === "string" ? promptLeading : "";
+  if (typeof prefixBytes === "string" && prefixBytes.length > 0 && leading.startsWith(prefixBytes)) {
+    return { aligned: true, mode: "inline", reason: null };
+  }
+  if (typeof prefixPath === "string" && prefixPath.trim().length > 0) {
+    const pointerLine = renderBriefingPointerLine(prefixPath);
+    if (leading.startsWith(pointerLine)) {
+      return { aligned: true, mode: "pointer", reason: null };
+    }
+  }
+  return {
+    aligned: false,
+    mode: null,
+    reason: "reviewer prompt does not LEAD with the round's byte-identical invariant prefix (inline mode) or its byte-identical pointer line (pointer-seeding mode) — an angle-first prompt (dynamic per-unit prose ahead of the prefix/pointer) defeats prefix matching (GATE-EXEC-BRIEFING-PREFIX)",
+  };
+}

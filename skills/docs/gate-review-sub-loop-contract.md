@@ -579,6 +579,7 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
   operator decision per PR. Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
+- is composed prefix-first (`GATE-EXEC-BRIEFING-PREFIX`'s "Cache alignment" paragraph): right after composing its prompt (the same step as the `verify-fresh-review-context.mjs` call above), the orchestrator ALSO calls `scripts/github/record-dispatch-prompt-layout.mjs --scope <same scope> --head-sha <sha> --prefix-path <this round's invariant-prefix file path> --prompt-file <path to the ACTUAL composed prompt text>` to capture its leading bytes — the "Prompt-LAYOUT enforcement" paragraph under `GATE-EXEC-BRIEFING-PREFIX` above owns the full capture/verify contract; this is a rollout, not a precondition (a round that never captures is never newly blocked).
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -783,6 +784,34 @@ closed. Only when no on-disk records exist (offline/legacy) does it fall back to
 rule that all of the round's sentinels share ONE identical hash. See
 `verify-briefing-prefixes.mjs --help` for the worked same-head two-gate example.
 
+**Prompt-LAYOUT enforcement (issue #1841, completes #1468).** Everything above proves the
+recorded prefix HASH is byte-identical across a round's sentinels — it proves nothing about
+whether any reviewer's ACTUAL dispatched prompt LED with those bytes, since the prompt is
+composed by the orchestrating agent at fan-out time with no code template. This closes that
+gap with a minimal capture point: right after composing each reviewer's prompt (the same
+fan-out step that already runs `verify-fresh-review-context.mjs`), call
+`scripts/github/record-dispatch-prompt-layout.mjs --scope <gate>-<angle-or-group> --head-sha
+<sha> --prefix-path <the invariant-prefix file path this reviewer's prompt was composed
+from/points at> --prompt-file <path to the ACTUAL composed prompt text>`. It captures the
+prompt's leading bytes (up to `DISPATCH_PROMPT_LEADING_CAP_BYTES`,
+`@dev-loops/core/loop/review-dispatch-plan`) to `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`.
+Before Phase 3 consolidation, the fan-in ALSO runs
+`scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` (wired into
+`consolidate-fanin.mjs`'s own `--head-sha` block, alongside `verify-briefing-prefixes.mjs`),
+which fails closed (exit 1) when a recorded prompt's leading bytes do NOT match either: the
+round's byte-identical invariant prefix itself (inline mode), or the byte-identical pointer
+LINE naming the SAME prefix path, rendered by `renderBriefingPointerLine`
+(`@dev-loops/core/loop/review-dispatch-plan`) — the fixed line `verifyPromptLeadingAlignment`
+checks the leading bytes against under pointer-seeding mode, with the angle-specific text
+strictly AFTER it. An angle-first prompt (dynamic per-unit prose ahead of the prefix/pointer)
+matches neither and fails this mechanically, not only by prose review. Ground truth is ALWAYS
+re-discovered on disk from the round's real `<gate>-<headSha>.briefing-prefix.txt` record —
+never trusted from a captured record's own stored path — so a stale/tampered record can never
+smuggle in different bytes. A round with NO dispatch-prompt records at all is never newly
+blocked (progressive/optional capture, same posture as `GATE-EXEC-PRIMER-EVIDENCE` below): the
+orchestrator adopting this capture step is a rollout, not a precondition for every existing
+caller.
+
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
 (for example due to tooling or resource constraints), the fan-out MUST run all reviewers
@@ -917,7 +946,12 @@ Before consolidating, `consolidate-fanin.mjs` itself runs
 had ZERO callers, so the rule's own cited proof was never invoked); a fail-closed
 result (mismatched or missing prefix hashes across this round's reviewer
 sentinels, or a sentinel count short of the dispatch units the conductor spawned)
-MUST stop the pass rather than proceed to consolidation. The conductor supplies
+MUST stop the pass rather than proceed to consolidation. In the SAME `--head-sha`
+block it ALSO runs `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha
+<sha>` (issue #1841, completing #1468's own acceptance — see the "Prompt-LAYOUT
+enforcement" paragraph under `GATE-EXEC-BRIEFING-PREFIX` above), which fails
+closed on any recorded reviewer prompt that does not LEAD with the round's
+byte-identical invariant prefix or pointer line. The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
 context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
 count, NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
@@ -1011,6 +1045,25 @@ plan hash is missing or mismatched. The refusal names the failing check
 `shared_prefix_hash` / `plan_hash`). This materially backs the `GATE-EXEC-PRIME`
 barrier: the primer write-before-read ordering is no longer asserted only in
 prose, but is a mechanically-checkable fail-closed input to consolidation.
+
+**Enforcement stays OPT-IN, not default-on (issue #1841, investigated as part of
+completing #1468).** `consolidate-fanin.mjs` validates this evidence ONLY when the
+conductor supplies both `--primer-evidence` and `--primer-plan`; a round that
+supplies neither proceeds unenforced, same as before. #1841 investigated flipping
+this to default-on and could NOT prove, within the shipped harness and without a
+live multi-reviewer dispatch to observe, that the Phase 1.5 primer measurably
+produces org+model content-hash cache reads on reviewers 2..N — `primer-evidence.mjs`'s
+own ordering/binding checks are deterministic and offline (timestamps, fingerprints),
+which proves ordering and request-fingerprint invariants but never MEASURES
+provider cache reuse itself (that measurement is `GATE-EXEC-CACHE-TELEMETRY`'s job,
+below, and it is ALSO opt-in for the same reason: no in-repo artifact yet records a
+real harness's cache-creation/cache-read token counts for a primed round). Flipping
+primer-evidence enforcement to default-on without that proof risked false-blocking a
+legitimately-primed fan-out on a harness/mechanism combination nobody had measured.
+Ship the dispatch-LAYOUT check above as unconditional (it needs no such proof — it
+verifies BYTES the orchestrator already controls, not provider-side cache behavior),
+and revisit this default once a real round's cache-telemetry evidence demonstrates
+the primer reliably produces reads on the shipped harness.
 
 <!-- rule: GATE-EXEC-CACHE-TELEMETRY -->
 `GATE-EXEC-CACHE-TELEMETRY`: when a round records cache-telemetry evidence

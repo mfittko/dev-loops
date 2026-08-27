@@ -61,6 +61,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
+import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -199,6 +200,14 @@ Optional:
                                  GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
                                  artifact count — comparing against the angle count would false-fail
                                  every grouped round.
+                                 When --head-sha is given, the fan-in ALSO reads any
+                                 tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json records
+                                 (record-dispatch-prompt-layout.mjs) and FAILS CLOSED (exit 1) when a
+                                 recorded reviewer prompt does not LEAD with the round's
+                                 byte-identical invariant prefix or its byte-identical pointer line
+                                 (GATE-EXEC-BRIEFING-PREFIX layout, #1841/completes #1468) — an
+                                 angle-first prompt fails this mechanically. A round with no such
+                                 records is never newly blocked (progressive/optional capture).
   --primer-evidence <path>       The recorded primer-dispatch ordering evidence artifact
                                  (<gate>-<headSha>.primer-evidence.json, Phase 1.5 step 4) as JSON.
                                  Must be paired with --primer-plan (either flag alone fails closed at
@@ -285,8 +294,10 @@ Exit codes:
      malformed "carriedFromHead" (not a 7-64 char hex SHA), a round still over the
      render budget at minimum summary length with --ledger-out not given, or a
      GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
-     (a sentinel records a divergent/missing prefix hash, or the sentinel count
-     is short of --expected-dispatch-units) — #1618, or (with --resolved-angles
+     (a sentinel records a divergent/missing prefix hash, the sentinel count
+     is short of --expected-dispatch-units, or a recorded reviewer prompt does
+     not lead with the round's byte-identical prefix/pointer line) — #1618,
+     #1841, or (with --resolved-angles
      and a "clean" verdict) a resolved angle with neither a per-angle artifact
      nor a proven carried-forward entry
   2  Invalid --jq filter`.trim();
@@ -1047,6 +1058,21 @@ export async function consolidateGateFanin(options) {
     if (options.expectedDispatchUnits !== undefined && prefixVerdict.reviewerCount > 0
         && prefixVerdict.reviewerCount < options.expectedDispatchUnits) {
       throw new Error(`GATE-EXEC-BRIEFING-PREFIX sentinel count (${prefixVerdict.reviewerCount}) is short of the expected dispatch-unit count (${options.expectedDispatchUnits}) for head ${options.headSha} — ${options.expectedDispatchUnits - prefixVerdict.reviewerCount} dispatched reviewer(s) never ran the fresh-context guard (no sentinel written). Re-run the missing reviewer(s), then re-consolidate.`);
+    }
+
+    // GATE-EXEC-BRIEFING-PREFIX dispatch-prompt LAYOUT (#1841, completes #1468):
+    // the hash checks above prove the recorded prefix is byte-identical across
+    // reviewers, but prove NOTHING about whether any reviewer's ACTUAL prompt
+    // LED with it. This reads the leading-bytes dispatch records
+    // record-dispatch-prompt-layout.mjs writes at fan-out and fails closed when
+    // a recorded prompt is angle-first (dynamic per-unit prose ahead of the
+    // invariant prefix/pointer line) instead of prefix-first. A round with NO
+    // dispatch-prompt records at all (the orchestrator has not yet been updated
+    // to capture them) is never newly blocked — progressive/optional capture,
+    // same posture as GATE-EXEC-PRIMER-EVIDENCE below.
+    const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
+    if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt was not cache-aligned. Re-dispatch the offending reviewer(s) prefix-first, then re-consolidate.`);
     }
   }
 
