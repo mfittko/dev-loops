@@ -185,6 +185,85 @@ test("detector 3 (sink-pattern): a >= comparison on a *token* name does NOT bloc
 });
 
 // ---------------------------------------------------------------------------
+// Detector 3 precision — sink-pattern false-positive tightening (#1857,
+// follow-up to #1816). Both directions pinned: prose/placeholder shapes that
+// merely CONTAIN a secret keyword must pass clean, while every real
+// secret-shaped identifier flowing into a real sink must still block.
+// ---------------------------------------------------------------------------
+
+// The exact rc.7-blocking shape (quoted verbatim from the triggering issue):
+// an ordinary word ("token-economical") that CONTAINS the keyword "token" as
+// a substring, next to a `<owner/name>` angle-bracket placeholder whose
+// closing `>` is not a shell redirect. Neither half is a real secret-name/
+// sink flow.
+const RC7_DOC_LINE = "... add `--jq`/`--silent` per the token-economical convention) ... --repo <owner/name> ...";
+
+test("detector 3 precision: the rc.7-blocking doc line (token-economical + <owner/name> placeholder) does NOT block", () => {
+  assert.deepEqual(scanLineText(RC7_DOC_LINE), []);
+});
+
+test("detector 3 precision: 'tokenize the input > 5' does NOT block (plain lowercase word, not an identifier)", () => {
+  assert.deepEqual(scanLineText("tokenize the input > 5"), []);
+});
+
+test("detector 3 precision: 'the keyword > threshold' does NOT block (no secret keyword present at all)", () => {
+  assert.deepEqual(scanLineText("the keyword > threshold"), []);
+});
+
+test("detector 3 precision: a Map<string, AuthToken> TS generic does NOT block (trailing bracket is not a redirect)", () => {
+  assert.deepEqual(scanLineText("const cache: Map<string, AuthToken> = new Map();"), []);
+});
+
+test("detector 3 precision: self-scan — scanDiffText over the exact rc.7 doc line reports ok:true (no self-trip)", () => {
+  const diff = [
+    "diff --git a/skills/dev-loop/SKILL.md b/skills/dev-loop/SKILL.md",
+    "index 0000000..1111111 100644",
+    "--- a/skills/dev-loop/SKILL.md",
+    "+++ b/skills/dev-loop/SKILL.md",
+    "@@ -0,0 +1,1 @@",
+    `+${RC7_DOC_LINE}`,
+  ].join("\n");
+  assert.deepEqual(scanDiffText(diff), { ok: true, findings: [] });
+});
+
+// True positives that must STILL block — no false-negative. Names built via
+// join() at runtime (see the module comment at the top of this file) so a
+// real secret-shaped identifier never sits next to a sink keyword in this
+// file's own committed SOURCE text.
+const ENV_STYLE_FIXTURE = join("GIT", "HUB_TO", "KEN"); // GITHUB_TOKEN — SCREAMING_SNAKE env-var shape
+const ALLCAPS_FIXTURE = join("SEC", "RET"); // SECRET — bare ALL-CAPS identifier
+const CAMELCASE_FIXTURE = join("auth", "Token"); // authToken — camelCase identifier
+const SUFFIX_SHAPE_FIXTURE = join("FOO_AP", "I_KEY"); // FOO_API_KEY — `*_API_KEY` suffix shape
+
+for (const [label, name] of [
+  ["SCREAMING_SNAKE env-var (GITHUB_TOKEN)", ENV_STYLE_FIXTURE],
+  ["bare ALL-CAPS identifier (SECRET)", ALLCAPS_FIXTURE],
+  ["camelCase identifier (authToken)", CAMELCASE_FIXTURE],
+  ["*_API_KEY suffix shape (FOO_API_KEY)", SUFFIX_SHAPE_FIXTURE],
+]) {
+  test(`detector 3 precision: ${label} echoed still blocks`, () => {
+    const findings = scanLineText(`echo "$${name}"`);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].detectorClass, DETECTOR_CLASSES.SINK_PATTERN);
+  });
+
+  test(`detector 3 precision: ${label} redirected to a real file still blocks`, () => {
+    const findings = scanLineText(`printf '%s' "$${name}" > /tmp/out.log`);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].detectorClass, DETECTOR_CLASSES.SINK_PATTERN);
+  });
+}
+
+// A real secret-shaped identifier and a real redirect target CAN share a
+// line with an unrelated `<owner/name>` placeholder — the placeholder-strip
+// must never swallow a genuine redirect that follows it.
+test("detector 3 precision: a real redirect after an unrelated <owner/name> placeholder still blocks", () => {
+  const findings = scanLineText(`printf '%s' "$${ENV_STYLE_FIXTURE}" --repo <owner/name> > /tmp/out.log`);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].detectorClass, DETECTOR_CLASSES.SINK_PATTERN);
+});
+
+// ---------------------------------------------------------------------------
 // Must-pass fixtures (DoD): safe env-var-only pattern, allowlisted value,
 // non-credential base64.
 // ---------------------------------------------------------------------------
