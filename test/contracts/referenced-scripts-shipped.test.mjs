@@ -143,6 +143,21 @@ function computeDanglingReferenceFailures(repoRoot, references, packedFiles) {
   return failures;
 }
 
+// Per-root vacuous-pass guard: `commands/` and `agents/` are scanned via the
+// shared `flatDir` helper, which fails OPEN (returns an empty list) when the
+// dir is missing. The aggregate `references.length > 0` check below is
+// satisfied by OTHER surface roots (skills, packages/core/src, ...), so a
+// vanished/renamed `commands/` or `agents/` dir would otherwise silently
+// shrink the scanned surface with no test failure. Assert each root
+// contributes at least one surface file directly.
+test("the commands/ and agents/ surface roots each contribute at least one surface file", () => {
+  const commandsFiles = flatDir(path.join(REPO_ROOT, "commands"), ".md", []);
+  assert.ok(commandsFiles.length > 0, "expected commands/ to contribute at least one .md surface file — a vanished/renamed commands/ dir would silently shrink the scanned surface");
+
+  const agentsFiles = flatDir(path.join(REPO_ROOT, "agents"), ".md", []);
+  assert.ok(agentsFiles.length > 0, "expected agents/ to contribute at least one .md surface file — a vanished/renamed agents/ dir would silently shrink the scanned surface");
+});
+
 test("every scripts/...mjs reference in the shipped instruction surfaces is in the packed npm file set", () => {
   const packedFiles = expandPackedFileSet(REPO_ROOT);
   assert.ok(packedFiles.size > 100, `packed file set looks too small (${packedFiles.size}) — expansion likely broken`);
