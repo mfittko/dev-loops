@@ -80,11 +80,19 @@ outside this contract's scope: a standalone, on-demand review pass reachable on
 any PR with no lifecycle obligation of its own (see the
 [Review skill](../review/SKILL.md)). It posts through the same single-surface
 poster and required-fields shape this document defines, but is a deliberately
-NON-EVIDENCE gate — `review` is absent from `GATE_CONFIG_KEY`
-(`@dev-loops/core/loop/gate-fanin`) and from the gate-comment header vocabulary
-a `draft_gate`/`pre_approval_gate` comment is parsed against
-(`@dev-loops/core/github/copilot-helpers`), so a `review` comment never
-satisfies `draft_gate` or `pre_approval_gate` evidence and `GATE-COMMENT-NON-
+NON-EVIDENCE gate. The guard is authoritative recognition, not absence:
+`review` IS a recognized gate name in the gate-comment header vocabulary a
+comment is parsed against (`@dev-loops/core/github/copilot-helpers`), and
+recognizing a comment's header as `review` is exactly what makes the parser
+return non-evidence immediately — before it ever falls through to the
+lenient whole-body `draft_gate`/`pre_approval_gate` token scan that a
+genuinely unidentifiable comment relies on. That holds regardless of
+`--findings-ledger`/the gate-findings-review marker. (`review` is also absent
+from `GATE_CONFIG_KEY` in `@dev-loops/core/loop/gate-fanin`, but that is a
+separate, unrelated fact — `review` has no `draft`/`preApproval`-style config
+threshold — not the mechanism that keeps its comments from being misread as
+draft/pre-approval evidence.) So a `review` comment never satisfies
+`draft_gate` or `pre_approval_gate` evidence and `GATE-COMMENT-NON-
 SUBSTITUTION` below applies to it symmetrically: a clean `review` comment
 authorizes nothing this contract's two gates require.
 

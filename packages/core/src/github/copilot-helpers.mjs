@@ -15,6 +15,17 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
+// `review` (the standalone review entrypoint, upsert-checkpoint-verdict.mjs's
+// `--gate review`) is a RECOGNIZED gate header — it is identified, not
+// absent — but carries no draft/pre-approval evidence by design (#1808 AC3).
+// Recognizing it (rather than leaving it unrecognized) is what lets
+// parseGateReviewCommentFields below short-circuit to null the instant a
+// `review` header is seen, instead of falling through to the lenient
+// draft_gate/pre_approval_gate token scan — the fallthrough that previously
+// let a `review` verdict whose findings text merely MENTIONED "draft_gate"
+// get recorded as real draft-gate evidence (a draft-gate bypass).
+const NON_EVIDENCE_GATE_NAMES = new Set(["review"]);
+const RECOGNIZED_GATE_NAMES = new Set([...GATE_REVIEW_NAMES, ...NON_EVIDENCE_GATE_NAMES]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // Size-budget outcome vocabulary — mirrors
 // check-size-budget.mjs's computeSizeBudget outcome enum exactly; this file
@@ -295,9 +306,14 @@ function stripGateCommentMarkdown(rawLine) {
   return line.trim();
 }
 
+// Recognizes BOTH evidence gates (draft_gate/pre_approval_gate) and the
+// non-evidence `review` gate — parseGateReviewCommentFields below relies on
+// `review` coming back as an identified value (not null) so it can
+// short-circuit to non-evidence explicitly, rather than leaving the field
+// null and falling through to the lenient token-scan fallback.
 function normalizeGateReviewName(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
-  return GATE_REVIEW_NAMES.has(normalized) ? normalized : null;
+  return RECOGNIZED_GATE_NAMES.has(normalized) ? normalized : null;
 }
 
 function normalizeGateReviewVerdict(value) {
@@ -478,6 +494,22 @@ function parseGateReviewCommentFields(body) {
       }
       continue;
     }
+  }
+
+  // An explicit, RECOGNIZED `review` gate field is authoritative and returns
+  // null here — before the lenient token-scan fallback below ever runs. A
+  // `review` verdict comment carries no draft/pre-approval evidence by
+  // design (#1808 AC3); without this short circuit, `fields.gate` would stay
+  // "review" (not one of the two evidence gates) but the lenient fallback
+  // below only fires when `!fields.gate` — so a *recognized* `review` gate
+  // would otherwise skip the fallback yet still return non-null fields keyed
+  // to "review", which is harmless for the two summarizers here (they only
+  // read `.draft_gate`/`.pre_approval_gate`) but leaves the non-evidence
+  // contract implicit rather than explicit. Stated plainly: an identified
+  // non-evidence gate must never be treated as an unidentified body, and an
+  // unidentified body is the ONLY case the token-scan fallback exists for.
+  if (NON_EVIDENCE_GATE_NAMES.has(fields.gate)) {
+    return null;
   }
 
   // Lenient fallback: detect gate name and head SHA anywhere in body

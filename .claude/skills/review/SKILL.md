@@ -73,15 +73,26 @@ instruction, not something this skill initiates itself.
 
 ## Non-evidence, by construction
 
-`review` is deliberately absent from `GATE_CONFIG_KEY`
-(`@dev-loops/core/loop/gate-fanin`) and from the core gate-comment header
-vocabulary (`GATE_REVIEW_NAMES`/`GATE_REVIEW_COMMENT_HEADER_RE`,
-`@dev-loops/core/github/copilot-helpers`): a posted `review` verdict comment
-never parses as a `draft_gate` or `pre_approval_gate` comment, so
+`review` is absent from `GATE_CONFIG_KEY` (`@dev-loops/core/loop/gate-fanin`:
+it has no `draft`/`preApproval`-style config threshold), but that absence is
+NOT what keeps a posted `review` verdict comment from being misread as
+draft/pre-approval evidence. The real guard lives in
+`parseGateReviewCommentFields` (`@dev-loops/core/github/copilot-helpers`):
+`review` IS a recognized gate name there — recognized, not absent — and
+recognizing it as `review` is exactly what makes the parser return `null`
+immediately, before its lenient whole-body `draft_gate`/`pre_approval_gate`
+token-scan fallback ever runs. That short circuit holds independent of
+whether the comment carries the `--findings-ledger` gate-findings-review
+marker: a bare `review` post (no ledger, no marker) is caught the same way as
+a marker-bearing one. Without it, a `review` verdict whose findings text
+merely mentions "draft_gate" or "pre_approval_gate" (a plausible thing to say
+when reporting on this very mechanism) could otherwise be misread as real
+evidence by that fallback. Because of this guard,
 `detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs` never
-attribute it to either gate's evidence — `draftGateAlreadySatisfied` stays
-`false` and pre-approval readiness is unaffected, no matter how many `review`
-rounds a PR has carried. Posting `review` is purely informational.
+attribute a `review` comment to either gate's evidence — draft-gate
+satisfaction stays unaffected and pre-approval readiness is unaffected, no
+matter how many `review` rounds a PR has carried. Posting `review` is purely
+informational.
 
 ## Non-goals
 

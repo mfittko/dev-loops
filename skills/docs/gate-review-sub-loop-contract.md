@@ -48,10 +48,18 @@ fan-out, Phase 3 fan-in + verdict-post) with `--gate review`, but stops after
 Phase 3 — it never reaches Phase 3.5 (judge), Phase 4 (fix), or Phase 5
 (repeat), and carries no gate obligation of its own (reachable on any PR, no
 auto-resolve, no forbidden-action refusal, no CI wait). It is a deliberately
-NON-EVIDENCE gate: absent from `GATE_CONFIG_KEY`
-(`@dev-loops/core/loop/gate-fanin`) and from the gate-comment header
-vocabulary, so a `review` verdict never satisfies `draft_gate` or
-`pre_approval_gate` evidence. See the [Review skill](../review/SKILL.md).
+NON-EVIDENCE gate: `review` IS a recognized gate name in the gate-comment
+header vocabulary a comment is parsed against
+(`@dev-loops/core/github/copilot-helpers`) — recognized, not absent — and
+that recognition is exactly what makes the parser return non-evidence
+immediately for a `review`-headed comment, before it can ever fall through
+to the lenient whole-body token scan a genuinely unidentifiable comment
+relies on, regardless of whether the comment carries the
+`--findings-ledger` gate-findings-review marker. (It is separately, and
+unrelatedly, absent from `GATE_CONFIG_KEY` in `@dev-loops/core/loop/gate-fanin`
+— it has no `draft`/`preApproval`-style config threshold — but that absence
+is not what keeps a `review` verdict from satisfying `draft_gate` or
+`pre_approval_gate` evidence.) See the [Review skill](../review/SKILL.md).
 
 ## Separate chains per gate
 
