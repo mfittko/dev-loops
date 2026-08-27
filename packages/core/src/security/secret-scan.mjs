@@ -141,8 +141,61 @@ function hasHighEntropyToken(text) {
 // TOKEN/SECRET/PASSWORD(/PASSWD) (`API_TOKEN`, `authToken`, `DB_PASSWORD`,
 // ...), suffix match for `_PAT`/`_KEY` (deliberately a suffix, not a
 // substring — "_KEY" alone would otherwise fire on ordinary words like
-// "keyboard"), plus the literal incident-motivating name.
-const SECRET_NAME_RE = /\w*(?:TOKEN|SECRET|PASSWORD|PASSWD)\w*|\w*_PAT\b|\w*_KEY\b|\bBUNDLE_GITHUB__COM\b/iu;
+// "keyboard"), plus the literal incident-motivating name. Tested per
+// IDENTIFIER, not per whole line — see hasSecretNamedIdentifier.
+const SECRET_KEYWORD_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD)|_PAT$|_KEY$/iu;
+const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_]*/gu;
+
+/**
+ * True when `identifier` (an already-extracted `[A-Za-z_][A-Za-z0-9_]*` run)
+ * is SHAPED like a real variable/env-key name rather than a plain English
+ * word that merely contains a secret keyword as a substring: it has an
+ * underscore (snake_case / SCREAMING_SNAKE env-var shape, e.g.
+ * `GITHUB_TOKEN`, `foo_api_key`), mixes upper and lower case
+ * (camelCase/PascalCase, e.g. `authToken`), or is entirely uppercase letters
+ * (a bare ALL-CAPS identifier, e.g. `SECRET` used standalone). A plain
+ * single-case word with no underscore — "token", "secretary", "tokenize" —
+ * is not identifier-shaped, even though it may contain a secret keyword as a
+ * substring: "token-economical" and a bare "token" in prose don't qualify.
+ */
+function isIdentifierShaped(identifier) {
+  if (identifier.includes("_")) return true;
+  const hasUpper = /[A-Z]/u.test(identifier);
+  const hasLower = /[a-z]/u.test(identifier);
+  if (hasUpper && hasLower) return true; // camelCase / PascalCase
+  return hasUpper && !hasLower; // bare ALL-CAPS identifier (e.g. `SECRET`)
+}
+
+function hasSecretNamedIdentifier(text) {
+  for (const identifier of text.match(IDENTIFIER_RE) ?? []) {
+    if (identifier.toUpperCase() === "BUNDLE_GITHUB__COM") return true;
+    if (SECRET_KEYWORD_RE.test(identifier) && isIdentifierShaped(identifier)) return true;
+  }
+  return false;
+}
+
+// An angle-bracket PLACEHOLDER or generic type — `<owner/name>`, `<x>`, a
+// `Map` of two type parameters where the second is a credential-named type —
+// whose trailing angle bracket is not a shell redirect. The content charset
+// is deliberately narrow (identifier/path-ish chars only: letters, digits,
+// `_ , . / : -` and interior spaces) and must both START and END on an
+// identifier/path char (never on a space): this is what keeps a REAL
+// redirect pair like `<input.txt >output.txt` (space right before the
+// trailing bracket) from being misread as one placeholder spanning both —
+// the bracket-strip below would otherwise swallow a genuine redirect target.
+// Applied in a loop so nested placeholders (two levels of generic type
+// parameters) are fully stripped, innermost first.
+const ANGLE_PLACEHOLDER_RE = /<[A-Za-z0-9_](?:[A-Za-z0-9_ ,./:-]*[A-Za-z0-9_.])?>/gu;
+
+function stripAnglePlaceholders(text) {
+  let stripped = text;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(ANGLE_PLACEHOLDER_RE, "");
+  } while (stripped !== previous);
+  return stripped;
+}
 
 // Output sinks named in the motivating incident: echo/printf/tee, base64
 // (encode-then-emit), a `>`/`>>` redirect, and a GitHub Actions workflow
@@ -154,11 +207,16 @@ const SECRET_NAME_RE = /\w*(?:TOKEN|SECRET|PASSWORD|PASSWD)\w*|\w*_PAT\b|\w*_KEY
 // The redirect branch excludes `=>`/`->`/`>=` (lookbehind/lookahead around the
 // bare `>`/`>>`) — those are an arrow function or a comparison in ordinary
 // source, not a shell redirect, and would otherwise fire on nearly any JS/TS
-// line that also happens to name a *TOKEN*/*SECRET*/... variable.
-const SINK_RE = /\b(?:echo|printf|tee|base64)\b|(?<![=-])>{1,2}(?!=)|::[A-Za-z][\w-]*::/u;
+// line that also happens to name a *TOKEN*/*SECRET*/... variable — and
+// requires a plausible target to follow (`> file`, `>>out.log`,
+// `>/dev/null`), never a bare `>` with nothing after it. Run against the
+// angle-placeholder-stripped text (see stripAnglePlaceholders) so a `>` that
+// merely closes a `<owner/name>` placeholder or a `Map<string, AuthToken>`
+// generic is never read as a redirect.
+const SINK_RE = /\b(?:echo|printf|tee|base64)\b|(?<![=-])>{1,2}(?!=)(?=\s*\S)|::[A-Za-z][\w-]*::/u;
 
 function hasSecretNameToSinkFlow(text) {
-  return SECRET_NAME_RE.test(text) && SINK_RE.test(text);
+  return hasSecretNamedIdentifier(text) && SINK_RE.test(stripAnglePlaceholders(text));
 }
 
 /**
