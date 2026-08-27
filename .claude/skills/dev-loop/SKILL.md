@@ -21,6 +21,8 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 ## Startup procedure
 
+**Review intent short-circuit (issue #1850):** A plain review request against a PR ("review PR #N", "review this PR") is NOT a continue/fix/merge request. Recognize review intent BEFORE resolving authoritative state below, and dispatch straight to the standalone [Review Skill](../review/SKILL.md) (`/dev-loops:loop-review <pr>`, or `/loop-review <pr>` in the dev-loops repo itself) — never run `loop startup`/`resolve-dev-loop-startup.mjs` for this route. The review route is read-only (no branch push, no fix commit, no merge, no board move, no assignee claim) and ownership-exempt by construction: it is not one of the routing evaluator's strategies, so `STRATEGY_OWNERSHIP_GATE` never applies to it and it runs on a PR owned by anyone, or by no one — see [Single-contributor ownership gate](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup). Any other request (continue the loop, fix findings, merge, watch) proceeds through the ordinary startup procedure below, which still enforces the ownership gate exactly as before.
+
 ### Resolve authoritative state
 
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
