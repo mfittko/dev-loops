@@ -5,7 +5,13 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildCreateArgs as coreBuildCreateArgs, createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
 import { enqueueBoardItem } from "./create-pr.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import {
+  JQ_OUTPUT_PARSE_OPTIONS,
+  JQ_OUTPUT_USAGE,
+  emitResult,
+  matchJqOutputToken,
+  preflightJqFilter,
+} from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: create-issue.mjs --repo <owner/name> --title <t> (--body <b> | --body-file <path>) [--milestone <m>] [--label <l>...] [--assignee <u>...]
 Create an issue. Thin wrapper over \`gh issue create\` — use this instead of an
@@ -178,6 +184,12 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never create the issue then fail (BASE-JQ-OUTPUT-
+  // GUARANTEE would otherwise catch it after the fact -> ok:false on a call
+  // that already succeeded -> a caller retry double-creates).
+  const jqSyntaxError = preflightJqFilter(options.jq, { stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
   let result;
   try {
     result = await createIssue(options, { env, ghCommand, run });

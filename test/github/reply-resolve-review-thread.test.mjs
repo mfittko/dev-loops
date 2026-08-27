@@ -616,6 +616,32 @@ test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --all
   }
 });
 
+test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BEFORE replying/resolving (no mutation)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-jq-invalid-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Added coverage.\n", "utf8");
+  try {
+    // Zero stubbed gh responses AND no overflow repeat: if the code regresses
+    // to validating --jq only after mutating (the original #1817 footgun),
+    // the first gh call (the review-threads read) exits 97 from the stub and
+    // the script's own error handling reports exit 1 — distinct from the
+    // expected exit 2 below, so a regression here fails loudly.
+    const gh = await writeGhStubHelper(tempDir, [], { logCalls: true, repeatLastOnOverflow: false });
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
+       "--body-file", bodyFile, "--jq", "not!valid"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /--jq/);
+    assert.match(result.stderr, /BASE-JQ-OUTPUT-GUARANTEE/);
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim();
+    assert.equal(ghLog, "", "no gh call (review-threads read, reply POST, or resolve) should happen when --jq is syntactically invalid");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs entry", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-allowed-refs-bad-"));
   const bodyFile = path.join(tempDir, "reply.md");

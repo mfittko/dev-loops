@@ -7,7 +7,13 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import {
+  JQ_OUTPUT_PARSE_OPTIONS,
+  JQ_OUTPUT_USAGE,
+  emitResult,
+  matchJqOutputToken,
+  preflightJqFilter,
+} from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: edit-issue.mjs --repo <owner/name> --issue <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>] [--state <open|closed>] [--reason <completed|not_planned>]
 Edit issue title/body/assignees/milestone/state. Thin wrapper over \`gh issue edit\`
@@ -259,6 +265,12 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never edit the issue then fail (BASE-JQ-OUTPUT-
+  // GUARANTEE would otherwise catch it after the fact -> ok:false on a call
+  // that already succeeded -> a caller retry double-edits).
+  const jqSyntaxError = preflightJqFilter(options.jq, { stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
   let result;
   try {
     result = await editIssue(options, { env, ghCommand, run });
