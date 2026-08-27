@@ -101,6 +101,21 @@ function collectFailures(repoRoot) {
   return failures;
 }
 
+// Per-root vacuous-pass guard: `commands/` and `agents/` are scanned via the
+// shared `flatDir` helper, which fails OPEN (returns an empty list) when the
+// dir is missing. The aggregate guards below (scannedSurfaces.length,
+// totalBareTokens) are satisfied by OTHER surface roots (skills, .claude,
+// ...), so a vanished/renamed `commands/` or `agents/` dir would otherwise
+// silently shrink the scanned surface with no test failure. Assert each root
+// contributes at least one surface file directly.
+test("the commands/ and agents/ surface roots each contribute at least one surface file", () => {
+  const commandsFiles = flatDir(path.join(REPO_ROOT, "commands"), ".md", []);
+  assert.ok(commandsFiles.length > 0, "expected commands/ to contribute at least one .md surface file — a vanished/renamed commands/ dir would silently shrink the scanned surface");
+
+  const agentsFiles = flatDir(path.join(REPO_ROOT, "agents"), ".md", []);
+  assert.ok(agentsFiles.length > 0, "expected agents/ to contribute at least one .md surface file — a vanished/renamed agents/ dir would silently shrink the scanned surface");
+});
+
 test("no shipped surface instructs a bare /loop-* slash command without the namespaced alternative", () => {
   // Vacuous-pass guard, two layers deep — mirrors referenced-scripts-shipped's
   // `references.length` check at the same depth (scan-OUTPUT, not just file
