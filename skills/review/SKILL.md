@@ -20,6 +20,22 @@ an on-demand "review this PR right now" pass — a code review someone asked for
 outside the normal draft/pre-approval lifecycle — without disturbing that
 lifecycle's own state.
 
+**Ownership-exempt (issue #1850).** `review` is read-only — it makes no
+branch push, no fix commit, no merge, no board move, and no assignee claim —
+so it never needs the single-contributor ownership gate
+(`resolve-dev-loop-startup.mjs`, see [Single-contributor ownership gate](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)).
+None of `write-gate-context.mjs`, `consolidate-fanin.mjs`, or
+`upsert-checkpoint-verdict.mjs` — the three scripts this skill's procedure
+runs — import or invoke `resolve-dev-loop-startup.mjs`; the exemption holds
+structurally, not by convention. The public [dev-loop](../dev-loop/SKILL.md)
+router recognizes a plain review request and dispatches straight here,
+before its own startup resolver (and the ownership gate it enforces) ever
+runs — a reviewer runs `review` against a PR owned by anyone, or by no one,
+with no ownership block and no fallback prompt. Every write-capable route
+(`copilot_pr_followup`, `reviewer_fixer`, `final_approval`, the full loop)
+stays gated exactly as before; this exemption reaches only this read-only
+route.
+
 ## Interface
 
 ```

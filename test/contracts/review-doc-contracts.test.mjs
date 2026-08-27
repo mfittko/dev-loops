@@ -184,6 +184,46 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
 });
 
+test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
+  const [devLoopSkill, reviewSkill, publicContract, writeGateContextSrc, consolidateFaninSrc, upsertVerdictSrc] = await Promise.all([
+    readRepo("skills/dev-loop/SKILL.md"),
+    readRepo("skills/review/SKILL.md"),
+    readRepo("skills/docs/public-dev-loop-contract.md"),
+    readRepo("scripts/github/write-gate-context.mjs"),
+    readRepo("scripts/loop/consolidate-fanin.mjs"),
+    readRepo("scripts/github/upsert-checkpoint-verdict.mjs"),
+  ]);
+
+  // The public router recognizes review intent and short-circuits to the
+  // review skill BEFORE the startup resolver (and its ownership gate) ever
+  // runs — a foreign-owned PR never blocks the review route.
+  assert.match(devLoopSkill, /Review intent short-circuit/i);
+  assert.match(devLoopSkill, /never run `loop startup`\/`resolve-dev-loop-startup\.mjs` for this route/i);
+  assert.match(devLoopSkill, /ownership-exempt by construction/i);
+
+  // review's own doc states the exemption and why (read-only).
+  assert.match(reviewSkill, /Ownership-exempt \(issue #1850\)/i);
+  assert.match(reviewSkill, /never needs the single-contributor ownership gate/i);
+
+  // The authoritative ownership-gate contract documents review's exemption
+  // (distinct mechanism from the ui_review/wait_watch STRATEGY_OWNERSHIP_GATE
+  // entries) alongside the write-capable routes that stay gated.
+  assert.match(publicContract, /standalone `review` route is ownership-exempt too/i);
+  assert.match(publicContract, /Every write-capable route[\s\S]{0,200}stays gated exactly as before/i);
+
+  // No review-pipeline script imports or otherwise references the ownership
+  // gate — the exemption holds structurally, not just by doc convention: a
+  // future edit wiring ownership into the review path would fail this
+  // assertion, not just go undocumented.
+  for (const [label, src] of [
+    ["scripts/github/write-gate-context.mjs", writeGateContextSrc],
+    ["scripts/loop/consolidate-fanin.mjs", consolidateFaninSrc],
+    ["scripts/github/upsert-checkpoint-verdict.mjs", upsertVerdictSrc],
+  ]) {
+    assert.doesNotMatch(src, /resolve-dev-loop-startup/, `${label} must not depend on the single-contributor ownership gate`);
+  }
+});
+
 test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregation job", async () => {
   const ciWorkflow = await readRepo(".github/workflows/ci.yml");
 
