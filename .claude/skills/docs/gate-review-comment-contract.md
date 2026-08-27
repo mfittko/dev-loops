@@ -75,6 +75,19 @@ This contract covers exactly two gates with distinct lifecycle semantics:
   merge readiness on the current head SHA. A new pass is required for each new head
   after post-draft changes.
 
+A THIRD gate, `review` (`GATE_NAMES`, `scripts/github/_gate-names.mjs`), exists
+outside this contract's scope: a standalone, on-demand review pass reachable on
+any PR with no lifecycle obligation of its own (see the
+[Review skill](../review/SKILL.md)). It posts through the same single-surface
+poster and required-fields shape this document defines, but is a deliberately
+NON-EVIDENCE gate — `review` is absent from `GATE_CONFIG_KEY`
+(`@dev-loops/core/loop/gate-fanin`) and from the gate-comment header vocabulary
+a `draft_gate`/`pre_approval_gate` comment is parsed against
+(`@dev-loops/core/github/copilot-helpers`), so a `review` comment never
+satisfies `draft_gate` or `pre_approval_gate` evidence and `GATE-COMMENT-NON-
+SUBSTITUTION` below applies to it symmetrically: a clean `review` comment
+authorizes nothing this contract's two gates require.
+
 ## Separate chains per gate
 
 Each gate runs its own independent review chain (`GATE-EXEC-SEPARATE-CHAINS`, owned by

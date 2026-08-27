@@ -39,6 +39,7 @@ import {
   renderBriefingPrefix,
   renderBriefingVolatile,
   renderScopedBriefingVariant,
+  resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 
@@ -594,6 +595,111 @@ test("mapGateToConfigKey maps artifact gate names to config keys", () => {
   assert.equal(mapGateToConfigKey("draft_gate"), "draft");
   assert.equal(mapGateToConfigKey("pre_approval_gate"), "preApproval");
   assert.throws(() => mapGateToConfigKey("bogus"), /Unknown gate/);
+});
+
+// #1808 review deliberately has no 1:1 config key (its angle set is a UNION
+// of draft's and pre-approval's, resolved by resolveReviewGateAngles below,
+// never resolveGateAnglesDynamic) — mapGateToConfigKey must keep refusing it.
+test("mapGateToConfigKey still refuses \"review\" (no 1:1 config key; see resolveReviewGateAngles)", () => {
+  assert.throws(() => mapGateToConfigKey("review"), /Unknown gate/);
+});
+
+// ---------------------------------------------------------------------------
+// resolveReviewGateAngles (#1808 AC2) — review's angle set is the UNION of
+// draft's and pre-approval's configured angles, with acceptance-criteria
+// dropped (rationale-recorded) only when the PR has no spec-of-record at all.
+// ---------------------------------------------------------------------------
+
+function reviewAnglesConfig({ draftAngles, preApprovalAngles }) {
+  return {
+    gates: {
+      draft: { angles: draftAngles.map((name) => ({ name })) },
+      preApproval: { angles: preApprovalAngles.map((name) => ({ name })) },
+    },
+  };
+}
+
+test("resolveReviewGateAngles unions draft's and pre-approval's configured angles (dedup, order-stable)", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "security"],
+    preApprovalAngles: ["security", "docs"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "security", "docs"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.equal(result.dynamicAnglesActive, false);
+});
+
+test("resolveReviewGateAngles DROPS acceptance-criteria (with a \"no spec-of-record\" rationale) when the PR closes no issue and its body has no AC checklist", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria"],
+    preApprovalAngles: ["docs"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "docs"]);
+  assert.deepEqual(result.skippedAngles, ["acceptance-criteria"]);
+  assert.deepEqual(result.reasons, { "acceptance-criteria": "no spec-of-record" });
+});
+
+test("resolveReviewGateAngles KEEPS acceptance-criteria when the PR closes an issue (even with no AC checklist in its own body)", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria"],
+    preApprovalAngles: [],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria"]);
+  assert.deepEqual(result.skippedAngles, []);
+});
+
+test("resolveReviewGateAngles KEEPS acceptance-criteria when the PR's own body carries an AC checklist (even closing no issue)", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria"],
+    preApprovalAngles: [],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: true });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria"]);
+  assert.deepEqual(result.skippedAngles, []);
+});
+
+test("resolveReviewGateAngles is a no-op when acceptance-criteria was never in the union to begin with", () => {
+  const config = reviewAnglesConfig({ draftAngles: ["correctness"], preApprovalAngles: ["docs"] });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "docs"]);
+  assert.deepEqual(result.skippedAngles, []);
+});
+
+// End-to-end wiring check (buildGateContext, not just the pure resolver above):
+// gate: "review" resolves the SAME union+drop shape through the actual artifact
+// builder — no resolveGateAnglesDynamic tiering, no config-key crash.
+test("buildGateContext --gate review resolves the draft+preApproval union and drops acceptance-criteria with no spec-of-record", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: { angles: buildAngleEntries({ angles: ["correctness", "acceptance-criteria"], mandatoryAngles: [], excludeAngles: [] }) },
+        preApproval: { angles: buildAngleEntries({ angles: ["docs"], mandatoryAngles: [], excludeAngles: [] }) },
+      },
+    };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "review",
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        hasClosingIssue: false,
+        prBody: "no AC checklist here",
+      },
+      { repoRoot },
+    );
+    assert.deepEqual(result.artifact.resolvedAngles, ["correctness", "docs"]);
+    const dropped = result.artifact.rationale.find((r) => r.angle === "acceptance-criteria");
+    assert.equal(dropped.action, "dropped");
+    assert.equal(dropped.reason, "no spec-of-record");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,17 @@ This contract owns the **execution shape** of gate-review work. It does not own:
 - the visible gate-review PR comment format (owned by [Gate Review Comment Contract](./gate-review-comment-contract.md), whose evidence is also required for a gate to be satisfied)
 - the broader PR lifecycle sequencing (owned by the workflow skill and [PR Lifecycle Contract](./pr-lifecycle-contract.md))
 
+A THIRD gate, `review` (`GATE_NAMES`, `scripts/github/_gate-names.mjs`), reuses
+this execution shape (Phase 1 context-builder, Phase 1.5 primer, Phase 2
+fan-out, Phase 3 fan-in + verdict-post) with `--gate review`, but stops after
+Phase 3 — it never reaches Phase 3.5 (judge), Phase 4 (fix), or Phase 5
+(repeat), and carries no gate obligation of its own (reachable on any PR, no
+auto-resolve, no forbidden-action refusal, no CI wait). It is a deliberately
+NON-EVIDENCE gate: absent from `GATE_CONFIG_KEY`
+(`@dev-loops/core/loop/gate-fanin`) and from the gate-comment header
+vocabulary, so a `review` verdict never satisfies `draft_gate` or
+`pre_approval_gate` evidence. See the [Review skill](../review/SKILL.md).
+
 ## Separate chains per gate
 
 <!-- rule: GATE-EXEC-SEPARATE-CHAINS -->

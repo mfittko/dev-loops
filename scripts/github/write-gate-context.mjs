@@ -34,7 +34,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAngles, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -63,6 +63,42 @@ export function mapGateToConfigKey(gate) {
   if (gate === "draft_gate") return "draft";
   if (gate === "pre_approval_gate") return "preApproval";
   throw new Error(`Unknown gate: ${JSON.stringify(gate)} (expected draft_gate or pre_approval_gate)`);
+}
+
+/**
+ * `review` (#1808) angle resolution — a standalone gate with no config key of
+ * its own (it is not "draft" or "preApproval"): its resolved angle set is the
+ * UNION of both gates' configured angle sets (resolveGateAngles, the STATIC
+ * pool — dynamic/tiered subtractive resolution is deliberately not applied to
+ * review; it always sees the full union), never resolveGateAnglesDynamic.
+ *
+ * `acceptance-criteria` is dropped from that union (with a rationale entry,
+ * reason "no spec-of-record") when the PR carries no spec-of-record at all —
+ * it closes no issue AND its own body carries no AC checklist. It is kept
+ * when either is true: a linked issue is presumed to carry the real spec even
+ * when its body could not be classified, and a PR that inlines its own AC
+ * checklist is its own spec-of-record.
+ *
+ * @param {import("@dev-loops/core/config").DevLoopConfig} config
+ * @param {{ hasClosingIssue: boolean, hasAcChecklist: boolean }} facts
+ * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
+ */
+export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
+  const union = [...new Set([
+    ...(resolveGateAngles(config, "draft") ?? []),
+    ...(resolveGateAngles(config, "preApproval") ?? []),
+  ])];
+  const hasSpecOfRecord = hasClosingIssue === true || hasAcChecklist === true;
+  const dropAcceptanceCriteria = !hasSpecOfRecord && union.includes("acceptance-criteria");
+  return {
+    recommendedAngles: dropAcceptanceCriteria ? union.filter((a) => a !== "acceptance-criteria") : union,
+    skippedAngles: dropAcceptanceCriteria ? ["acceptance-criteria"] : [],
+    reasons: dropAcceptanceCriteria ? { "acceptance-criteria": "no spec-of-record" } : {},
+    fallbackToAll: false,
+    dynamicAnglesActive: false,
+    addedAngles: [],
+    addedReasons: {},
+  };
 }
 
 /**
@@ -132,12 +168,12 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
   --pr <number>
-  --gate <draft_gate|pre_approval_gate>
+  --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
   --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is used VERBATIM as an explicit override (dynamic resolution is bypassed) — an escape hatch for forcing a specific angle set.
@@ -337,7 +373,7 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "gate") {
       const gate = normalizeGate(requireTokenValue(token, parseError));
-      if (!gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
+      if (!gate) throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       options.gate = gate;
       continue;
     }
@@ -2504,16 +2540,27 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
-  const configKey = mapGateToConfigKey(input.gate);
+  const isReviewGate = input.gate === "review";
+  // review has no config key of its own (resolveGateAnglesDynamic only
+  // understands "draft"/"preApproval"); its angle scope/fanout lookups below
+  // fall back to draft's config shape — a reasonable default since neither
+  // gate config exists for it — while its ANGLE SET is the dedicated union
+  // resolver below, never resolveGateAnglesDynamic.
+  const configKey = isReviewGate ? "draft" : mapGateToConfigKey(input.gate);
   // input.hasFullLabel is an ATTESTATION about the live PR's gate:full label,
   // not a preference: only an explicit `false` (caller checked the labels and
   // the label is absent) enables diff-class tier reduction. An omitted or
   // truthy value fails closed to the untriered set, so a caller that never
   // looked at the labels can never grant the reduced tier on a labelled PR.
-  const resolverResult = await resolveGateAnglesDynamic(input.config, configKey, {
-    diff: input.diff,
-    hasFullLabel: input.hasFullLabel !== false,
-  });
+  const resolverResult = isReviewGate
+    ? resolveReviewGateAngles(input.config, {
+        hasClosingIssue: input.hasClosingIssue === true,
+        hasAcChecklist: detectIssueRefinementArtifact({ body: input.prBody ?? "" }).hasACs,
+      })
+    : await resolveGateAnglesDynamic(input.config, configKey, {
+        diff: input.diff,
+        hasFullLabel: input.hasFullLabel !== false,
+      });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
   // AC3 (#1572): each resolved angle's declared surface scope, straight from
@@ -2726,12 +2773,18 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   // the throw above, which is the unresolvable case.
   if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
 
+  // Recorded whenever `pr` was actually fetched (regardless of the acProvided
+  // short-circuit below), for the `review` gate's own angle resolution (#1808
+  // AC2): whether this PR closes an issue at all, independent of whether the
+  // caller also supplied an --acceptance-criteria pointer.
+  const closingNumbers = resolveLinkedIssuesFromPr(pr);
+  options.hasClosingIssue = closingNumbers.length > 0;
+
   if (!needsIssue) {
     options.acceptanceCriteriaSource = "provided";
     return options;
   }
 
-  const closingNumbers = resolveLinkedIssuesFromPr(pr);
   if (closingNumbers.length === 0) {
     // Genuinely no closing reference (and no body-keyword fallback match) —
     // recorded as such, so a consumer can tell "this PR closes no issue" from
@@ -2911,28 +2964,39 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       // --prefix-file mode never touches GitHub, so the label CANNOT be
       // derived there — an omitted flag in that mode also fails closed to the
       // untriered set rather than silently tier-reducing a labelled PR.
-      if (options.fullLabel !== true && !options.prefixFile) {
-        try {
-          const { pr } = await viewPr(
-            { repo: options.repo, pr: options.pr, fields: "labels" },
-            { run },
-          );
-          options.fullLabel = Array.isArray(pr?.labels)
-            && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
-        } catch (error) {
+      // review never diff-class-tiers (no gate:full label lookup needed) — its
+      // angle set is always the dedicated union resolver, never
+      // resolveGateAnglesDynamic.
+      let resolverResult;
+      if (options.gate === "review") {
+        resolverResult = resolveReviewGateAngles(config, {
+          hasClosingIssue: options.hasClosingIssue === true,
+          hasAcChecklist: detectIssueRefinementArtifact({ body: options.prBody ?? "" }).hasACs,
+        });
+      } else {
+        if (options.fullLabel !== true && !options.prefixFile) {
+          try {
+            const { pr } = await viewPr(
+              { repo: options.repo, pr: options.pr, fields: "labels" },
+              { run },
+            );
+            options.fullLabel = Array.isArray(pr?.labels)
+              && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
+          } catch (error) {
+            options.fullLabel = true;
+            process.stderr.write(
+              `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
+            );
+          }
+        } else if (options.fullLabel !== true && options.prefixFile) {
           options.fullLabel = true;
           process.stderr.write(
-            `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
+            `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
           );
         }
-      } else if (options.fullLabel !== true && options.prefixFile) {
-        options.fullLabel = true;
-        process.stderr.write(
-          `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
-        );
+        const configKey = mapGateToConfigKey(options.gate);
+        resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });
       }
-      const configKey = mapGateToConfigKey(options.gate);
-      const resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
         process.stderr.write(
@@ -2960,7 +3024,9 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // rather than loading it a second time.
     if (options.angles.length > 0) {
       const scopeConfig = config;
-      const scopeConfigKey = mapGateToConfigKey(options.gate);
+      // review has no config key of its own; scope/fanout lookups fall back
+      // to draft's config shape (see buildGateContext's own configKey note).
+      const scopeConfigKey = options.gate === "review" ? "draft" : mapGateToConfigKey(options.gate);
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );

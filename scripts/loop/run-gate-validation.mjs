@@ -21,7 +21,7 @@ import { parseArgs } from "node:util";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "../github/_gate-names.mjs";
+import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "../github/_gate-names.mjs";
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -29,14 +29,14 @@ const DEFAULT_SUITES = ["verify"];
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
-const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> [--suite <name>]... [--tmp-root <dir>]
+const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--suite <name>]... [--tmp-root <dir>]
 Run this round's validation suites ONCE and record the results in the shared
 validation-results artifact (GATE-EXEC-VALIDATION-ARTIFACT) so every per-angle
 gate reviewer reads this record instead of re-running the same suites.
 Required:
   --repo <owner/name>
   --pr <number>
-  --gate <draft_gate|pre_approval_gate>
+  --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
   --suite <name>              npm script name to run (repeatable). MUST be a key
@@ -115,7 +115,7 @@ export function parseRunGateValidationCliArgs(argv) {
     }
     if (token.name === "gate") {
       const gate = normalizeGate(requireTokenValue(token, parseError));
-      if (!gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
+      if (!gate) throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       options.gate = gate;
       continue;
     }

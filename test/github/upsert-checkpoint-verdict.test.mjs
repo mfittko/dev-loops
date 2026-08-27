@@ -6184,6 +6184,111 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
   }, { prefix: "dev-loops-upsert-withheld-covered-" });
 });
 
+// ---------------------------------------------------------------------------
+// #1808 AC4 — `review` is a THIRD, standalone gate: --gate review posts the
+// single-surface PR review straight from --findings-ledger and never touches
+// the draft/pre-approval coordination-context (no CI wait, no PR-view/
+// requested_reviewers/threads coordination reads, no auto-resolve, no
+// forbidden-action refusal). The gh mock below carries ONLY the
+// resolveFindingSurface reads a --findings-ledger round needs (login,
+// reviews, issue comments, threads, PR files) plus the POST — omitting every
+// coordination-context call makeGhMock would otherwise refuse as unexpected,
+// which is itself the proof that none of them ran.
+// ---------------------------------------------------------------------------
+
+function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], threads = [], files = [] } = {}) {
+  return [
+    { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: threads } } } } }) + "\n",
+    },
+    ...(files === null ? [] : [{ assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/files?per_page=100"], stdout: JSON.stringify(files) + "\n" }]),
+  ];
+}
+
+async function writeReviewGateLedger(tempDir, findings, overrides = {}) {
+  const ledgerPath = path.join(tempDir, "review-ledger.json");
+  await writeFile(ledgerPath, JSON.stringify({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "review",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findings,
+    ...overrides,
+  }), "utf8");
+  return ledgerPath;
+}
+
+test("#1808: --gate review posts a created PR review straight from --findings-ledger, with NO coordination-context/CI gh calls (unmocked calls would refuse)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [BODY_FILED_FINDING], { overallVerdict: "findings_present" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":901,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-901"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      // --verdict omitted on purpose: derived from the ledger's overallVerdict,
+      // same contract as draft_gate/pre_approval_gate (#1616).
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.surface, "review");
+    assert.equal(result.gate, "review");
+    assert.equal(result.bodyFiled, 1);
+    // No draft_gate-shaped blocking-severity gating leaks onto review.
+    assert.deepEqual(result.blockCleanOnFindingSeverities, []);
+  }, { prefix: "dev-loops-upsert-review-gate-" });
+});
+
+test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity line and requires no --findings-severity-counts", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      // No findings at all: resolveFindingSurface returns before the PR-files
+      // read (nothing to locate), so files: null omits that mock entry.
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":902,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-902"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      // No --findings-severity-counts: a draft_gate/pre_approval_gate clean
+      // verdict would refuse without it (see the #1621 clean-verdict tests
+      // above); review carries no blocking severities, so no proof is
+      // required for its "clean" claim.
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+  }, { prefix: "dev-loops-upsert-review-gate-clean-" });
+});
+
 test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
   const angles = normalizeStructuredFindings([
     { angle: "docs", verdict: "findings_present", findings: [{ severity: "defer", summary: "legacy entry" }] },

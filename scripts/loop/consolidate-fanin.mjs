@@ -67,7 +67,7 @@ import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -91,7 +91,7 @@ Optional:
                                  pre-stamp behavior (no head check). This is what makes a
                                  stale artifact staged from an earlier round distinguishable
                                  from a fresh verdict at the reviewed head.
-  --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
+  --gate <draft_gate|pre_approval_gate|review>   Echoed onto the result as "gate"; also loads this
                                  worktree's config and applies gates.<gate>.blockCleanOnFindingSeverities
                                  to the overall verdict (default when omitted: ["high"]). When given,
                                  a config that could not be fully loaded/validated FAILS CLOSED (exit 1)
@@ -657,7 +657,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     if (token.name === "gate") {
       const gate = requireTokenValue(token, parseError).trim();
       if (!VALID_GATES.has(gate)) {
-        throw parseError("--gate must be draft_gate or pre_approval_gate");
+        throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       }
       options.gate = gate;
       continue;
@@ -1179,12 +1179,23 @@ export async function consolidateGateFanin(options) {
     if (Array.isArray(errors) && errors.length > 0) {
       throw new Error(`--gate ${options.gate} was given but this worktree's config (--repo-root ${JSON.stringify(repoRoot)}) could not be fully loaded/validated: ${JSON.stringify(errors)}`);
     }
+    // review (#1808) has no config section of its own; its computed verdict
+    // reuses pre_approval_gate's configured blocking severities (the stricter
+    // gate's bar) purely to decide "clean" vs "findings_present" TRUTHFULLY —
+    // review carries no gate obligations, so nothing here actually blocks a
+    // merge/ready transition, and it carries no mandatory-angle enforcement
+    // of its own (this repo's own configured mandatory angles are not
+    // review's to enforce; #1808 non-goal: no new reviewer angles).
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     blockCleanOnFindingSeverities = resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
-    // Lowercased to match the base+lowercase key compared against alwaysRerun
-    // below — a mandatory angle configured with case drift (e.g. "Correctness")
-    // must be refused exactly like its lowercase form.
-    mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles.map((name) => String(name).trim().toLowerCase());
+    if (options.gate === "review") {
+      mandatoryAngles = [];
+    } else {
+      // Lowercased to match the base+lowercase key compared against alwaysRerun
+      // below — a mandatory angle configured with case drift (e.g. "Correctness")
+      // must be refused exactly like its lowercase form.
+      mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles.map((name) => String(name).trim().toLowerCase());
+    }
   }
 
   // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert

@@ -26,11 +26,13 @@ import test from "node:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
@@ -157,6 +159,54 @@ test("summarizeGateReviewComments keeps the newest valid comment for each gate",
   assert.equal(summary.draft_gate?.headSha, "abc1234");
   assert.equal(summary.pre_approval_gate?.commentId, 12);
   assert.equal(summary.pre_approval_gate?.nextAction, "await final human approval");
+});
+
+// #1808 AC3: a `review` verdict is a THIRD, non-evidence gate — it must never
+// satisfy draft_gate or pre_approval_gate evidence. "review" is deliberately
+// absent from GATE_REVIEW_NAMES/GATE_REVIEW_COMMENT_HEADER_RE
+// (packages/core/src/github/copilot-helpers.mjs), so a review comment's
+// header never parses as either canonical gate.
+test("summarizeGateReviewComments ignores a review-gate comment (#1808 AC3: review carries no draft/pre-approval evidence)", () => {
+  const summary = summarizeGateReviewComments([
+    {
+      id: 20,
+      body: [
+        "Gate review: review",
+        "Reviewed head SHA: abc1234",
+        "Verdict: clean",
+        "Findings summary: no issues found",
+        "Next action: none — informational review, no re-gate required",
+      ].join("\n"),
+      updated_at: "2026-05-29T23:00:00Z",
+    },
+  ]);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+});
+
+// End-to-end proof against the REAL renderer (upsert-checkpoint-verdict.mjs's
+// own renderGateReviewCommentBody), including the gate-findings-review marker
+// a --findings-ledger round renders: the whole comment is excluded even
+// before field parsing (isGateMachineArtifactBody: true, since its header
+// does not match GATE_REVIEW_COMMENT_HEADER_RE), and a PR carrying ONLY this
+// comment reports no draft_gate/pre_approval_gate evidence either way.
+test("a real review-gate verdict comment (with a findings-review marker) never satisfies draft_gate/pre_approval_gate evidence (#1808 AC3)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "none — informational review, no re-gate required",
+    round: 1,
+  });
+  assert.equal(isGateMachineArtifactBody(body), true);
+  const comments = [{ id: 21, body, updated_at: "2026-05-29T23:30:00Z" }];
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+  const markerSummary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(markerSummary.draft_gate, null);
+  assert.equal(markerSummary.pre_approval_gate, null);
 });
 
 test("summarizeGateReviewCommentMarkers can target the newest marker for the current gate+head pair", () => {

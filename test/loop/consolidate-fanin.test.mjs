@@ -176,7 +176,7 @@ test("parseConsolidateFaninCliArgs rejects missing --findings-dir", () => {
 test("parseConsolidateFaninCliArgs rejects invalid --gate", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "bogus_gate"]),
-    /draft_gate or pre_approval_gate/,
+    /draft_gate, pre_approval_gate, review/,
   );
 });
 
