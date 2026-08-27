@@ -128,7 +128,11 @@ export function parseCiWatchCliArgs(argv) {
       continue;
     }
     if (token.name === "commit") {
-      options.commit = requireTokenValue(token, parseError).trim();
+      const commit = requireTokenValue(token, parseError).trim();
+      if (commit.length === 0) {
+        throw parseError("--commit must not be empty or whitespace-only");
+      }
+      options.commit = commit;
       continue;
     }
     if (token.name === "timeout-ms") {

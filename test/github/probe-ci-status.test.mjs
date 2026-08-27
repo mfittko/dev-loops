@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1009,18 +1009,26 @@ function runList(runs) {
   return JSON.stringify(runs);
 }
 
-async function withGhRunListStub(routes, fn) {
+// `expectedCommit`, when given, pins that every recorded gh invocation was
+// literally `gh run list ... --commit <expectedCommit>` — without this, a
+// stub that silently stopped being called (or the code under test invoking a
+// different gh subcommand) would still pass every route/response assertion.
+async function withGhRunListStub(routes, fn, { expectedCommit } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-commit-ci-"));
   try {
     const ghPath = path.join(tempDir, "gh");
     const counterPath = path.join(tempDir, "runlist-counter.txt");
+    const argvLogPath = path.join(tempDir, "runlist-argv.log");
     await writeFile(counterPath, "0", "utf8");
+    await writeFile(argvLogPath, "", "utf8");
     const script = [
       "#!/usr/bin/env node",
-      'const { readFileSync, writeFileSync } = require("node:fs");',
+      'const { readFileSync, writeFileSync, appendFileSync } = require("node:fs");',
       `const routes = ${JSON.stringify(routes)};`,
       `const counterPath = ${JSON.stringify(counterPath)};`,
-      'const argv = process.argv.slice(2).join(" ");',
+      `const argvLogPath = ${JSON.stringify(argvLogPath)};`,
+      'const argv = process.argv.slice(2);',
+      'appendFileSync(argvLogPath, JSON.stringify(argv) + "\\n");',
       'const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
       'writeFileSync(counterPath, String(i + 1));',
       'const idx = Math.min(i, routes.length - 1);',
@@ -1032,7 +1040,19 @@ async function withGhRunListStub(routes, fn) {
     await writeFile(ghPath, script, "utf8");
     await chmod(ghPath, 0o755);
     const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
-    return await fn(env);
+    const result = await fn(env);
+    if (expectedCommit !== undefined) {
+      const invocations = (await readFile(argvLogPath, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      assert.ok(invocations.length > 0, "gh run list was never invoked");
+      for (const argv of invocations) {
+        assert.deepEqual(argv.slice(0, 2), ["run", "list"], `expected "gh run list", got "gh ${argv.join(" ")}"`);
+        assert.equal(argv[argv.indexOf("--commit") + 1], expectedCommit);
+      }
+    }
+    return result;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1056,6 +1076,7 @@ test("watch-commit-ci settles success when every workflow run completes clean", 
       assert.deepEqual(result.failedRuns, []);
       assert.equal(result.runCount, 2);
     },
+    { expectedCommit: "sha-main-1" },
   );
 });
 
@@ -1075,6 +1096,7 @@ test("watch-commit-ci settles failure and reports the failing run", async () => 
       assert.equal(result.ciStatus, "failure");
       assert.deepEqual(result.failedRuns, [{ name: "pages", conclusion: "failure" }]);
     },
+    { expectedCommit: "sha-main-2" },
   );
 });
 
@@ -1090,6 +1112,7 @@ test("watch-commit-ci returns timeout while a run is still in_progress past the 
       assert.equal(result.settled, false);
       assert.equal(result.ciStatus, "pending");
     },
+    { expectedCommit: "sha-main-3" },
   );
 });
 
@@ -1104,6 +1127,7 @@ test("watch-commit-ci single check (timeout-ms 0) reports live pending without w
       assert.equal(result.status, "pending");
       assert.equal(result.attempts, 1);
     },
+    { expectedCommit: "sha-main-4" },
   );
 });
 
@@ -1121,6 +1145,7 @@ test("watch-commit-ci transitions pending -> success across polls", async () => 
       assert.equal(result.status, "success");
       assert.equal(result.attempts, 2);
     },
+    { expectedCommit: "sha-main-5" },
   );
 });
 
@@ -1136,6 +1161,7 @@ test("watch-commit-ci reports pending when gh run list returns no runs yet", asy
       assert.equal(result.ciStatus, "pending");
       assert.equal(result.runCount, 0);
     },
+    { expectedCommit: "sha-main-6" },
   );
 });
 
@@ -1151,6 +1177,7 @@ test("watch-commit-ci throws when gh run list does not return a JSON array", asy
         /gh run list did not return a JSON array/,
       );
     },
+    { expectedCommit: "sha-main-7" },
   );
 });
 
@@ -1158,6 +1185,13 @@ test("watch-commit-ci CLI: --commit and --pr are mutually exclusive", () => {
   assert.throws(
     () => parseCiWatchCliArgs(["--repo", "owner/repo", "--pr", "7", "--commit", "sha-a"]),
     /mutually exclusive/i,
+  );
+});
+
+test("watch-commit-ci CLI: whitespace-only --commit is rejected at parse (not passed to gh)", () => {
+  assert.throws(
+    () => parseCiWatchCliArgs(["--repo", "owner/repo", "--commit", "   "]),
+    /--commit must not be empty or whitespace-only/,
   );
 });
 
