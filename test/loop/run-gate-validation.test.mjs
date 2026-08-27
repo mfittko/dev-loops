@@ -432,6 +432,55 @@ test("buildValidationArtifact: stamps depState stale when installed lockfile is 
   }
 });
 
+test("buildValidationArtifact: stamps depState synced for a linked worktree with no local node_modules (ancestor installed lock matches)", async () => {
+  // Mirrors ensure-worktree.mjs's linked layout: the worktree has its own
+  // package-lock.json (checked out via git) but no local node_modules — only
+  // the ancestor (main checkout) has the installed lock the suites actually
+  // ran against.
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-worktree-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(repoRoot, { recursive: true });
+    await mkdir(path.join(outerRoot, "node_modules"), { recursive: true });
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "": { name: "fixture" }, "node_modules/a": { version: "1.0.0" } },
+    });
+    const installed = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/a": { version: "1.0.0" } } });
+    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
+    await writeFile(path.join(outerRoot, "node_modules", ".package-lock.json"), installed, "utf8");
+
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "synced");
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: stamps depState stale for a linked worktree when the ancestor's installed deps genuinely diverge", async () => {
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-worktree-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(repoRoot, { recursive: true });
+    await mkdir(path.join(outerRoot, "node_modules"), { recursive: true });
+    const lock = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/a": { version: "2.0.0" } } });
+    const installed = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/a": { version: "1.0.0" } } });
+    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
+    await writeFile(path.join(outerRoot, "node_modules", ".package-lock.json"), installed, "utf8");
+
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildValidationArtifact: stamps depState n-a when there is no package-lock.json", async () => {
   const { repoRoot } = await makeFixtureRepo();
   try {
