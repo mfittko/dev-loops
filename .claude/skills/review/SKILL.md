@@ -20,11 +20,14 @@ lifecycle's own state.
 ## Interface
 
 ```
-/loop-review <pr>
+/loop-review <pr>          # interactive: ends with a submit choice
+/loop-review <pr> --auto   # headless: posts a COMMENT review, no prompt
 ```
 
 `<pr>` is a pull request number or URL, required. `<owner/repo>` resolves from
-the git remote at invocation, same as the other loop commands.
+the git remote at invocation, same as the other loop commands. `--auto`
+mirrors `/loop-grill`'s (`/dev-loops:loop-grill` in a consumer install)
+headless flag (`skills/loop-grill/SKILL.md`).
 
 In a consumer (plugin) install this runs as `/dev-loops:loop-review <pr>`; the
 bare `/loop-review` form is dev-loops-repo-local (repo-local
@@ -59,11 +62,41 @@ repeat phases those gates run:
    into one disposition ledger and computed verdict, then `node
    scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
    --gate review --head-sha <sha> --findings-ledger <path> --next-action "none
-   — informational review, no re-gate required" [...]` posts the SINGLE
-   visible PR review surface (`GATE-COMMENT-SINGLE-SURFACE`) straight from
-   that ledger — no CI wait, no coordination-context read, no auto-resolve, no
-   forbidden-action check (those are draft/pre-approval-only machinery `review`
-   never touches).
+   — informational review, no re-gate required" --submit <mode> [--auto]
+   [...]` posts the SINGLE visible PR review surface
+   (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
+   coordination-context read, no auto-resolve, no forbidden-action check
+   (those are draft/pre-approval-only machinery `review` never touches). See
+   [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
+   for the `--submit` vocabulary.
+5. **Phase 4 — submit choice.**
+   - **Interactive run:** the review was posted `--submit pending` — an
+     author-only draft, invisible to other reviewers until submitted. Present
+     an `AskUserQuestion` multiple choice (mirroring `/loop-grill`'s
+     interactive pattern, `skills/loop-grill/SKILL.md`):
+     - **Leave pending (default)** — print the PR review URL and how to
+       finish it (open the URL, or re-invoke with `--submit
+       comment`/`approve`/`request-changes` — see the option below); warn it
+       stays invisible to other reviewers until submitted.
+     - **Submit as Comment** — re-run `upsert-checkpoint-verdict.mjs --gate
+       review --submit comment` for the SAME round (do not re-fan-out).
+     - **Submit as Request-changes** — same re-run with `--submit
+       request-changes`. State inline: this is a GitHub-native review event
+       that can BLOCK merge (branch protection) until dismissed, independent
+       of any dev-loops gate.
+     - **Submit as Approve** — same re-run with `--submit approve`. State
+       inline: this is a GitHub-native review event that SATISFIES a
+       required-approvals branch-protection rule, independent of any
+       dev-loops gate — it never satisfies `draft_gate`/`pre_approval_gate`
+       evidence (see [Non-evidence, by construction](#non-evidence-by-construction)
+       below).
+     - **Discard** — delete the pending draft review (`gh api -X DELETE
+       repos/<owner>/<repo>/pulls/<n>/reviews/<id>`) so no dangling artifact
+       is left.
+   - **`--auto`/headless run:** skip the prompt entirely; the round already
+     posted `--submit comment` (the default, and the only escalation-capable
+     mode headless is allowed — `approve`/`request-changes` are refused
+     headless, reachable only through the interactive choice above).
 
 **Stop here.** Never proceed to the judge pass, the fix cycle, a re-gate
 round, `pr ready-for-review`, or a board move — a `review` round is a single,
@@ -94,9 +127,21 @@ satisfaction stays unaffected and pre-approval readiness is unaffected, no
 matter how many `review` rounds a PR has carried. Posting `review` is purely
 informational.
 
+This guard reads only the comment BODY (the header line) — it is entirely
+independent of the GitHub review's own `event`/`state`. A `review` verdict
+therefore stays non-evidence for dev-loops gates in EVERY `--submit` mode
+(#1840), including `approve`: a GitHub-native `APPROVE` review still counts
+toward GitHub branch protection (satisfying a required-approvals rule) — that
+is expected and separate, and is exactly why headless `--auto` review runs
+are refused `--submit approve`/`--submit request-changes` (see
+[`--submit`](#interface) above); only a deliberate interactive choice reaches
+those two events.
+
 ## Non-goals
 
 No fixer loop, no re-gate, no merge path, no new reviewer angles, and no
 headless CLI that spawns reviewers itself — fan-out stays agent-orchestrated
 exactly like draft/pre-approval fan-out. It does not change draft_gate or
-pre_approval_gate semantics in any way.
+pre_approval_gate semantics in any way. No auto-submit of a pending review on
+a later run — the human submits it (or discards it) via the interactive
+submit choice.

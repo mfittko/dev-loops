@@ -39,6 +39,27 @@ import {
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+// The `review` gate's submit-mode vocabulary (#1840), SCOPED TO --gate review
+// only. Mapped to the GitHub create-review `event` value in
+// resolveReviewSubmitEvent below: "pending" maps to a falsy value so
+// createGateReview (_gate-finding-surface.mjs) omits `event` from the payload
+// entirely, which is what leaves the review PENDING (author-only draft).
+const REVIEW_SUBMIT_MODES = new Set(["pending", "comment", "request-changes", "approve"]);
+const DEFAULT_REVIEW_SUBMIT_MODE = "comment";
+// Only these two modes may ever be reached without a deliberate interactive
+// choice (--auto/headless review runs, and the default when --submit is
+// omitted). approve/request-changes are reachable only via the review skill's
+// interactive multiple-choice, never automatically.
+const HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES = new Set(["pending", "comment"]);
+function resolveReviewSubmitEvent(mode) {
+  switch (mode) {
+    case "pending": return null;
+    case "comment": return "COMMENT";
+    case "approve": return "APPROVE";
+    case "request-changes": return "REQUEST_CHANGES";
+    default: throw new Error(`Unreachable --submit mode: ${mode}`);
+  }
+}
 // Mirrors check-size-budget.mjs's computeSizeBudget outcome enum exactly —
 // this file never recomputes the outcome, only validates/renders it.
 const SIZE_BUDGET_OUTCOMES = new Set(["pass", "escalate", "block"]);
@@ -172,6 +193,38 @@ Optional:
   --gate <draft_gate|pre_approval_gate|review>     Auto-resolved from coordination state (draft_gate/pre_approval_gate only; review is never auto-resolved)
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
+  --submit <pending|comment|request-changes|approve>
+                                            SCOPED TO --gate review ONLY (#1840):
+                                            how the review's own PR review is
+                                            submitted. Passing --submit on
+                                            draft_gate/pre_approval_gate is
+                                            REJECTED (they always submit COMMENT
+                                            — GATE-COMMENT-NON-SUBSTITUTION, a
+                                            clean pre-approval must stay a
+                                            submitted visible evidence surface).
+                                            \`pending\` creates the review with
+                                            GitHub's \`event\` OMITTED — an
+                                            author-only draft, invisible to other
+                                            reviewers until submitted.
+                                            \`comment\` (the default when
+                                            --submit is omitted) submits a
+                                            COMMENT review, today's behavior.
+                                            \`request-changes\`/\`approve\` submit
+                                            with that GitHub review event — a
+                                            native GitHub branch-protection
+                                            signal independent of any dev-loops
+                                            gate. --auto (headless) allows only
+                                            \`pending\`/\`comment\`; \`approve\`/
+                                            \`request-changes\` are REFUSED
+                                            headless so automation can never
+                                            auto-approve or auto-block a PR —
+                                            they are reachable only through an
+                                            interactive choice.
+  --auto                                   Headless/non-interactive run (mirrors
+                                            scripts/projects/add-queue-item.mjs's
+                                            --auto). Only meaningful together with
+                                            --gate review --submit: restricts
+                                            --submit to pending/comment.
   --lightweight                             This PR is light-dispatched (#1210):
                                             resolve the Copilot round cap as
                                             min(lightMode.maxCopilotRounds ?? 1,
@@ -243,6 +296,10 @@ Output (stdout, JSON):
   \`commentId\`/\`commentUrl\` identify the posted PR review (a legacy verdict issue
   comment when \`surface\` is "issue_comment"). \`round\`/\`inlineComments\`/
   \`bodyFiled\`/\`suppressed\` are present only for a --findings-ledger round.
+  \`submit\` (present only for \`gate: "review"\`) echoes the resolved --submit
+  mode (\`pending\` when left as an author-only draft, otherwise the submitted
+  event's mode) — \`pending\` means \`commentUrl\` is invisible to other
+  reviewers until a human submits it.
 A \`warning\` field is included when a gate comment for the same gate already
 exists on a different head SHA (the old comment is stale for the current head).
 Error output (stderr, JSON):
@@ -450,6 +507,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "allowed-refs": { type: "string" },
       lightweight: { type: "boolean" },
       "size-budget-json": { type: "string" },
+      submit: { type: "string" },
+      auto: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -474,6 +533,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     allowedRefs: [],
     lightweight: false,
     sizeBudgetJson: undefined,
+    submit: undefined,
+    auto: false,
     jq: undefined,
     silent: false,
   };
@@ -607,6 +668,18 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.sizeBudgetJson = rawPath;
       continue;
     }
+    if (token.name === "submit") {
+      const raw = requireTokenValue(token, parseError).trim().toLowerCase();
+      if (!REVIEW_SUBMIT_MODES.has(raw)) {
+        throw parseError("--submit must be one of: pending, comment, request-changes, approve");
+      }
+      options.submit = raw;
+      continue;
+    }
+    if (token.name === "auto") {
+      options.auto = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -648,6 +721,29 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.executionMode === "inline_single_agent" && options.inlineReason === undefined) {
     throw parseError(
       "--inline-reason is required for executionMode inline_single_agent (the default). Pass --execution-mode fanout_fanin for fan-out/fan-in runs, or --inline-reason \"<why>\" to record why the gate ran inline.",
+    );
+  }
+  // --submit is SCOPED TO --gate review ONLY. --gate review is never
+  // auto-resolved (must be passed explicitly), so this covers both an
+  // explicit non-review gate AND an omitted --gate (which would otherwise
+  // auto-resolve to draft_gate/pre_approval_gate at runtime) — GATE-COMMENT-NON-SUBSTITUTION:
+  // draft_gate/pre_approval_gate always submit a COMMENT review; a clean
+  // pre-approval must stay a submitted, visible evidence surface, never
+  // substitutable by a differently-submitted review.
+  if (options.submit !== undefined && options.gate !== "review") {
+    throw parseError(
+      `--submit is scoped to --gate review only (draft_gate/pre_approval_gate always submit a COMMENT review and reject --submit — GATE-COMMENT-NON-SUBSTITUTION). Pass --gate review explicitly, or omit --submit.`,
+    );
+  }
+  // Headless/non-interactive safety (#1840): a review run under --auto may
+  // only leave the review pending or submit it as a comment. approve/
+  // request-changes carry GitHub-native branch-protection effects (satisfying
+  // required approvals / blocking merge) independent of any dev-loops gate,
+  // so automation must never reach them — they are reachable only via the
+  // review skill's interactive multiple-choice.
+  if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
+    throw parseError(
+      `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
     );
   }
   try {
@@ -1729,6 +1825,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // (the one place this function would otherwise read CI status) and posts
   // straight from the caller-supplied --head-sha.
   const isReviewGate = options.gate === "review";
+  // Resolved submit mode for the review gate only (#1840); parseUpsertCheckpointVerdictCliArgs
+  // already refused --submit on any other gate and refused approve/request-changes
+  // under --auto, so this is a pure default-fill, not further validation.
+  const reviewSubmitMode = isReviewGate ? (options.submit ?? DEFAULT_REVIEW_SUBMIT_MODE) : undefined;
   let coordinationContext = null;
   let evidence = null;
   let coordination = null;
@@ -2453,6 +2553,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       body: renderInlineCommentBody(finding, { round: findingSurface.round }),
     })),
     allowedRefs: options.allowedRefs,
+    ...(isReviewGate ? { event: resolveReviewSubmitEvent(reviewSubmitMode) } : {}),
   }, gh);
   const created = { commentId: createdReview.reviewId, commentUrl: createdReview.reviewUrl };
   // Post-creation verification: verify the review is retrievable before returning.
@@ -2492,6 +2593,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
     ...findingSurfaceFields,
+    ...(isReviewGate ? { submit: reviewSubmitMode } : {}),
     ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
