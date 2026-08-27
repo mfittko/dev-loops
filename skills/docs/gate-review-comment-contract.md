@@ -96,6 +96,37 @@ draft/pre-approval evidence.) So a `review` comment never satisfies
 SUBSTITUTION` below applies to it symmetrically: a clean `review` comment
 authorizes nothing this contract's two gates require.
 
+<!-- rule: GATE-REVIEW-SUBMIT-MODES -->
+### `review` gate submit modes (#1840)
+
+`GATE-REVIEW-SUBMIT-MODES`: `upsert-checkpoint-verdict.mjs`'s `--submit
+<pending|comment|request-changes|approve>` flag is SCOPED TO `--gate review`
+ONLY — passing it on `draft_gate`/`pre_approval_gate` is rejected with a named
+error (never silently ignored); those two gates always submit a `COMMENT`
+review per `GATE-COMMENT-SINGLE-SURFACE` (`GATE-COMMENT-NON-SUBSTITUTION`: a
+clean pre-approval must stay a submitted, visible evidence surface, never
+substitutable by a differently-submitted review).
+
+| Mode | GitHub review `event` | Effect |
+|---|---|---|
+| `pending` | omitted | Creates an author-only draft review — invisible to other reviewers until a human submits it |
+| `comment` (default when `--submit` is omitted) | `COMMENT` | Submits the review immediately (today's behavior, unchanged) |
+| `request-changes` | `REQUEST_CHANGES` | Submits the review; a GitHub-native branch-protection signal that can BLOCK merge until dismissed |
+| `approve` | `APPROVE` | Submits the review; a GitHub-native branch-protection signal that SATISFIES a required-approvals rule |
+
+`request-changes`/`approve` carry GitHub-native branch-protection effects
+independent of any dev-loops gate. A headless/non-interactive review run
+(`--auto`) is restricted to `pending`/`comment` — `--submit
+approve`/`--submit request-changes` are REFUSED headless, so automation can
+never auto-approve or auto-block a PR; they are reachable only through the
+[Review skill](../review/SKILL.md)'s interactive multiple-choice submit step.
+
+Every submit mode — including `approve` — stays a NON-evidence `review`
+verdict for dev-loops gates: the authoritative-`review`-header guard above
+reads only the comment body, never the review's `event`/`state`, so
+`detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs`
+report no draft/pre-approval evidence from it regardless of submit mode.
+
 ## Separate chains per gate
 
 Each gate runs its own independent review chain (`GATE-EXEC-SEPARATE-CHAINS`, owned by

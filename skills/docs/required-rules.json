@@ -215,6 +215,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-REVIEW-SUBMIT-MODES",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-ANGLE-CARRY-FORWARD"
     },
     {

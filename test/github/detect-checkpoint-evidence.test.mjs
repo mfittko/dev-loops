@@ -2528,6 +2528,68 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
   }
 });
 
+// #1840 AC5 — extends the #1808 non-evidence regression: a `review` verdict
+// posted via the NEW `--submit approve` mode is STILL non-evidence for
+// dev-loops gates. approve/request-changes are reachable only via the
+// interactive submit choice (upsert-checkpoint-verdict.mjs), and a
+// GitHub-native APPROVE review carries real branch-protection weight
+// (satisfies required-approvals rules) — separate and expected — but that is
+// exactly why the dev-loops-internal evidence guard must stay unaffected by
+// the review's `state`/`event`: the guard is the authoritative `review`
+// header recognized by parseGateReviewCommentFields
+// (@dev-loops/core/github/copilot-helpers), which reads only the comment
+// BODY, never the review's submitted GitHub event/state. This test proves
+// that holds end to end through the real detect-checkpoint-evidence CLI, on
+// a review payload shaped exactly like GitHub's response to a submitted
+// APPROVE review (state: "APPROVED", a non-null submitted_at).
+test("detect-checkpoint-evidence: a `review`-gate verdict submitted as an APPROVE review (--submit approve, #1840) is still non-evidence for draft_gate/pre_approval_gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-approve-mode-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const approvedReviewGateComment = {
+      id: 960,
+      body: renderGateReviewCommentBody({
+        gate: "review",
+        headSha: "abc1234",
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "none — informational review, no re-gate required",
+      }),
+      // Shape of GitHub's response to a SUBMITTED review (state !== "PENDING",
+      // a non-empty submitted_at) — exactly what isSubmittedReview
+      // (_gate-finding-surface.mjs) requires before a review enters the
+      // evidence-scan comment stream at all, so this fixture is a genuine
+      // proof the guard holds even once the review clears that filter.
+      state: "APPROVED",
+      submitted_at: "2026-08-27T23:25:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-960",
+    };
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([approvedReviewGateComment]) + "\n" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    // With no genuine draft_gate/pre_approval_gate comment on the PR (only
+    // the APPROVE-mode `review` comment), evidence must remain ABSENT — the
+    // pre-merge check fails closed rather than reading the review as
+    // draft_gate evidence.
+    assert.equal(result.code, 1, result.stdout);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean draft_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence: a posted gate-findings-review body can never win the newest-gate-marker tie-break (evidence-scan hijack)", async () => {
   // close-gate-findings.mjs's posted findings review always embeds the gate
   // name in its header line, and a finding's own free text can mention the

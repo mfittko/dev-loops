@@ -858,15 +858,23 @@ function parseReviewMutationResponse(payload) {
  * Create the round's ONE review: the verdict-marker body plus one inline
  * comment per locatable finding. GitHub 422s a COMMENT-event review with an
  * empty body, so the caller must always pass a rendered body.
+ *
+ * `event` defaults to "COMMENT" (draft_gate/pre_approval_gate's only submit
+ * mode — GATE-COMMENT-SINGLE-SURFACE). The standalone `review` gate's
+ * `pending` submit mode (#1840) passes `event: null` so GitHub leaves the
+ * review PENDING (author-only draft): a falsy `event` here — `null`, never
+ * the parameter-default-triggering `undefined` — omits the `event` key from
+ * the payload entirely, which is what the create-review API reads as "leave
+ * pending" rather than submitting it.
  */
-export async function createGateReview({ repo, pr, headSha, body, comments, allowedRefs }, { env, ghCommand, runChild = defaultRunChild }) {
+export async function createGateReview({ repo, pr, headSha, body, comments, allowedRefs, event = "COMMENT" }, { env, ghCommand, runChild = defaultRunChild }) {
   // ISSUE/PR-ID GUARD: refuse a verdict body or inline finding comment
   // that emits a raw issue/PR id (fail-closed) unless explicitly allowlisted.
   guardCommentBodyNoIssuePrIds(body, { ref: "gate verdict comment body", allowedRefs });
   for (const comment of comments ?? []) {
     guardCommentBodyNoIssuePrIds(comment?.body, { ref: "gate review inline finding comment", allowedRefs });
   }
-  const payload = { commit_id: headSha, event: "COMMENT", body, comments };
+  const payload = { commit_id: headSha, body, comments, ...(event ? { event } : {}) };
   const result = await runChild(
     ghCommand,
     ["api", "-X", "POST", `repos/${repo}/pulls/${pr}/reviews`, "--input", "-"],

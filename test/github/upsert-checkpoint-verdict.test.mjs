@@ -6289,6 +6289,135 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+// ---------------------------------------------------------------------------
+// #1840 — `--submit <pending|comment|request-changes|approve>` on --gate
+// review only: the create path's GitHub `event`, the review-gate-only
+// scoping refusal, the headless (--auto) approve/request-changes refusal,
+// and the default-comment fallback.
+// ---------------------------------------------------------------------------
+
+test("parseUpsertCheckpointVerdictCliArgs: --submit is scoped to --gate review only (draft_gate/pre_approval_gate reject it with a named error)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", gate, "--submit", "comment"]),
+      /--submit is scoped to --gate review only.*GATE-COMMENT-NON-SUBSTITUTION/is,
+    );
+  }
+  // An omitted --gate would auto-resolve to draft_gate/pre_approval_gate at
+  // runtime, never review — --submit is refused up front rather than
+  // deferring to a runtime resolution that could never legally accept it.
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "pending"]),
+    /--submit is scoped to --gate review only/i,
+  );
+  // review accepts it.
+  const parsed = parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "review", "--submit", "comment"]);
+  assert.equal(parsed.submit, "comment");
+});
+
+test("parseUpsertCheckpointVerdictCliArgs: --submit rejects an unrecognized mode", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "bogus"]),
+    /--submit must be one of: pending, comment, request-changes, approve/i,
+  );
+});
+
+test("parseUpsertCheckpointVerdictCliArgs: --auto refuses --submit approve/request-changes on --gate review (headless never auto-approves or auto-blocks)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin", "--auto"];
+  for (const submit of ["approve", "request-changes"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit]),
+      /not allowed with --auto.*interactive submit choice/is,
+    );
+  }
+  // Headless still allows pending/comment.
+  for (const submit of ["pending", "comment"]) {
+    const parsed = parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit]);
+    assert.equal(parsed.submit, submit);
+    assert.equal(parsed.auto, true);
+  }
+  // approve/request-changes ARE reachable without --auto (the interactive path).
+  for (const submit of ["approve", "request-changes"]) {
+    const interactiveBase = base.filter((token) => token !== "--auto");
+    const parsed = parseUpsertCheckpointVerdictCliArgs([...interactiveBase, "--submit", submit]);
+    assert.equal(parsed.submit, submit);
+    assert.equal(parsed.auto, false);
+  }
+});
+
+for (const { submit, expectedEvent, label } of [
+  { submit: undefined, expectedEvent: "COMMENT", label: "omitted --submit defaults to comment" },
+  { submit: "comment", expectedEvent: "COMMENT", label: "--submit comment" },
+  { submit: "request-changes", expectedEvent: "REQUEST_CHANGES", label: "--submit request-changes" },
+  { submit: "approve", expectedEvent: "APPROVE", label: "--submit approve" },
+]) {
+  test(`upsert-checkpoint-verdict --gate review: ${label} submits the review with GitHub event ${expectedEvent}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+      const entries = [
+        ...reviewGateFindingSurfaceEntries({ files: null }),
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+          stdout: '{"id":950,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-950"}\n',
+        },
+      ];
+      const { runChild, calls } = makeGhMock(entries);
+      const result = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        ...(submit !== undefined ? { submit } : {}),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.action, "created");
+      assert.equal(result.submit, submit ?? "comment");
+      const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+      const postedPayload = JSON.parse(postCall.stdinText);
+      assert.equal(postedPayload.event, expectedEvent);
+    }, { prefix: "dev-loops-upsert-review-submit-" });
+  });
+}
+
+test("upsert-checkpoint-verdict --gate review --submit pending creates the review with GitHub's `event` OMITTED (author-only draft)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":951,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-951"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "pending",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.submit, "pending");
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const postedPayload = JSON.parse(postCall.stdinText);
+    assert.equal("event" in postedPayload, false);
+    // The verdict body is still rendered in full — a pending review still
+    // carries the complete verdict for the human to inspect before submitting.
+    assert.match(postedPayload.body, /### Gate review: `review`/);
+  }, { prefix: "dev-loops-upsert-review-submit-pending-" });
+});
+
 test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
   const angles = normalizeStructuredFindings([
     { angle: "docs", verdict: "findings_present", findings: [{ severity: "defer", summary: "legacy entry" }] },
