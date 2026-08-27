@@ -786,6 +786,49 @@ export function renderBriefingPointerLine(prefixPath) {
  *   pointer line (must be the SAME path every reviewer was pointed at).
  * @returns {{ aligned: boolean, mode: "inline"|"pointer"|null, reason: string|null }}
  */
+/**
+ * Deterministically compose a full reviewer prompt: the round's
+ * byte-identical invariant prefix INLINED as the leading bytes, followed by
+ * the (also round-invariant) volatile tail, followed by the per-group angle
+ * suffix (issue #1852). This is the ONE function every reviewer prompt on the
+ * canonical fan-out path is built from — never a hand-assembled per-group
+ * preamble that leads with dynamic prose ahead of the prefix (the
+ * "angle-first" / pointer-seeding failure mode `verifyPromptLeadingAlignment`
+ * exists to catch).
+ *
+ * Byte-identical-prefix-across-groups falls out of the arguments alone: any
+ * two calls sharing the same `prefixBytes`/`volatileBytes` (true for every
+ * dispatch unit of one round, since both are round-scoped, not group-scoped)
+ * produce prompts whose leading span is identical regardless of
+ * `angleSuffix` — the property AC1 requires, provable by construction rather
+ * than by review.
+ *
+ * Pure and offline: takes already-read bytes, never reads a file itself (the
+ * CLI wrapper, `compose-reviewer-prompt.mjs`, owns I/O and the
+ * record-dispatch-prompt-layout.mjs capture that makes the composed prompt's
+ * layout binding on `verify-dispatch-prompt-layout.mjs`).
+ *
+ * @param {object} input
+ * @param {string} input.prefixBytes — the round's invariant-prefix bytes
+ *   (`<gate>-<headSha>.briefing-prefix.txt`), non-empty.
+ * @param {string} [input.volatileBytes] — the round's volatile-tail bytes
+ *   (`<gate>-<headSha>.briefing-volatile.txt`); absent/non-string treated as
+ *   "" (best-effort — a round that never wrote one still composes).
+ * @param {string} input.angleSuffix — the per-group/angle-specific prompt
+ *   text, non-empty (an empty suffix would compose a prompt naming no work).
+ * @returns {string} the exact full reviewer prompt text.
+ */
+export function composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix } = {}) {
+  if (typeof prefixBytes !== "string" || prefixBytes.length === 0) {
+    throw new Error("composeReviewerPromptText requires non-empty prefixBytes (the round's invariant prefix)");
+  }
+  if (typeof angleSuffix !== "string" || angleSuffix.trim().length === 0) {
+    throw new Error("composeReviewerPromptText requires a non-empty angleSuffix (the per-group angle-specific prompt)");
+  }
+  const volatile = typeof volatileBytes === "string" ? volatileBytes : "";
+  return prefixBytes + volatile + angleSuffix;
+}
+
 export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefixPath } = {}) {
   const leading = typeof promptLeading === "string" ? promptLeading : "";
   if (typeof prefixBytes === "string" && prefixBytes.length > 0 && leading.startsWith(prefixBytes)) {

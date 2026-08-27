@@ -21,6 +21,7 @@ import {
   resolvePrimerForm,
   sha256Hex,
   DISPATCH_PROMPT_LEADING_CAP_BYTES,
+  composeReviewerPromptText,
   renderBriefingPointerLine,
   verifyPromptLeadingAlignment,
 } from "../src/loop/review-dispatch-plan.mjs";
@@ -776,6 +777,66 @@ describe("renderBriefingPointerLine — pointer-seeding mode's byte-identical po
 
   test("throws on an empty prefixPath", () => {
     assert.throws(() => renderBriefingPointerLine(""), /non-empty prefixPath/);
+  });
+});
+
+describe("composeReviewerPromptText — deterministic reviewer-prompt composer (issue #1852)", () => {
+  const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+  const VOLATILE_BYTES = "# volatile tail\ngate: draft_gate\nhead: abc\n";
+
+  test("composes prefix INLINED as the leading bytes, then volatile, then the angle suffix", () => {
+    const composed = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo the thing.",
+    });
+    assert.equal(composed, `${PREFIX_BYTES}${VOLATILE_BYTES}## Angle: coverage\nDo the thing.`);
+    assert.ok(composed.startsWith(PREFIX_BYTES));
+  });
+
+  test("AC1: two different groups' composed prompts share an identical leading prefix span, byte-for-byte", () => {
+    const coverage = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo coverage things.",
+    });
+    const security = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: security\nDo security things (a longer angle suffix, different length).",
+    });
+    assert.notEqual(coverage, security);
+    const sharedSpan = PREFIX_BYTES + VOLATILE_BYTES;
+    assert.equal(coverage.slice(0, sharedSpan.length), sharedSpan);
+    assert.equal(security.slice(0, sharedSpan.length), sharedSpan);
+  });
+
+  test("an absent volatile tail composes as empty — never blocking", () => {
+    const composed = composeReviewerPromptText({ prefixBytes: PREFIX_BYTES, angleSuffix: "## Angle: coverage\nDo the thing." });
+    assert.equal(composed, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`);
+  });
+
+  test("throws on an empty prefixBytes (never composes angle-first by accident)", () => {
+    assert.throws(() => composeReviewerPromptText({ prefixBytes: "", angleSuffix: "## Angle: coverage" }), /non-empty prefixBytes/);
+  });
+
+  test("throws on an empty/whitespace-only angleSuffix", () => {
+    assert.throws(() => composeReviewerPromptText({ prefixBytes: PREFIX_BYTES, angleSuffix: "   " }), /non-empty angleSuffix/);
+  });
+
+  test("the composed output verifies as inline-aligned via verifyPromptLeadingAlignment", () => {
+    const composed = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo the thing.",
+    });
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: composed,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt",
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "inline");
   });
 });
 

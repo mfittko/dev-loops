@@ -579,7 +579,7 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
   operator decision per PR. Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is composed prefix-first (`GATE-EXEC-BRIEFING-PREFIX`'s "Cache alignment" paragraph): right after composing its prompt (the same step as the `verify-fresh-review-context.mjs` call above), the orchestrator ALSO calls `scripts/github/record-dispatch-prompt-layout.mjs --scope <same scope> --head-sha <sha> --prefix-path <this round's invariant-prefix file path> --prompt-file <path to the ACTUAL composed prompt text>` to capture its leading bytes — the "Prompt-LAYOUT enforcement" paragraph under `GATE-EXEC-BRIEFING-PREFIX` above owns the full capture/verify contract; this is a rollout, not a precondition (a round that never captures is never newly blocked).
+- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) ALSO runs `scripts/github/compose-reviewer-prompt.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha> --scope <same scope> --angle-suffix-file <path to the group's authored angle-specific prompt text>`, which inlines this round's invariant-prefix bytes as the leading bytes, appends the volatile tail and the angle suffix, writes the composed prompt, and records its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer already made it). The orchestrator then delivers the composer's `--out` file bytes to the reviewer per the "Per-harness delivery" paragraph above. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -667,6 +667,56 @@ pointer LINE ITSELF — not just the file it names — MUST be byte-identical ac
 reviewer of the round; a pointer that varies per reviewer (e.g. embeds the angle name or a
 per-reviewer path) defeats prefix matching exactly as an inlined angle-first prefix would,
 even though the referenced file's bytes are still shared.
+
+**The composer (issue #1852, by construction, not by agent discipline).** Hand-composing a
+reviewer prompt — leading with a per-group preamble and instructing the reviewer to READ the
+invariant-prefix file rather than inlining its bytes — reflexively defeats the cache-alignment
+rule above: it reads as ergonomic ("tell the reviewer to read the file") but produces exactly
+the angle-first / pointer-varying layouts this section forbids, and prose discipline alone
+never held. `scripts/github/compose-reviewer-prompt.mjs` is the ONE SANCTIONED way a reviewer
+prompt is produced on the fan-out path: given `--repo`/`--pr`/`--gate`/`--head-sha`/`--scope`
+and a `--angle-suffix-file` (the per-group/angle-specific prompt text the orchestrator
+authored), it reads this round's `<gate>-<headSha>.briefing-prefix.txt` and
+`.briefing-volatile.txt` bytes off disk, concatenates prefix + volatile + angle suffix (in that
+fixed order, `composeReviewerPromptText` in `@dev-loops/core/loop/review-dispatch-plan`) so the
+invariant prefix is INLINED as the composed prompt's leading bytes by construction, writes the
+result, and — in the SAME call — records the dispatch-prompt layout via
+`record-dispatch-prompt-layout.mjs`'s `recordDispatchPromptLayout` (see "Prompt-LAYOUT
+enforcement" below). Composing and recording are one atomic call, not two steps an orchestrator
+could pair incorrectly or skip; hand-composed pointer-seeding (calling
+`record-dispatch-prompt-layout.mjs` directly against a manually-assembled prompt) remains
+possible as the underlying primitive but is no longer the sanctioned fan-out path. Angle
+CONTENT is unchanged by this: the composer never generates or templates the angle-specific
+text — it is still the orchestrator's own authored persona/instructions (e.g.
+`COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`), supplied verbatim via `--angle-suffix-file`; the
+composer only enforces WHERE that text goes.
+
+**Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
+bytes; how those bytes REACH the spawned reviewer's actual prompt differs by harness:
+- **Code-driven fan-out (e.g. a `pi` `runs.all` batch dispatch):** the driver reads the
+  composer's `--out` file (or its stdout `promptPath`) and passes those bytes directly as the
+  spawned reviewer's prompt — a straightforward byte-exact relay with no intermediate agent
+  paraphrase.
+- **Agent-driven fan-out (Claude Code's Agent/Task tool):** the orchestrating agent has no
+  primitive that injects a program-constructed byte-exact prefix into a subagent's prompt
+  independently of the `prompt` STRING PARAMETER it itself constructs for that tool call. The
+  sanctioned sequence is: run the composer, read its `--out` file's exact bytes, and pass those
+  bytes verbatim — with NO added preamble, wrapper text, or paraphrase — as the Agent tool's
+  `prompt` parameter. This makes the prompt CODE-COMPOSED (the composer, not the agent, decides
+  the byte sequence), but the final hop — the orchestrating agent relaying those exact bytes
+  into the tool call — is not itself mechanically enforced by this CLI; `verify-dispatch-prompt-layout.mjs`'s
+  fan-in check (below) is what catches a relay that drifted (added a preamble, truncated,
+  reordered). Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
+  Code's Agent-tool dispatch layer exposes no usage/cache-read telemetry to the orchestrating
+  agent for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one
+  round (`org+model content-hash reads on reviewers 2..N`) cannot be measured or verified from
+  inside this harness — only the ordering/fingerprint invariants above (byte-identical prefix,
+  by-construction inline alignment, mechanical layout enforcement) are assertable here; a
+  verified-reuse claim would require the harness to expose that telemetry, which is outside this
+  repo's control. This is a harness-capability limit, not a defect in the composer: the composer
+  still guarantees, by construction, that every compliant dispatch UNIT of a round shares a
+  byte-identical leading prefix span, which is the necessary (if not independently provable)
+  precondition for the provider to ever reuse its cache.
 
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
@@ -784,16 +834,19 @@ closed. Only when no on-disk records exist (offline/legacy) does it fall back to
 rule that all of the round's sentinels share ONE identical hash. See
 `verify-briefing-prefixes.mjs --help` for the worked same-head two-gate example.
 
-**Prompt-LAYOUT enforcement (issue #1841, completes #1468).** Everything above proves the
+**Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Everything above proves the
 recorded prefix HASH is byte-identical across a round's sentinels — it proves nothing about
-whether any reviewer's ACTUAL dispatched prompt LED with those bytes, since the prompt is
-composed by the orchestrating agent at fan-out time with no code template. This closes that
-gap with a minimal capture point: right after composing each reviewer's prompt (the same
-fan-out step that already runs `verify-fresh-review-context.mjs`), call
-`scripts/github/record-dispatch-prompt-layout.mjs --scope <gate>-<angle-or-group> --head-sha
+whether any reviewer's ACTUAL dispatched prompt LED with those bytes. On the sanctioned fan-out
+path ("The composer" paragraph above), this is closed BY CONSTRUCTION: composing a reviewer
+prompt via `compose-reviewer-prompt.mjs` records it in the SAME call, via
+`record-dispatch-prompt-layout.mjs`'s exported `recordDispatchPromptLayout` — there is no
+separate step an orchestrator could pair incorrectly or skip, and a canonical-path dispatch is
+therefore NEVER left unrecorded. The underlying capture primitive
+(`scripts/github/record-dispatch-prompt-layout.mjs --scope <gate>-<angle-or-group> --head-sha
 <sha> --prefix-path <the invariant-prefix file path this reviewer's prompt was composed
-from/points at> --prompt-file <path to the ACTUAL composed prompt text>`. It captures the
-prompt's leading bytes (up to `DISPATCH_PROMPT_LEADING_CAP_BYTES`,
+from/points at> --prompt-file <path to the ACTUAL composed prompt text>`) remains directly
+callable for a caller that already has an independently-composed prompt file on disk. Either
+way, the record captures the prompt's leading bytes (up to `DISPATCH_PROMPT_LEADING_CAP_BYTES`,
 `@dev-loops/core/loop/review-dispatch-plan`) to `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`.
 Before Phase 3 consolidation, the fan-in ALSO runs
 `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` (wired into
@@ -807,10 +860,12 @@ strictly AFTER it. An angle-first prompt (dynamic per-unit prose ahead of the pr
 matches neither and fails this mechanically, not only by prose review. Ground truth is ALWAYS
 re-discovered on disk from the round's real `<gate>-<headSha>.briefing-prefix.txt` record —
 never trusted from a captured record's own stored path — so a stale/tampered record can never
-smuggle in different bytes. A round with NO dispatch-prompt records at all is never newly
-blocked (progressive/optional capture, same posture as `GATE-EXEC-PRIMER-EVIDENCE` below): the
-orchestrator adopting this capture step is a rollout, not a precondition for every existing
-caller.
+smuggle in different bytes. A round with NO dispatch-prompt records at all is still never newly
+blocked (progressive/optional capture, same posture as `GATE-EXEC-PRIMER-EVIDENCE` below) — this
+stays true for a caller that genuinely never adopted the composer (e.g. a pre-#1852 artifact
+replayed offline); the records-floor residual this closes is that the SANCTIONED path can no
+longer silently be the one that never captures, since composing on that path now always
+captures.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
