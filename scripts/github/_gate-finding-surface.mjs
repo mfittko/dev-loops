@@ -111,6 +111,31 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
   return true; // "low" or "nit" (and any legacy spelling of either)
 }
 
+// True when a finding at `severity` — RESOLVED (per `isDeferredAtRound` above)
+// at the current round — must ALSO be tracked on the PR's follow-up GitHub
+// issue and carry the thread marker's `disposition=deferred` stamp. This is
+// the net-reduction filing bar (#1846): resolving a thread and FILING it are
+// two different decisions. A `nit` is NEVER fileable — resolved-with-rationale
+// in-thread only, no matter the round; a resolved nit is cosmetic, not a
+// tracked backlog item. A `low` is fileable ONLY when its own marker carries
+// the explicit `operatorVisible` signal (rendered as the marker's `ov=1`
+// field, set from the finding's own `operatorVisible: true`) — the DEFAULT
+// (`operatorVisible` absent/false) is the conservative, net-negative-backlog
+// choice: NOT fileable, resolved-with-rationale instead. `medium` (past its
+// fix window) keeps its unchanged behavior: always fileable once
+// `isDeferredAtRound` selects it. `high`/`question` are never resolved by the
+// disposition pass to begin with (`isDeferredAtRound` excludes them), so they
+// are never fileable either. Governs whether `close-gate-findings.mjs`'s
+// disposition pass calls `ensureFollowUpIssue`/`stampDeferredDisposition` for
+// a given target, and (via `detectContractViolatingDeferredStamps`) whether an
+// already-stamped `disposition=deferred` marker is legitimate.
+export function isFileableDeferral(severity, operatorVisible, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
+  const sev = normalizeSeverity(severity);
+  if (sev === "medium") return round > mediumFixWindow;
+  if (sev === "low") return operatorVisible === true;
+  return false; // "nit" (never fileable), "high"/"question" (never resolved here)
+}
+
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
 // field: the fingerprint dedupe is intentionally cross-gate (a draft-gate
 // deferral suppresses re-raising the same finding at pre-approval too).
@@ -127,16 +152,30 @@ const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 // finding is tracked on (#1807, GATE-EXEC-DEFERRAL-RECORD): a deferral must
 // never live only in the thread marker and the ephemeral tmp ledger, so the
 // marker itself carries the re-attachment pointer.
-export function buildFindingMarker({ fp, severity, angle, round, disposition, issue }) {
+//
+// `operatorVisible` (#1846) is the explicit operator-visibility signal a `low`
+// finding's OWN PRODUCER attaches — rendered as the marker's `ov=1` field only
+// when `operatorVisible === true`; omitted (the default) is NOT operator
+// visible. This is the ONE place the signal is defined: a producer marks a
+// `low` finding visible by setting `operatorVisible: true` on the finding
+// object it feeds through the ledger (`write-gate-findings-log.mjs`'s
+// `--findings`/`--findings-file`); nothing infers visibility from a finding's
+// own text. `isFileableDeferral` (above) is the sole consumer — it never
+// affects `high`/`medium`/`question`/`nit` disposition.
+export function buildFindingMarker({ fp, severity, angle, round, operatorVisible, disposition, issue }) {
+  if (operatorVisible !== undefined && typeof operatorVisible !== "boolean") {
+    throw new Error(`buildFindingMarker: operatorVisible must be a boolean (or omitted), got ${JSON.stringify(operatorVisible)}`);
+  }
   if (disposition !== undefined && !VALID_MARKER_DISPOSITIONS.has(disposition)) {
     throw new Error(`buildFindingMarker: disposition must be "deferred" (or omitted), got ${JSON.stringify(disposition)}`);
   }
   if (issue !== undefined && (!Number.isInteger(issue) || issue <= 0)) {
     throw new Error(`buildFindingMarker: issue must be a positive integer (or omitted), got ${JSON.stringify(issue)}`);
   }
+  const operatorVisibleField = operatorVisible === true ? " ov=1" : "";
   const dispositionField = disposition ? ` disposition=${slugForMarker(disposition)}` : "";
   const issueField = issue !== undefined ? ` issue=${issue}` : "";
-  return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round}${dispositionField}${issueField} -->`;
+  return `<!-- dev-loops:finding ${fp} severity=${slugForMarker(severity)} angle=${slugForMarker(angle)} round=${round}${operatorVisibleField}${dispositionField}${issueField} -->`;
 }
 
 // Anchored to the START of a line (multiline `m`): a marker quoted mid-line
@@ -144,7 +183,7 @@ export function buildFindingMarker({ fp, severity, angle, round, disposition, is
 // marker as an example) must never be honored as a real marker. Every marker
 // this module renders is always the first character of its own line, so this
 // anchor costs nothing against genuine markers.
-export const FINDING_MARKER_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+disposition=(deferred))?(?:\s+issue=(\d+))?\s*-->/m;
+export const FINDING_MARKER_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\s+severity=([a-z0-9._-]+)\s+angle=([a-z0-9._-]+)\s+round=(\d+)(?:\s+ov=(1))?(?:\s+disposition=(deferred))?(?:\s+issue=(\d+))?\s*-->/m;
 const FINDING_MARKER_FP_ONLY_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
 
 export function parseFindingMarker(text) {
@@ -155,8 +194,9 @@ export function parseFindingMarker(text) {
     severity: normalizeSeverity(match[2]),
     angle: match[3],
     round: Number(match[4]),
-    disposition: match[5] ?? null,
-    issue: match[6] ? Number(match[6]) : null,
+    operatorVisible: match[5] === "1",
+    disposition: match[6] ?? null,
+    issue: match[7] ? Number(match[7]) : null,
   };
 }
 
@@ -416,8 +456,12 @@ export function renderInlineCommentBody(finding, { round }) {
   // never render its retired spelling here while its own marker parses back
   // as the canonical one.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
+  // #1846: carry the finding's own explicit operator-visibility signal onto
+  // the marker (`ov=1` when `finding.operatorVisible === true`) — anything
+  // else (absent, falsy, non-boolean) renders no field at all, the
+  // conservative default `isFileableDeferral` treats as NOT operator visible.
   const lines = [
-    buildFindingMarker({ fp, severity, angle: finding.angle, round }),
+    buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true }),
     renderFindingLine({ ...finding, severity }),
   ];
   if (hasRecommendation(finding)) {
@@ -593,6 +637,14 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     }
     if ("line" in f && f.line !== undefined && (!Number.isInteger(f.line) || f.line < 1)) {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].line must be a positive integer`);
+    }
+    // #1846: the explicit operator-visibility signal (see buildFindingMarker's
+    // own doc) — optional, boolean-only. A malformed value fails closed here
+    // rather than silently coercing to falsy (not-visible), so a producer's
+    // typo surfaces as a ledger-write error instead of a silently over-broad
+    // "resolved, not filed" default.
+    if ("operatorVisible" in f && f.operatorVisible !== undefined && typeof f.operatorVisible !== "boolean") {
+      throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].operatorVisible must be a boolean`);
     }
     if ("files" in f && f.files !== undefined) {
       if (!Array.isArray(f.files)) {

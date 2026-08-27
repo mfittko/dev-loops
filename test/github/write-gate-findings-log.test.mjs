@@ -383,6 +383,68 @@ test("writeGateFindingsLog rejects invalid disposition", async () => {
   }, /disposition/);
 });
 
+// #1846: operatorVisible is the explicit operator-visibility signal a "low"
+// finding's own producer attaches — optional, boolean-only, carried through
+// to the ledger entry unchanged.
+test("writeGateFindingsLog carries operatorVisible: true through to the ledger entry", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 99,
+      gate: "pre_approval_gate",
+      headSha: "ccccccccccccccccc00000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "low", angle: "correctness", summary: "wrong guidance", operatorVisible: true },
+        { severity: "low", angle: "naming", summary: "unused local", operatorVisible: false },
+      ]),
+      tmpRoot: tmpDir,
+    });
+
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc00000000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.findings[0].operatorVisible, true);
+    assert.equal(parsed.findings[1].operatorVisible, false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog omits operatorVisible when absent from the input finding", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-test-"));
+  try {
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 99,
+      gate: "pre_approval_gate",
+      headSha: "ccccccccccccccccc00000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "naming", summary: "unused local" }]),
+      tmpRoot: tmpDir,
+    });
+
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-99", "pre_approval_gate-ccccccccccccccccc00000000000000000000000.json");
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal("operatorVisible" in parsed.findings[0], false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a non-boolean operatorVisible", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify([{ severity: "low", angle: "naming", summary: "x", operatorVisible: "true" }]),
+    });
+  }, /operatorVisible must be a boolean/);
+});
+
 test("writeGateFindingsLog rejects malformed repo format in buildLogPath", async () => {
   await assert.rejects(async () => {
     await writeGateFindingsLog({
