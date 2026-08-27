@@ -96,6 +96,29 @@ test("detector 1 (literal-credential): a value stored base64-encoded still decod
   assert.ok(!JSON.stringify(findings).includes(credentialValue), "never the decoded value either");
 });
 
+// One positive fixture per remaining literal-credential provider prefix
+// (github_pat fine-grained, gho_/ghu_/ghs_/ghr_, slack xox-) — previously
+// only ghp_/AKIA/PEM were individually asserted, so a regex typo in any of
+// these could ship silently.
+const LITERAL_PROVIDER_FIXTURES = [
+  { provider: "github-pat-fine-grained", token: join("github_pat_", "A".repeat(20), "b1") },
+  { provider: "github-oauth-token", token: join("gho_", "A".repeat(20), "b1") },
+  { provider: "github-user-to-server-token", token: join("ghu_", "A".repeat(20), "b1") },
+  { provider: "github-server-to-server-token", token: join("ghs_", "A".repeat(20), "b1") },
+  { provider: "github-refresh-token", token: join("ghr_", "A".repeat(20), "b1") },
+  { provider: "slack-token", token: join("xoxb-", "A".repeat(10), "b1") },
+];
+
+for (const { provider, token } of LITERAL_PROVIDER_FIXTURES) {
+  test(`detector 1 (literal-credential): a ${provider} token blocks`, () => {
+    const findings = scanLineText(`const t = "${token}";`);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].detectorClass, DETECTOR_CLASSES.LITERAL_CREDENTIAL);
+    assert.match(findings[0].reason, new RegExp(provider));
+    assert.ok(!JSON.stringify(findings).includes(token));
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Detector 2 — high entropy
 // ---------------------------------------------------------------------------
@@ -207,6 +230,32 @@ test("parseAddedLines: tracks new-file line numbers, skips removed lines, advanc
 test("parseAddedLines: a binary-file diff (no hunk) yields no entries", () => {
   const diff = ["diff --git a/f.bin b/f.bin", "Binary files a/f.bin and b/f.bin differ"].join("\n");
   assert.deepEqual(parseAddedLines(diff), []);
+});
+
+test("parseAddedLines: an added line whose CONTENT starts with '+ ' (raw diff line '+++ ...') is content, not a file header — regression for the fail-open where such a line was skipped from every detector", () => {
+  const token = join("ghp_", "A".repeat(20), "b1");
+  // Content is `++ export TOKEN="..."` — prefixed with the added-line marker
+  // `+`, the raw diff line is `+++ export TOKEN="..."`, indistinguishable
+  // from a `+++ ` file header by a naive prefix test alone.
+  const diff = [
+    "diff --git a/config.sh b/config.sh",
+    "index 0000000..1111111 100644",
+    "--- a/config.sh",
+    "+++ b/config.sh",
+    "@@ -0,0 +1,1 @@",
+    `+++ export TOKEN="${token}"`,
+  ].join("\n");
+  const entries = parseAddedLines(diff);
+  assert.deepEqual(entries, [{ file: "config.sh", line: 1, text: `++ export TOKEN="${token}"` }]);
+
+  const result = scanDiffText(diff);
+  assert.equal(result.ok, false);
+  assert.equal(result.findings.length, 1);
+  assert.deepEqual(
+    { file: result.findings[0].file, line: result.findings[0].line, detectorClass: result.findings[0].detectorClass },
+    { file: "config.sh", line: 1, detectorClass: DETECTOR_CLASSES.LITERAL_CREDENTIAL },
+  );
+  assert.ok(!JSON.stringify(result).includes(token));
 });
 
 test("scanDiffText: attributes a hit to the correct file/line and never carries the value", () => {

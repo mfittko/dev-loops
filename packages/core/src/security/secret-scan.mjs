@@ -217,16 +217,28 @@ export function parseAddedLines(diffText) {
   const entries = [];
   let file = null;
   let newLine = 0;
+  // `+++ `/`--- ` are STRUCTURAL file headers only before the first `@@`
+  // hunk of a file — inside a hunk, a line starting with `+` (even `++ ` or
+  // `--- `-shaped content) is added/removed CONTENT, never a header. Gate the
+  // header checks on hunk position (`inHunk`), not a naive prefix test alone,
+  // so a planted credential on a line whose content happens to start with
+  // `+ ` can never be misread as a header and skipped from every detector.
+  let inHunk = false;
   for (const rawLine of diffText.split("\n")) {
-    if (rawLine.startsWith("+++ ")) {
+    if (rawLine.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk && rawLine.startsWith("+++ ")) {
       const target = rawLine.slice(4).replace(/\t.*$/u, "");
       file = target === "/dev/null" ? null : target.replace(/^b\//u, "");
       continue;
     }
-    if (rawLine.startsWith("--- ")) continue;
+    if (!inHunk && rawLine.startsWith("--- ")) continue;
     if (rawLine.startsWith("@@")) {
       const match = rawLine.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u);
       newLine = match ? Number.parseInt(match[1], 10) : 0;
+      inHunk = true;
       continue;
     }
     if (rawLine.startsWith("+")) {
