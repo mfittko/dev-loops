@@ -14,7 +14,8 @@ import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
-import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine } from "@dev-loops/core/loop/review-dispatch-plan";
+import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { runNode } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -3182,6 +3183,136 @@ test("#1618 record-matching: a sentinel whose hash matches NO gate record fails 
           () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
           (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /matches no gate briefing-prefix record/i.test(err.message),
         );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1841 (completes #1468): dispatch-prompt LAYOUT enforcement, wired into the
+// SAME --head-sha fan-in block as the GATE-EXEC-BRIEFING-PREFIX hash checks
+// above. The hash checks prove the recorded prefix is byte-identical; this
+// proves whether the reviewer's ACTUAL prompt led with it — an angle-first
+// prompt is caught mechanically here, not only documented.
+// ---------------------------------------------------------------------------
+
+async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, leading }) {
+  await mkdir(tmpRoot, { recursive: true });
+  await writeFile(
+    dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha),
+    JSON.stringify({ scope, headSha, prefixPath, leading }),
+  );
+}
+
+test("#1841 AC4: a head with no dispatch-prompt records still consolidates (offline/legacy path unchanged)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: a round whose dispatched reviewer prompt is prefix-first (inline) consolidates", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${bytes}## Angle: coverage\nDo the thing.`,
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: a round whose dispatched reviewer prompt leads with the byte-identical POINTER line consolidates", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        const pointerLine = renderBriefingPointerLine(prefixPath);
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${pointerLine}\n## Angle: coverage\nDo the thing.`,
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: fails closed when a dispatched reviewer prompt is ANGLE-FIRST (dynamic prose ahead of the invariant prefix)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        // Angle-first: dynamic per-unit prose BEFORE the invariant prefix.
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `## Angle: coverage\nDo the thing.\n${bytes}`,
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /do not lead with the round's byte-identical/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1841 AC3: primer-evidence enforcement default decision. Investigation could
+// not prove (within the shipped harness, offline in this repo) that the Phase
+// 1.5 primer measurably produces provider cache reuse without a live
+// multi-reviewer dispatch to observe — so enforcement stays OPT-IN (unchanged):
+// the fan-in proceeds unchanged, primer evidence unenforced, when neither
+// --primer-evidence nor --primer-plan is given, even on a --head-sha round
+// that also passes the (now-enforced) dispatch-layout/prefix-hash checks.
+// This test pins that decision so a future default-on flip requires
+// deliberately breaking it, not silently drifting.
+// ---------------------------------------------------------------------------
+
+test("#1841 AC3: primer-evidence enforcement stays OPT-IN by default — a round with neither flag consolidates unenforced", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-primer-default-"));
+      try {
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
       } finally {
         await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
       }

@@ -20,6 +20,9 @@ import {
   partitionPrimerGroups,
   resolvePrimerForm,
   sha256Hex,
+  DISPATCH_PROMPT_LEADING_CAP_BYTES,
+  renderBriefingPointerLine,
+  verifyPromptLeadingAlignment,
 } from "../src/loop/review-dispatch-plan.mjs";
 
 describe("normalizeHarnessCapabilities — explicit capability model (Section D)", () => {
@@ -749,5 +752,94 @@ describe("sha256Hex — deterministic hashing + opaque markers", () => {
     assert.equal(a, sha256Hex({ bytes: Buffer.from("hello"), label: "x" }));
     // A Buffer and an identical hex string must NOT collide (prefix disambiguates).
     assert.notEqual(a, sha256Hex({ bytes: "hello", label: "x" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyPromptLeadingAlignment / renderBriefingPointerLine — dispatch-prompt
+// LAYOUT check (#1841, completes #1468): mechanically proving whether a
+// dispatched reviewer prompt actually LEADS with the round's byte-identical
+// invariant prefix/pointer line, never angle-first.
+// ---------------------------------------------------------------------------
+describe("renderBriefingPointerLine — pointer-seeding mode's byte-identical pointer line", () => {
+  test("is deterministic for the same prefixPath", () => {
+    const a = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    const b = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    assert.equal(a, b);
+  });
+
+  test("differs when the prefixPath differs (a per-reviewer/angle-varying path would defeat prefix matching)", () => {
+    const a = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    const b = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc-coverage.briefing-prefix.txt");
+    assert.notEqual(a, b);
+  });
+
+  test("throws on an empty prefixPath", () => {
+    assert.throws(() => renderBriefingPointerLine(""), /non-empty prefixPath/);
+  });
+});
+
+describe("verifyPromptLeadingAlignment — GATE-EXEC-BRIEFING-PREFIX layout check", () => {
+  const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+  const PREFIX_PATH = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+
+  test("inline mode: a prompt whose leading bytes ARE the prefix passes", () => {
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "inline");
+  });
+
+  test("pointer mode: a prompt leading with the byte-identical pointer line passes, angle suffix after", () => {
+    const pointerLine = renderBriefingPointerLine(PREFIX_PATH);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${pointerLine}\n## Angle: coverage\nDo the thing.`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "pointer");
+  });
+
+  test("REJECTS an angle-first prompt (dynamic per-unit prose ahead of the invariant prefix)", () => {
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `## Angle: coverage\nDo the thing.\n${PREFIX_BYTES}`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+    assert.match(verdict.reason, /does not LEAD with/);
+  });
+
+  test("REJECTS an angle-first prompt in pointer-seeding mode (prose ahead of the pointer line)", () => {
+    const pointerLine = renderBriefingPointerLine(PREFIX_PATH);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `## Angle: coverage\nDo the thing.\n${pointerLine}`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("REJECTS a pointer line naming a DIFFERENT path (per-reviewer path variance defeats matching)", () => {
+    const otherPointerLine = renderBriefingPointerLine(`${PREFIX_PATH}.other`);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${otherPointerLine}\n## Angle: coverage\n`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("REJECTS an empty/missing promptLeading", () => {
+    const verdict = verifyPromptLeadingAlignment({ promptLeading: "", prefixBytes: PREFIX_BYTES, prefixPath: PREFIX_PATH });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("DISPATCH_PROMPT_LEADING_CAP_BYTES is comfortably above the 200 KiB inline-diff cap", () => {
+    assert.ok(DISPATCH_PROMPT_LEADING_CAP_BYTES > 200 * 1024);
   });
 });
