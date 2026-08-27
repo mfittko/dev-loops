@@ -152,7 +152,7 @@ function detectContractViolatingDeferredStamps(threads, login, round, mediumFixW
     const details = violations
       .map((v) => `thread ${v.threadId} (comment ${v.commentId}): severity=${v.severity} at round=${v.round} (mediumFixWindow=${v.mediumFixWindow}) carries disposition=deferred, reason=${v.reason}${v.issue ? ` (issue=${v.issue})` : ""}`)
       .join("; ");
-    throw new Error(`GATE-EXEC-THREAD-DISPOSITION violation: ${violations.length} gate-authored thread(s) carry a contract-violating disposition=deferred stamp (${details}). A question must be answered (never deferred), an in-window medium (round ≤ mediumFixWindow) must stay unresolved to force a fix round, and every disposition=deferred stamp must link a follow-up issue number. Refuse to proceed with the disposition pass.`);
+    throw new Error(`GATE-EXEC-THREAD-DISPOSITION violation: ${violations.length} gate-authored thread(s) carry a contract-violating disposition=deferred stamp (${details}). A question must be answered (never deferred), a nit must never be stamped deferred (resolved-with-rationale instead, never filed), a low must carry operatorVisible=true on its own marker before it may be stamped deferred (otherwise resolved-with-rationale, never filed), an in-window medium (round ≤ mediumFixWindow) must stay unresolved to force a fix round, and every disposition=deferred stamp must link a follow-up issue number. Refuse to proceed with the disposition pass.`);
   }
 }
 

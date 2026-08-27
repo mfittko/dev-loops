@@ -37,7 +37,7 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAngles, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
-import { buildAngleRequestGroups, buildReviewDispatchPlan, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -2200,6 +2200,17 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     prefixMode = "file";
   } else {
+    // Issue #1853: the diff INLINED into the invariant prefix (and its
+    // scoped "changed-files" variant below) is FILTERED — lockfiles,
+    // generated/vendored trees, and any --diff-exclude-glob configured here
+    // are dropped whole-file, so a lockfile-heavy diff no longer dominates
+    // the shared per-head block. The FULL, unfiltered diff stays persisted
+    // at options.diffPath (scope.diffPath) — an excluded file remains
+    // readable on demand from there, or via `git diff` in the reviewed
+    // worktree; only the INLINED copy is narrowed.
+    const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
+      ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
+      : (options.diffOutput ?? null);
     const rendered = renderBriefingPrefix({
       repo: options.repo,
       pr: options.pr,
@@ -2212,7 +2223,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
-      diffOutput: options.diffOutput ?? null,
+      diffOutput: inlineDiffOutput,
       diffPath: options.diffPath ?? null,
       changedFiles: options.changedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
@@ -2247,7 +2258,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueRef: options.acceptanceCriteria ?? null,
           issueBody: options.issueBody ?? null,
           issueSections: options.issueSections ?? null,
-          diffOutput: options.diffOutput ?? null,
+          diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
           validationResultsPath: options.validationResultsPath ?? null,
         });

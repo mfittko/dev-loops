@@ -579,7 +579,7 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
   operator decision per PR. Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) ALSO runs `scripts/github/compose-reviewer-prompt.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha> --scope <same scope> --angle-suffix-file <path to the group's authored angle-specific prompt text>`, which inlines this round's invariant-prefix bytes as the leading bytes, appends the volatile tail and the angle suffix, writes the composed prompt, and records its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer already made it). The orchestrator then delivers the composer's `--out` file bytes to the reviewer per the "Per-harness delivery" paragraph above. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path.
+- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) ALSO runs `scripts/github/compose-reviewer-prompt.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha> --scope <same scope> --angle-suffix-file <path to the group's authored angle-specific prompt text>`, which inlines this round's invariant-prefix bytes as the leading bytes, appends the volatile tail and the angle suffix, writes the composed prompt, and records its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer already made it). The orchestrator then delivers the composer's `--out` file bytes to the reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -740,7 +740,17 @@ structured data (label + body pairs), never pre-joined into one string, so the r
 itself — not any one issue's body — owns emitting each `### <label>` heading, outside every
 fence. Every fence delimiter (`pickFence`) is sized one backtick longer than the longest
 backtick run already inside the text it wraps, so the wrapped content can never close the
-fence early and leak into a later section. The diff SHOULD be inlined up to a size cap
+fence early and leak into a later section. The diff is FILTERED before inlining (issue
+#1853, `filterDiffForInline` in `@dev-loops/core/loop/review-dispatch-plan`): lockfiles
+(`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `Gemfile.lock`,
+`composer.lock`, and `*-lock.y[a]ml` generally), generated/vendored trees (`dist/`, `lib/`,
+`coverage/`, `node_modules/`, `.claude/`), and any caller-configured `excludeGlobs` are
+dropped whole-file (`DEFAULT_DIFF_EXCLUDE_GLOBS`, always applied — a caller's own globs
+layer on top, never replace it) — high-churn/not-review-relevant hunks never dilute the
+shared per-head block. An excluded file's CHANGE still appears in the "Changed files"
+summary and stays fully readable on demand from the FULL, unfiltered `scope.diffPath`
+pointer file (never itself filtered) or `git diff` in the reviewed worktree; only the
+INLINED copy is narrowed. The (filtered) diff SHOULD then be inlined up to a size cap
 (`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
 markdown block sized by the same `pickFence` rule — the fence and surrounding framing are
 part of the rendered prefix bytes, so "inline" means the diff content travels in the
@@ -1516,8 +1526,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   is, like every non-high body-filed finding, deferred by construction at post time per
   `GATE-EXEC-DEFERRAL-RECORD` — the answered/never-deferred contract applies only to a locatable
   question's own resolvable thread, which is the only surface an answer reply can land on. A nit
-  is deferred immediately at round 1, with no fixer cycle on the severity axis (judge-acted
-  nits excepted). Two layers
+  is resolved-with-rationale immediately at round 1, never filed, with no fixer cycle on the
+  severity axis (judge-acted nits excepted). Two layers
   govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
   and never from an open medium thread; an unresolved in-window locatable

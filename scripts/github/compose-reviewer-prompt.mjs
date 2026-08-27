@@ -71,7 +71,7 @@ Output (stdout, JSON):
   { "ok": true, "composed": true, "recorded": true, "scope": "...", "headSha": "...", "gate": "...", "promptPath": "...", "prefixPath": "...", "promptLength": <n>, "truncated": false }
   { "ok": true, "composed": false, "reason": "..." }
   On error (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }
+  { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Composed and recorded

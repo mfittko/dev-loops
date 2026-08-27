@@ -206,6 +206,22 @@ test("record-dispatch-prompt-layout.mjs refuses (exit 1) a non-canonical --prefi
   });
 });
 
+test("record-dispatch-prompt-layout.mjs validates --prefix-path BEFORE reading --prompt-file (fail-fast: an unreadable --prompt-file never masks a bad --prefix-path)", () => {
+  const result = runRecordCli([
+    "--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA,
+    "--prefix-path", "not-a-real-record.txt",
+    // A nonexistent --prompt-file: if the CLI read it BEFORE validating
+    // --prefix-path, the reason would report an unreadable prompt-file
+    // instead of the (earlier, real) prefix-path defect.
+    "--prompt-file", "/nonexistent/path/does-not-exist.txt",
+  ]);
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.recorded, false);
+  assert.match(payload.reason, /canonical/);
+  assert.doesNotMatch(payload.reason, /unreadable/);
+});
+
 test("record-dispatch-prompt-layout.mjs requires --scope/--head-sha/--prefix-path/--prompt-file", () => {
   assert.equal(runRecordCli([]).status, 2);
   assert.equal(runRecordCli(["--scope", "a"]).status, 2);

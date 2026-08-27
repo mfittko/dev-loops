@@ -57,7 +57,7 @@ Output (stdout, JSON):
   { "ok": true, "recorded": true, "scope": "...", "headSha": "...", "prefixPath": "...", "truncated": false }
   { "ok": true, "recorded": false, "reason": "..." }
   On error (stderr, JSON):
-  { "ok": false, "error": "...", "usage": "..." }
+  { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Recorded
@@ -200,6 +200,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+
+  // Fail fast on a non-canonical --prefix-path BEFORE reading --prompt-file:
+  // recordDispatchPromptLayout would reject this exact input anyway, but
+  // only after the (possibly large) prompt-file read below — checking here
+  // first means a bad basename refuses instantly, no wasted I/O.
+  const pathCheck = validateBriefingPrefixPath(prefixPathArg, headSha);
+  if (!pathCheck.ok) {
+    return finish({ ok: true, recorded: false, scope, headSha, reason: pathCheck.reason }, false);
+  }
 
   let promptText;
   try {

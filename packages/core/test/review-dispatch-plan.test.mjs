@@ -24,6 +24,10 @@ import {
   composeReviewerPromptText,
   renderBriefingPointerLine,
   verifyPromptLeadingAlignment,
+  DEFAULT_DIFF_EXCLUDE_GLOBS,
+  classifyDiffFileExclusion,
+  filterDiffForInline,
+  matchesDiffExcludeGlob,
 } from "../src/loop/review-dispatch-plan.mjs";
 
 describe("normalizeHarnessCapabilities — explicit capability model (Section D)", () => {
@@ -902,5 +906,139 @@ describe("verifyPromptLeadingAlignment — GATE-EXEC-BRIEFING-PREFIX layout chec
 
   test("DISPATCH_PROMPT_LEADING_CAP_BYTES is comfortably above the 200 KiB inline-diff cap", () => {
     assert.ok(DISPATCH_PROMPT_LEADING_CAP_BYTES > 200 * 1024);
+  });
+});
+
+describe("matchesDiffExcludeGlob / classifyDiffFileExclusion — diff-inline exclude patterns (issue #1853)", () => {
+  test("literal filename pattern matches only that exact path", () => {
+    assert.equal(matchesDiffExcludeGlob("package-lock.json", "package-lock.json"), true);
+    assert.equal(matchesDiffExcludeGlob("packages/app/package-lock.json", "package-lock.json"), false);
+  });
+
+  test("**/ prefix matches the same basename at any depth, including the root", () => {
+    assert.equal(matchesDiffExcludeGlob("package-lock.json", "**/package-lock.json"), true);
+    assert.equal(matchesDiffExcludeGlob("packages/app/package-lock.json", "**/package-lock.json"), true);
+  });
+
+  test("a single * matches within one path segment only", () => {
+    assert.equal(matchesDiffExcludeGlob("dist/foo.js", "dist/*.js"), true);
+    assert.equal(matchesDiffExcludeGlob("dist/nested/foo.js", "dist/*.js"), false);
+    assert.equal(matchesDiffExcludeGlob("dist/nested/foo.js", "dist/**"), true);
+  });
+
+  test("classifyDiffFileExclusion: DEFAULT_DIFF_EXCLUDE_GLOBS covers common lockfiles + generated trees", () => {
+    for (const p of ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "packages/core/package-lock.json"]) {
+      assert.equal(classifyDiffFileExclusion(p), "default", p);
+    }
+    for (const p of ["dist/index.js", "node_modules/x/index.js", ".claude/agents/foo.md"]) {
+      assert.equal(classifyDiffFileExclusion(p), "default", p);
+    }
+  });
+
+  test("classifyDiffFileExclusion: a review-relevant source file is never classified", () => {
+    assert.equal(classifyDiffFileExclusion("packages/core/src/loop/review-dispatch-plan.mjs"), null);
+  });
+
+  test("classifyDiffFileExclusion: a caller excludeGlobs entry is 'configured', layered on top of the default set (never replacing it)", () => {
+    assert.equal(classifyDiffFileExclusion("dist/index.js"), "default"); // still excluded even with no excludeGlobs
+    assert.equal(classifyDiffFileExclusion("vendor/generated.rb", { excludeGlobs: ["vendor/**"] }), "configured");
+    assert.equal(classifyDiffFileExclusion("package-lock.json", { excludeGlobs: [] }), "default");
+  });
+
+  test("DEFAULT_DIFF_EXCLUDE_GLOBS is frozen and non-empty", () => {
+    assert.ok(Object.isFrozen(DEFAULT_DIFF_EXCLUDE_GLOBS));
+    assert.ok(DEFAULT_DIFF_EXCLUDE_GLOBS.length > 0);
+  });
+});
+
+describe("filterDiffForInline — filtered diff for the shared per-head block (issue #1853)", () => {
+  const SRC_HUNK = [
+    "diff --git a/src/foo.mjs b/src/foo.mjs",
+    "index 1111111..2222222 100644",
+    "--- a/src/foo.mjs",
+    "+++ b/src/foo.mjs",
+    "@@ -1,2 +1,2 @@",
+    "-old line",
+    "+new line",
+    " context",
+  ].join("\n");
+  const LOCKFILE_HUNK = [
+    "diff --git a/package-lock.json b/package-lock.json",
+    "index 3333333..4444444 100644",
+    "--- a/package-lock.json",
+    "+++ b/package-lock.json",
+    "@@ -1,3 +1,3 @@",
+    '-  "version": "1.0.0",',
+    '+  "version": "1.0.1",',
+    " other",
+  ].join("\n");
+  const DIFF_WITH_LOCKFILE = `${SRC_HUNK}\n${LOCKFILE_HUNK}\n`;
+
+  test("AC1: strips a lockfile's hunk out of the diff entirely", () => {
+    const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    assert.ok(!filteredDiff.includes("package-lock.json"));
+    assert.ok(!filteredDiff.includes('"version": "1.0.1"'));
+    assert.ok(filteredDiff.includes("src/foo.mjs"));
+    assert.ok(filteredDiff.includes("new line"));
+    assert.deepEqual(excludedFiles, [{ path: "package-lock.json", reason: "default" }]);
+    assert.deepEqual(includedFiles, ["src/foo.mjs"]);
+  });
+
+  test("a non-excluded file's block passes through byte-for-byte unchanged", () => {
+    const { filteredDiff } = filterDiffForInline(SRC_HUNK);
+    assert.equal(filteredDiff, SRC_HUNK);
+  });
+
+  test("a diff excluding every file collapses to an empty filteredDiff (no dangling separators)", () => {
+    const { filteredDiff, excludedFiles } = filterDiffForInline(LOCKFILE_HUNK);
+    assert.equal(filteredDiff, "");
+    assert.equal(excludedFiles.length, 1);
+  });
+
+  test("an absent/empty diff passes through as empty, never throws", () => {
+    assert.deepEqual(filterDiffForInline(null), { filteredDiff: "", excludedFiles: [], includedFiles: [] });
+    assert.deepEqual(filterDiffForInline(""), { filteredDiff: "", excludedFiles: [], includedFiles: [] });
+  });
+
+  test("configured excludeGlobs additionally excludes a project-specific path, on top of the defaults", () => {
+    const vendorHunk = [
+      "diff --git a/vendor/generated.rb b/vendor/generated.rb",
+      "--- a/vendor/generated.rb",
+      "+++ b/vendor/generated.rb",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const combined = `${SRC_HUNK}\n${vendorHunk}\n`;
+    const { filteredDiff, excludedFiles } = filterDiffForInline(combined, { excludeGlobs: ["vendor/**"] });
+    assert.ok(!filteredDiff.includes("vendor/generated.rb"));
+    assert.ok(filteredDiff.includes("src/foo.mjs"));
+    assert.deepEqual(excludedFiles, [{ path: "vendor/generated.rb", reason: "configured" }]);
+  });
+
+  test("AC4: the filtered diff, once inlined into a shared prefix, is byte-identical across the round's reviewers regardless of angle suffix", () => {
+    const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    const prefixBytes = `## Invariant prefix\nrepo: o/r\nhead: abc\n\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;
+    const volatileBytes = "# volatile tail\n";
+    const coverage = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix: "## Angle: coverage" });
+    const security = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix: "## Angle: security, a longer suffix" });
+    const sharedSpan = prefixBytes + volatileBytes;
+    assert.equal(coverage.slice(0, sharedSpan.length), sharedSpan);
+    assert.equal(security.slice(0, sharedSpan.length), sharedSpan);
+    assert.ok(coverage.slice(0, sharedSpan.length).includes(filteredDiff));
+  });
+
+  test("AC4: ordering is static (prefix header) -> filtered-diff -> suffix in the composed prompt", () => {
+    const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    const staticHeader = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+    const prefixBytes = `${staticHeader}\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;
+    const composed = composeReviewerPromptText({ prefixBytes, angleSuffix: "## Angle: coverage\nDo the thing." });
+    const staticIdx = composed.indexOf(staticHeader);
+    const diffIdx = composed.indexOf(filteredDiff);
+    const suffixIdx = composed.indexOf("## Angle: coverage");
+    assert.ok(staticIdx === 0);
+    assert.ok(diffIdx > staticIdx, "filtered diff must sit after the static leading span");
+    assert.ok(suffixIdx > diffIdx, "the per-group suffix must sit after the filtered diff");
+    assert.ok(!composed.includes("package-lock.json"), "an excluded file's hunk never reaches the composed prompt");
   });
 });
