@@ -421,12 +421,15 @@ test("buildValidationArtifact: stamps depState stale when installed lockfile is 
       JSON.stringify({ lockfileVersion: 3, packages: {} }),
       "utf8",
     );
-    // No node_modules/.package-lock.json → deps not materialized → stale.
+    // No node_modules/.package-lock.json anywhere up the ancestor chain →
+    // deps not materialized → stale. Passing at all also confirms the
+    // ancestor walk-up terminates (does not hang) when it finds nothing.
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
     assert.equal(artifact.depState.status, "stale");
+    assert.match(artifact.depState.detail, /absent in repoRoot or any ancestor/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -455,6 +458,7 @@ test("buildValidationArtifact: stamps depState synced for a linked worktree with
       { repoRoot },
     );
     assert.equal(artifact.depState.status, "synced");
+    assert.match(artifact.depState.detail, new RegExp(`resolved from ancestor ${outerRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }
@@ -476,6 +480,14 @@ test("buildValidationArtifact: stamps depState stale for a linked worktree when 
       { repoRoot },
     );
     assert.equal(artifact.depState.status, "stale");
+    // Pin the walk-up specifically: the pre-walk-up code only ever reads
+    // repoRoot's own node_modules (which does not exist here), so it would
+    // stamp "stale" via the absent-lockfile branch instead — same status,
+    // different detail. Asserting the ancestor is named in the detail means
+    // this only passes when resolveDepState actually found and compared the
+    // outer checkout's installed lock.
+    assert.match(artifact.depState.detail, /diverge/);
+    assert.match(artifact.depState.detail, new RegExp(`resolved from ancestor ${outerRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }

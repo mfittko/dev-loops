@@ -292,6 +292,37 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
 }
 
 /**
+ * Whether a package-lock.json `packages[]` entry is installable on the
+ * current host, given its optional `os`/`cpu` platform gates.
+ * @param {{os?: string[], cpu?: string[]}} pkg
+ * @returns {boolean}
+ */
+function isInstallableOnHost(pkg) {
+  if (pkg.os && !pkg.os.includes(process.platform)) return false;
+  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
+  return true;
+}
+
+/**
+ * Walk up from `startDir` to the nearest ancestor (inclusive) with a
+ * `node_modules/.package-lock.json`, returning its raw contents and the
+ * directory it was found in. Returns `{ raw: null, root: null }` when no
+ * ancestor up to the filesystem root has one.
+ * @param {string} startDir
+ * @returns {Promise<{raw: string | null, root: string | null}>}
+ */
+async function findAncestorInstalledLock(startDir) {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const raw = await readFile(path.join(dir, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
+    if (raw !== null) return { raw, root: dir };
+    const parent = path.dirname(dir);
+    if (parent === dir) return { raw: null, root: null };
+    dir = parent;
+  }
+}
+
+/**
  * Compare the repo's package-lock.json against the installed lock snapshot
  * (node_modules/.package-lock.json) (#1627). A mismatch means the validation
  * suites ran against stale deps — stamped, not blocking, so gate consumers can
@@ -323,31 +354,6 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
  */
-function isInstallableOnHost(pkg) {
-  if (pkg.os && !pkg.os.includes(process.platform)) return false;
-  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
-  return true;
-}
-
-/**
- * Walk up from `startDir` to the nearest ancestor (inclusive) with a
- * `node_modules/.package-lock.json`, returning its raw contents and the
- * directory it was found in. Returns `{ raw: null, root: null }` when no
- * ancestor up to the filesystem root has one.
- * @param {string} startDir
- * @returns {Promise<{raw: string | null, root: string | null}>}
- */
-async function findAncestorInstalledLock(startDir) {
-  let dir = path.resolve(startDir);
-  for (;;) {
-    const raw = await readFile(path.join(dir, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
-    if (raw !== null) return { raw, root: dir };
-    const parent = path.dirname(dir);
-    if (parent === dir) return { raw: null, root: null };
-    dir = parent;
-  }
-}
-
 async function resolveDepState(repoRoot) {
   const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
   if (lockRaw === null) {
