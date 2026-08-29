@@ -484,7 +484,16 @@ function sectionHasBody(section) {
  * pick exactly one mode (tracker-backed, with or without a specific
  * expected issue) or issue-less — never both.
  *
- * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean }} input
+ * `requireOpenQuestions` (default `true`, issue #1863): the lightweight
+ * PR-body-as-spec contract (this function's original scope) requires an Open
+ * questions/risks section; the ordinary tracker-backed PR-description
+ * contract (skills/docs/copilot-loop-operations.md "PR description
+ * contract") does not name one. Pass `false` (see
+ * `validateTrackerBackedPrBodySpec` below) to skip the `missing_open_questions`
+ * check without touching any other invariant — the lightweight caller's
+ * default stays byte-identical.
+ *
+ * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean, requireOpenQuestions?: boolean }} input
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
 
@@ -540,7 +549,7 @@ export function detectGrillEmbedHeading(body = "") {
   return null;
 }
 
-export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false } = {}) {
+export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false, requireOpenQuestions = true } = {}) {
   if (issueLess && Number.isInteger(expectedIssue)) {
     // Fail closed at the library boundary too (not just the CLI): the two modes
     // are contradictory and silently preferring one would hide caller bugs.
@@ -550,7 +559,8 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
   const sections = parseMarkdownSections(bodyText);
   const errors = [];
 
-  for (const { code, label, patterns } of Object.values(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
+  for (const [key, { code, label, patterns }] of Object.entries(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
+    if (key === "open_questions" && !requireOpenQuestions) continue;
     const section = findSectionByPatterns(sections, patterns);
     if (!sectionHasBody(section)) {
       errors.push({ code, message: `Missing or empty ${label} section.` });
@@ -604,6 +614,31 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
     dodItems,
     closesIssues,
   };
+}
+
+/**
+ * Validate a TRACKER-BACKED PR's own body against the PR-description contract
+ * (skills/docs/copilot-loop-operations.md "PR description contract", issue
+ * #1863): Acceptance criteria + Definition of done checklists, an explicit
+ * Non-goals section, and a `Closes #N`/`Fixes #N` reference — regardless of
+ * whether the linked issue itself already carries a refinement artifact. A
+ * linked issue with real ACs is necessary but not sufficient: the PR body is
+ * the portable spec-of-record a tracker-agnostic consumer reads.
+ *
+ * Thin wrapper over `validatePrBodySpec`, not a second divergent checker:
+ * `requireOpenQuestions: false` because the tracker-backed contract, unlike
+ * the lightweight PR-body-as-spec path, does not require an Open
+ * questions/risks section. `expectedIssue` is only checked when the PR closes
+ * exactly ONE issue — an umbrella PR closing several is not required to name
+ * any single one of them in the `expectedIssue` slot (each linked issue's
+ * refinement is verified separately by the caller).
+ *
+ * @param {{ body?: string, closingIssues?: number[] }} input
+ * @returns {ReturnType<typeof validatePrBodySpec>}
+ */
+export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] } = {}) {
+  const expectedIssue = Array.isArray(closingIssues) && closingIssues.length === 1 ? closingIssues[0] : null;
+  return validatePrBodySpec({ body, expectedIssue, requireOpenQuestions: false });
 }
 
 /**

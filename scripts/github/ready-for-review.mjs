@@ -9,6 +9,7 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -27,9 +28,15 @@ T1-slice waiver additionally requires --approved-by <human> naming a human
 approver (an unwaivable block — absoluteHardLoc, config errors, ambiguous, or
 substantially-unclassified — is never waivable, no matter these flags).
 
+For a tracker-backed PR (one or more closing issue references), also enforces
+the PR-description contract on the PR's own body (Acceptance criteria +
+Definition of done checklists, an explicit Non-goals section, and a
+Closes #N/Fixes #N reference; issue #1863) — no waiver surface for this
+check.
+
 ${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
-const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state, mergeStateStatus, title, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
+const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state, mergeStateStatus, title, body, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
 
 export function parseReadyForReviewCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -74,7 +81,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   const closingIssues = (d.closingIssuesReferences?.nodes ?? [])
     .map((n) => n?.number)
     .filter((n) => Number.isInteger(n) && n > 0);
-  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null, closingIssues };
+  return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null, body: typeof d.body === "string" ? d.body : "", closingIssues };
 }
 
 async function fetchCiStatus({ repo, pr }, { env, ghCommand }) {
@@ -159,6 +166,18 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
       { env, ghCommand },
     );
   }
+  // Fail-closed PR-description contract for a TRACKER-BACKED PR (issue #1863):
+  // mirrors pre-pr-ready-gate.mjs's guard on the raw `gh pr ready` path — no
+  // waiver surface for this check (unlike size budget, a stripped-down PR
+  // description is never an acceptable trade-off). `null` (not run) for an
+  // issue-less PR — that path stays validate-pr-body-spec's existing
+  // --no-issue job, unchanged.
+  const prBodySpec = prState.closingIssues.length > 0
+    ? validateTrackerBackedPrBodySpec({ body: prState.body, closingIssues: prState.closingIssues })
+    : null;
+  if (prBodySpec && !prBodySpec.ok) {
+    throw new Error(`PR #${options.pr} closes ${prState.closingIssues.map((n) => `#${n}`).join(", ")} but its own body fails the PR-description contract (validate-pr-body-spec: ${prBodySpec.errors.map((e) => e.code).join(", ")}); the PR body must independently carry Acceptance criteria + Definition of done checklists, an explicit Non-goals section, and a Closes #N/Fixes #N reference.`);
+  }
   const readyResult = await runChild(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
@@ -174,7 +193,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, prBodySpec, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {
