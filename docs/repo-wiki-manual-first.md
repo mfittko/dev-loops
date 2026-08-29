@@ -141,7 +141,7 @@ node scripts/repo-wiki.mjs init --repo .
 
 1. clones `mfittko/repo-wiki` under `.tmp/repo-wiki/<ref>/source/`
 2. checks out the pinned commit `d7e772e3d702a75896a6f4eec574a4e4e5bfa6dd`
-3. runs `npm install` and `npm run build` in that checkout (skipped on rerun if a build stamp matches the ref)
+3. installs dependencies and builds the checkout via its own package.json build script (skipped on rerun if a build stamp matches the ref)
 4. runs `dist/bin/repo-wiki.js` from that prepared checkout against this repository
 
 ## Local verification performed for this slice

@@ -162,8 +162,13 @@ function shouldIgnoreRawTarget(rawTarget) {
   return false;
 }
 
-export function extractRelativeMarkdownLinks(content) {
-  const links = [];
+// Shared fence-aware line walk: yields every markdown link match (raw,
+// unfiltered) with its 1-based line number, skipping anything inside a
+// fenced code block. Both `extractRelativeMarkdownLinks` (file-target links,
+// used by the broken-link checker below) and `extractAnchorLinks` (fragment
+// links, used by the docs-reference contract test) build on this single
+// parse so the fence-tracking logic exists exactly once.
+function* iterateMarkdownLinkMatches(content) {
   const lines = content.split(/\r?\n/);
   let activeFence = null;
 
@@ -191,22 +196,57 @@ export function extractRelativeMarkdownLinks(content) {
     }
 
     for (const match of line.matchAll(LINK_PATTERN)) {
-      const rawTarget = normalizeLinkTarget(match[1] ?? "");
-      if (shouldIgnoreRawTarget(rawTarget)) {
-        continue;
-      }
-
-      links.push({
-        line: index + 1,
-        rawTarget,
-      });
+      yield { line: index + 1, rawTarget: normalizeLinkTarget(match[1] ?? "") };
     }
+  }
+}
+
+export function extractRelativeMarkdownLinks(content) {
+  const links = [];
+
+  for (const { line, rawTarget } of iterateMarkdownLinkMatches(content)) {
+    if (shouldIgnoreRawTarget(rawTarget)) {
+      continue;
+    }
+
+    links.push({ line, rawTarget });
   }
 
   return links;
 }
 
-async function collectMarkdownFiles(repoRoot) {
+// Extracts every markdown link whose target carries a `#fragment` — a
+// same-doc anchor (`(#section)`) or a cross-file anchor
+// (`(other.md#section)`) — for the docs-reference contract test's dangling-
+// anchor check. Deliberately keeps fragment-only targets that
+// `extractRelativeMarkdownLinks`/`shouldIgnoreRawTarget` drop (those exist to
+// check FILE targets, not anchors) and skips external/protocol targets
+// (`https:`, `mailto:`, ...), which no offline check can resolve.
+export function extractAnchorLinks(content) {
+  const links = [];
+
+  for (const { line, rawTarget } of iterateMarkdownLinkMatches(content)) {
+    if (rawTarget.length === 0 || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(rawTarget)) {
+      continue;
+    }
+
+    const hashIndex = rawTarget.indexOf("#");
+    if (hashIndex === -1) {
+      continue;
+    }
+
+    const fragment = rawTarget.slice(hashIndex + 1);
+    if (fragment.length === 0) {
+      continue;
+    }
+
+    links.push({ line, pathPart: rawTarget.slice(0, hashIndex), fragment });
+  }
+
+  return links;
+}
+
+export async function collectMarkdownFiles(repoRoot) {
   const collected = new Set();
 
   async function walkDirectory(absoluteDir, repoRelativeDir) {
