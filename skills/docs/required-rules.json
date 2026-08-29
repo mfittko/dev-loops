@@ -671,6 +671,10 @@
       "id": "WORKTREE-CLEANUP"
     },
     {
+      "id": "WORKTREE-COMMIT-MSG-GUARD",
+      "enforcement": "runtime"
+    },
+    {
       "id": "WORKTREE-CREATE-PROVISION"
     },
     {

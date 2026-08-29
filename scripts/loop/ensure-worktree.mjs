@@ -43,7 +43,9 @@
  * whatever was already fetched. `provision` is the full provisionWorktree()
  * result, not just its summary. `guard` is the default-branch guard's
  * install result — best-effort: a failure there never fails the worktree,
- * see installGuard below.)
+ * see installGuard below. `commitMsgGuard` is the commit-message contract
+ * guard's install result (issue #1869) — same best-effort contract, see
+ * installCommitMsgGuardForRoot below.)
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
@@ -55,6 +57,7 @@ import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
 import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
+import { installCommitMsgGuard } from "@dev-loops/core/loop/commit-msg-guard";
 import { canonicalize } from "./_worktree-path.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -110,6 +113,12 @@ Output (stdout, JSON):
                // install result (best-effort; see installDefaultBranchGuard) —
                // always present, on both the create and reuse paths. Guards the
                // repo's own default AND, when it differs, an explicit --base.
+    "commitMsgGuard": { "ok": bool, "installed": bool, "refreshed": bool,
+               "skipped": bool, "reason"? }              // commit-message
+               // contract guard's install result (best-effort; see
+               // installCommitMsgGuard) — always present, on both the create
+               // and reuse paths. Enforces the attribution trailers, the
+               // no-bare-#N rule, and the conventional-commit subject form.
   }
 
 ${JQ_OUTPUT_USAGE}`.trim();
@@ -469,34 +478,41 @@ function guardedBranches(gitCommand, root, explicitBase) {
   return { repoDefault, explicitBase: explicitCandidate };
 }
 
+// The COMMON git dir, not the per-worktree one: `--absolute-git-dir` in a
+// linked worktree resolves to `.git/worktrees/<name>`, a hooks directory git
+// never executes for anything — installing there reports guard.ok: true for
+// a hook that can never fire. `--git-common-dir` is identical for the main
+// checkout and every linked worktree, which is what every hook install must
+// target since hooks are resolved from the common directory. Shared by
+// installGuard (default-branch) and installCommitMsgGuardForRoot
+// (commit-msg): both hooks install into the same directory the same way.
+function resolveHooksInstallTarget(gitCommand, root) {
+  // --path-format=absolute needs git >= 2.31; fall back to resolving the
+  // (possibly relative) --git-common-dir against the invocation root so an
+  // older git still targets the right directory instead of failing the guard.
+  let gitDir;
+  try {
+    gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
+  } catch {
+    gitDir = path.resolve(root, runGit(gitCommand, ["rev-parse", "--git-common-dir"], root).trim());
+  }
+  let hooksPathOverride = null;
+  try {
+    // Exit 0 means SET (even to ""), exit 1 means unset — `.trim() || null`
+    // collapsed both to the same null, so `core.hooksPath=""` (git runs NO
+    // hooks at all in that case) read as "unset" and installed hooks git
+    // would never execute while reporting guard.ok: true.
+    hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim();
+  } catch {
+    hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
+  }
+  return { gitDir, hooksPathOverride };
+}
+
 function installGuard(gitCommand, root, explicitBase) {
   try {
-    // The COMMON git dir, not the per-worktree one: `--absolute-git-dir` in a
-    // linked worktree resolves to `.git/worktrees/<name>`, a hooks directory git
-    // never executes for anything — installing there reports guard.ok: true for
-    // a hook that can never fire. `--git-common-dir` is identical for the main
-    // checkout and every linked worktree, which is what the hook install must
-    // target since hooks are resolved from the common directory.
-    // --path-format=absolute needs git >= 2.31; fall back to resolving the
-    // (possibly relative) --git-common-dir against the invocation root so an
-    // older git still targets the right directory instead of failing the guard.
-    let gitDir;
-    try {
-      gitDir = runGit(gitCommand, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root).trim();
-    } catch {
-      gitDir = path.resolve(root, runGit(gitCommand, ["rev-parse", "--git-common-dir"], root).trim());
-    }
+    const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);
     const { repoDefault, explicitBase: explicitBranch } = guardedBranches(gitCommand, root, explicitBase);
-    let hooksPathOverride = null;
-    try {
-      // Exit 0 means SET (even to ""), exit 1 means unset — `.trim() || null`
-      // collapsed both to the same null, so `core.hooksPath=""` (git runs NO
-      // hooks at all in that case) read as "unset" and installed hooks git
-      // would never execute while reporting guard.ok: true.
-      hooksPathOverride = runGit(gitCommand, ["config", "--get", "core.hooksPath"], root).trim();
-    } catch {
-      hooksPathOverride = null; // unset — `git config --get` exits 1, which is the normal case
-    }
     const result = installDefaultBranchGuard({
       gitDir,
       defaultBranches: repoDefault,
@@ -530,6 +546,25 @@ function installGuard(gitCommand, root, explicitBase) {
       skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: detail })),
       reason: detail,
     };
+  }
+}
+
+// Installs the commit-msg contract guard (issue #1869) alongside the
+// default-branch guard above — same resolveHooksInstallTarget, same common
+// hooks directory, so it rides into every worktree the same way. Best-effort,
+// like installGuard: a failure here never fails the worktree.
+function installCommitMsgGuardForRoot(gitCommand, root) {
+  try {
+    const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);
+    const result = installCommitMsgGuard({ gitDir, hooksPathOverride });
+    if (!result.ok) {
+      process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${result.reason}\n`);
+    }
+    return result;
+  } catch (err) {
+    const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
+    process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${detail}\n`);
+    return { ok: false, installed: false, refreshed: false, skipped: true, reason: detail };
   }
 }
 
@@ -617,6 +652,7 @@ export async function ensureWorktree(
         branchOrigin: "reused-detached",
         provision: summary,
         guard: installGuard(gitCommand, root, base),
+        commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
       };
     }
     // Fetch before the divergence check (mirroring the create path below) so
@@ -635,6 +671,7 @@ export async function ensureWorktree(
       ...(fetchDegraded ? { fetchDegraded: true } : {}),
       provision: summary,
       guard: installGuard(gitCommand, root, base),
+      commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
     };
   }
 
@@ -697,6 +734,7 @@ export async function ensureWorktree(
     ...(fetchDegraded ? { fetchDegraded: true } : {}),
     provision: summary,
     guard: installGuard(gitCommand, root, base),
+    commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
   };
 }
 
