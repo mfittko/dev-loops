@@ -18,13 +18,19 @@
  * next start/resume when this marker shows `state: "required"`.
  *
  * Completing the retrospective:
- * After running the review below, record the outcome via
- * `scripts/loop/checkpoint-contract.mjs`, carrying the cycle identity
- * (`--repo <owner/name> --pr <n> --merge-commit <sha>`) so the gate can tell
- * WHICH cycle this discharges — a stale, identity-less record cannot satisfy
- * a newer qualifying completion:
- *   --state complete --notes "<summary>" --repo <owner/name> --pr <n> --merge-commit <sha>
- *   --state skipped  --reason "<reason>" --repo <owner/name> --pr <n> --merge-commit <sha>
+ * The retrospective MUST be a fresh-context, independent pass over the cycle's
+ * full agent/subagent tool-call record — dispatched like a gate reviewer, not
+ * self-authored inline by this working session (an inline retro fails the
+ * checkpoint; issue #1870). After running that fresh-context pass, record the
+ * outcome via `scripts/loop/checkpoint-contract.mjs`, carrying the cycle
+ * identity (`--repo <owner/name> --pr <n> --merge-commit <sha>`) and the
+ * fresh-context provenance (`--retro-context fresh --record-source <path>`) so
+ * the gate can tell WHICH cycle this discharges and that the retro audited
+ * actual behavior:
+ *   --state complete --notes "<summary>" --retro-context fresh --record-source <path>
+ *     --repo <owner/name> --pr <n> --merge-commit <sha>
+ *   --state skipped  --reason "<reason>"
+ *     --repo <owner/name> --pr <n> --merge-commit <sha>
  */
 
 import { execFileSync } from "node:child_process";
@@ -40,10 +46,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const RETROSPECTIVE_CHECKPOINT_FILE = ".pi/dev-loop-retrospective-checkpoint.json";
 
 const REVIEW_PROMPT = `
-Run a brief behavioral review of the dev-loop run that just completed.
+Dispatch a FRESH-CONTEXT retrospective of the dev-loop run that just completed —
+a new independent subagent with no inherited working/session context, seeded
+with the cycle's full agent/subagent tool-call record (the session
+transcript/journal artifacts) plus the relevant contracts and the issue's
+acceptance criteria / definition of done / non-goals. Do NOT self-review in
+this session: an inline, self-authored retrospective fails the checkpoint.
 
-Check:
-- Did it follow the working agreement (test-first, honest validation, proper thread resolution, no dangerous git history rewrites)?
+The fresh-context pass evaluates neutrally, auditing what the agents actually
+did (not a self-summary):
+- Did the run follow the working agreement (test-first, honest validation, proper thread resolution, no dangerous git history rewrites)?
 - Did it stay in dev mode as expected?
 - What did it get right?
 - Where did it drift or skip a step?
@@ -51,11 +63,14 @@ Check:
 
 Keep it concise and honest — this is not a formality.
 
-After completing this review, record the outcome via checkpoint-contract.mjs,
-carrying the cycle identity (repo + PR number + merge commit) so a later
-reader can tell WHICH cycle it discharged:
+After the fresh-context pass completes, record the outcome via
+checkpoint-contract.mjs, carrying the cycle identity (repo + PR number + merge
+commit) and the fresh-context provenance (record source) so a later reader can
+tell WHICH cycle it discharged and that it audited the actual record:
   node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete \\
-    --notes "<one-line summary>" --repo <owner/name> --pr <n> --merge-commit <sha>
+    --notes "<one-line summary>" --retro-context fresh \\
+    --record-source <path to the seeded tool-call record> \\
+    --repo <owner/name> --pr <n> --merge-commit <sha>
 or, to explicitly skip:
   node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped \\
     --reason "<reason>" --repo <owner/name> --pr <n> --merge-commit <sha>

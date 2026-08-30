@@ -425,6 +425,11 @@
       "id": "LOCAL-PREFLIGHT-GATE-MANDATORY"
     },
     {
+      "id": "LOCAL-RETRO-FRESH-CONTEXT-DISPATCH",
+      "enforcement": "agent",
+      "enforcementNote": "Fresh-context retro dispatch is agent discipline; the write path is runtime-enforced via RETRO-FRESH-CONTEXT-MANDATORY (checkpoint-contract.mjs)."
+    },
+    {
       "id": "LOCAL-RETROSPECTIVE-REQUIRED"
     },
     {
@@ -509,6 +514,9 @@
     },
     {
       "id": "RETRO-FINDINGS-ENVELOPE-CARRY"
+    },
+    {
+      "id": "RETRO-FRESH-CONTEXT-MANDATORY"
     },
     {
       "id": "RETRO-GATE-FAIL-CLOSED"

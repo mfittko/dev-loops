@@ -2232,6 +2232,12 @@ test("runCli --input STRIPS an injected canonicalSpecSource (injection guard, en
 
 const RETROSPECTIVE_CONFIG = { workflow: { requireRetrospective: true } };
 
+// Valid fresh-context provenance (issue #1870): a `complete` checkpoint MUST
+// pin that the retro was a fresh-context pass seeded with the full tool-call
+// record. Fixtures below that expect pass-through carry this; its absence
+// fails closed like an inline self-authored retro.
+const VALID_PROVENANCE = { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" };
+
 function writeCheckpoint(tempDir, checkpoint) {
   const checkpointPath = path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json");
   mkdirSync(path.dirname(checkpointPath), { recursive: true });
@@ -2315,6 +2321,7 @@ test("buildResolveDevLoopStartupResult: a complete checkpoint with nothing merge
       completedAt: "2026-08-08T01:00:00.000Z",
       notes: "followed the working agreement",
       identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+      provenance: VALID_PROVENANCE,
     });
     const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
       env: resolverTestEnv(),
@@ -2323,6 +2330,28 @@ test("buildResolveDevLoopStartupResult: a complete checkpoint with nothing merge
       resolveHasNewerMerge: fixedHasNewerMerge(false),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: complete WITHOUT fresh-context provenance (legacy inline self-authored retro) fails closed to MISSING under requireRetrospective", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "self-authored inline retro",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+    });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(),
+      cwd: tempDir,
+      config: RETROSPECTIVE_CONFIG,
+      resolveHasNewerMerge: fixedHasNewerMerge(false),
+    });
+    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.match(result.nextAction ?? "", /retrospective/i);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2686,6 +2715,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a complete checkpoint with n
         completedAt: "2026-08-08T01:00:00.000Z",
         notes: "ok",
         identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: initialSha },
+        provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" },
       }, null, 2)}\n`,
       "utf8",
     );
