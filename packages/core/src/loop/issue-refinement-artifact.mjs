@@ -283,6 +283,10 @@ export function detectLinkedRefinementDoc(body) {
   if (refinementSection) {
     const inlinePath = /(?:^|\s)(tmp\/refinement\/[^\s)`'"]+\.md)\b/u.exec(refinementSection.bodyLines.join("\n"));
     if (inlinePath) {
+      // Containment guard: same '..' rejection as the explicit-path branch.
+      if (inlinePath[1].includes("..")) {
+        return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+      }
       return { found: true, path: inlinePath[1], reason: "refinement-section-path" };
     }
   }
