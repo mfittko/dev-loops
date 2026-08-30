@@ -3424,7 +3424,7 @@ test("resolvePrSpecContext fetches the live PR body and the closing issue's body
 test("resolvePrSpecContext: a linked issue with a real Acceptance criteria section records acceptanceCriteriaSource=linked-issue (AC4 of #1496)", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n\n- [ ] does the thing\n" }),
+    run: specStubRun({ closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n\n- [ ] does the thing\n\n\n## Non-goals\n- none" }),
   });
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
@@ -3487,8 +3487,8 @@ test("resolvePrSpecContext: an umbrella PR closing multiple issues resolves ALL 
     run: specStubRun({
       closing: [{ number: 1496 }, { number: 1511 }],
       issueBodies: {
-        "owner/repo#1496": "## Acceptance criteria\n\n- [ ] a\n",
-        "owner/repo#1511": "## Acceptance criteria\n\n- [ ] b\n",
+        "owner/repo#1496": "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none",
+        "owner/repo#1511": "## Acceptance criteria\n\n- [ ] b\n\n\n## Non-goals\n- none",
       },
     }),
   });
@@ -3500,8 +3500,8 @@ test("resolvePrSpecContext: an umbrella PR closing multiple issues resolves ALL 
   // each label as its own heading, outside any fence.
   assert.equal(options.issueBody, null, "multi-issue bodies are structured data, not pre-joined into issueBody");
   assert.deepEqual(options.issueSections, [
-    { label: "#1496", body: "## Acceptance criteria\n\n- [ ] a\n" },
-    { label: "#1511", body: "## Acceptance criteria\n\n- [ ] b\n" },
+    { label: "#1496", body: "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none" },
+    { label: "#1511", body: "## Acceptance criteria\n\n- [ ] b\n\n\n## Non-goals\n- none" },
   ]);
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
@@ -3511,7 +3511,7 @@ test("resolvePrSpecContext: a cross-repo closing reference resolves the issue in
   await resolvePrSpecContext(options, {
     run: specStubRun({
       closing: [{ number: 12, repository: { owner: { login: "owner" }, name: "other" } }],
-      issueBodies: { "owner/other#12": "## Acceptance criteria\n\n- [ ] x\n" },
+      issueBodies: { "owner/other#12": "## Acceptance criteria\n\n- [ ] x\n\n\n## Non-goals\n- none" },
     }),
   });
   assert.equal(options.acceptanceCriteria, "owner/other#12");
@@ -3528,7 +3528,7 @@ test("resolvePrSpecContext: a resolved linked issue with a genuinely empty body 
 test("resolvePrSpecContext: a PR whose closing links never registered on GitHub falls back to a Closes/Fixes/Resolves #N body keyword (same detector as the enqueue gate)", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ prBody: "Closes #99", closing: [], issueBodies: { "owner/repo#99": "## Acceptance criteria\n\n- [ ] a\n" } }),
+    run: specStubRun({ prBody: "Closes #99", closing: [], issueBodies: { "owner/repo#99": "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none" } }),
   });
   assert.equal(options.acceptanceCriteria, "#99");
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
@@ -3564,14 +3564,14 @@ test("CLI: a PR with a body renders that body in the prefix and never the absent
     await main([
       "--repo", "owner/repo", "--pr", "77", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: specStubRun({ prBody: "## Summary\nreal description", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- [ ] a" }) });
+    ], { repoRoot, run: specStubRun({ prBody: "## Summary\nreal description", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- [ ] a\n\n## Non-goals\n- none" }) });
 
     const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha });
     const text = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
     assert.ok(text.includes("real description"), "live PR body inlined");
     assert.ok(!text.includes(PR_BODY_ABSENT_SENTINEL), "absent sentinel not rendered for a PR that has a body");
     assert.ok(text.includes("## Linked issue #42"), "linked issue section labeled from the closing reference");
-    assert.ok(text.includes("## Acceptance criteria"), "linked issue body inlined");
+    assert.ok(text.includes("## Non-goals\n- none"), "linked issue body inlined");
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(artifact.scope.acceptanceCriteria, "#42");
@@ -3634,7 +3634,7 @@ test("CLI: a rebuild at the SAME head re-resolves the spec-of-record, so the art
     const build = (prBody) => main([
       "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b" }) });
+    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" }) });
 
     await build("first-build body");
     const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha });
@@ -3669,7 +3669,7 @@ test("#1537 regression: an ALLOWED rebuild re-resolves the spec-of-record so the
     const build = (prBody) => main([
       "--repo", "owner/repo", "--pr", "81", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b" }) });
+    ], { repoRoot, run: specStubRun({ prBody, closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" }) });
 
     const first = await build("first-build body");
     assert.equal(process.exitCode, 0, "first build exited clean");
@@ -3706,7 +3706,7 @@ test("resolvePrSpecContext: a programmatic caller that OMITS the spec fields sti
   // leaves undefined, which must not read as "the caller provided this".
   const options = { repo: "owner/repo", pr: 95 };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ prBody: "live body", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a" }),
+    run: specStubRun({ prBody: "live body", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Non-goals\n- none" }),
   });
   assert.equal(options.prBody, "live body");
   assert.equal(options.acceptanceCriteria, "#42");
@@ -3721,13 +3721,13 @@ test("resolvePrSpecContext: two same-numbered issues in different repos both sur
         { number: 5 },
         { number: 5, repository: { owner: { login: "owner" }, name: "other" } },
       ],
-      issueBodies: { "owner/repo#5": "## Acceptance criteria\n- a", "owner/other#5": "other-repo body" },
+      issueBodies: { "owner/repo#5": "## Acceptance criteria\n- a\n\n## Non-goals\n- none", "owner/other#5": "other-repo body" },
     }),
   });
   assert.equal(options.acceptanceCriteria, "#5, owner/other#5");
   assert.equal(options.issueBody, null);
   assert.deepEqual(options.issueSections, [
-    { label: "#5", body: "## Acceptance criteria\n- a" },
+    { label: "#5", body: "## Acceptance criteria\n- a\n\n## Non-goals\n- none" },
     { label: "owner/other#5", body: "other-repo body" },
   ], "the cross-repo issue's body is not dropped");
 });
@@ -3737,7 +3737,7 @@ test("resolvePrSpecContext: --repo Owner/Repo still labels a same-repo issue bar
   await resolvePrSpecContext(options, {
     run: specStubRun({
       closing: [{ number: 42, repository: { owner: { login: "owner" }, name: "repo" } }],
-      issueBodies: { "owner/repo#42": "## Acceptance criteria\n- a" },
+      issueBodies: { "owner/repo#42": "## Acceptance criteria\n- a\n\n## Non-goals\n- none" },
     }),
   });
   assert.equal(options.acceptanceCriteria, "#42");
@@ -3774,7 +3774,7 @@ test("resolvePrSpecContext: a refined issue mixed with a prose-only one still cl
     run: specStubRun({
       closing: [{ number: 7 }, { number: 8 }],
       issueBodies: {
-        "owner/repo#7": "## Acceptance criteria\n- a\n\n## Definition of done\n- b",
+        "owner/repo#7": "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none",
         "owner/repo#8": "just some prose, no sections at all",
       },
     }),
@@ -6013,4 +6013,42 @@ test("renderBriefingVolatile: a validationPosture containing a newline is reject
     validationPosture: "npm run verify",
   });
   assert.match(text, /validationPosture: npm run verify/);
+});
+
+test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (real buildGateContext wiring)", async () => {
+  // The #1866 refinement predicate requires an explicit Non-goals section, so
+  // a bare .hasACs read would be false for this body and the review-gate
+  // resolver would silently drop acceptance-criteria (fail-open regression).
+  // Exercises the REAL wiring end to end: buildGateContext -> the
+  // hasAcChecklist guard -> resolveReviewGateAngles.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: { angles: buildAngleEntries({ angles: ["correctness", "acceptance-criteria"], mandatoryAngles: [], excludeAngles: [] }) },
+        preApproval: { angles: buildAngleEntries({ angles: ["docs"], mandatoryAngles: [], excludeAngles: [] }) },
+      },
+    };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "review",
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        hasClosingIssue: false,
+        prBody: "## Acceptance criteria\n\n- [ ] does the thing\n",
+      },
+      { repoRoot },
+    );
+    assert.ok(
+      result.artifact.resolvedAngles.includes("acceptance-criteria"),
+      "acceptance-criteria must be kept: an AC checklist is its own spec-of-record even without Non-goals",
+    );
+    const kept = result.artifact.rationale.find((r) => r.angle === "acceptance-criteria");
+    assert.equal(kept?.action, "kept");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

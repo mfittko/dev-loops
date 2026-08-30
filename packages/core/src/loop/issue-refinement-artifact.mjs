@@ -9,6 +9,13 @@
  * `Acceptance criteria` or `DoD` section cause the draft gate to post
  * `verdict=blocked` with the `missing_refinement_artifact` finding.
  *
+ * Since #1866 the check ALSO requires an explicit Non-goals section on the
+ * issue body (see `MISSING_EXPLICIT_NON_GOALS_FINDING` below).
+ */
+import { existsSync } from "node:fs";
+import path from "node:path";
+
+/**
  * This module owns:
  * - canonical section-name matching for AC / DoD blocks
  * - bullet-item extraction (checklist `- [ ]`/`- [x]` and top-level `- ` bullets)
@@ -37,6 +44,15 @@ export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
   "Definition of done section",
   "linked refinement doc",
 ]);
+
+/**
+ * #1866: finding reported when the issue body carries a refinement artifact
+ * (AC/DoD checklist or a resolvable linked doc) but no explicit Non-goals
+ * section. Mirrors the PR-path narrative-invariant code
+ * (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.code`) so both spec surfaces
+ * name the missing invariant identically.
+ */
+export const MISSING_EXPLICIT_NON_GOALS_FINDING = "missing_explicit_non_goals";
 
 /**
  * Canonical list of section headings that satisfy the refinement check.
@@ -248,6 +264,13 @@ export function detectLinkedRefinementDoc(body) {
 
   const pathMatch = /(?:^|\s|[`(\[<])(tmp\/refinement\/[A-Za-z0-9._/\-]+\.md)\b/u.exec(body);
   if (pathMatch) {
+    // Containment guard: reject actual '..' path segments (not benign
+    // double-dot filenames) so the new fs-probe wiring can never be used as a
+    // filesystem existence oracle outside tmp/refinement
+    // (e.g. `tmp/refinement/../../docs/some-existing.md`).
+    if (pathMatch[1].split("/").some((segment) => segment === "..")) {
+      return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+    }
     return { found: true, path: pathMatch[1], reason: "explicit-path" };
   }
 
@@ -261,6 +284,11 @@ export function detectLinkedRefinementDoc(body) {
   if (refinementSection) {
     const inlinePath = /(?:^|\s)(tmp\/refinement\/[^\s)`'"]+\.md)\b/u.exec(refinementSection.bodyLines.join("\n"));
     if (inlinePath) {
+      // Containment guard: same segment-based '..' rejection as the
+      // explicit-path branch.
+      if (inlinePath[1].split("/").some((segment) => segment === "..")) {
+        return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+      }
       return { found: true, path: inlinePath[1], reason: "refinement-section-path" };
     }
   }
@@ -271,25 +299,56 @@ export function detectLinkedRefinementDoc(body) {
 /**
  * Detect the refinement artifact on a parsed issue body.
  *
+ * #1866: the tracker-backed refinement floor is the artifact (AC checklist,
+ * DoD checklist, or a resolvable linked refinement doc) AND an explicit,
+ * non-empty Non-goals section — the loop-grill / artifact-authority contract
+ * requires Non-goals on a refined issue body, so the deterministic check
+ * enforces it (fail-closed) with the distinct finding
+ * `MISSING_EXPLICIT_NON_GOALS_FINDING`. The non-goals matcher is shared with
+ * `validatePrBodySpec` (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns`),
+ * so the two spec surfaces cannot drift on what counts as an explicit
+ * Non-goals section. `hasACs` keeps its caller-facing meaning: true only when
+ * the FULL check passes, so every `.hasACs` consumer (enqueue gate, draft
+ * gate, parked-items discovery, gate context) fails closed with no call-site
+ * change.
+ *
+ * `resolveLinkedDoc` (optional, #1866): a `(path) => boolean` callback used to
+ * verify that a linked `tmp/refinement/*.md` doc actually resolves (e.g.
+ * `existsSync`). Enforcement-point callers (enqueue gate, draft-gate
+ * linked-issue path) supply it; a linked doc found in the body then satisfies
+ * the artifact check only when the callback returns true. When the callback is
+ * not supplied the predicate stays pure/no-I/O and behavior is unchanged, and
+ * the `linkedDoc` result carries no `resolves` field. When supplied and the
+ * doc does not resolve, `linkedDoc.resolves === false` and the linked doc does
+ * not satisfy the artifact check (other artifact sources still count).
+ *
+ * Result-shape note: on a `missing_explicit_non_goals` result, `source` keeps
+ * the detected artifact origin (e.g. `issue-body-ac`) so callers/reporting can
+ * still see what artifact exists; `hasACs` is false because the full
+ * refinement check did not pass.
+ *
  * @param {object} input
  * @param {string} [input.body]  Raw issue body Markdown.
  * @param {number} [input.issueNumber]  Issue number, used for linked-doc convention.
+ * @param {Function} [input.resolveLinkedDoc]  Optional `(path) => boolean` doc-resolution check.
  * @returns {{
  *   hasACs: boolean,
+ *   hasNonGoals: boolean,
  *   source: string,
  *   acItems: string[],
  *   uncheckedAcItems: string[],
  *   dodItems: string[],
  *   sections: string[],
- *   linkedDoc: { found: boolean, path: string|null, reason: string },
+ *   linkedDoc: { found: boolean, path: string|null, reason: string, resolves?: boolean },
  *   reason: string,
  *   finding: string|null,
  * }}
  */
-export function detectIssueRefinementArtifact({ body = "", issueNumber = null } = {}) {
+export function detectIssueRefinementArtifact({ body = "", issueNumber = null, resolveLinkedDoc = null } = {}) {
   if (typeof body !== "string" || body.length === 0) {
     return {
       hasACs: false,
+      hasNonGoals: false,
       source: REFINEMENT_SOURCE.MISSING,
       acItems: [],
       uncheckedAcItems: [],
@@ -315,58 +374,88 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
   const uncheckedAcItems = acceptanceSection ? extractUncheckedChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
   const dodItems = dodSection ? extractChecklistItems(dodSection.bodyLines.join("\n")) : [];
 
-  const linkedDoc = detectLinkedRefinementDoc(body);
-
-  if (acItems.length > 0) {
-    return {
-      hasACs: true,
-      source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
-      acItems,
-      uncheckedAcItems,
-      dodItems,
-      sections: sectionNames,
-      linkedDoc,
-      reason: `Found ${acItems.length} Acceptance criteria checklist item(s) in the issue body.`,
-      finding: null,
-    };
+  let linkedDoc = detectLinkedRefinementDoc(body);
+  let linkedDocResolves = linkedDoc.found;
+  if (linkedDoc.found && typeof resolveLinkedDoc === "function") {
+    linkedDocResolves = resolveLinkedDoc(linkedDoc.path) === true;
+    linkedDoc = { ...linkedDoc, resolves: linkedDocResolves };
   }
 
-  if (dodItems.length > 0) {
-    return {
-      hasACs: true,
-      source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
-      acItems,
-      uncheckedAcItems,
-      dodItems,
-      sections: sectionNames,
-      linkedDoc,
-      reason: `Found ${dodItems.length} DoD checklist item(s) in the issue body.`,
-      finding: null,
-    };
-  }
+  // #1866: explicit Non-goals section required on a refined tracker-backed
+  // issue body — same matcher the PR-body spec path uses, so the two cannot
+  // drift. A heading-only or fenced-only section does not count
+  // (sectionHasBody anti-spoof).
+  const hasNonGoals = sectionHasBody(
+    findSectionByPatterns(sections, PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns),
+  );
 
-  if (linkedDoc.found) {
+  const artifactSource = acItems.length > 0
+    ? REFINEMENT_SOURCE.ISSUE_BODY_AC
+    : dodItems.length > 0
+      ? REFINEMENT_SOURCE.ISSUE_BODY_DOD
+      : linkedDocResolves
+        ? REFINEMENT_SOURCE.LINKED_DOC
+        : null;
+
+  const base = {
+    hasNonGoals,
+    acItems,
+    uncheckedAcItems,
+    dodItems,
+    sections: sectionNames,
+    linkedDoc,
+  };
+
+  if (artifactSource !== null) {
+    if (!hasNonGoals) {
+      return {
+        ...base,
+        hasACs: false,
+        source: artifactSource,
+        reason:
+          `Issue body carries a refinement artifact (${artifactSource}) but no explicit Non-goals section; ` +
+          "the tracker-backed refinement contract requires one (rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; " +
+          "e.g. run the loop-grill synthesis). Refusing: the refinement check fails closed without an explicit Non-goals section.",
+        finding: MISSING_EXPLICIT_NON_GOALS_FINDING,
+      };
+    }
+    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_AC) {
+      return {
+        ...base,
+        hasACs: true,
+        source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
+        reason: `Found ${acItems.length} Acceptance criteria checklist item(s) in the issue body.`,
+        finding: null,
+      };
+    }
+    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_DOD) {
+      return {
+        ...base,
+        hasACs: true,
+        source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
+        reason: `Found ${dodItems.length} DoD checklist item(s) in the issue body.`,
+        finding: null,
+      };
+    }
     return {
+      ...base,
       hasACs: true,
       source: REFINEMENT_SOURCE.LINKED_DOC,
       acItems: [],
       uncheckedAcItems: [],
       dodItems: [],
-      sections: sectionNames,
-      linkedDoc,
       reason: `Issue body links a refinement doc at ${linkedDoc.path}; treating that as the refinement artifact source.`,
       finding: null,
     };
   }
 
   return {
+    ...base,
     hasACs: false,
     source: REFINEMENT_SOURCE.MISSING,
     acItems: [],
     uncheckedAcItems: [],
     dodItems: [],
-    sections: sectionNames,
-    linkedDoc,
     reason: "Issue body has no Acceptance criteria section, no DoD section, and no linked refinement doc.",
     finding: REFINEMENT_ARTIFACT_FINDING,
   };
@@ -658,11 +747,21 @@ export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] 
  * @returns {{ action: "enqueue" } | { action: "block"|"divert", reason: string, missing: string[] }}
  */
 export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
-  // `artifact.finding === null` is the explicit "has ANY refinement artifact"
-  // signal (AC checklist OR DoD checklist OR linked doc) — clearer than reading
-  // `hasACs`, whose name understates that a DoD or linked doc also satisfies it.
+  // `artifact.finding === null` is the explicit "passes the full refinement
+  // check" signal (artifact AND — since #1866 — an explicit Non-goals
+  // section), clearer than reading `hasACs`, whose name understates what it
+  // covers.
   if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
+  }
+  // #1866: artifact present but the contract-mandated Non-goals section is
+  // absent/empty — a distinct failure with its own guidance.
+  if (artifact.finding === MISSING_EXPLICIT_NON_GOALS_FINDING) {
+    const reason =
+      "Issue carries a refinement artifact but no explicit Non-goals section. " +
+      "Add an explicit `## Non-goals` section to the issue body " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without an explicit Non-goals section.";
+    return { action: auto ? "divert" : "block", reason, missing: ["explicit Non-goals section"] };
   }
   const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
@@ -684,7 +783,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
  * @param {{ issueNumber: number, repo: string, env: object, runChild: Function, auto?: boolean }} input
  * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
  */
-export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false }) {
+export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false, repoRoot = null }) {
   const bodyResult = await runChild(
     "gh",
     ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
@@ -701,7 +800,17 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
     throw new Error("Invalid JSON input");
   }
   const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
-  const artifact = detectIssueRefinementArtifact({ body, issueNumber });
+  // #1866: a linked refinement doc satisfies the gate only when it actually
+  // resolves. Paths follow the `tmp/refinement/*.md` convention and are
+  // anchored to the caller's repo root (`repoRoot` option, falling back to
+  // process.cwd()) — never the ambient cwd of whichever subdirectory the
+  // gate happened to run from.
+  const docAnchor = repoRoot ?? process.cwd();
+  const artifact = detectIssueRefinementArtifact({
+    body,
+    issueNumber,
+    resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+  });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto });
   if (decision.action === "block") {
     throw Object.assign(new Error(decision.reason), {
