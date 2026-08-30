@@ -369,7 +369,7 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
           { code: "CONFIG_ERROR" },
         );
       }
-      const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: false });
+      const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: false, repoRoot: cwd });
       refinement = { refined: decision.action === "enqueue" };
     }
   }
