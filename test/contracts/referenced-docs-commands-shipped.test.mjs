@@ -51,10 +51,15 @@ function isExcludedFromSubcommandCheck(relPath) {
 
 // ── npm run <name> resolution ──────────────────────────────────────
 
-// A name token stops before a bare trailing `:` and before an immediately
-// following `*` (a doc quoting a script FAMILY, e.g. `` `npm run foo:*` ``,
-// is a glob mention, not a literal invocation of a script named `foo:*`).
-const NPM_RUN_RE = /\bnpm run ([A-Za-z0-9](?:[A-Za-z0-9:_-]*[A-Za-z0-9])?)(?!\*)/g;
+// Group 1 (the name) stops before a bare trailing `:` (sentence punctuation
+// after the script name, not part of it). Group 2 captures an optional glob
+// suffix — a trailing `*`, optionally preceded by `:` — e.g. `` `npm run
+// foo:*` `` or `` `npm run foo*` ``. A doc citing that shape names a script
+// FAMILY (a glob mention), not a literal invocation of a script named
+// `foo:*`, so group 2 matching means: skip validation entirely, do NOT
+// validate group 1 alone as a literal script name (a family prefix like
+// `smoke` in `smoke:*` need not itself be a real script — only `smoke:headless` is).
+const NPM_RUN_RE = /\bnpm run ([A-Za-z0-9](?:[A-Za-z0-9:_-]*[A-Za-z0-9])?)(:?\*)?/g;
 
 export function loadPackageScriptNames(repoRoot) {
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -66,6 +71,9 @@ export function findUnknownNpmRunReferences(content, knownScriptNames) {
   const lines = content.split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
     for (const match of line.matchAll(NPM_RUN_RE)) {
+      if (match[2]) {
+        continue; // glob-family mention (`name:*` / `name*`) — not a literal script name
+      }
       const name = match[1];
       if (!knownScriptNames.has(name)) {
         failures.push({ line: index + 1, name });
@@ -282,8 +290,18 @@ test("findUnknownNpmRunReferences flags an absent script and accepts a real one"
 
 test("findUnknownNpmRunReferences does not flag a script-family glob mention", () => {
   const knownScriptNames = loadPackageScriptNames(REPO_ROOT);
-  const failing = findUnknownNpmRunReferences("historically ran `npm run repo-wiki:*` scripts", knownScriptNames);
-  assert.deepEqual(failing, []);
+  // `smoke` is deliberately NOT itself a package.json script — only
+  // `smoke:headless` is — so this pins that the glob-family exemption
+  // skips validation of the family prefix entirely, rather than
+  // (incorrectly) validating it as a literal script name.
+  assert.ok(!knownScriptNames.has("smoke"), "fixture assumes `smoke` is not itself a real script");
+  assert.ok(knownScriptNames.has("smoke:headless"), "fixture assumes `smoke:headless` is a real script");
+
+  const colonGlob = findUnknownNpmRunReferences("historically ran `npm run smoke:*` scripts", knownScriptNames);
+  assert.deepEqual(colonGlob, []);
+
+  const bareGlob = findUnknownNpmRunReferences("historically ran `npm run smoke*` scripts", knownScriptNames);
+  assert.deepEqual(bareGlob, []);
 });
 
 test("findUnresolvedSubcommandReferences flags an unresolved subcommand and accepts a real one/an alias", () => {
@@ -299,6 +317,16 @@ test("findUnresolvedSubcommandReferences flags an unresolved subcommand and acce
 
   const help = findUnresolvedSubcommandReferences("See `dev-loops queue --help`.");
   assert.deepEqual(help, []);
+
+  const shortHelp = findUnresolvedSubcommandReferences("See `dev-loops queue -h`.");
+  assert.deepEqual(shortHelp, []);
+
+  const nodeForm = findUnresolvedSubcommandReferences("See `node cli/index.mjs loop startup` first.");
+  assert.deepEqual(nodeForm, []);
+
+  const nodeFormFailing = findUnresolvedSubcommandReferences("See `node cli/index.mjs queue does-not-exist-synthetic-1865`.");
+  assert.equal(nodeFormFailing.length, 1);
+  assert.deepEqual(nodeFormFailing[0], { line: 1, category: "queue", subcommand: "does-not-exist-synthetic-1865" });
 });
 
 test("extractHeadingAnchorIds mirrors github-slugger, including the double-hyphen case and explicit {#id}", () => {
