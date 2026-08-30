@@ -130,6 +130,23 @@ test("allows a genuine Closes/Fixes/Refs #N reference", async () => {
   }
 });
 
+test("allows the colon-form Closes:/Fixes:/Refs: #N trailer, same as the non-colon form", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installCommitMsgGuard({ gitDir });
+    for (const message of [
+      `fix(gate): patch the thing\n\nCloses: #42${AGENT_TRAILERS}`,
+      `fix(gate): patch the thing\n\nFixes: #42${AGENT_TRAILERS}`,
+      `fix(gate): patch the thing\n\nRefs: #42${AGENT_TRAILERS}`,
+    ]) {
+      const result = commitAttempt(dir, message, { CLAUDECODE: "1" });
+      assert.equal(result.blocked, false, `expected ${JSON.stringify(message)} to pass: ${result.stderr}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("rejects a subject not in conventional-commit type(scope): summary form", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
@@ -138,6 +155,39 @@ test("rejects a subject not in conventional-commit type(scope): summary form", a
     const result = commitAttempt(dir, message, { CLAUDECODE: "1" });
     assert.equal(result.blocked, true);
     assert.match(result.stderr, /conventional-commit form/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("accepts every conventional-commit type in the full allowlist, including refactor/revert/perf/style/ci/build", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installCommitMsgGuard({ gitDir });
+    for (const type of ["feat", "fix", "chore", "docs", "test", "refactor", "revert", "perf", "style", "ci", "build"]) {
+      const message = `${type}(gate): do the thing${AGENT_TRAILERS}`;
+      const result = commitAttempt(dir, message, { CLAUDECODE: "1" });
+      assert.equal(result.blocked, false, `expected type "${type}" to pass: ${result.stderr}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a default git-revert/fixup!/squash! subject is exempt from the conventional-commit subject check", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installCommitMsgGuard({ gitDir });
+    for (const subject of [
+      'Revert "fix(gate): do the thing"',
+      "fixup! fix(gate): do the thing",
+      "squash! fix(gate): do the thing",
+    ]) {
+      // No trailers, no conventional form of its own — the git/tooling-authored
+      // shape must exempt it regardless.
+      const result = commitAttempt(dir, subject, { CLAUDECODE: "1" });
+      assert.equal(result.blocked, false, `expected ${JSON.stringify(subject)} to pass: ${result.stderr}`);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

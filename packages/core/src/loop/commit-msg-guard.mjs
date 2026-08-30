@@ -56,13 +56,19 @@ import { readFileSync } from "node:fs";
 // prepare-commit-msg, which also gets a source/sha) — no signal distinguishes
 // an ordinary commit from a merge/squash at this hook. A default, unedited
 // merge message ("Merge branch '...'", "Merge pull request #...", "Merge tag
-// '...'") is git-generated, not operator-authored prose, so it is exempt by
+// '...'"), a default git-revert message (Revert "..."), or a
+// git commit --fixup/--squash autosquash subject (fixup! ... / squash! ...)
+// is git/tooling-generated, not operator-authored prose, so each is exempt by
 // its own recognizable shape rather than forced through a conventional-commit
 // subject and trailers it was never meant to carry.
 const [, , msgPath] = process.argv;
 const message = readFileSync(msgPath, "utf8");
 const subjectLine = message.split("\n", 1)[0] || "";
-if (/^Merge (branch|tag|remote-tracking branch|pull request) /u.test(subjectLine)) process.exit(0);
+if (
+  /^Merge (branch|tag|remote-tracking branch|pull request) /u.test(subjectLine) ||
+  /^Revert "/u.test(subjectLine) ||
+  /^(fixup|squash)! /u.test(subjectLine)
+) process.exit(0);
 
 if (/^${COMMIT_MSG_GUARD_MARKER}:allow\b/mu.test(message)) process.exit(0);
 
@@ -83,19 +89,20 @@ if (process.env.CLAUDECODE === "1") {
 }
 
 // A genuine "Closes #N" / "Fixes #N" / "Refs #N" reference (optionally a
-// comma/and-joined list) is allowed and stripped first; any #<digits> left
-// over is a bare non-issue enumeration, which GitHub auto-links to an
-// unrelated issue/PR when rendered.
+// comma/and-joined list, and optionally the trailer colon form "Closes: #N")
+// is allowed and stripped first; any #<digits> left over is a bare non-issue
+// enumeration, which GitHub auto-links to an unrelated issue/PR when
+// rendered.
 const withoutAllowedRefs = message.replace(
-  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|references?)\s+#\d+(?:\s*(?:,|and)\s*#\d+)*/giu,
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|references?):?\s+#\d+(?:\s*(?:,|and)\s*#\d+)*/giu,
   "",
 );
 if (/#\d+/u.test(withoutAllowedRefs)) {
   errors.push('bare #<digits> reference found; use "Closes #N" / "Fixes #N" / "Refs #N" for a genuine issue reference, or reword a non-issue enumeration (e.g. "defect N")');
 }
 
-if (!/^(feat|fix|chore|docs|test)\([^()\n]+\): .+\S/u.test(subjectLine)) {
-  errors.push("subject must be conventional-commit form \"type(scope): summary\" (type one of feat/fix/chore/docs/test)");
+if (!/^(feat|fix|chore|docs|test|refactor|revert|perf|style|ci|build)\([^()\n]+\): .+\S/u.test(subjectLine)) {
+  errors.push("subject must be conventional-commit form \"type(scope): summary\" (type one of feat/fix/chore/docs/test/refactor/revert/perf/style/ci/build)");
 }
 
 if (errors.length > 0) {

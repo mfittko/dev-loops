@@ -234,6 +234,15 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     // this whole suite green while breaking that contract.
     assert.equal(second.guard.ok, true);
     assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-merge-commit", "pre-push"]);
+    // MUST-FIX regression (issue #1869): commitMsgGuard is documented as
+    // always present on BOTH the create and reuse paths — deleting
+    // installCommitMsgGuardForRoot's call on either return site would leave
+    // this whole suite green while silently dropping the commit-message
+    // contract guard from every reused worktree.
+    assert.equal(first.commitMsgGuard.ok, true);
+    assert.equal(first.commitMsgGuard.installed, true);
+    assert.equal(second.commitMsgGuard.ok, true);
+    assert.equal(second.commitMsgGuard.refreshed, true);
   } finally {
     repo.cleanup();
   }
@@ -288,6 +297,9 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
     assert.equal(res.branchOrigin, "reused-detached");
     assert.equal(res.diverged, undefined);
     assert.equal(res.base, undefined, "base is only reported on create");
+    // MUST-FIX regression (issue #1869): commitMsgGuard must be present on
+    // the reused-detached return site too, not just create/reused-local.
+    assert.equal(res.commitMsgGuard.ok, true);
   } finally {
     repo.cleanup();
   }
