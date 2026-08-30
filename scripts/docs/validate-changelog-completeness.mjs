@@ -137,8 +137,10 @@ export function createGitClient(root, exec = promisify(execFile)) {
       return stdout.trim();
     },
     async diffNameOnly(a, b) {
-      const { stdout } = await run(["diff", "--no-renames", "--name-only", a, b]);
-      return stdout.split(/\r?\n/).filter(Boolean);
+      // -z (NUL-delimited names) so a C-quoted path containing a newline cannot
+      // smuggle a suffix line past classifyFile() as a separate "file".
+      const { stdout } = await run(["diff", "--no-renames", "--name-only", "-z", a, b]);
+      return stdout.split("\0").filter(Boolean);
     },
     async logSubjects(a, b) {
       const { stdout } = await run(["log", "--format=%s", `${a}..${b}`]);
@@ -184,9 +186,14 @@ async function resolveBaseRef(git, env = process.env) {
   return null;
 }
 
-async function main({ root, env = process.env, log = console } = {}) {
-  const git = createGitClient(root);
-  const base = await resolveBaseRef(git).catch(() => null);
+/**
+ * Run the validator end to end, returning the process exit code. Injectable
+ * `root`/`git`/`env`/`log` keep the CLI path unit-testable (base-ref resolution
+ * order, the degrade path, and exit codes), matching the sibling
+ * validate-decision-records.mjs run({ root, git }) shape.
+ */
+export async function main({ root, env = process.env, log = console, git = createGitClient(root) } = {}) {
+  const base = await resolveBaseRef(git, env).catch(() => null);
   if (!base) {
     // Legitimate no-history case (shallow checkout, no origin): degrade with a
     // notice like the decision-record validator. PR CI fetches the base branch
@@ -220,10 +227,12 @@ async function main({ root, env = process.env, log = console } = {}) {
 
 /* istanbul ignore if */
 if (isDirectCliRun(import.meta.url)) {
-  main({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..") })
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
+  try {
+    process.exitCode = await main({
+      root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
     });
+  } catch (err) {
+    console.error(err);
+    process.exitCode = 1;
+  }
 }
