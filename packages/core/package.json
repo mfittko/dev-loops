@@ -53,6 +53,7 @@
     "./loop/refinement-grill-state": "./src/loop/refinement-grill-state.mjs",
     "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",
     "./loop/default-branch-guard": "./src/loop/default-branch-guard.mjs",
+    "./loop/commit-msg-guard": "./src/loop/commit-msg-guard.mjs",
     "./loop/queue-board-sync": "./src/loop/queue-board-sync.mjs",
     "./loop/queue-driver": "./src/loop/queue-driver.mjs",
     "./loop/queue-membership": "./src/loop/queue-membership.mjs",

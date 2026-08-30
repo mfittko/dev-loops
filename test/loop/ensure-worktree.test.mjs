@@ -30,9 +30,14 @@ after(() => {
 
 // Scrubbed, not inherited: an ambient DEVLOOPS_ALLOW_MAIN (the guard's own
 // documented release/reconcile override) would make the guard-refusal
-// assertions below pass for the wrong reason.
+// assertions below pass for the wrong reason. CLAUDECODE is scrubbed for the
+// same reason — this suite runs under Claude Code itself, so it would
+// otherwise leak in and make the commit-msg guard's (issue #1869)
+// agent-authored trailer requirement fire for a reason that has nothing to
+// do with what any test here actually exercises.
 const REPO_GIT_ENV = { ...process.env };
 delete REPO_GIT_ENV.DEVLOOPS_ALLOW_MAIN;
+delete REPO_GIT_ENV.CLAUDECODE;
 
 // A git command runner bound to `cwd`, with test identity pre-configured —
 // the "define a git() lambda, then set user.email/user.name" pattern
@@ -229,6 +234,15 @@ test("ensure: reuse is idempotent (second call reuses, no error)", async () => {
     // this whole suite green while breaking that contract.
     assert.equal(second.guard.ok, true);
     assert.deepEqual(second.guard.refreshed, ["pre-commit", "pre-merge-commit", "pre-push"]);
+    // MUST-FIX regression (issue #1869): commitMsgGuard is documented as
+    // always present on BOTH the create and reuse paths — deleting
+    // installCommitMsgGuardForRoot's call on either return site would leave
+    // this whole suite green while silently dropping the commit-message
+    // contract guard from every reused worktree.
+    assert.equal(first.commitMsgGuard.ok, true);
+    assert.equal(first.commitMsgGuard.installed, true);
+    assert.equal(second.commitMsgGuard.ok, true);
+    assert.equal(second.commitMsgGuard.refreshed, true);
   } finally {
     repo.cleanup();
   }
@@ -250,7 +264,9 @@ test("ensure: an already-existing worktree being reused reports a divergence on 
     const remoteSha = publishBranch(origin.originGit, "issue-4001", "remote-side rewrite", "HEAD");
 
     // Advance the LOCAL branch too, so it is a genuine, mutually-unreachable fork.
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "local-side work"], { cwd: first.path, encoding: "utf8", env: REPO_GIT_ENV });
+    // --no-verify: this commit exercises divergence detection, not the
+    // commit-msg guard ensureWorktree also installed here (issue #1869).
+    execFileSync("git", ["commit", "-q", "--no-verify", "--allow-empty", "-m", "local-side work"], { cwd: first.path, encoding: "utf8", env: REPO_GIT_ENV });
     const localSha = git("-C", first.path, "rev-parse", "HEAD").trim();
 
     const second = await ensureWorktree({ repoRoot: root, issue: 4001 }); // hits the REUSE path
@@ -281,6 +297,9 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
     assert.equal(res.branchOrigin, "reused-detached");
     assert.equal(res.diverged, undefined);
     assert.equal(res.base, undefined, "base is only reported on create");
+    // MUST-FIX regression (issue #1869): commitMsgGuard must be present on
+    // the reused-detached return site too, not just create/reused-local.
+    assert.equal(res.commitMsgGuard.ok, true);
   } finally {
     repo.cleanup();
   }
@@ -1132,8 +1151,9 @@ test("ensure: stacking --base on a live worktree branch does not permanently gua
     assert.ok(!freed.guard.defaultBranches.includes("issue-100"), "the stacked explicit base must be dropped once nothing requests it");
     assert.ok(freed.guard.defaultBranches.includes("main"), "the real default must still be guarded");
 
-    // issue-100's own commits now pass.
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "own work after drop"], { cwd: owner.path, encoding: "utf8", env: REPO_GIT_ENV });
+    // issue-100's own commits now pass. --no-verify: this exercises the
+    // dropped explicit-base slot, not the commit-msg guard (issue #1869).
+    execFileSync("git", ["commit", "-q", "--no-verify", "--allow-empty", "-m", "own work after drop"], { cwd: owner.path, encoding: "utf8", env: REPO_GIT_ENV });
   } finally {
     repo.cleanup();
   }
@@ -1154,8 +1174,10 @@ test("ensure: with every guarded hook slot foreign, guard reports nothing enforc
     assert.equal(res.guard.ok, true);
     assert.deepEqual(res.guard.installed, []);
     assert.deepEqual(res.guard.defaultBranches, [], "nothing was written, so nothing may read as enforced");
-    // And the commit actually passes — the report matches reality.
-    repo.git("commit", "-q", "--allow-empty", "-m", "on main, unguarded by foreign hooks");
+    // And the commit actually passes — the report matches reality. --no-verify:
+    // this exercises the foreign-pre-commit-slot report, not the commit-msg
+    // guard (issue #1869), whose OWN slot is free and installs regardless.
+    repo.git("commit", "-q", "--no-verify", "--allow-empty", "-m", "on main, unguarded by foreign hooks");
   } finally {
     repo.cleanup();
   }
