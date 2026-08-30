@@ -509,6 +509,107 @@ test("size budget: fails closed when origin/<base> is not locally resolvable (gi
   assert.match(stderrParsed.error, /git diff against --base/i);
 });
 
+// ---------------------------------------------------------------------------
+// Fail-closed tracker-backed PR-description contract (issue #1863) — mirrors
+// the size-budget mirror above: the same validateTrackerBackedPrBodySpec
+// check ready-for-review.mjs runs, on the raw `gh pr ready` hook path.
+// ---------------------------------------------------------------------------
+
+const COMPLIANT_TRACKER_BODY = `Closes #900
+
+## Objective
+Ship the feature.
+
+## In scope
+- the feature
+
+## Explicit non-goals
+- unrelated cleanup
+
+## Acceptance criteria
+- [ ] the feature works
+
+## Definition of done
+- [ ] npm run verify is green
+`;
+
+test("prBodySpec: a tracker-backed PR whose body fails the PR-description contract blocks the raw gh pr ready path (fail closed, AC1)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-block-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
+  const { env } = await writeGhStub(tmpDir, [
+    {
+      stdout: JSON.stringify(buildPrStateResponse({
+        isDraft: true,
+        headRefOid: headSha,
+        baseRefName: baseBranch,
+        body: "Closes #900\n\nShips the feature.",
+        closingIssuesReferences: { nodes: [{ number: 900 }] },
+      })),
+    },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /PR-description contract/);
+  assert.match(stderrParsed.error, /missing_acceptance_criteria/);
+  assert.match(stderrParsed.error, /missing_definition_of_done/);
+  assert.match(stderrParsed.error, /missing_explicit_non_goals/);
+  assert.equal(stderrParsed.prBodySpec.ok, false);
+});
+
+test("prBodySpec: a tracker-backed PR with a fully compliant body passes the raw gh pr ready path (green path, AC6)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-pass-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
+  const { env } = await writeGhStub(tmpDir, [
+    {
+      stdout: JSON.stringify(buildPrStateResponse({
+        isDraft: true,
+        headRefOid: headSha,
+        baseRefName: baseBranch,
+        body: COMPLIANT_TRACKER_BODY,
+        closingIssuesReferences: { nodes: [{ number: 900 }] },
+      })),
+    },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.prBodySpec.ok, true);
+});
+
+test("prBodySpec: an issue-less PR (no closing issue reference) skips this check entirely (regression guard — lightweight path unchanged)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-skip-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch, body: "no invariants at all" })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.prBodySpec, null);
+});
+
 test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async (t) => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-configerr-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));

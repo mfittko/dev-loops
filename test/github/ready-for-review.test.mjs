@@ -53,6 +53,31 @@ function gateCloseStubs(opts = {}) {
   return [{ stdout: "[]" }, ...gateThreadLoginStubs(opts)];
 }
 
+// A PR body compliant with the tracker-backed PR-description contract
+// (issue #1863): Acceptance criteria + Definition of done checklists, an
+// explicit Non-goals section, and a Closes #N reference. Used by fixtures
+// below that set a real closingIssuesReferences number, so the new
+// validateTrackerBackedPrBodySpec check (wired in ready-for-review.mjs)
+// passes and these tests keep exercising board-sync/other behavior, not this
+// new check.
+const COMPLIANT_TRACKER_BODY = `Closes #55
+
+## Objective
+Ship the feature.
+
+## In scope
+- the feature
+
+## Explicit non-goals
+- unrelated cleanup
+
+## Acceptance criteria
+- [ ] the feature works
+
+## Definition of done
+- [ ] npm run verify is green
+`;
+
 
 // --- parseReadyForReviewCliArgs unit tests ---
 
@@ -599,6 +624,7 @@ test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#
                 baseRefName: baseBranch,
                 state: "OPEN",
                 mergeStateStatus: "CLEAN",
+                body: COMPLIANT_TRACKER_BODY,
                 closingIssuesReferences: { nodes: [{ number: 55 }] },
               },
             },
@@ -662,6 +688,7 @@ function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
               state: "OPEN",
               mergeStateStatus: "CLEAN",
               title: "Add feature",
+              body: COMPLIANT_TRACKER_BODY,
               closingIssuesReferences: { nodes: closingIssueNodes },
             },
           },
@@ -945,7 +972,7 @@ test("#1585: ready-for-review fails closed (-1) when review-thread state is unre
 // whether the size check is expected to let the draft exit proceed.
 // ---------------------------------------------------------------------------
 
-function sizeBudgetGhStubEntries({ headSha, baseBranch, extraEntries = [] }) {
+function sizeBudgetGhStubEntries({ headSha, baseBranch, extraEntries = [], body = undefined, closingIssueNodes = [] }) {
   return [
     {
       stdout: JSON.stringify({
@@ -958,6 +985,8 @@ function sizeBudgetGhStubEntries({ headSha, baseBranch, extraEntries = [] }) {
               baseRefName: baseBranch,
               state: "OPEN",
               mergeStateStatus: "CLEAN",
+              ...(body !== undefined ? { body } : {}),
+              closingIssuesReferences: { nodes: closingIssueNodes },
             },
           },
         },
@@ -1267,6 +1296,80 @@ test("size budget: fails closed when origin/<base> is not locally resolvable (gi
     assert.match(result.stderr, /git diff against --base/i);
     const calls = await readGhCalls(ghLogPath);
     assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when the base ref cannot be resolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Fail-closed tracker-backed PR-description contract (issue #1863).
+// ---------------------------------------------------------------------------
+
+test("prBodySpec: a tracker-backed PR whose body fails the PR-description contract blocks ready-for-review (fail closed, AC1)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-block-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      body: "Closes #900\n\nShips the feature.",
+      closingIssueNodes: [{ number: 900 }],
+    }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /PR-description contract/);
+    assert.match(result.stderr, /missing_acceptance_criteria/);
+    assert.match(result.stderr, /missing_definition_of_done/);
+    assert.match(result.stderr, /missing_explicit_non_goals/);
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when the PR-description contract fails");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prBodySpec: a tracker-backed PR with a fully compliant body passes ready-for-review (green path, AC6)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-pass-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const { env } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      body: COMPLIANT_TRACKER_BODY,
+      closingIssueNodes: [{ number: 55 }],
+      extraEntries: [{ stdout: "" }], // gh pr ready
+    }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.prBodySpec.ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prBodySpec: an issue-less PR (no closing issue reference) skips this check entirely (regression guard — lightweight path unchanged)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-skip-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const { env } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      body: "no invariants at all",
+      extraEntries: [{ stdout: "" }], // gh pr ready
+    }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.prBodySpec, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
