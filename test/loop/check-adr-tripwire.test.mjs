@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { execSync } from "node:child_process";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
@@ -471,4 +473,37 @@ test("evaluateAdrTripwire honors env injection and strips GIT_DIR/GIT_WORK_TREE"
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("round-3 fixes: rule-bearing doc renamed OUT of skills/docs still scans (origPath guard)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["R100\tskills/docs/planning.md\tdocs/planning.md"]),
+    baseContents: { "skills/docs/planning.md": BASE_CONTRACT },
+    headContents: { "docs/planning.md": BASE_CONTRACT.replace("MUST be persisted", "SHOULD be persisted") },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "rule-modality-reversal" && t.ruleId === "ADR-WORTHY-PERSIST"));
+});
+
+test("round-3 low fix: the reserved 0000-template row never satisfies the tripwire", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC, "A\tdocs/decisions/0000-template.md"]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.deepEqual(r.adrFiles, []);
+});
+
+test("round-3 medium fix: CLI usage error exits 2", () => {
+  const { execFileSync } = require("node:child_process");
+  let code = null;
+  try {
+    execFileSync(process.execPath, [path.resolve("scripts/loop/check-adr-tripwire.mjs"), "--bogus"], { stdio: "ignore", env: { ...process.env } });
+  } catch (e) {
+    code = e.status;
+  }
+  assert.equal(code, 2);
 });

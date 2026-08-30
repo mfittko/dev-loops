@@ -234,7 +234,7 @@ export function computeAdrTripwire({
   // carries rules) fails closed — silence must mean "scanned, no reversal",
   // never "could not read".
   for (const file of files) {
-    if (!isSkillsDocsMarkdown(file.path)) continue;
+    if (!isSkillsDocsMarkdown(file.path) && !(file.origPath && isSkillsDocsMarkdown(file.origPath))) continue;
     const base = (file.origPath ? baseContents[file.origPath] : undefined) ?? baseContents[file.path] ?? null;
     const head = headContents[file.path] ?? null;
     const baseModal = base != null ? extractRuleModalities(base) : null;
@@ -271,12 +271,18 @@ export function computeAdrTripwire({
   }
 
   // Satisfaction counts only rows that ADD or UPDATE a record — a DELETED
-  // decision record is the opposite of ADR presence and never satisfies.
-  const adrFiles = files.filter((f) => !f.status.startsWith("D") && ADR_PATH_RE.test(f.path)).map((f) => f.path);
+  // decision record is the opposite of ADR presence and never satisfies, and
+  // the reserved 0000-template row is not a record (ADR-PATH-NUMBERING).
+  const adrFiles = files
+    .filter((f) => !f.status.startsWith("D") && ADR_PATH_RE.test(f.path) && f.path !== "docs/decisions/0000-template.md")
+    .map((f) => f.path);
 
   // Waiver: first `adr-tripwire:allow <reason>` line in the PR body. A bare
   // marker with no reason is invalid — the reason is the durable evidence a
   // reviewer reads; without it the marker is decorative.
+  // Waiver scan is FIRST-marker-wins: a bare marker earlier in the body
+  // invalidates (and stops the scan at) a later valid marker — deliberate
+  // strictness, documented here.
   let waiver = { requested: false, valid: false, reason: null };
   if (typeof prBody === "string" && prBody.length > 0) {
     for (const line of prBody.split("\n")) {
@@ -414,9 +420,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {
-    // Exit 2 for a usage/argument error (parse errors carry the usage text),
-    // 1 for anything else — mirroring check-size-budget's CLI contract.
+    // Exit 2 for ALL errors reaching this catch: buildParseError usage errors
+    // and unexpected throws alike (check-size-budget's CLI contract). A block
+    // never throws — it exits 1 from emitResult inside runCli.
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
-    process.exitCode = /usage/i.test(String(error?.message ?? "")) ? 2 : 1;
+    process.exitCode = 2;
   });
 }
