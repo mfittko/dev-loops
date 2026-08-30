@@ -519,3 +519,13 @@ test("round-4 low fix: a bare marker earlier in the body invalidates a later val
   assert.equal(r.waiver.requested, true);
   assert.equal(r.waiver.valid, false);
 });
+
+test("round-5 fix pinned: same-line following marker bounds the modality window", () => {
+  // First rule lost its keyword; a same-line later marker carries MUST. The
+  // window bound must stop R-ONE's scan at the next marker so R-ONE stays
+  // null (no reversal) instead of inheriting R-TWO's must.
+  const content = "| <!-- rule: R-ONE --> `R-ONE` | Obligation text removed entirely. | <!-- rule: R-TWO --> `R-TWO` | You MUST comply. |\n";
+  const m = extractRuleModalities(content);
+  assert.equal(m.get("R-ONE"), null);
+  assert.equal(m.get("R-TWO"), "must");
+});
