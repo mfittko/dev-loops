@@ -3262,6 +3262,52 @@ test("#1868: an unparseable persisted request-plan artifact fails closed", async
   );
 });
 
+// A parseable plan whose SHAPE is drifted fails closed too — the plan is the
+// enforcement authority, never silently ignorable (#1868 review finding).
+test("#1868: a shape-drifted (non-array requestGroups) request-plan artifact fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: "drifted",
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array requestGroups/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1868: a requestGroup with a non-array angles field fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: "drifted" }],
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array angles field/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // #1618 record-matching path: when on-disk per-gate briefing-prefix records
 // exist, consolidate-fanin's verifier exercises the record-matching branch

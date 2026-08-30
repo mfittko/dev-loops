@@ -903,12 +903,22 @@ async function readGateRequestPlansForHead(tmpRoot, headSha) {
 // plans: the total number of pending angles across every plan's requestGroups.
 // A plan whose groups carry no angles (an all-carried / genuinely zero-unit
 // gate) contributes 0 — the floor only applies when units were expected.
+// A parseable plan whose SHAPE is drifted (non-array requestGroups, or a group
+// with a non-array angles field) FAILS CLOSED (#1868 review finding): the plan
+// is the enforcement authority, so a schema-drifted or hand-edited plan must
+// never silently disable the records-floor — only an empty requestGroups array
+// (a genuinely zero-unit gate) contributes 0.
 function deriveRequestPlanExpectedUnits(plans) {
   let total = 0;
-  for (const { plan } of plans) {
-    if (!Array.isArray(plan?.requestGroups)) continue;
+  for (const { filePath, plan } of plans) {
+    if (!Array.isArray(plan?.requestGroups)) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" has a non-array requestGroups field (${JSON.stringify(plan?.requestGroups)}) — the plan is the enforcement authority for this round's expected dispatch units, so a shape-drifted plan fails closed rather than silently disabling the floor`);
+    }
     for (const g of plan.requestGroups) {
-      if (Array.isArray(g?.angles)) total += g.angles.length;
+      if (!Array.isArray(g?.angles)) {
+        throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" has a requestGroup with a non-array angles field (${JSON.stringify(g?.angles)}) — the plan is the enforcement authority for this round's expected dispatch units, so a shape-drifted plan fails closed rather than silently disabling the floor`);
+      }
+      total += g.angles.length;
     }
   }
   return total;
