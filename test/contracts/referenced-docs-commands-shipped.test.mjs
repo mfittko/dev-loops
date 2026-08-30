@@ -61,12 +61,12 @@ function isExcludedFromSubcommandCheck(relPath) {
 // `smoke` in `smoke:*` need not itself be a real script — only `smoke:headless` is).
 const NPM_RUN_RE = /\bnpm run ([A-Za-z0-9](?:[A-Za-z0-9:_-]*[A-Za-z0-9])?)(:?\*)?/g;
 
-export function loadPackageScriptNames(repoRoot) {
+function loadPackageScriptNames(repoRoot) {
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   return new Set(Object.keys(pkg.scripts ?? {}));
 }
 
-export function findUnknownNpmRunReferences(content, knownScriptNames) {
+function findUnknownNpmRunReferences(content, knownScriptNames) {
   const failures = [];
   const lines = content.split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
@@ -95,7 +95,7 @@ const CLI_SUBCOMMAND_RE = new RegExp(
   "g",
 );
 
-export function isKnownSubcommand(category, subcommand, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
+function isKnownSubcommand(category, subcommand, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
   if (subcommand === "--help" || subcommand === "-h") {
     return true; // generic category-help fast-path (cli/index.mjs), not a route
   }
@@ -105,7 +105,7 @@ export function isKnownSubcommand(category, subcommand, subcommandRoutes = SUBCO
   return Boolean(subcommandAliases[category]?.[subcommand]);
 }
 
-export function findUnresolvedSubcommandReferences(content, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
+function findUnresolvedSubcommandReferences(content, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
   const failures = [];
   const lines = content.split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
@@ -148,7 +148,7 @@ function slugifyHeadingText(text) {
 // same way (repeat slug N gets a `-N` suffix), plus any explicit `{#custom-id}`
 // trailer (an explicit id is stripped from the slugified text first, then
 // added to the set alongside the auto-computed slug — both are valid targets).
-export function extractHeadingAnchorIds(content) {
+function extractHeadingAnchorIds(content) {
   const ids = new Set();
   const seenCounts = new Map();
   const lines = content.split(/\r?\n/);
@@ -203,7 +203,7 @@ export function extractHeadingAnchorIds(content) {
 // doesn't exist on disk — a missing target is already the existing
 // `validateMarkdownLinks` broken-link check's job, so this skips it rather
 // than double-reporting.
-export function findDanglingAnchorReferences({ sourceRelPath, sourceContent, loadTargetContent }) {
+function findDanglingAnchorReferences({ sourceRelPath, sourceContent, loadTargetContent }) {
   const failures = [];
   for (const { line, pathPart, fragment } of extractAnchorLinks(sourceContent)) {
     const targetContent = pathPart === "" ? sourceContent : loadTargetContent(pathPart);
@@ -217,7 +217,7 @@ export function findDanglingAnchorReferences({ sourceRelPath, sourceContent, loa
   return failures;
 }
 
-export function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
+function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
   return (pathPart) => {
     const targetAbs = path.resolve(path.dirname(sourceAbsPath), pathPart);
     // Guard against a link path traversing outside the repo (e.g. `../../../../etc/hosts`):
@@ -399,7 +399,12 @@ test("findDanglingAnchorReferences skips an anchor whose target file does not ex
 test("loadTargetContentRelativeTo refuses a cross-file anchor link that traverses outside the repo root", () => {
   const sourceAbsPath = path.join(REPO_ROOT, "docs", "synthetic-1865.md");
   const loadTargetContent = loadTargetContentRelativeTo(REPO_ROOT, sourceAbsPath);
+  // An absolute pathPart makes `path.resolve` ignore the base dir entirely, so this
+  // resolves to the real, existing `/etc/hosts` — outside the repo root. A relative
+  // `../../../../etc/hosts` would resolve to a NONEXISTENT in-tree path from
+  // `docs/`, making the plain existence check (not the containment guard) return
+  // null and passing vacuously even with the containment guard deleted.
   // `/etc/hosts` exists on every runner this test targets, so a non-null return here
   // would prove the traversal guard failed and the file was read from outside the repo.
-  assert.equal(loadTargetContent("../../../../etc/hosts"), null);
+  assert.equal(loadTargetContent("/etc/hosts"), null);
 });
