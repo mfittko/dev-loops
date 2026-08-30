@@ -11,6 +11,7 @@ import {
   CONTRACT_DOC_RE,
   computeAdrTripwire,
   extractRuleModalities,
+  evaluateAdrTripwire,
   runCli,
   unquoteGitPath,
   parseCheckAdrTripwireCliArgs,
@@ -286,7 +287,7 @@ test("new rule with a modality is not a reversal (no prior base modality)", () =
   assert.deepEqual(r.triggers, []);
 });
 
-test("rule-bearing non-contract doc whose rules were all removed trips unresolvable only when head unreadable; with readable head it passes", () => {
+test("rules removed from a still-present rule-bearing doc is a modality reversal (round-2 medium fix)", () => {
   const DOC = "skills/docs/planning.md";
   const r = computeAdrTripwire({
     nameStatusOutput: ns(["M\t" + DOC]),
@@ -294,8 +295,55 @@ test("rule-bearing non-contract doc whose rules were all removed trips unresolva
     headContents: { [DOC]: "Rules removed entirely.\n" },
     prBody: "",
   });
-  assert.equal(r.outcome, "pass");
-  assert.deepEqual(r.triggers, []);
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "rule-modality-reversal" && t.ruleId === "ADR-SOFT-HINT" && t.to === "none"));
+});
+
+test("keyword stripped from a rule (marker stays, modality gone) is a reversal (round-2 medium fix)", () => {
+  const DOC = "skills/docs/planning.md";
+  const head = BASE_CONTRACT.replace("| <!-- rule: ADR-SOFT-HINT --> `ADR-SOFT-HINT` | A routine choice SHOULD be recorded when convenient. |", "| <!-- rule: ADR-SOFT-HINT --> `ADR-SOFT-HINT` | A routine choice is recorded when convenient. |");
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DOC]),
+    baseContents: { [DOC]: BASE_CONTRACT },
+    headContents: { [DOC]: head },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "rule-modality-reversal" && t.ruleId === "ADR-SOFT-HINT" && t.to === "none"));
+});
+
+test("a deleted ADR record row never satisfies the tripwire (round-2 medium fix)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC, "D\tdocs/decisions/0051-net-reduction-disposition-policy.md"]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.deepEqual(r.adrFiles, []);
+  assert.ok(r.reasons.length > 0);
+});
+
+test("waiver marker buried mid-sentence does not waive (round-2 medium fix — line-anchored)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "This PR does not need adr-tripwire:allow because the change is minor.",
+  });
+  assert.equal(r.outcome, "block");
+  assert.equal(r.waiver.valid, false);
+});
+
+test("gate-config rename-out trips via origPath (round-2 low fix)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["R100\tpackages/core/src/config/extension-defaults.yaml\tpackages/core/src/config/gate-defaults.yaml"]),
+    baseContents: {},
+    headContents: {},
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "gate-config"));
 });
 
 test("parseNameStatus: rename rows", () => {
@@ -397,6 +445,29 @@ test("runCli: block outcome exits 1 and reports ok:false", async () => {
     assert.equal(payload.ok, false);
     assert.equal(payload.outcome, "block");
     assert.equal(payload.error, "adr_tripwire_block");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// evaluateAdrTripwire: the env argument reaches git subprocesses (round-2
+// low fix) — GIT_DIR/GIT_WORK_TREE dir overrides are stripped, so a poisoned
+// inherited env cannot redirect the scan.
+// ---------------------------------------------------------------------------
+
+test("evaluateAdrTripwire honors env injection and strips GIT_DIR/GIT_WORK_TREE", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-env-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(path.join(fixture, "skills/docs"), { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t && echo base > base.md && git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, "skills/docs/plain.md"), "# Plain doc\n\nNo rules.\n");
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const poisoned = { ...process.env, GIT_DIR: "/nonexistent", GIT_WORK_TREE: "/nonexistent" };
+    const r = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, env: poisoned });
+    assert.equal(r.ok, true);
+    assert.equal(r.outcome, "pass");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

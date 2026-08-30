@@ -58,12 +58,12 @@ Optional:
   --pr-body-file <path> File holding the PR body (waiver surface); default:
                         no body — a waiver can then never be honored
 
- * Exit codes:
- *   0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
- *   1  block — a decision-shaped surface was touched without an ADR or waiver
- *   2  argument/usage error
- *
- * Output (stdout, JSON):
+Exit codes:
+   0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
+   1  block — a decision-shaped surface was touched without an ADR or waiver
+   2  argument/usage error
+
+Output (stdout, JSON):
   {
     "ok": true|false,          // false on a block — the CLI exits 1 on a block,
                                // 0 on pass, 2 on a usage error (fail-closed)
@@ -87,7 +87,7 @@ export const ADR_PATH_RE = /^docs\/decisions\/\d{4}-[a-z0-9-]+\.md$/u;
 export const CONTRACT_DOC_RE = /^skills\/docs\/[A-Za-z0-9._-]*-contract\.md$/u;
 export const GATE_CONFIG_PATH = "packages/core/src/config/extension-defaults.yaml";
 export const WAIVER_MARKER = "adr-tripwire:allow";
-const WAIVER_RE = /adr-tripwire:allow[ \t]+(\S.*?)\s*$/u;
+const WAIVER_RE = /^\s*adr-tripwire:allow[ \t]+(\S.*?)\s*$/u;
 
 /** True when the path is a markdown doc under skills/docs (rule-marker scan surface). */
 function isSkillsDocsMarkdown(p) {
@@ -223,8 +223,8 @@ export function computeAdrTripwire({
       // an in-place edit and must trip the same trigger.
       triggers.push({ type: "contract-doc", path: file.origPath && CONTRACT_DOC_RE.test(file.origPath) ? file.origPath : file.path });
     }
-    if (file.path === GATE_CONFIG_PATH) {
-      triggers.push({ type: "gate-config", path: file.path });
+    if (file.path === GATE_CONFIG_PATH || file.origPath === GATE_CONFIG_PATH) {
+      triggers.push({ type: "gate-config", path: file.origPath === GATE_CONFIG_PATH ? file.origPath : file.path });
     }
   }
 
@@ -252,16 +252,27 @@ export function computeAdrTripwire({
     }
     for (const [ruleId, family] of headModal) {
       const before = baseModal.get(ruleId);
-      // A brand-new rule (no base modality) is not a reversal; a rule whose
-      // modality family changed in either direction is (tighten or loosen —
-      // both are policy-level modality changes per ADR-WORTHY-PERSIST).
-      if (before != null && family != null && before !== family) {
-        triggers.push({ type: "rule-modality-reversal", path: file.path, ruleId, from: before, to: family });
+      // A brand-new rule (no base modality) is not a reversal. A reversal is
+      // any change of the rule's enforcement modality: MUST↔SHOULD↔MAY in
+      // either direction, a keyword stripped to nothing (family null — the
+      // rule keeps its marker but loses its RFC-2119 obligation), or the
+      // rule removed outright from a still-present rule-bearing doc.
+      if (before != null && (family == null || before !== family)) {
+        triggers.push({ type: "rule-modality-reversal", path: file.path, ruleId, from: before, to: family ?? "none" });
+      }
+    }
+    // A rule present at base but absent at head is the deletion form of the
+    // same reversal (marker removed from a doc that still exists).
+    for (const [ruleId, before] of baseModal) {
+      if (before != null && !headModal.has(ruleId)) {
+        triggers.push({ type: "rule-modality-reversal", path: file.path, ruleId, from: before, to: "none" });
       }
     }
   }
 
-  const adrFiles = files.filter((f) => ADR_PATH_RE.test(f.path)).map((f) => f.path);
+  // Satisfaction counts only rows that ADD or UPDATE a record — a DELETED
+  // decision record is the opposite of ADR presence and never satisfies.
+  const adrFiles = files.filter((f) => !f.status.startsWith("D") && ADR_PATH_RE.test(f.path)).map((f) => f.path);
 
   // Waiver: first `adr-tripwire:allow <reason>` line in the PR body. A bare
   // marker with no reason is invalid — the reason is the durable evidence a
@@ -299,7 +310,7 @@ export function computeAdrTripwire({
   reasons.push(
     "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body.",
   );
-  return { ok: true, outcome: "block", satisfiedBy: null, triggers, adrFiles, waiver, reasons };
+  return { ok: false, outcome: "block", satisfiedBy: null, triggers, adrFiles, waiver, reasons };
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +414,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {
-    process.stderr.write(`${formatCliError(error)}\n`);
-    process.exitCode = 1;
+    // Exit 2 for a usage/argument error (parse errors carry the usage text),
+    // 1 for anything else — mirroring check-size-budget's CLI contract.
+    process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
+    process.exitCode = /usage/i.test(String(error?.message ?? "")) ? 2 : 1;
   });
 }
