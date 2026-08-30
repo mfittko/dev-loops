@@ -13,6 +13,10 @@ const CHANGELOG_PATH = "CHANGELOG.md";
 /**
  * Conventional-commit type vocabulary, pinned to the same set the worktree
  * commit-msg guard enforces (`packages/core/src/loop/commit-msg-guard.mjs`).
+ * Only the guard's TYPE vocabulary is pinned here, not its stricter subject
+ * regex: the PR-seam parser below additionally accepts a scope-less subject
+ * and a breaking-change `!` suffix, so `feat!: ...` classifies as notable
+ * even though the commit-msg guard would refuse that subject shape.
  * A `feat` or `fix` subject marks the change as notable (user-facing), so the
  * PR must document it in the CHANGELOG.
  */
@@ -36,8 +40,10 @@ const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]*\))?!?:\s+\S/u;
 
 /**
  * Parse the conventional-commit type from a commit subject line.
- * Returns null for non-conventional subjects (same vocabulary as the
- * commit-msg guard, issue #1864: reuse the existing detection, no new heuristic).
+ * Returns null for non-conventional subjects (same type vocabulary as the
+ * commit-msg guard, issue #1864: reuse the existing detection, no new heuristic;
+ * the subject shape here is looser than the guard's — scope-less subjects and
+ * a breaking-change `!` suffix are accepted).
  *
  * @param {string} subject
  * @returns {string|null} The type token (e.g. "feat"), or null.
