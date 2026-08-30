@@ -329,6 +329,22 @@ test("findUnresolvedSubcommandReferences flags an unresolved subcommand and acce
   assert.deepEqual(nodeFormFailing[0], { line: 1, category: "queue", subcommand: "does-not-exist-synthetic-1865" });
 });
 
+test("isExcludedFromSubcommandCheck exempts docs/specs/ from the subcommand-route check but leaves everything else covered", () => {
+  const content = "See `dev-loops queue does-not-exist-synthetic-1865`.";
+  const specsPath = "docs/specs/queue-mode/SPEC.md";
+  const normalPath = "docs/queue-mode/guide.md";
+
+  assert.ok(isExcludedFromSubcommandCheck(specsPath), "docs/specs/ must be in the allowlist");
+  assert.ok(!isExcludedFromSubcommandCheck(normalPath), "a normal docs/ file must not be in the allowlist");
+
+  // Mirrors computeAllFailures's own guard: only run the subcommand check when not excluded.
+  const specsFailures = isExcludedFromSubcommandCheck(specsPath) ? [] : findUnresolvedSubcommandReferences(content);
+  const normalFailures = isExcludedFromSubcommandCheck(normalPath) ? [] : findUnresolvedSubcommandReferences(content);
+
+  assert.deepEqual(specsFailures, [], "the same unresolved-subcommand citation is exempted under docs/specs/");
+  assert.equal(normalFailures.length, 1, "the same unresolved-subcommand citation must still fail outside docs/specs/");
+});
+
 test("extractHeadingAnchorIds mirrors github-slugger, including the double-hyphen case and explicit {#id}", () => {
   const ids = extractHeadingAnchorIds([
     "# Phase 4 — Fix",
