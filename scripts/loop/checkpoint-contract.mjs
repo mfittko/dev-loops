@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { normalizeCheckpointCycleIdentity } from "@dev-loops/core/loop/public-dev-loop-routing";
+import { normalizeCheckpointCycleIdentity, normalizeRetroProvenance, RETROSPECTIVE_PROVENANCE } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { parsePositiveInteger } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -27,6 +27,15 @@ Required:
 Optional:
   --notes <text>           Required when --state is complete (non-blank)
   --reason <text>          Required when --state is skipped (non-blank)
+  --retro-context <c>      Required when --state is complete: MUST be "fresh".
+                           Pins that the retrospective was produced by a
+                           fresh-context, independent dispatch (issue #1870).
+                           "inline" (self-authored by the working context) is
+                           rejected — an inline retro fails the checkpoint.
+  --record-source <path>   Required when --state is complete (non-blank): path
+                           of the agent/subagent tool-call record (transcript
+                           or journal artifact) the fresh-context retro was
+                           seeded with.
   --repo <owner/name>      Cycle identity. MUST be provided together (with
   --pr <number>            --pr and --merge-commit) when --state is complete
   --merge-commit <sha>     or skipped, so a later reader can tell WHICH cycle
@@ -81,11 +90,13 @@ export function resolveCheckpointRepoRoot(cwd) {
   return cwd;
 }
 
-export function buildRetrospectiveCheckpointPayload({ state, notes = null, reason = null, identity = null }, now = new Date()) {
+export function buildRetrospectiveCheckpointPayload({ state, notes = null, reason = null, identity = null, provenance = null }, now = new Date()) {
   const timestamp = now.toISOString();
   const normalizedIdentity = identity != null ? normalizeCheckpointCycleIdentity(identity) : null;
   const identityField = normalizedIdentity ? { identity: normalizedIdentity } : {};
-  if (state === "complete") return { state, completedAt: timestamp, notes, ...identityField };
+  const normalizedProvenance = provenance != null ? normalizeRetroProvenance(provenance) : null;
+  const provenanceField = normalizedProvenance ? { provenance: normalizedProvenance } : {};
+  if (state === "complete") return { state, completedAt: timestamp, notes, ...identityField, ...provenanceField };
   if (state === "skipped") return { state, skippedAt: timestamp, reason, ...identityField };
   if (state === "required") return { state, triggeredAt: timestamp, ...identityField };
   if (state === "missing") return { state, triggeredAt: timestamp, ...identityField };
@@ -105,6 +116,8 @@ function parseCliArgs(argv) {
         repo: { type: "string" },
         pr: { type: "string" },
         "merge-commit": { type: "string" },
+        "retro-context": { type: "string" },
+        "record-source": { type: "string" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
@@ -132,6 +145,31 @@ function parseCliArgs(argv) {
   }
   if (state === "skipped" && !values.reason?.trim()) {
     throw parseError('state "skipped" requires --reason');
+  }
+
+  // Fresh-context provenance is mandatory for `complete` (issue #1870): the
+  // retro must have been produced by a fresh-context, independent dispatch
+  // seeded with the full agent/subagent tool-call record. An inline
+  // (self-authored) retro is rejected outright, and so is a complete record
+  // with no provenance at all — the reader fails closed on both.
+  let provenance = null;
+  if (state === "complete") {
+    const retroContext = values["retro-context"]?.trim().toLowerCase();
+    if (!retroContext) {
+      throw parseError('state "complete" requires --retro-context fresh (RETRO-FRESH-CONTEXT-MANDATORY: the retrospective must be a fresh-context, independent pass over the tool-call record — an inline self-authored retro fails the checkpoint)');
+    }
+    if (retroContext === RETROSPECTIVE_PROVENANCE.CONTEXT_INLINE) {
+      throw parseError('retro-context "inline" is rejected (RETRO-FRESH-CONTEXT-MANDATORY): an inline, self-authored retrospective fails the checkpoint. Dispatch a fresh-context pass seeded with the full tool-call record, then record with --retro-context fresh');
+    }
+    if (retroContext !== RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH) {
+      throw parseError(`--retro-context must be "${RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH}" (got "${retroContext}")`);
+    }
+    if (!values["record-source"]?.trim()) {
+      throw parseError('state "complete" requires --record-source (RETRO-FRESH-CONTEXT-MANDATORY: the path of the agent/subagent tool-call record the fresh-context retro was seeded with)');
+    }
+    provenance = { context: RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH, seededFrom: RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD, recordSource: values["record-source"].trim() };
+  } else if (values["retro-context"] !== undefined || values["record-source"] !== undefined) {
+    throw parseError("--retro-context/--record-source only apply to --state complete");
   }
 
   const mergeCommit = values["merge-commit"];
@@ -172,6 +210,7 @@ function parseCliArgs(argv) {
     notes: values.notes ?? null,
     reason: values.reason ?? null,
     identity,
+    provenance,
     jq: values.jq,
     silent: values.silent === true,
   };
@@ -184,8 +223,8 @@ async function run(argv) {
     return 0;
   }
 
-  const { state, notes, reason, identity } = parsed;
-  const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason, identity });
+  const { state, notes, reason, identity, provenance } = parsed;
+  const payload = buildRetrospectiveCheckpointPayload({ state, notes, reason, identity, provenance });
   const checkpointPath = path.join(resolveCheckpointRepoRoot(process.cwd()), CHECKPOINT_FILE);
   await mkdir(path.dirname(checkpointPath), { recursive: true });
   await writeFile(checkpointPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");

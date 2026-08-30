@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   RETROSPECTIVE_CHECKPOINT_STATE,
+  RETROSPECTIVE_PROVENANCE,
   RETROSPECTIVE_QUALIFYING_GATES,
   evaluateRetrospectiveGate,
   normalizeCheckpointCycleIdentity,
+  normalizeRetroProvenance,
   resolveCheckpointStateFromArtifact,
 } from "../src/loop/retrospective-checkpoint.mjs";
 
@@ -265,6 +267,8 @@ test("evaluateRetrospectiveGate: called with no arguments returns a fail-closed 
 
 const VALID_IDENTITY = { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: "abc123" };
 
+const VALID_PROVENANCE = { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" };
+
 test("normalizeCheckpointCycleIdentity: accepts a well-formed identity", () => {
   assert.deepEqual(normalizeCheckpointCycleIdentity(VALID_IDENTITY), VALID_IDENTITY);
 });
@@ -346,8 +350,8 @@ test("resolveCheckpointStateFromArtifact: stale-skipped (newer merge observed) r
   );
 });
 
-test("resolveCheckpointStateFromArtifact: matching-complete (no newer merge) resolves to COMPLETE", () => {
-  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+test("resolveCheckpointStateFromArtifact: matching-complete (no newer merge, valid fresh-context provenance) resolves to COMPLETE", () => {
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY, provenance: VALID_PROVENANCE };
   assert.equal(
     resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint: false }),
     RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE,
@@ -357,16 +361,70 @@ test("resolveCheckpointStateFromArtifact: matching-complete (no newer merge) res
 test("resolveCheckpointStateFromArtifact: complete defaults to trusted (hasNewerMergeSinceCheckpoint omitted)", () => {
   // The caller never verified recency this call (e.g. requireRetrospective
   // disabled) — nothing to compare against, so the recorded completion stands.
-  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY, provenance: VALID_PROVENANCE };
   assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE);
 });
 
 test("resolveCheckpointStateFromArtifact: stale-complete (newer merge observed) resolves to MISSING — fail-closed backstop", () => {
-  const staleArtifact = { state: "complete", completedAt: "2026-08-06T01:00:38.000Z", notes: "old cycle", identity: VALID_IDENTITY };
+  const staleArtifact = { state: "complete", completedAt: "2026-08-06T01:00:38.000Z", notes: "old cycle", identity: VALID_IDENTITY, provenance: VALID_PROVENANCE };
   assert.equal(
     resolveCheckpointStateFromArtifact(staleArtifact, { hasNewerMergeSinceCheckpoint: true }),
     RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   );
+});
+
+// ── Fresh-context provenance is mandatory for `complete` (issue #1870) ──────
+
+test("resolveCheckpointStateFromArtifact: a complete record WITHOUT provenance (legacy inline/self-authored retro) fails closed to MISSING", () => {
+  // The old inline self-review path is disallowed: a retro written by the
+  // same working context that did the work cannot be distinguished from a
+  // genuine fresh-context pass, so it fails closed.
+  const artifact = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+});
+
+test("resolveCheckpointStateFromArtifact: a complete record with inline provenance fails closed to MISSING", () => {
+  const artifact = {
+    state: "complete",
+    completedAt: "2026-08-08T00:00:00.000Z",
+    notes: "ok",
+    identity: VALID_IDENTITY,
+    provenance: { context: "inline", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" },
+  };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+});
+
+test("resolveCheckpointStateFromArtifact: a complete record with malformed/partial provenance fails closed to MISSING", () => {
+  const base = { state: "complete", completedAt: "2026-08-08T00:00:00.000Z", notes: "ok", identity: VALID_IDENTITY };
+  const badProvenances = [
+    null,
+    "fresh",
+    [],
+    { context: "fresh" },
+    { context: "fresh", seededFrom: "agent_tool_call_record" },
+    { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "   " },
+    { context: "fresh", seededFrom: "self_summary", recordSource: "tmp/retro/record.jsonl" },
+  ];
+  for (const provenance of badProvenances) {
+    assert.equal(
+      resolveCheckpointStateFromArtifact({ ...base, provenance }),
+      RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+      `expected MISSING for provenance ${JSON.stringify(provenance)}`,
+    );
+  }
+});
+
+test("resolveCheckpointStateFromArtifact: provenance does not rescue a stale complete record", () => {
+  const staleArtifact = { state: "complete", completedAt: "2026-08-06T01:00:38.000Z", notes: "old cycle", identity: VALID_IDENTITY, provenance: VALID_PROVENANCE };
+  assert.equal(
+    resolveCheckpointStateFromArtifact(staleArtifact, { hasNewerMergeSinceCheckpoint: true }),
+    RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  );
+});
+
+test("resolveCheckpointStateFromArtifact: skipped records are NOT provenance-gated (no retro ran to have provenance)", () => {
+  const artifact = { state: "skipped", skippedAt: "2026-08-08T00:00:00.000Z", reason: "trivial", identity: VALID_IDENTITY };
+  assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED);
 });
 
 test("resolveCheckpointStateFromArtifact: state 'none' resolves to NONE", () => {
@@ -375,4 +433,43 @@ test("resolveCheckpointStateFromArtifact: state 'none' resolves to NONE", () => 
 
 test("resolveCheckpointStateFromArtifact: an unrecognized state fails closed to MISSING", () => {
   assert.equal(resolveCheckpointStateFromArtifact({ state: "bogus_unknown_state" }), RETROSPECTIVE_CHECKPOINT_STATE.MISSING);
+});
+
+// ---------------------------------------------------------------------------
+// RETROSPECTIVE_PROVENANCE + normalizeRetroProvenance (issue #1870)
+// ---------------------------------------------------------------------------
+
+test("RETROSPECTIVE_PROVENANCE exports the fresh/inline contexts and the record seed source", () => {
+  assert.equal(RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH, "fresh");
+  assert.equal(RETROSPECTIVE_PROVENANCE.CONTEXT_INLINE, "inline");
+  assert.equal(RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD, "agent_tool_call_record");
+  assert.ok(Object.isFrozen(RETROSPECTIVE_PROVENANCE));
+});
+
+test("normalizeRetroProvenance: accepts a well-formed fresh-context provenance record", () => {
+  assert.deepEqual(normalizeRetroProvenance(VALID_PROVENANCE), {
+    context: "fresh",
+    seededFrom: "agent_tool_call_record",
+    recordSource: "tmp/retro/record.jsonl",
+  });
+});
+
+test("normalizeRetroProvenance: trims and case-normalizes context/seededFrom but keeps recordSource verbatim-trimmed", () => {
+  assert.deepEqual(
+    normalizeRetroProvenance({ context: " FRESH ", seededFrom: " Agent_Tool_Call_Record ", recordSource: " tmp/retro/record.jsonl " }),
+    { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" },
+  );
+});
+
+test("normalizeRetroProvenance: rejects an inline (self-authored) provenance", () => {
+  assert.equal(
+    normalizeRetroProvenance({ context: "inline", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" }),
+    null,
+  );
+});
+
+test("normalizeRetroProvenance: rejects absent/malformed/partial inputs", () => {
+  for (const bad of [undefined, null, "fresh", 42, [], { context: "fresh" }, { context: "fresh", seededFrom: "agent_tool_call_record" }, { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "" }, { context: "fresh", seededFrom: "summary_only", recordSource: "x" }]) {
+    assert.equal(normalizeRetroProvenance(bad), null, `expected null for ${JSON.stringify(bad)}`);
+  }
 });

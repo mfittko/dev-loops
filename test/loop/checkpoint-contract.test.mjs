@@ -81,6 +81,7 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
     const { code, stdout, stderr } = await runNode(
       [
         "--state", "complete", "--notes", "Retrospective documented after merge",
+        "--retro-context", "fresh", "--record-source", "tmp/retro/transcript.jsonl",
         "--repo", "mfittko/dev-loops", "--pr", "1613", "--merge-commit", VALID_SHA,
       ],
       { cwd: tempDir },
@@ -95,6 +96,11 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
     assert.equal(checkpoint.state, "complete");
     assert.equal(checkpoint.notes, "Retrospective documented after merge");
     assert.deepEqual(checkpoint.identity, { repo: "mfittko/dev-loops", prNumber: 1613, mergeCommit: VALID_SHA });
+    assert.deepEqual(checkpoint.provenance, {
+      context: "fresh",
+      seededFrom: "agent_tool_call_record",
+      recordSource: "tmp/retro/transcript.jsonl",
+    });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -257,7 +263,7 @@ test("checkpoint-contract CLI writes a checkpoint file carrying the cycle identi
 
 test("checkpoint-contract CLI rejects --state complete without a cycle identity", async () => {
   await withIsolatedCwd(async (cwd) => {
-    const { code, stderr } = await runNode(["--state", "complete", "--notes", "ok"], { cwd });
+    const { code, stderr } = await runNode(["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/record.jsonl"], { cwd });
     assert.equal(code, 1);
     assert.match(JSON.parse(stderr).error, /requires a cycle identity/i);
   });
@@ -311,6 +317,116 @@ test("checkpoint-contract CLI rejects a whitespace-only --reason for state skipp
     assert.equal(code, 1);
     assert.match(JSON.parse(stderr).error, /reason/i);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Fresh-context provenance (issue #1870) — a `complete` record MUST pin that
+// the retrospective was produced by a fresh-context, independent dispatch
+// seeded with the full agent/subagent tool-call record. An inline
+// (self-authored) retro is rejected outright; so is a complete record with
+// no provenance at all.
+// ---------------------------------------------------------------------------
+
+test("checkpoint-contract CLI rejects --state complete without --retro-context", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /--retro-context fresh/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects an inline (self-authored) retrospective outright", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "inline", "--record-source", "tmp/retro/record.jsonl", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    const parsed = JSON.parse(stderr);
+    assert.match(parsed.error, /inline/i);
+    assert.match(parsed.error, /fails the checkpoint/i);
+    // The rejection must not have written a checkpoint file.
+    const checkpointPath = path.join(cwd, ".pi", "dev-loop-retrospective-checkpoint.json");
+    await assert.rejects(readFile(checkpointPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+test("checkpoint-contract CLI rejects an unrecognized --retro-context value", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "vibes", "--record-source", "tmp/retro/record.jsonl", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /must be "fresh"/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects --state complete without --record-source", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /--record-source/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects a whitespace-only --record-source", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "   ", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /--record-source/i);
+  });
+});
+
+test("checkpoint-contract CLI rejects provenance flags with a non-complete state", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "skipped", "--reason", "trivial", "--retro-context", "fresh", "--record-source", "tmp/retro/record.jsonl"],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /only apply to --state complete/i);
+  });
+});
+
+test("buildRetrospectiveCheckpointPayload attaches a normalized provenance to complete", () => {
+  const now = new Date("2026-06-05T00:00:00.000Z");
+  const payload = buildRetrospectiveCheckpointPayload(
+    {
+      state: "complete",
+      notes: "ok",
+      provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: " tmp/retro/record.jsonl " },
+    },
+    now,
+  );
+  assert.deepEqual(payload.provenance, { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" });
+});
+
+test("buildRetrospectiveCheckpointPayload drops an invalid provenance rather than writing a partial one", () => {
+  const now = new Date("2026-06-05T00:00:00.000Z");
+  const payload = buildRetrospectiveCheckpointPayload(
+    { state: "complete", notes: "ok", provenance: { context: "inline", seededFrom: "agent_tool_call_record", recordSource: "x" } },
+    now,
+  );
+  assert.equal(payload.provenance, undefined);
+});
+
+test("buildRetrospectiveCheckpointPayload omits provenance for non-complete states even when provided", () => {
+  const now = new Date("2026-06-05T00:00:00.000Z");
+  const payload = buildRetrospectiveCheckpointPayload(
+    { state: "skipped", reason: "trivial", provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" } },
+    now,
+  );
+  assert.equal(payload.provenance, undefined);
 });
 
 // ---------------------------------------------------------------------------
