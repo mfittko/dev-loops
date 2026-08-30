@@ -190,6 +190,13 @@ Optional:
                                  dispatch units by hand before passing this flag. Either way, if the
                                  resulting count is 0, OMIT --expected-dispatch-units entirely rather
                                  than pass 0 (this parses as a POSITIVE integer and throws on 0).
+                                 The records-floor AUTHORITY for whether units were expected at all is
+                                 NOT this flag but the round's persisted request-plan artifact
+                                 (#1868): when --head-sha is given, the fan-in derives the expected
+                                 unit floor from every <gate>-<headSha>.dispatch-plan.json under
+                                 tmp/gate-context/** and FAILS CLOSED when the plan expects units but
+                                 the round recorded zero reviewer sentinels — independent of this
+                                 flag. This flag, when given, still reconciles the EXACT count.
                                  When given alongside --head-sha, the fan-in fails closed
                                  (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
                                  for the head is SHORT of it — a dispatched reviewer never ran the
@@ -295,9 +302,11 @@ Exit codes:
      render budget at minimum summary length with --ledger-out not given, or a
      GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
      (a sentinel records a divergent/missing prefix hash, the sentinel count
-     is short of --expected-dispatch-units, or a recorded reviewer prompt does
-     not lead with the round's byte-identical prefix/pointer line) — #1618,
-     #1841, or (with --resolved-angles
+     is short of --expected-dispatch-units, a recorded reviewer prompt does
+     not lead with the round's byte-identical prefix/pointer line, or the
+     round's persisted request-plan artifact expects dispatch units but the
+     round recorded zero reviewer sentinels — the #1868 records-floor) — #1618,
+     #1841, #1868, or (with --resolved-angles
      and a "clean" verdict) a resolved angle with neither a per-angle artifact
      nor a proven carried-forward entry
   2  Invalid --jq filter`.trim();
@@ -841,6 +850,70 @@ export function parseConsolidateFaninCliArgs(argv) {
   return options;
 }
 
+// ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the conductor's Phase-1
+// request-plan artifact (`<gate>-<headSha>.dispatch-plan.json` under
+// tmp/gate-context/**, written by write-gate-context.mjs) is the AUTHORITY for
+// whether this round dispatched units — not a caller-passed flag. Read every
+// persisted request plan for the reviewed head and derive the expected
+// dispatch-unit floor: the total number of pending angles across the plans'
+// requestGroups (> 0 means the round dispatched at least one unit, so zero
+// recorded evidence must fail closed).
+// Malformed/unreadable plan JSON fails closed — a corrupt artifact means the
+// enforcement authority cannot be trusted, and silently ignoring it would
+// recreate the vacuous pass it exists to prevent.
+// ---------------------------------------------------------------------------
+const REQUEST_PLAN_SUFFIX = ".dispatch-plan.json";
+
+async function readGateRequestPlansForHead(tmpRoot, headSha) {
+  const root = path.join(tmpRoot, "gate-context");
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true, recursive: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const suffix = `-${headSha}${REQUEST_PLAN_SUFFIX}`;
+  const matches = entries
+    .filter((e) => e.isFile() && e.name.endsWith(suffix) && e.name.length > suffix.length)
+    // readdir order is filesystem-dependent; sort so error messages and the
+    // derived floor stay deterministic across runs.
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const plans = [];
+  for (const e of matches) {
+    const gate = e.name.slice(0, -suffix.length);
+    // Only canonical gate plans are trusted — same posture as the
+    // briefing-prefix record reader in verify-briefing-prefixes.mjs.
+    if (!GATE_NAMES.includes(gate)) continue;
+    const dir = e.parentPath ?? root;
+    const filePath = path.join(dir, e.name);
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(filePath, "utf8"));
+    } catch (err) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" could not be read/parsed (${err instanceof Error ? err.message : String(err)}) — the request plan is the authority for this round's expected dispatch units, so a corrupt plan fails closed rather than passing vacuously`);
+    }
+    plans.push({ gate, filePath, plan: parsed });
+  }
+  return plans;
+}
+
+// Derive the round's expected dispatch-unit floor from its persisted request
+// plans: the total number of pending angles across every plan's requestGroups.
+// A plan whose groups carry no angles (an all-carried / genuinely zero-unit
+// gate) contributes 0 — the floor only applies when units were expected.
+function deriveRequestPlanExpectedUnits(plans) {
+  let total = 0;
+  for (const { plan } of plans) {
+    if (!Array.isArray(plan?.requestGroups)) continue;
+    for (const g of plan.requestGroups) {
+      if (Array.isArray(g?.angles)) total += g.angles.length;
+    }
+  }
+  return total;
+}
+
 // Validate the CLI's own fail-closed schema floor: a well-formed object with a
 // non-empty angle, a non-empty verdict, and (when findings is present as an
 // array) only recognized severities. Everything else — verdict enum value,
@@ -1047,11 +1120,27 @@ export async function consolidateGateFanin(options) {
   //     false-fail every grouped round (#1579/#1601 shipped default).
   // AC4: a head with NO sentinels at all still consolidates — offline/inline/
   // test paths where the fresh-context guard was never invoked stay
-  // byte-identical (reviewerCount === 0 → skip). Only runs when --head-sha is
-  // given (the same boundary the artifact head-stamp guard uses).
+  // byte-identical (reviewerCount === 0 → skip) — UNLESS the round's persisted
+  // request-plan artifact (#1868 records-floor) proves units were dispatched:
+  // then zero sentinels FAILS CLOSED (see the dedicated floor check below).
+  // Only runs when --head-sha is given (the same boundary the artifact head-stamp guard uses).
   if (options.headSha !== undefined) {
     const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
-    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha);
+    // Records-floor authority (#1868): derive the expected dispatch-unit floor
+    // from the persisted request-plan artifact(s) for this head — not from a
+    // caller-passed flag. --expected-dispatch-units (when also given) still
+    // reconciles the EXACT count; the plan derives whether units were expected
+    // at all.
+    const requestPlans = await readGateRequestPlansForHead(tmpRoot, options.headSha);
+    const requestPlanExpectedUnits = deriveRequestPlanExpectedUnits(requestPlans);
+    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha, requestPlanExpectedUnits);
+    // Records-floor (#1868): a round whose request plan expected dispatch units
+    // but recorded ZERO reviewer sentinels FAILS CLOSED — the vacuous pass the
+    // floor exists to prevent (an angle-first or entirely-unrecorded
+    // agent-composed dispatch is no longer invisible to the gate).
+    if (requestPlanExpectedUnits > 0 && prefixVerdict.reviewerCount === 0) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact(s) for head ${options.headSha} (${requestPlans.map((p) => p.filePath).join(", ")}) expect ${requestPlanExpectedUnits} dispatch unit(s), but the round recorded ZERO reviewer sentinels — a coordinator round that dispatched units cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs / record-dispatch-prompt-layout.mjs), then re-consolidate.`);
+    }
     if (prefixVerdict.reviewerCount > 0 && !prefixVerdict.verified) {
       throw new Error(`GATE-EXEC-BRIEFING-PREFIX verification failed for head ${options.headSha} (${prefixVerdict.reviewerCount} reviewer sentinel(s)): ${prefixVerdict.reason} — the fan-in refuses to consolidate a round whose invariant-briefing-prefix proof is broken. Re-run the offending reviewer(s), then re-consolidate.`);
     }

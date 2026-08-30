@@ -234,12 +234,26 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * back to the conservative flat check: all sentinels must share one hash.
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
+ * When `expectedDispatchUnits` is > 0 (derived by the caller from the round's
+ * persisted request-plan artifact, #1868), a round with ZERO sentinels FAILS
+ * CLOSED (the GATE-EXEC-BRIEFING-PREFIX records-floor): a coordinator round
+ * that dispatched units must record evidence — zero sentinels can no longer
+ * pass vacuously. With `expectedDispatchUnits === 0` (no plan, or a plan
+ * expecting no units) the zero-sentinel case stays a trivial pass.
+ *
  * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
  * @param {Map<string, Set<string>>|null} [gateRecords] — sha256 -> set of gates
+ * @param {number} [expectedDispatchUnits] — dispatch units the round's persisted request plan expects (0 = no floor)
  * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string, reviewerCount:number}> }}
  */
-export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
+export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expectedDispatchUnits = 0) {
   if (sentinels.length === 0) {
+    if (Number(expectedDispatchUnits) > 0) {
+      return {
+        verified: false,
+        reason: `GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted request plan expected ${expectedDispatchUnits} dispatch unit(s) but the round recorded ZERO reviewer sentinels — a coordinator round that dispatched units cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs), then re-verify.`,
+      };
+    }
     return { verified: true, reason: "no sentinels found for this round" };
   }
   const missing = sentinels.filter((s) => s.prefixHash === null).map((s) => s.scope);
@@ -347,22 +361,24 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
  * A head with no sentinels at all returns `{ verified: true, reviewerCount: 0, ... }`
  * (AC4: offline/inline/test paths where the fresh-context guard was never
  * invoked stay byte-identical — the count reconciliation in consolidate-fanin
- * treats `reviewerCount === 0` as "skip", never a failure). Does NOT validate
- * the head SHA length here (a non-40-char value simply matches zero sentinel
- * files → `reviewerCount: 0` → AC4 skip); the CLI `main` keeps the strict
- * 40-char refusal for direct invocations.
+ * treats `reviewerCount === 0` as "skip", never a failure) — UNLESS the caller
+ * derives a positive expected dispatch-unit count from the round's persisted
+ * request-plan artifact (#1868 records-floor), in which case zero sentinels
+ * returns `verified: false` with a records-floor reason.
  * @param {string} tmpRoot
  * @param {string} headSha — already lowercased/trimmed by the caller
+ * @param {number} [expectedDispatchUnits] — dispatch units the round's persisted request plan expects (0 = no floor)
  * @returns {Promise<object>}
  */
-export async function verifyBriefingPrefixesForHead(tmpRoot, headSha) {
+export async function verifyBriefingPrefixesForHead(tmpRoot, headSha, expectedDispatchUnits = 0) {
   const sentinels = await readRoundSentinels(tmpRoot, headSha);
   const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
-  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords);
+  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords, expectedDispatchUnits);
   return {
     verified: verdict.verified,
     headSha,
     reviewerCount: sentinels.length,
+    ...(Number(expectedDispatchUnits) > 0 ? { expectedDispatchUnits } : {}),
     ...(verdict.reason ? { reason: verdict.reason } : {}),
     ...(verdict.missing ? { missing: verdict.missing } : {}),
     ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
