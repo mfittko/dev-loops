@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execSync } from "node:child_process";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Writable } from "node:stream";
 
 import {
   ADR_PATH_RE,
   CONTRACT_DOC_RE,
   computeAdrTripwire,
   extractRuleModalities,
+  runCli,
+  unquoteGitPath,
   parseCheckAdrTripwireCliArgs,
   parseNameStatus,
 } from "../../scripts/loop/check-adr-tripwire.mjs";
@@ -291,6 +298,53 @@ test("rule-bearing non-contract doc whose rules were all removed trips unresolva
   assert.deepEqual(r.triggers, []);
 });
 
+test("parseNameStatus: rename rows", () => {
+  const files = parseNameStatus(ns(["R087\told-contract.md\tskills/docs/new-contract.md"]));
+  assert.deepEqual(files, [
+    { status: "R087", path: "skills/docs/new-contract.md", origPath: "old-contract.md" },
+  ]);
+});
+
+test("parseNameStatus: C-quoted tab path is unquoted, not truncated", () => {
+  const files = parseNameStatus('M\t"skills/docs/we\\tird-contract.md"\n');
+  assert.deepEqual(files, [{ status: "M", path: "skills/docs/we\tird-contract.md", origPath: null }]);
+});
+
+test("unquoteGitPath: plain paths pass through, octal and quote escapes decode", () => {
+  assert.equal(unquoteGitPath("skills/docs/plain-contract.md"), "skills/docs/plain-contract.md");
+  assert.equal(unquoteGitPath(String.raw`"skills/docs/\303\251-contract.md"`), "skills/docs/\u00e9-contract.md");
+  assert.equal(unquoteGitPath('"skills/docs/a\\"b-contract.md"'), 'skills/docs/a"b-contract.md');
+});
+
+test("rename OUT of the contract surface triggers via origPath (gate-review finding M2)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["R100\tskills/docs/old-contract.md\tskills/docs/old.md"]),
+    baseContents: { "skills/docs/old-contract.md": BASE_CONTRACT },
+    headContents: { "skills/docs/old.md": "Renamed away from contract shape.\n" },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "contract-doc" && t.path === "skills/docs/old-contract.md"));
+});
+
+test("extractRuleModalities: adjacent markers without blank line do not cross-inherit modality (gate-review finding L2)", () => {
+  const content = "<!-- rule: R-ONE -->\n<!-- rule: R-TWO -->\nYou MUST wait.\n";
+  const m = extractRuleModalities(content);
+  assert.equal(m.get("R-ONE"), null);
+  assert.equal(m.get("R-TWO"), "must");
+});
+
+test("one-side-unreadable rule-bearing doc fails closed (base readable, head absent)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\tskills/docs/planning.md"]),
+    baseContents: { "skills/docs/planning.md": BASE_CONTRACT },
+    headContents: {},
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "unresolvable-rule-scan"));
+});
+
 // ---------------------------------------------------------------------------
 // Existing ADR-shape validator surface untouched (issue AC 4) — smoke only;
 // the validator itself is not modified by this change (checked by diff).
@@ -317,4 +371,33 @@ test("parseCheckAdrTripwireCliArgs: requires --base, accepts --head/--pr-body-fi
   assert.equal(opts.head, "abc123");
   assert.equal(opts.prBodyFile, "/tmp/body.md");
   assert.throws(() => parseCheckAdrTripwireCliArgs([]));
+});
+
+// ---------------------------------------------------------------------------
+// runCli: a block exits non-zero (gate-review finding M1) — fail-closed at
+// the tool's own CLI surface, not just the programmatic API.
+// ---------------------------------------------------------------------------
+
+test("runCli: block outcome exits 1 and reports ok:false", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-cli-block-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(path.join(fixture, "skills/docs"), { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t && echo base > base.md && git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, "skills/docs/new-contract.md"), "# New contract\n\nSome prose.\n");
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const chunks = [];
+    const stdout = new Writable({ write(c, _e, cb) { chunks.push(c); cb(); } });
+    const stderr = new Writable({ write(c, _e, cb) { chunks.push(c); cb(); } });
+    await runCli(["--base", "base", "--head", "HEAD"], { stdout, stderr, repoRoot: fixture });
+    const exitCode = process.exitCode;
+    process.exitCode = undefined;
+    assert.equal(exitCode, 1);
+    const payload = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(payload.ok, false);
+    assert.equal(payload.outcome, "block");
+    assert.equal(payload.error, "adr_tripwire_block");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 });

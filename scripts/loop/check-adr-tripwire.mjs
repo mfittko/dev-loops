@@ -39,7 +39,6 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: check-adr-tripwire.mjs --base <ref> [--head <ref>] [--pr-body-file <path>]
@@ -59,9 +58,15 @@ Optional:
   --pr-body-file <path> File holding the PR body (waiver surface); default:
                         no body — a waiver can then never be honored
 
-Output (stdout, JSON):
+ * Exit codes:
+ *   0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
+ *   1  block — a decision-shaped surface was touched without an ADR or waiver
+ *   2  argument/usage error
+ *
+ * Output (stdout, JSON):
   {
-    "ok": true,
+    "ok": true|false,          // false on a block — the CLI exits 1 on a block,
+                               // 0 on pass, 2 on a usage error (fail-closed)
     "outcome": "pass"|"block",
     "satisfiedBy": "adr"|"waiver"|null,
     "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan", "path": "...", ... }],
@@ -94,6 +99,9 @@ function isSkillsDocsMarkdown(p) {
 // ---------------------------------------------------------------------------
 
 const RULE_MARKER_RE = /<!--\s*rule:\s*([A-Z][A-Z0-9-]*)\s*-->/gu;
+// Non-global sibling for boolean line tests — a global regex's .test()
+// advances lastIndex across calls and corrupts subsequent results.
+const RULE_MARKER_LINE_RE = /<!--\s*rule:\s*[A-Z][A-Z0-9-]*\s*-->/u;
 const MODALITY_RE = /\b(MUST NOT|SHALL NOT|SHOULD NOT|MAY NOT|MUST|SHALL|SHOULD|MAY)\b/u;
 
 function modalityFamily(keyword) {
@@ -125,7 +133,7 @@ export function extractRuleModalities(content) {
         family = modalityFamily(km[1]);
       } else {
         for (let j = i + 1; j < Math.min(i + 4, lines.length); j += 1) {
-          if (lines[j].trim() === "") break;
+          if (lines[j].trim() === "" || RULE_MARKER_LINE_RE.test(lines[j])) break;
           const next = MODALITY_RE.exec(lines[j]);
           if (next) { family = modalityFamily(next[1]); break; }
         }
@@ -148,12 +156,41 @@ export function parseNameStatus(output) {
     const parts = line.split("\t");
     const status = parts[0] ?? "";
     if (parts.length >= 3) {
-      files.push({ status, path: parts[2], origPath: parts[1] });
+      files.push({ status, path: unquoteGitPath(parts[2]), origPath: unquoteGitPath(parts[1]) });
     } else if (parts.length === 2 && parts[1] !== "") {
-      files.push({ status, path: parts[1], origPath: null });
+      files.push({ status, path: unquoteGitPath(parts[1]), origPath: null });
     }
   }
   return files;
+}
+
+/**
+ * Undo git's C-quoting of non-plain paths (a leading `"` with backslash
+ * escapes — \t, \n, \" , \\, and \NNN octal). Plain paths pass through
+ * unchanged; a quoted path that survives unquoting unchanged is impossible
+ * (git only quotes when quoting is REQUIRED), so a decode bug cannot invert
+ * into a silent false-negative on a plain path.
+ */
+export function unquoteGitPath(p) {
+  if (typeof p !== "string" || !p.startsWith("\"") || !p.endsWith("\"") || p.length < 2) return p;
+  const body = p.slice(1, -1);
+  // git C-quotes raw BYTES: a multi-byte UTF-8 char arrives as a run of \NNN
+  // octal escapes, so decode through a byte buffer (named escapes become
+  // their single code points; everything else passes through as UTF-8).
+  const bytes = [];
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] === "\\") {
+      const next = body[i + 1];
+      if (next === "t") { bytes.push(0x09); i += 1; continue; }
+      if (next === "n") { bytes.push(0x0a); i += 1; continue; }
+      if (next === "\\") { bytes.push(0x5c); i += 1; continue; }
+      if (next === '"') { bytes.push(0x22); i += 1; continue; }
+      const oct = /^([0-7]{3})/.exec(body.slice(i + 1));
+      if (oct) { bytes.push(parseInt(oct[1], 8)); i += 3; continue; }
+    }
+    for (const b of Buffer.from(body[i], "utf8")) bytes.push(b);
+  }
+  return Buffer.from(bytes).toString("utf8");
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +217,11 @@ export function computeAdrTripwire({
   const triggers = [];
 
   for (const file of files) {
-    if (CONTRACT_DOC_RE.test(file.path)) {
-      triggers.push({ type: "contract-doc", path: file.path });
+    if (CONTRACT_DOC_RE.test(file.path) || (file.origPath && CONTRACT_DOC_RE.test(file.origPath))) {
+      // origPath too: a rename OUT of the surface (skills/docs/x-contract.md
+      // → skills/docs/x.md) deletes a contract path — as decision-shaped as
+      // an in-place edit and must trip the same trigger.
+      triggers.push({ type: "contract-doc", path: file.origPath && CONTRACT_DOC_RE.test(file.origPath) ? file.origPath : file.path });
     }
     if (file.path === GATE_CONFIG_PATH) {
       triggers.push({ type: "gate-config", path: file.path });
@@ -294,7 +334,10 @@ export async function evaluateAdrTripwire({
 } = {}) {
   assertPlausibleRef(base, "--base");
   assertPlausibleRef(head, "--head");
-  const gitEnv = gitEnvWithoutDirOverrides(env);
+  // Inline the dir-override strip (the shared gitEnvWithoutDirOverrides
+  // helper reads process.env directly and cannot honor an injected env) so
+  // the env param here actually reaches the git subprocesses.
+  const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
   const nameStatusOutput = runGit(["diff", "--name-status", `${base}...${head}`], { repoRoot, env: gitEnv });
   const files = parseNameStatus(nameStatusOutput);
   const baseContents = {};
@@ -352,9 +395,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     prBody = readFileSync(options.prBodyFile, "utf8");
   }
   const result = await evaluateAdrTripwire({ base: options.base, head: options.head, prBody, repoRoot, env });
-  const payload = result.outcome === "pass"
-    ? { ...result, ok: true }
-    : { ...result, ok: true, error: "adr_tripwire_block" };
+  const payload = { ...result, ok: result.outcome === "pass" };
+  if (result.outcome !== "pass") payload.error = "adr_tripwire_block";
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, stdout, stderr });
   return payload;
 }
