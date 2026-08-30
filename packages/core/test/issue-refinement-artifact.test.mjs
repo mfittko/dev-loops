@@ -419,3 +419,51 @@ test("#1866 an unresolved linked doc falls back to AC/DoD artifacts when present
   assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
   assert.equal(artifact.finding, null);
 });
+
+test("#1866 runPickupRefinementGate anchors linked-doc resolution to the repoRoot option, not ambient cwd", async () => {
+  const { runPickupRefinementGate } = await import("../src/loop/issue-refinement-artifact.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const pathMod = await import("node:path");
+
+  const repoRoot = mkdtempSync(pathMod.join(tmpdir(), "refine-anchor-"));
+  const docDir = pathMod.join(repoRoot, "tmp", "refinement");
+  mkdirSync(docDir, { recursive: true });
+  writeFileSync(pathMod.join(docDir, "anchor-plan.md"), "# plan\n");
+  const body =
+    "## Plan\n\nSee tmp/refinement/anchor-plan.md for details.\n" + NGOALS;
+  const runChild = async () => ({
+    code: 0,
+    stdout: JSON.stringify({ body }),
+    stderr: "",
+  });
+
+  try {
+    // With the repoRoot anchor the doc resolves even though it does not exist
+    // relative to the ambient cwd (the test runner's cwd).
+    const decision = await runPickupRefinementGate({
+      issueNumber: 532,
+      repo: "o/r",
+      env: {},
+      runChild,
+      repoRoot,
+    });
+    assert.equal(decision.action, "enqueue");
+
+    // Without an anchor that points at the doc's root, the doc does not
+    // resolve and the gate blocks (fail-closed), never a silent pass.
+    await assert.rejects(
+      () =>
+        runPickupRefinementGate({
+          issueNumber: 532,
+          repo: "o/r",
+          env: {},
+          runChild,
+          repoRoot: mkdtempSync(pathMod.join(tmpdir(), "refine-empty-")),
+        }),
+      (err) => err.code === "MISSING_REFINEMENT_ARTIFACT",
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});

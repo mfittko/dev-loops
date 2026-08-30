@@ -517,7 +517,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   let effectiveTargetOption = targetOption;
   let effectiveTargetStatus = targetStatus;
   if (issueNumber !== null && targetStatus === nextUpColumn) {
-    const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: !!args.auto });
+    const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: !!args.auto, repoRoot: cwd });
     if (decision.action === "divert") {
       const parkedColumn = nonSuccessBoardColumn(cwd);
       if (parkedColumn === nextUpColumn) {

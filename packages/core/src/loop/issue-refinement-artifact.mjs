@@ -13,6 +13,7 @@
  * issue body (see `MISSING_EXPLICIT_NON_GOALS_FINDING` below).
  */
 import { existsSync } from "node:fs";
+import path from "node:path";
 
 /**
  * This module owns:
@@ -770,7 +771,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
  * @param {{ issueNumber: number, repo: string, env: object, runChild: Function, auto?: boolean }} input
  * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
  */
-export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false }) {
+export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false, repoRoot = null }) {
   const bodyResult = await runChild(
     "gh",
     ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
@@ -788,9 +789,16 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
   }
   const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
   // #1866: a linked refinement doc satisfies the gate only when it actually
-  // resolves. Paths follow the `tmp/refinement/*.md` convention, relative to
-  // the caller's working directory (the repo root).
-  const artifact = detectIssueRefinementArtifact({ body, issueNumber, resolveLinkedDoc: (p) => existsSync(p) });
+  // resolves. Paths follow the `tmp/refinement/*.md` convention and are
+  // anchored to the caller's repo root (`repoRoot` option, falling back to
+  // process.cwd()) — never the ambient cwd of whichever subdirectory the
+  // gate happened to run from.
+  const docAnchor = repoRoot ?? process.cwd();
+  const artifact = detectIssueRefinementArtifact({
+    body,
+    issueNumber,
+    resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+  });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto });
   if (decision.action === "block") {
     throw Object.assign(new Error(decision.reason), {

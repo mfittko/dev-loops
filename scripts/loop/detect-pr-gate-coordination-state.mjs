@@ -530,6 +530,11 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
 // unticked-AC check (#1621) without re-deriving it.
 async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild }) {
   const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  // #1866 follow-up: anchor linked refinement doc resolution to the repo root,
+  // never the ambient cwd — cwd is untrusted in this script (children run with
+  // cwd: repoRoot) and a subdirectory invocation would false-block refined
+  // issues whose tmp/refinement/*.md docs resolve only from the root.
+  const docAnchor = resolveRepoRoot(process.cwd());
   const evaluated = [];
   for (const issue of linkedIssues) {
     const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
@@ -539,10 +544,14 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
     }
     // #1866: a linked refinement doc satisfies the artifact check only when it
     // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
-    // relative to the caller's working directory (the repo root).
+    // anchored to the repo root (see docAnchor above).
     evaluated.push({
       issue,
-      artifact: detectIssueRefinementArtifact({ body, issueNumber: issue, resolveLinkedDoc: (p) => existsSync(p) }),
+      artifact: detectIssueRefinementArtifact({
+        body,
+        issueNumber: issue,
+        resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+      }),
     });
   }
   const refinedIssues = evaluated
