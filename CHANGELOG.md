@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Enforce CHANGELOG completeness at the PR seam (#1864).** `scripts/docs/validate-changelog-completeness.mjs`, wired into `test:docs`, fails closed when a notable PR (conventional `feat`/`fix` commit subject, or a diff touching code per the shared `classifyFile()` change classifier) adds no list item under `## Unreleased` in `CHANGELOG.md`. Base resolution follows the decision-record validator's merge-base pattern; the CI `test:docs` leg already fetches the base branch, so the check blocks the PR. The release-time empty-section extractor remains the second line of defense.
+
 ## 1.0.0-rc.7 - 2026-08-27
 
 ### Security
