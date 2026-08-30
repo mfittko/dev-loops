@@ -264,10 +264,11 @@ export function detectLinkedRefinementDoc(body) {
 
   const pathMatch = /(?:^|\s|[`(\[<])(tmp\/refinement\/[A-Za-z0-9._/\-]+\.md)\b/u.exec(body);
   if (pathMatch) {
-    // Containment guard: reject '..' segments so the new fs-probe wiring can
-    // never be used as a filesystem existence oracle outside tmp/refinement
+    // Containment guard: reject actual '..' path segments (not benign
+    // double-dot filenames) so the new fs-probe wiring can never be used as a
+    // filesystem existence oracle outside tmp/refinement
     // (e.g. `tmp/refinement/../../docs/some-existing.md`).
-    if (pathMatch[1].includes("..")) {
+    if (pathMatch[1].split("/").some((segment) => segment === "..")) {
       return { found: false, path: null, reason: "path-escapes-refinement-dir" };
     }
     return { found: true, path: pathMatch[1], reason: "explicit-path" };
@@ -283,8 +284,9 @@ export function detectLinkedRefinementDoc(body) {
   if (refinementSection) {
     const inlinePath = /(?:^|\s)(tmp\/refinement\/[^\s)`'"]+\.md)\b/u.exec(refinementSection.bodyLines.join("\n"));
     if (inlinePath) {
-      // Containment guard: same '..' rejection as the explicit-path branch.
-      if (inlinePath[1].includes("..")) {
+      // Containment guard: same segment-based '..' rejection as the
+      // explicit-path branch.
+      if (inlinePath[1].split("/").some((segment) => segment === "..")) {
         return { found: false, path: null, reason: "path-escapes-refinement-dir" };
       }
       return { found: true, path: inlinePath[1], reason: "refinement-section-path" };

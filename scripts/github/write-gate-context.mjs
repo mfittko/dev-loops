@@ -40,7 +40,7 @@ import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@de
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { MISSING_EXPLICIT_NON_GOALS_FINDING, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { REFINEMENT_SOURCE, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -2556,13 +2556,16 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * changed files with size guards + a stripped/truncated manifest. Reviewers are
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
-// #1866 review-gate coverage guard: an AC checklist remains its own
-// spec-of-record even when the refinement predicate's ONLY miss is the
-// missing_explicit_non_goals finding, so the review-gate angle resolver must
-// not lose the acceptance-criteria angle for such bodies.
+// #1866 review-gate coverage guard: hasAcChecklist must reflect "an AC
+// checklist exists" (artifact source = issue-body AC), independent of the
+// Non-goals floor the predicate also enforces, so a PR body with a real AC
+// checklist but no Non-goals still keeps the acceptance-criteria angle.
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
-  return artifact.hasACs || artifact.finding === MISSING_EXPLICIT_NON_GOALS_FINDING;
+  // Exact semantics: an AC checklist exists only when the artifact source IS
+  // the issue-body AC checklist. A missing_explicit_non_goals finding on a
+  // DoD-only or linked-doc-only body does NOT imply an AC checklist.
+  return artifact.source === REFINEMENT_SOURCE.ISSUE_BODY_AC;
 }
 
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {

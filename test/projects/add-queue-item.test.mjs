@@ -915,9 +915,12 @@ describe("add-queue-item", () => {
 
     it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
       // #1866: the enqueue gate now verifies the linked refinement doc resolves
-      // (existsSync, cwd-relative) — create the referenced doc first.
+      // (existsSync, cwd-relative) — create the referenced doc first. Cleanup
+      // runs in a finally block so a failed assertion never leaks the fixture.
+      const refinementDoc = "tmp/refinement/10-plan.md";
       mkdirSync("tmp/refinement", { recursive: true });
-      writeFileSync("tmp/refinement/10-plan.md", "# Plan\n", "utf-8");
+      writeFileSync(refinementDoc, "# Plan\n", "utf-8");
+      try {
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -935,8 +938,10 @@ describe("add-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement.refined, true);
-      rmSync("tmp/refinement/10-plan.md");
-      rmSync("tmp/refinement", { recursive: true });
+      } finally {
+        rmSync(refinementDoc, { force: true });
+        rmSync("tmp/refinement", { recursive: true, force: true });
+      }
     });
 
     it("skips the gate for a non-pickup target column (default Backlog)", async () => {
