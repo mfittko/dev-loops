@@ -36,7 +36,7 @@ const CONVENTIONAL_TYPES = new Set([
   "build",
 ]);
 
-const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]*\))?!?:\s+\S/u;
+const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]+\))?!?:\s+\S/u;
 
 /**
  * Parse the conventional-commit type from a commit subject line.
@@ -97,9 +97,11 @@ export function isNotableChange({ commitSubjects, files }) {
 
 /**
  * Core check: a notable change must add at least one list item under
- * `## Unreleased` relative to the base. "Added" means the head Unreleased
- * section contains an item text absent from the base section — editing an
- * existing item without adding a new one does not satisfy the requirement.
+ * `## Unreleased` relative to the base. "Added" is endpoint-based: the head
+ * Unreleased section contains an item text absent from the base section.
+ * Consequence: a reworded item (new text absent from base) satisfies the
+ * requirement, while keeping the exact item text does not — intermediate
+ * churn within the PR is not observed.
  *
  * @param {{
  *   baseChangelog: string,

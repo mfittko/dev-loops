@@ -50,6 +50,10 @@ describe("parseConventionalType", () => {
     assert.equal(parseConventionalType("chore(release): v1.0.0"), "chore");
     assert.equal(parseConventionalType("docs: clarify contract"), "docs");
   });
+  it("rejects an empty scope (guard parity: scope must be non-empty)", () => {
+    assert.equal(parseConventionalType("feat(): x"), null);
+    assert.equal(parseConventionalType("fix(): x"), null);
+  });
   it("returns null for non-conventional subjects", () => {
     assert.equal(parseConventionalType("Merge pull request #1864"), null);
     assert.equal(parseConventionalType("random text"), null);
