@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -95,6 +96,15 @@ export function buildRetrospectiveCheckpointPayload({ state, notes = null, reaso
   const normalizedIdentity = identity != null ? normalizeCheckpointCycleIdentity(identity) : null;
   const identityField = normalizedIdentity ? { identity: normalizedIdentity } : {};
   const normalizedProvenance = provenance != null ? normalizeRetroProvenance(provenance) : null;
+  // Fail closed at WRITE time too: silently dropping an invalid provenance
+  // would let a programmatic caller write a `complete` record that only fails
+  // closed at read time, with no signal at the write. A null provenance
+  // (absent) stays the CLI's legitimate "not provided" shape — the CLI itself
+  // rejects `complete` without provenance, but the payload builder stays
+  // permissive about absence for direct callers, mirroring identity handling.
+  if (provenance != null && normalizedProvenance === null) {
+    throw new Error(`Invalid retrospective provenance for state "complete": must pin a fresh-context pass over the agent/subagent tool-call record (RETRO-FRESH-CONTEXT-MANDATORY)`);
+  }
   const provenanceField = normalizedProvenance ? { provenance: normalizedProvenance } : {};
   if (state === "complete") return { state, completedAt: timestamp, notes, ...identityField, ...provenanceField };
   if (state === "skipped") return { state, skippedAt: timestamp, reason, ...identityField };
@@ -147,31 +157,6 @@ function parseCliArgs(argv) {
     throw parseError('state "skipped" requires --reason');
   }
 
-  // Fresh-context provenance is mandatory for `complete` (issue #1870): the
-  // retro must have been produced by a fresh-context, independent dispatch
-  // seeded with the full agent/subagent tool-call record. An inline
-  // (self-authored) retro is rejected outright, and so is a complete record
-  // with no provenance at all — the reader fails closed on both.
-  let provenance = null;
-  if (state === "complete") {
-    const retroContext = values["retro-context"]?.trim().toLowerCase();
-    if (!retroContext) {
-      throw parseError('state "complete" requires --retro-context fresh (RETRO-FRESH-CONTEXT-MANDATORY: the retrospective must be a fresh-context, independent pass over the tool-call record — an inline self-authored retro fails the checkpoint)');
-    }
-    if (retroContext === RETROSPECTIVE_PROVENANCE.CONTEXT_INLINE) {
-      throw parseError('retro-context "inline" is rejected (RETRO-FRESH-CONTEXT-MANDATORY): an inline, self-authored retrospective fails the checkpoint. Dispatch a fresh-context pass seeded with the full tool-call record, then record with --retro-context fresh');
-    }
-    if (retroContext !== RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH) {
-      throw parseError(`--retro-context must be "${RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH}" (got "${retroContext}")`);
-    }
-    if (!values["record-source"]?.trim()) {
-      throw parseError('state "complete" requires --record-source (RETRO-FRESH-CONTEXT-MANDATORY: the path of the agent/subagent tool-call record the fresh-context retro was seeded with)');
-    }
-    provenance = { context: RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH, seededFrom: RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD, recordSource: values["record-source"].trim() };
-  } else if (values["retro-context"] !== undefined || values["record-source"] !== undefined) {
-    throw parseError("--retro-context/--record-source only apply to --state complete");
-  }
-
   const mergeCommit = values["merge-commit"];
   const hasIdentityFlag = values.repo !== undefined || values.pr !== undefined || mergeCommit !== undefined;
   if (hasIdentityFlag && state === "none") {
@@ -203,6 +188,55 @@ function parseCliArgs(argv) {
     if (normalizeCheckpointCycleIdentity(identity) === null) {
       throw parseError("--repo, --pr, and --merge-commit must form a valid cycle identity");
     }
+  }
+
+  // Fresh-context provenance validation for `complete` — runs after the
+  // identity block above so identity errors take precedence (issue #1870,
+  // RETRO-FRESH-CONTEXT-MANDATORY: an inline self-authored retro is rejected
+  // outright, and so is a complete record with no provenance at all — the
+  // reader fails closed on both).
+  let provenance = null;
+  if (state === "complete") {
+    const retroContext = values["retro-context"]?.trim().toLowerCase();
+    if (!retroContext) {
+      throw parseError('state "complete" requires --retro-context fresh (RETRO-FRESH-CONTEXT-MANDATORY: the retrospective must be a fresh-context, independent pass over the tool-call record — an inline self-authored retro fails the checkpoint)');
+    }
+    if (retroContext === RETROSPECTIVE_PROVENANCE.CONTEXT_INLINE) {
+      throw parseError('retro-context "inline" is rejected (RETRO-FRESH-CONTEXT-MANDATORY): an inline, self-authored retrospective fails the checkpoint. Dispatch a fresh-context pass seeded with the full tool-call record, then record with --retro-context fresh');
+    }
+    if (retroContext !== RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH) {
+      throw parseError(`--retro-context must be "${RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH}" (got "${retroContext}")`);
+    }
+    if (!values["record-source"]?.trim()) {
+      throw parseError('state "complete" requires --record-source (RETRO-FRESH-CONTEXT-MANDATORY: the path of the agent/subagent tool-call record the fresh-context retro was seeded with)');
+    }
+    // The record must actually exist and carry content: a retro attested
+    // against a record that does not exist is rejected at write time rather
+    // than shipping an unverifiable provenance pointer.
+    const recordSource = values["record-source"].trim();
+    const recordPath = path.isAbsolute(recordSource) ? recordSource : path.resolve(process.cwd(), recordSource);
+    let recordStat = null;
+    try {
+      recordStat = statSync(recordPath);
+    } catch {
+      recordStat = null;
+    }
+    if (!recordStat?.isFile() || recordStat.size === 0) {
+      throw parseError(`--record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordSource}`);
+    }
+    // Delegate shape ownership to the core normalizer — the CLI validates the
+    // two flag values above, but never hand-builds the canonical provenance
+    // object. Values are pre-validated, so a null result here is unreachable.
+    provenance = normalizeRetroProvenance({
+      context: retroContext,
+      seededFrom: RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD,
+      recordSource,
+    });
+    if (provenance === null) {
+      throw parseError("internal error: validated provenance failed normalization");
+    }
+  } else if (values["retro-context"] !== undefined || values["record-source"] !== undefined) {
+    throw parseError("--retro-context/--record-source only apply to --state complete");
   }
 
   return {

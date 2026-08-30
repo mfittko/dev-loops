@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -78,6 +78,8 @@ test("buildRetrospectiveCheckpointPayload writes none payload without timestamp"
 test("checkpoint-contract CLI writes checkpoint file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-test-"));
   try {
+    await mkdir(path.join(tempDir, "tmp", "retro"), { recursive: true });
+    await writeFile(path.join(tempDir, "tmp", "retro", "transcript.jsonl"), "tool-call record line\n", "utf8");
     const { code, stdout, stderr } = await runNode(
       [
         "--state", "complete", "--notes", "Retrospective documented after merge",
@@ -327,6 +329,23 @@ test("checkpoint-contract CLI rejects a whitespace-only --reason for state skipp
 // no provenance at all.
 // ---------------------------------------------------------------------------
 
+test("checkpoint-contract CLI rejects a --record-source that does not resolve to an existing non-empty file", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    for (const badSource of ["tmp/retro/missing-record.jsonl", "tmp/retro/empty-record.jsonl"]) {
+      if (badSource.endsWith("empty-record.jsonl")) {
+        await mkdir(path.join(cwd, "tmp", "retro"), { recursive: true });
+        await writeFile(path.join(cwd, "tmp", "retro", "empty-record.jsonl"), "", "utf8");
+      }
+      const { code, stderr } = await runNode(
+        ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", badSource, "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+        { cwd },
+      );
+      assert.equal(code, 1, `expected rejection for --record-source ${badSource}`);
+      assert.match(JSON.parse(stderr).error, /existing, non-empty file/i);
+    }
+  });
+});
+
 test("checkpoint-contract CLI rejects --state complete without --retro-context", async () => {
   await withIsolatedCwd(async (cwd) => {
     const { code, stderr } = await runNode(
@@ -390,7 +409,7 @@ test("checkpoint-contract CLI rejects a whitespace-only --record-source", async 
 test("checkpoint-contract CLI rejects provenance flags with a non-complete state", async () => {
   await withIsolatedCwd(async (cwd) => {
     const { code, stderr } = await runNode(
-      ["--state", "skipped", "--reason", "trivial", "--retro-context", "fresh", "--record-source", "tmp/retro/record.jsonl"],
+      ["--state", "none", "--retro-context", "fresh", "--record-source", "tmp/retro/record.jsonl"],
       { cwd },
     );
     assert.equal(code, 1);
@@ -411,13 +430,18 @@ test("buildRetrospectiveCheckpointPayload attaches a normalized provenance to co
   assert.deepEqual(payload.provenance, { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" });
 });
 
-test("buildRetrospectiveCheckpointPayload drops an invalid provenance rather than writing a partial one", () => {
+test("buildRetrospectiveCheckpointPayload throws on an invalid provenance instead of writing a partial one", () => {
   const now = new Date("2026-06-05T00:00:00.000Z");
-  const payload = buildRetrospectiveCheckpointPayload(
-    { state: "complete", notes: "ok", provenance: { context: "inline", seededFrom: "agent_tool_call_record", recordSource: "x" } },
-    now,
+  // Fail closed at WRITE time: a programmatic caller passing an inline/invalid
+  // provenance must not get a silently-dropped (provenance-less) complete
+  // record that only fails closed at read time with no write signal.
+  assert.throws(
+    () => buildRetrospectiveCheckpointPayload(
+      { state: "complete", notes: "ok", provenance: { context: "inline", seededFrom: "agent_tool_call_record", recordSource: "x" } },
+      now,
+    ),
+    /Invalid retrospective provenance/,
   );
-  assert.equal(payload.provenance, undefined);
 });
 
 test("buildRetrospectiveCheckpointPayload omits provenance for non-complete states even when provided", () => {

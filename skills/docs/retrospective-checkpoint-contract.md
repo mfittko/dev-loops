@@ -9,10 +9,10 @@ A qualifying retrospective MUST be produced by a **fresh-context, independent di
 
 An **inline, self-authored retrospective** — written by the same working/session context that did the work, from its own self-narrative — is **disallowed and fails the checkpoint**. A self-review reflects the working agent's own blind spots back at it: it validates consistency, not conformance, and cannot see a systematic error it itself committed (e.g. a uniformly-wrong PR template raises no anomaly signal to a self-referential reflection).
 
-The requirement is pinned by the **dispatch + write mechanism**, not convention:
+The requirement is pinned by the **write mechanism**, not convention: the CLI rejects an inline retro outright and the read side fails closed on every record the CLI could not have produced. The dispatch half (point 1) is agent discipline (`LOCAL-RETRO-FRESH-CONTEXT-DISPATCH`, `enforcement: "agent"`) — provenance is self-attested at write time, so a determined working session could self-author a retro and type `--retro-context fresh` regardless; the durable guarantee is that no inline/legacy record passes the checkpoint, not that the attestation itself is verifiable.
 
 1. the retro pass is dispatched as a fresh-context subagent (no inherited working/session context or self-narrative) with the record path as its primary input;
-2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with;
+2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with; `--record-source` MUST resolve (from the invocation cwd; absolute paths allowed) to an existing, non-empty file, so a retro attested against a record that does not exist is rejected at write time;
 3. the durable artifact carries that provenance, and the pure resolver (`resolveCheckpointStateFromArtifact`) treats a `complete` record whose `provenance` does not pin a fresh-context pass over the record as `MISSING` — fail-closed, including every legacy inline retro.
 
 Provenance shape:

@@ -78,8 +78,8 @@ export const RETROSPECTIVE_PROVENANCE = Object.freeze({
  * Normalizes a retrospective provenance record from a durable checkpoint
  * artifact. Returns the normalized provenance only when it pins a valid
  * fresh-context pass over the full tool-call record:
- * - `context` must be exactly "fresh" (an "inline"/self-authored retro is
- *   rejected — it fails closed, never accepted)
+ * - `context` must normalize to "fresh" (trimmed, case-insensitive; an
+ *   "inline"/self-authored retro is rejected — it fails closed, never accepted)
  * - `seededFrom` must be exactly "agent_tool_call_record" (the retro audited
  *   the cycle's actual behavior, not a summary)
  * - `recordSource` must be a non-blank string (the transcript/journal path
