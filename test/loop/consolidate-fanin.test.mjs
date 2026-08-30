@@ -3129,6 +3129,186 @@ test("parseConsolidateFaninCliArgs parses --tmp-root", () => {
 });
 
 // ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted
+// request-plan artifact (<gate>-<headSha>.dispatch-plan.json under
+// tmp/gate-context/**) is the AUTHORITY for expected dispatch units. A round
+// whose plan expects units but records ZERO sentinels fails closed (the
+// vacuous-pass residual from #1468); a genuinely zero-unit round does not.
+// ---------------------------------------------------------------------------
+
+async function writeGateRequestPlan(tmpRoot, gate, headSha, plan) {
+  const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${gate}-${headSha}.dispatch-plan.json`), `${JSON.stringify(plan)}\n`, "utf8");
+}
+
+// AC (vacuous-pass-now-fails): the plan expects 2 pending angles but the round
+// recorded zero sentinels and zero dispatch-prompt records — the exact
+// coordinator-round shape #1868 closes. Mutation: revert the floor check and
+// this test fails (the vacuous pass returns).
+test("#1868: a round whose request plan expects units but recorded ZERO sentinels fails closed (records-floor)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: ["coverage", "correctness"] }],
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX records-floor (#1868)")
+            && /pends 2 pending angle\(s\)/.test(err.message)
+            && /ZERO reviewer sentinels/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC (compliant-passes): the plan expects units and the round recorded sentinels
+// with a matching gate-record hash — consolidates clean, unchanged.
+test("#1868: a compliant round (plan expects units, sentinels recorded with matching hashes) still consolidates", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: ["coverage", "correctness"] }],
+        });
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC (zero-unit-no-false-fail): an all-carried / genuinely zero-unit gate has
+// a plan whose requestGroups carry no angles — the floor must NOT fire.
+test("#1868: a genuinely zero-unit gate (plan with no pending angles, zero sentinels) is not forced to fail", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [],
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// The floor is derived from the PERSISTED plan artifact, not a caller flag: a
+// caller passing a positive --expected-dispatch-units cannot create a floor
+// where no plan exists (that stays the exact-count reconciliation only), and
+// conversely the plan floor applies with NO flag at all (covered by the first
+// test, which passes no expectedDispatchUnits).
+test("#1868: with no persisted request plan, zero sentinels still consolidate (floor is plan-derived, not flag-derived)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// A CORRUPT plan artifact cannot be silently ignored: the plan is the
+// enforcement authority, so unparseable JSON fails closed.
+test("#1868: an unparseable persisted request-plan artifact fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        const dirPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+        await mkdir(dirPath, { recursive: true });
+        await writeFile(path.join(dirPath, `draft_gate-${HEAD_A}.dispatch-plan.json`), "{not json", "utf8");
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /could not be read\/parsed/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// A parseable plan whose SHAPE is drifted fails closed too — the plan is the
+// enforcement authority, never silently ignorable (#1868 review finding).
+test("#1868: a shape-drifted (non-array requestGroups) request-plan artifact fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: "drifted",
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array requestGroups/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1868: a requestGroup with a non-array angles field fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: "drifted" }],
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array angles field/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #1618 record-matching path: when on-disk per-gate briefing-prefix records
 // exist, consolidate-fanin's verifier exercises the record-matching branch
 // (not only the flat fallback the tests above cover). A sentinel whose hash

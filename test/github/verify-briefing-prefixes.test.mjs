@@ -66,6 +66,19 @@ test("evaluateBriefingPrefixes: zero sentinels is trivially verified (nothing to
   assert.deepEqual(evaluateBriefingPrefixes([]), { verified: true, reason: "no sentinels found for this round" });
 });
 
+// Records-floor (#1868): when the round's request plan expected dispatch units,
+// zero sentinels is a vacuous pass and must FAIL closed — not verify trivially.
+test("evaluateBriefingPrefixes: zero sentinels with expected dispatch units FAILS closed (records-floor #1868)", () => {
+  const result = evaluateBriefingPrefixes([], null, 2);
+  assert.equal(result.verified, false);
+  assert.ok(/records-floor/i.test(result.reason));
+  assert.ok(result.reason.includes("2"));
+});
+
+test("evaluateBriefingPrefixes: zero sentinels with expectedDispatchUnits 0 stays trivially verified (zero-unit gate, no false-fail)", () => {
+  assert.deepEqual(evaluateBriefingPrefixes([], null, 0), { verified: true, reason: "no sentinels found for this round" });
+});
+
 test("evaluateBriefingPrefixes: a single HASHED sentinel verifies (nothing to mismatch)", () => {
   const one = evaluateBriefingPrefixes([{ scope: "a", prefixHash: "h1" }]);
   assert.equal(one.verified, true);
