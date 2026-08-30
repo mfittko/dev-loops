@@ -26,6 +26,7 @@ import { readSuppressionMarker } from "./_post-convergence-review-suppression.mj
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -536,7 +537,13 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       evaluated.push({ issue, artifact: null });
       continue;
     }
-    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
+    // #1866: a linked refinement doc satisfies the artifact check only when it
+    // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
+    // relative to the caller's working directory (the repo root).
+    evaluated.push({
+      issue,
+      artifact: detectIssueRefinementArtifact({ body, issueNumber: issue, resolveLinkedDoc: (p) => existsSync(p) }),
+    });
   }
   const refinedIssues = evaluated
     .filter((e) => e.artifact && e.artifact.hasACs === true)

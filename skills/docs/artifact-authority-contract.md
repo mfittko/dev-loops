@@ -23,6 +23,7 @@ Artifacts:
 - **Planning artifact:** GitHub issue (title, body, labels, assignees, acceptance criteria)
 - **Execution artifact:** GitHub PR (linked to issue; created during implementation)
 - <!-- rule: ARTIFACT-TRACKER-FIRST-NO-DUP --> **No local duplicate:** A tracker-first session MUST NOT create `docs/phases/phase-<n>.md` for the same session when a GitHub issue is the canonical spec
+- <!-- rule: ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR --> A refined tracker-backed issue body MUST carry an explicit, non-empty `## Non-goals` section alongside the refinement artifact (Acceptance criteria checklist, DoD checklist, or a linked refinement doc). The deterministic predicate `detectIssueRefinementArtifact` (`@dev-loops/core/loop/issue-refinement-artifact`) enforces this floor fail-closed with the distinct `missing_explicit_non_goals` finding — the same Non-goals requirement the loop-grill synthesis writes and the lightweight PR-body path validates (issue #1866, resolving the earlier contract-vs-check disagreement in the contract's favor, not by narrowing the contract). A linked `tmp/refinement/*.md` doc satisfies the artifact check only when it actually resolves (enqueue gate and draft-gate linked-issue path verify the path on disk); the issue-less / PR-body spec path is unchanged.
 
 Key contract:
 - GitHub issue state is authoritative — not local notes or chat context

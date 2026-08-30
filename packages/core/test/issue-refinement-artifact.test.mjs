@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
   REFINEMENT_SOURCE,
   decideEnqueueRefinementGate,
   detectIssueRefinementArtifact,
@@ -13,6 +14,11 @@ import {
   parseMarkdownSections,
   summarizeRefinementGateCheck,
 } from "../src/loop/issue-refinement-artifact.mjs";
+
+// #1866: a refined tracker-backed issue body carries an explicit Non-goals
+// section (loop-grill / artifact-authority contract). Fixture suffix shared by
+// every "artifact present" fixture below.
+const NGOALS = "\n\n## Non-goals\n\n- None beyond the stated scope.\n";
 
 test("parseMarkdownSections returns heading boundaries", () => {
   const sections = parseMarkdownSections("## Problem\n\nText.\n\n## Acceptance criteria\n\n- [ ] AC1\n");
@@ -36,7 +42,7 @@ test("detectIssueRefinementArtifact returns missing for prose-only bodies", () =
 
 test("detectIssueRefinementArtifact detects Acceptance criteria with checkboxes", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n",
+    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -46,7 +52,7 @@ test("detectIssueRefinementArtifact detects Acceptance criteria with checkboxes"
 
 test("detectIssueRefinementArtifact detects Acceptance criteria with plain bullets", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- First AC\n- Second AC\n",
+    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- First AC\n- Second AC\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -56,7 +62,7 @@ test("detectIssueRefinementArtifact detects Acceptance criteria with plain bulle
 
 test("detectIssueRefinementArtifact detects DoD section with plain bullets when AC is absent", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Definition of Done\n\n- Ship it\n- Docs updated\n",
+    body: "## Problem\n\nX\n\n## Definition of Done\n\n- Ship it\n- Docs updated\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
@@ -81,7 +87,7 @@ test("detectIssueRefinementArtifact ignores plain bullets under an unrecognized 
 
 test("detectIssueRefinementArtifact counts only top-level bullets, not indented sub-bullets", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- foo\n  - detail of foo\n- bar\n",
+    body: "## Acceptance criteria\n\n- foo\n  - detail of foo\n- bar\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -90,7 +96,7 @@ test("detectIssueRefinementArtifact counts only top-level bullets, not indented 
 
 test("detectIssueRefinementArtifact detects DoD section when AC is absent", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Definition of Done\n\n- [ ] DoD1\n- [x] DoD2\n",
+    body: "## Problem\n\nX\n\n## Definition of Done\n\n- [ ] DoD1\n- [x] DoD2\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
@@ -99,7 +105,7 @@ test("detectIssueRefinementArtifact detects DoD section when AC is absent", () =
 
 test("detectIssueRefinementArtifact detects a linked refinement doc path", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\nSee `tmp/refinement/532-plan.md` for ACs.\n",
+    body: "## Problem\n\nX\n\nSee `tmp/refinement/532-plan.md` for ACs.\n" + NGOALS,
     issueNumber: 532,
   });
   assert.equal(result.hasACs, true);
@@ -151,7 +157,7 @@ test("detectIssueRefinementArtifact rejects an AC section of only empty checkbox
 
 test("detectIssueRefinementArtifact drops empty checkbox placeholders but keeps filled ones", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n",
+    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n" + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -179,7 +185,7 @@ test("detectLinkedRefinementDoc finds explicit tmp/refinement path", () => {
 
 test("summarizeRefinementGateCheck maps to clean verdict when artifact present", () => {
   const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n",
+    body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS,
   });
   assert.equal(summary.verdict, "clean");
   assert.equal(summary.finding, null);
@@ -196,19 +202,19 @@ test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing
 });
 
 test("decideEnqueueRefinementGate enqueues a refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" });
+  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
 });
 
 test("decideEnqueueRefinementGate enqueues a DoD-only refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Definition of done\n\n- [ ] DoD1\n" });
+  const artifact = detectIssueRefinementArtifact({ body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
 });
 
 test("decideEnqueueRefinementGate enqueues a linked-doc-only refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Plan\n\nSee tmp/refinement/10-plan.md for details.\n" });
+  const artifact = detectIssueRefinementArtifact({ body: "## Plan\n\nSee tmp/refinement/10-plan.md for details.\n" + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
 });
@@ -267,7 +273,9 @@ test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside ac
       "## Acceptance criteria", "",
       "- [x] done AC", "- [ ] open AC one", "- [ ] open AC two", "",
       "## Definition of done", "",
-      "- [ ] tests pass",
+      "- [ ] tests pass", "",
+      "## Non-goals", "",
+      "- none",
     ].join("\n"),
   });
   assert.equal(artifact.hasACs, true);
@@ -278,7 +286,7 @@ test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside ac
 
 test("#1621 detectIssueRefinementArtifact carries uncheckedAcItems: [] when all ACs are ticked", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: ["## Acceptance criteria", "", "- [x] done one", "- [x] done two"].join("\n"),
+    body: ["## Acceptance criteria", "", "- [x] done one", "- [x] done two", "", "## Non-goals", "", "- none"].join("\n"),
   });
   assert.deepEqual(artifact.uncheckedAcItems, []);
 });
@@ -310,4 +318,104 @@ test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synt
     detectGrillEmbedHeading(["## Acceptance criteria", "", "- [ ] ac", "", "## Non-goals", "", "- none"].join("\n")),
     null,
   );
+});
+
+// ---- #1866: Non-goals required on tracker-backed refined issues ----
+
+test("#1866 fails closed when an AC-bearing issue lacks an explicit Non-goals section", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] First AC\n",
+  });
+  assert.equal(artifact.hasACs, false);
+  assert.equal(artifact.hasNonGoals, false);
+  // The artifact itself is still reported (source keeps the detected origin).
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+  assert.match(artifact.reason, /Non-goals/);
+});
+
+test("#1866 fail-closed propagates: summarizeRefinementGateCheck blocks a Non-goals miss", () => {
+  const summary = summarizeRefinementGateCheck({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] done\n",
+  });
+  assert.equal(summary.verdict, "blocked");
+  assert.equal(summary.blocking, true);
+  assert.equal(summary.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+});
+
+test("#1866 fail-closed propagates: decideEnqueueRefinementGate blocks a Non-goals miss", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.equal(decision.action, "block");
+  assert.match(decision.reason, /Non-goals/);
+  assert.deepEqual(decision.missing, ["explicit Non-goals section"]);
+
+  const diverted = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: true });
+  assert.equal(diverted.action, "divert");
+  assert.deepEqual(diverted.missing, ["explicit Non-goals section"]);
+});
+
+test("#1866 rejects an empty Non-goals section (heading only, or fenced-only body)", () => {
+  const headingOnly = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n",
+  });
+  assert.equal(headingOnly.hasACs, false);
+  assert.equal(headingOnly.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+
+  // Anti-spoof (#1025 fence logic): a fenced-only Non-goals body is empty.
+  const fencedOnly = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n```\n- [ ] spoof\n```\n",
+  });
+  assert.equal(fencedOnly.hasACs, false);
+  assert.equal(fencedOnly.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+});
+
+test("#1866 accepts 'out of scope' as an explicit non-goals heading (shared patterns)", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Out of scope\n\n- everything else\n",
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.finding, null);
+});
+
+test("#1866 a linked refinement doc counts only when it resolves (resolveLinkedDoc)", () => {
+  const body = "## Plan\n\nSee tmp/refinement/532-plan.md for details.\n" + NGOALS;
+  const unresolved = detectIssueRefinementArtifact({
+    body,
+    issueNumber: 532,
+    resolveLinkedDoc: () => false,
+  });
+  assert.equal(unresolved.hasACs, false);
+  assert.equal(unresolved.source, REFINEMENT_SOURCE.MISSING);
+  assert.equal(unresolved.finding, "missing_refinement_artifact");
+  assert.equal(unresolved.linkedDoc.resolves, false);
+
+  const resolved = detectIssueRefinementArtifact({
+    body,
+    issueNumber: 532,
+    resolveLinkedDoc: (p) => p === "tmp/refinement/532-plan.md",
+  });
+  assert.equal(resolved.hasACs, true);
+  assert.equal(resolved.source, REFINEMENT_SOURCE.LINKED_DOC);
+  assert.equal(resolved.linkedDoc.resolves, true);
+  assert.equal(resolved.finding, null);
+});
+
+test("#1866 without resolveLinkedDoc the predicate stays pure and unchanged (no resolves field)", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Plan\n\nSee tmp/refinement/532-plan.md for details.\n" + NGOALS,
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.linkedDoc.found, true);
+  assert.equal("resolves" in artifact.linkedDoc, false);
+});
+
+test("#1866 an unresolved linked doc falls back to AC/DoD artifacts when present", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Plan\n\nSee tmp/refinement/gone.md.\n" + NGOALS,
+    resolveLinkedDoc: () => false,
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.finding, null);
 });

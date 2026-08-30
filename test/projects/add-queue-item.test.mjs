@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/projects/add-queue-item.mjs";
@@ -110,7 +110,7 @@ function issueBodyResponse(body) {
 }
 
 function refinedIssueBodyResponse() {
-  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n");
+  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- None.\n");
 }
 
 function unrefinedIssueBodyResponse() {
@@ -900,7 +900,7 @@ describe("add-queue-item", () => {
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n") },
+        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- None.\n") },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -914,13 +914,17 @@ describe("add-queue-item", () => {
     });
 
     it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
+      // #1866: the enqueue gate now verifies the linked refinement doc resolves
+      // (existsSync, cwd-relative) — create the referenced doc first.
+      mkdirSync("tmp/refinement", { recursive: true });
+      writeFileSync("tmp/refinement/10-plan.md", "# Plan\n", "utf-8");
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n") },
+        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n\n## Non-goals\n\n- None.\n") },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -931,6 +935,8 @@ describe("add-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement.refined, true);
+      rmSync("tmp/refinement/10-plan.md");
+      rmSync("tmp/refinement", { recursive: true });
     });
 
     it("skips the gate for a non-pickup target column (default Backlog)", async () => {
