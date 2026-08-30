@@ -467,3 +467,16 @@ test("#1866 runPickupRefinementGate anchors linked-doc resolution to the repoRoo
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("#1866 containment: a linked-doc path with '..' segments is rejected, never fs-probed", () => {
+  const body = "## Plan\n\nSee tmp/refinement/../../docs/some-existing.md for details.\n" + NGOALS;
+  const artifact = detectIssueRefinementArtifact({
+    body,
+    issueNumber: 532,
+    resolveLinkedDoc: (p) => existsProbe(p),
+  });
+  assert.equal(artifact.linkedDoc.found, false, "traversal-shaped path must not count as a linked doc");
+  function existsProbe() {
+    throw new Error("resolveLinkedDoc must not be called for a traversal-shaped path");
+  }
+});

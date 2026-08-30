@@ -264,6 +264,12 @@ export function detectLinkedRefinementDoc(body) {
 
   const pathMatch = /(?:^|\s|[`(\[<])(tmp\/refinement\/[A-Za-z0-9._/\-]+\.md)\b/u.exec(body);
   if (pathMatch) {
+    // Containment guard: reject '..' segments so the new fs-probe wiring can
+    // never be used as a filesystem existence oracle outside tmp/refinement
+    // (e.g. `tmp/refinement/../../docs/some-existing.md`).
+    if (pathMatch[1].includes("..")) {
+      return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+    }
     return { found: true, path: pathMatch[1], reason: "explicit-path" };
   }
 
