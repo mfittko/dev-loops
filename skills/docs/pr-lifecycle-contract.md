@@ -50,6 +50,9 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 - A merge-blocking marker in the PR **title** blocks the draft -> ready transition and, for non-draft PRs, blocks entry to the pre-approval gate and final approval (`title_marker_blocked`). `WIP`/`DRAFT` only count when bracketed, parenthesized, colon-suffixed, or standalone (a compound-noun use like `draft-gate`, a conventional-commit scope like `fix(draft):`, or a dash-set-off trailing tag like `Fix login flow — WIP` is exempt); `DO NOT MERGE` and `🚧` match directly rather than through the four constructions, and only whitespace joins the words of `DO NOT MERGE`, so `do-not-merge` does not flag — case-insensitive throughout. Markers are permitted only while the PR remains draft. See [Merge preconditions](merge-preconditions.md#title-markers).
 - Human approval / merge are explicit external waits, not hidden remediation states.
 
+<!-- rule: LIFECYCLE-CHANGELOG-COMPLETENESS -->
+`LIFECYCLE-CHANGELOG-COMPLETENESS`: A PR classified as notable — a conventional-commit `feat`/`fix` subject in the PR's commit range, or a diff that touches code (per the shared diff-file classifier, `classifyFile()` from `@dev-loops/core/analysis/diff-analyzer`) — MUST add at least one list item under `## Unreleased` in `CHANGELOG.md` (issue #1864). This is enforced deterministically at the PR seam by `scripts/docs/validate-changelog-completeness.mjs`, wired into `test:docs` (whose CI leg fetches the base branch and runs on pull requests, so the check blocks the PR). The check fails closed on a notable PR with no added Unreleased item; a chore/docs/test-only PR is exempt. The release-time empty-section guard (`scripts/release/extract-changelog-section.mjs`) remains the second line of defense.
+
 ## Two required local gates
 
 Each gate runs an independent review chain (`GATE-EXEC-SEPARATE-CHAINS`); see

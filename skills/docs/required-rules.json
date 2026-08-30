@@ -379,6 +379,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "LIFECYCLE-CHANGELOG-COMPLETENESS"
+    },
+    {
       "id": "LIFECYCLE-CONFLICT-BLOCKS-PROGRESS"
     },
     {
