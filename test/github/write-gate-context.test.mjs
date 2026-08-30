@@ -6015,27 +6015,40 @@ test("renderBriefingVolatile: a validationPosture containing a newline is reject
   assert.match(text, /validationPosture: npm run verify/);
 });
 
-test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (hasAcChecklist guard)", async () => {
+test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (real buildGateContext wiring)", async () => {
   // The #1866 refinement predicate requires an explicit Non-goals section, so
   // a bare .hasACs read would be false for this body and the review-gate
   // resolver would silently drop acceptance-criteria (fail-open regression).
-  // The wiring guard treats missing_explicit_non_goals bodies as still
-  // carrying their AC checklist.
-  const body = "## Acceptance criteria\n\n- [ ] does the thing\n";
-  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null, gate: "review", config: reviewAnglesConfig({ draftAngles: ["correctness", "acceptance-criteria"], preApprovalAngles: [] }), hasClosingIssue: false };
-  await resolvePrSpecContext(
-    { ...options },
-    { run: async () => ({ code: 0, stdout: JSON.stringify({ body: "x" }), stderr: "" }) },
-  ).catch(() => {});
-  // Direct pin of the wiring helper's semantics through the resolver input:
-  const { detectIssueRefinementArtifact, MISSING_EXPLICIT_NON_GOALS_FINDING } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-  const artifact = detectIssueRefinementArtifact({ body });
-  assert.equal(artifact.hasACs, false, "predicate requires Non-goals — fixture sanity");
-  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
-  // The guard's contract: hasACs OR missing_explicit_non_goals => AC checklist present.
-  assert.equal(
-    artifact.hasACs || artifact.finding === MISSING_EXPLICIT_NON_GOALS_FINDING,
-    true,
-    "hasAcChecklist must stay true so acceptance-criteria is not dropped",
-  );
+  // Exercises the REAL wiring end to end: buildGateContext -> the
+  // hasAcChecklist guard -> resolveReviewGateAngles.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: { angles: buildAngleEntries({ angles: ["correctness", "acceptance-criteria"], mandatoryAngles: [], excludeAngles: [] }) },
+        preApproval: { angles: buildAngleEntries({ angles: ["docs"], mandatoryAngles: [], excludeAngles: [] }) },
+      },
+    };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "review",
+        repo: "owner/repo",
+        pr: 12,
+        headSha: "abc1234567890",
+        hasClosingIssue: false,
+        prBody: "## Acceptance criteria\n\n- [ ] does the thing\n",
+      },
+      { repoRoot },
+    );
+    assert.ok(
+      result.artifact.resolvedAngles.includes("acceptance-criteria"),
+      "acceptance-criteria must be kept: an AC checklist is its own spec-of-record even without Non-goals",
+    );
+    const kept = result.artifact.rationale.find((r) => r.angle === "acceptance-criteria");
+    assert.equal(kept?.action, "kept");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
