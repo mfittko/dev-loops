@@ -37,6 +37,8 @@ describe("parseConventionalType", () => {
   it("detects feat and fix subjects", () => {
     assert.equal(parseConventionalType("feat(gate): add check"), "feat");
     assert.equal(parseConventionalType("fix: repair thing"), "fix");
+    assert.equal(parseConventionalType("feat!: breaking change"), "feat");
+    assert.equal(parseConventionalType("feat(gate)!: breaking change"), "feat");
   });
 
   it("detects non-notable types", () => {
@@ -99,6 +101,17 @@ describe("isNotableChange", () => {
   it("does not flag a test-only change", () => {
     assert.equal(
       isNotableChange({ commitSubjects: ["test: x"], files: ["test/docs/validate-changelog-completeness.test.mjs"] }),
+      false,
+    );
+  });
+
+  it("does not flag ci-only or unknown-category changes (classifier edge categories)", () => {
+    assert.equal(
+      isNotableChange({ commitSubjects: ["ci: x"], files: [".github/workflows/ci.yml"] }),
+      false,
+    );
+    assert.equal(
+      isNotableChange({ commitSubjects: [], files: ["assets/logo.bin"] }),
       false,
     );
   });

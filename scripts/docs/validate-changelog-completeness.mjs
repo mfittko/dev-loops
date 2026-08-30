@@ -32,7 +32,7 @@ const CONVENTIONAL_TYPES = new Set([
   "build",
 ]);
 
-const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]*\))?:\s+\S/u;
+const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]*\))?!?:\s+\S/u;
 
 /**
  * Parse the conventional-commit type from a commit subject line.
@@ -199,7 +199,7 @@ async function main({ root, env = process.env, log = console } = {}) {
     git.logSubjects(base, "HEAD"),
     git.diffNameOnly(base, "HEAD"),
     readFile(path.join(root, CHANGELOG_PATH), "utf8").catch(() => ""),
-    git.pathExistsIn(base, CHANGELOG_PATH).catch(() => false),
+    git.pathExistsIn(base, CHANGELOG_PATH),
   ]);
   const baseChangelog = baseExists ? await git.show(`${base}:${CHANGELOG_PATH}`) : "";
 
@@ -214,6 +214,7 @@ async function main({ root, env = process.env, log = console } = {}) {
     for (const error of errors) log.error(`  - ${error}`);
     return 1;
   }
+  log.log(`CHANGELOG completeness check passed (base ${base.slice(0, 12)}).`);
   return 0;
 }
 
