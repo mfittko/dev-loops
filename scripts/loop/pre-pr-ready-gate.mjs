@@ -10,6 +10,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
+import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "./check-adr-tripwire.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -26,7 +27,12 @@ PR-description contract (Acceptance criteria + Definition of done checklists,
 an explicit Non-goals section, and a Closes #N/Fixes #N reference; issue
 #1863). This is the guard the raw \`gh pr ready\` hook path runs — no
 --waive-size-budget surface here; a size waiver can only be granted through
-ready-for-review.mjs.
+ready-for-review.mjs. Also enforces the fail-closed ADR tripwire (issue
+#1867): a PR touching a decision-shaped surface (skills/docs/*-contract.md,
+the shared gate config, or a rule-modality reversal) must add/update a
+docs/decisions/NNNN-*.md record or carry \`adr-tripwire:allow <reason>\` in its
+PR body. The ADR waiver is body-derived, so unlike the size-budget flag it is
+honored identically on this raw path.
 
 Exit codes:
   0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
@@ -41,6 +47,7 @@ Output (stdout, JSON on success):
     "draftGateSatisfied": true,
     "draftGate": { "visible": true, "headSha": "abc1234", "verdict": "clean", ... },
     "sizeBudget": { "outcome": "pass"|"escalate", ... },
+    "adrTripwire": { "outcome": "pass", "satisfiedBy": "adr"|"waiver"|null, ... },
     "prBodySpec": { "ok": true, "checker": "validate-pr-body-spec", ... } | null
   }
   ("prBodySpec" is null for a PR with no closing issue reference — that path
@@ -111,7 +118,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
@@ -187,6 +194,34 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
+  // Fail-closed ADR tripwire (issue #1867): the same body-derived check
+  // readyForReview() runs — a decision-shaped surface touch requires a
+  // docs/decisions/NNNN-*.md record in the diff or an `adr-tripwire:allow
+  // <reason>` waiver in the PR body. Body-derived, so this raw path honors
+  // the waiver exactly like the canonical path; no flag surface exists.
+  if (!prState.baseRefName) throw new Error(`Could not resolve PR #${options.pr} base branch`);
+  const adrTripwire = await evaluateAdrTripwire({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    prBody: prState.body,
+    repoRoot,
+  });
+  if (adrTripwire.outcome === "block") {
+    return {
+      ok: false,
+      error: `PR #${options.pr} blocked by the ADR tripwire: ${adrTripwire.reasons.join("; ")}`,
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+      adrTripwire,
+    };
+  }
+
   // Fail-closed PR-description contract for a TRACKER-BACKED PR (issue #1863):
   // the deterministic validate-pr-body-spec check, previously wired only to
   // the lightweight/issue-less path (#1025), now also runs on a draft PR that
@@ -211,6 +246,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
       draftGate: gate.draftGate,
       draftGateMarker: gate.draftGateMarker,
       sizeBudget,
+      adrTripwire,
       prBodySpec,
     };
   }
@@ -225,6 +261,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     draftGate: gate.draftGate,
     draftGateMarker: gate.draftGateMarker,
     sizeBudget,
+    adrTripwire,
     prBodySpec,
   };
 }
