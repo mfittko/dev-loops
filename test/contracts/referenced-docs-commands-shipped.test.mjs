@@ -217,9 +217,14 @@ export function findDanglingAnchorReferences({ sourceRelPath, sourceContent, loa
   return failures;
 }
 
-function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
+export function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
   return (pathPart) => {
     const targetAbs = path.resolve(path.dirname(sourceAbsPath), pathPart);
+    // Guard against a link path traversing outside the repo (e.g. `../../../../etc/hosts`):
+    // treat it the same as a missing target rather than reading outside the repo root.
+    if (targetAbs !== repoRoot && !targetAbs.startsWith(repoRoot + path.sep)) {
+      return null;
+    }
     if (!fs.existsSync(targetAbs) || !fs.statSync(targetAbs).isFile()) {
       return null;
     }
@@ -389,4 +394,12 @@ test("findDanglingAnchorReferences skips an anchor whose target file does not ex
     loadTargetContent: () => null,
   });
   assert.deepEqual(failures, []);
+});
+
+test("loadTargetContentRelativeTo refuses a cross-file anchor link that traverses outside the repo root", () => {
+  const sourceAbsPath = path.join(REPO_ROOT, "docs", "synthetic-1865.md");
+  const loadTargetContent = loadTargetContentRelativeTo(REPO_ROOT, sourceAbsPath);
+  // `/etc/hosts` exists on every runner this test targets, so a non-null return here
+  // would prove the traversal guard failed and the file was read from outside the repo.
+  assert.equal(loadTargetContent("../../../../etc/hosts"), null);
 });
