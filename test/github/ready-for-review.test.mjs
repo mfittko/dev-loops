@@ -13,6 +13,10 @@ function passingSizeBudget() {
   return { ok: true, outcome: "pass", wholeLogicLoc: 0, t1SliceLoc: 0, reasons: [], waiver: { requested: false, approvedBy: null, t1Valid: false, defaultValid: false } };
 }
 
+function passingAdrTripwire() {
+  return { ok: true, outcome: "pass", satisfiedBy: null, triggers: [], adrFiles: [], waiver: { requested: false, valid: false, reason: null }, reasons: [] };
+}
+
 import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
@@ -723,7 +727,7 @@ test("board tail targets the closing issue (not the PR) when closingIssues prese
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -746,7 +750,7 @@ test("board tail falls back to the PR number when closingIssues is empty (#1069)
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.action, "marked_ready");
     assert.equal(syncCalls.length, 1);
@@ -763,7 +767,7 @@ test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking re
     const fakeSync = async () => { throw new Error("board exploded"); };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget },
+      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -1052,6 +1056,50 @@ test("size budget: a waiver-eligible block (default.waiverLoc) with no waiver re
     assert.match(result.stderr, /waiverLoc/);
     const calls = await readGhCalls(ghLogPath);
     assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called on a block");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ADR tripwire: contract-doc touch without ADR or waiver blocks the draft exit (#1867)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-adr-block-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [{ path: "skills/docs/new-contract.md", content: "# New contract\n\nSome prose.\n" }],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /blocked by the ADR tripwire/i);
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called on an ADR-tripwire block");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ADR tripwire: body-derived waiver satisfies a decision-shaped touch (#1867)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-adr-waiver-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [{ path: "packages/core/src/config/extension-defaults.yaml", content: "version: 1\n" }],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
+      headSha,
+      baseBranch,
+      body: "Body.\nadr-tripwire:allow deliberate gate re-tune recorded upstream\n",
+      extraEntries: [{ stdout: "" }], // gh pr ready
+    }));
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.adrTripwire.outcome, "pass");
+    assert.equal(output.adrTripwire.satisfiedBy, "waiver");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -9,6 +9,7 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { evaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -33,6 +34,12 @@ the PR-description contract on the PR's own body (Acceptance criteria +
 Definition of done checklists, an explicit Non-goals section, and a
 Closes #N/Fixes #N reference; issue #1863) — no waiver surface for this
 check.
+
+Also enforces the fail-closed ADR tripwire (issue #1867): a PR touching a
+decision-shaped surface (skills/docs/*-contract.md, the shared gate config,
+or a rule-modality reversal) must add/update a docs/decisions/NNNN-*.md
+record or carry \`adr-tripwire:allow <reason>\` in its PR body. The waiver is
+body-derived, so no flag surface exists or is needed.
 
 ${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
@@ -124,7 +131,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }
 
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false;
@@ -160,6 +167,21 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (sizeBudget.outcome === "block") {
     throw new Error(`PR #${options.pr} blocked by size budget: ${sizeBudget.reasons.join("; ")}`);
   }
+  // Fail-closed ADR tripwire (issue #1867): a PR touching a decision-shaped
+  // surface (skills/docs/*-contract.md, the shared gate config, or a
+  // rule-modality reversal) must add/update a docs/decisions/NNNN-*.md record
+  // or carry a valid `adr-tripwire:allow <reason>` waiver in its PR body. The
+  // waiver is body-derived, so it is honored identically here and on
+  // pre-pr-ready-gate.mjs's raw `gh pr ready` path — no flag surface.
+  const adrTripwire = await evaluateAdrTripwireFn({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    prBody: prState.body,
+    repoRoot,
+  });
+  if (adrTripwire.outcome === "block") {
+    throw new Error(`PR #${options.pr} blocked by the ADR tripwire: ${adrTripwire.reasons.join("; ")}`);
+  }
   if (sizeBudget.waiver.t1Valid || sizeBudget.waiver.defaultValid) {
     await postSizeBudgetWaiverComment(
       { repo: options.repo, pr: options.pr, headSha, sizeBudget, reason: options.reason, approvedBy: options.approvedBy },
@@ -193,7 +215,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, prBodySpec, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, adrTripwire, prBodySpec, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {

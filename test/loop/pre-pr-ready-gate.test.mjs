@@ -610,6 +610,75 @@ test("prBodySpec: an issue-less PR (no closing issue reference) skips this check
   assert.equal(parsed.prBodySpec, null);
 });
 
+test("ADR tripwire: contract-doc touch without ADR or waiver blocks the raw gh pr ready path (#1867)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-block-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    headFiles: [{ path: "skills/docs/new-contract.md", content: "# New contract\n\nSome prose.\n" }],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.match(stderrParsed.error, /ADR tripwire/i);
+  assert.equal(stderrParsed.adrTripwire.outcome, "block");
+  assert.ok(stderrParsed.adrTripwire.triggers.some((tr) => tr.type === "contract-doc"));
+});
+
+test("ADR tripwire: an added docs/decisions record satisfies a contract-doc touch on the raw path (#1867)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-pass-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    headFiles: [
+      { path: "skills/docs/new-contract.md", content: "# New contract\n\nSome prose.\n" },
+      { path: "docs/decisions/0052-adr-tripwire-fail-closed.md", content: "# 0052. ADR tripwire\n\n## Status\n\nAccepted — 2026-08-30 (PR)\n\n## Context\n\nContext.\n\n## Decision\n\nDecision.\n\n## Consequences\n\nConsequences.\n" },
+    ],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.adrTripwire.outcome, "pass");
+  assert.equal(parsed.adrTripwire.satisfiedBy, "adr");
+});
+
+test("ADR tripwire: a body-derived waiver satisfies a gate-config touch on the raw path (#1867)", async (t) => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-waiver-"));
+  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    headFiles: [{ path: "packages/core/src/config/extension-defaults.yaml", content: "version: 1\n" }],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch, body: "Body.\nadr-tripwire:allow deliberate gate re-tune, ADR tracked in #1867\nEnd." })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.adrTripwire.outcome, "pass");
+  assert.equal(parsed.adrTripwire.satisfiedBy, "waiver");
+});
+
 test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async (t) => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-configerr-"));
   t.after(() => rm(tmpDir, { recursive: true, force: true }));
