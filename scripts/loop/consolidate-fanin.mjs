@@ -192,11 +192,11 @@ Optional:
                                  than pass 0 (this parses as a POSITIVE integer and throws on 0).
                                  The records-floor AUTHORITY for whether units were expected at all is
                                  NOT this flag but the round's persisted request-plan artifact
-                                 (#1868): when --head-sha is given, the fan-in derives the expected
-                                 unit floor from every <gate>-<headSha>.dispatch-plan.json under
-                                 tmp/gate-context/** and FAILS CLOSED when the plan expects units but
-                                 the round recorded zero reviewer sentinels — independent of this
-                                 flag. This flag, when given, still reconciles the EXACT count.
+                                 (#1868): when --head-sha is given, the fan-in derives the
+                                 pending-angle floor from every <gate>-<headSha>.dispatch-plan.json
+                                 under tmp/gate-context/** and FAILS CLOSED when the plan records
+                                 pending angles but the round recorded zero reviewer sentinels —
+                                 independent of this flag. This flag, when given, still reconciles the EXACT count.
                                  When given alongside --head-sha, the fan-in fails closed
                                  (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
                                  for the head is SHORT of it — a dispatched reviewer never ran the
@@ -304,7 +304,7 @@ Exit codes:
      (a sentinel records a divergent/missing prefix hash, the sentinel count
      is short of --expected-dispatch-units, a recorded reviewer prompt does
      not lead with the round's byte-identical prefix/pointer line, or the
-     round's persisted request-plan artifact expects dispatch units but the
+     round's persisted request-plan artifact records pending angles but the
      round recorded zero reviewer sentinels — the #1868 records-floor) — #1618,
      #1841, #1868, or (with --resolved-angles
      and a "clean" verdict) a resolved angle with neither a per-angle artifact
@@ -899,8 +899,11 @@ async function readGateRequestPlansForHead(tmpRoot, headSha) {
   return plans;
 }
 
-// Derive the round's expected dispatch-unit floor from its persisted request
-// plans: the total number of pending angles across every plan's requestGroups.
+// Derive the round's records-floor input from its persisted request plans:
+// the total number of PENDING ANGLES across every plan's requestGroups — a
+// pending-angle floor, NOT an exact dispatch-unit count (grouped dispatch
+// covers several angles per unit; --expected-dispatch-units owns the exact
+// unit-count reconciliation).
 // A plan whose groups carry no angles (an all-carried / genuinely zero-unit
 // gate) contributes 0 — the floor only applies when units were expected.
 // A parseable plan whose SHAPE is drifted (non-array requestGroups, or a group
@@ -908,7 +911,7 @@ async function readGateRequestPlansForHead(tmpRoot, headSha) {
 // is the enforcement authority, so a schema-drifted or hand-edited plan must
 // never silently disable the records-floor — only an empty requestGroups array
 // (a genuinely zero-unit gate) contributes 0.
-function deriveRequestPlanExpectedUnits(plans) {
+function deriveRequestPlanPendingAngleCount(plans) {
   let total = 0;
   for (const { filePath, plan } of plans) {
     if (!Array.isArray(plan?.requestGroups)) {
@@ -1136,20 +1139,20 @@ export async function consolidateGateFanin(options) {
   // Only runs when --head-sha is given (the same boundary the artifact head-stamp guard uses).
   if (options.headSha !== undefined) {
     const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
-    // Records-floor authority (#1868): derive the expected dispatch-unit floor
+    // Records-floor authority (#1868): derive the pending-angle floor
     // from the persisted request-plan artifact(s) for this head — not from a
     // caller-passed flag. --expected-dispatch-units (when also given) still
     // reconciles the EXACT count; the plan derives whether units were expected
-    // at all.
+    // at all (as a pending-angle floor, not an exact unit count).
     const requestPlans = await readGateRequestPlansForHead(tmpRoot, options.headSha);
-    const requestPlanExpectedUnits = deriveRequestPlanExpectedUnits(requestPlans);
-    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha, requestPlanExpectedUnits);
+    const requestPlanPendingAngles = deriveRequestPlanPendingAngleCount(requestPlans);
+    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha, requestPlanPendingAngles);
     // Records-floor (#1868): a round whose request plan expected dispatch units
     // but recorded ZERO reviewer sentinels FAILS CLOSED — the vacuous pass the
-    // floor exists to prevent (an angle-first or entirely-unrecorded
+    // pending-angle floor exists to prevent (an angle-first or entirely-unrecorded
     // agent-composed dispatch is no longer invisible to the gate).
-    if (requestPlanExpectedUnits > 0 && prefixVerdict.reviewerCount === 0) {
-      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact(s) for head ${options.headSha} (${requestPlans.map((p) => p.filePath).join(", ")}) expect ${requestPlanExpectedUnits} dispatch unit(s), but the round recorded ZERO reviewer sentinels — a coordinator round that dispatched units cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs / record-dispatch-prompt-layout.mjs), then re-consolidate.`);
+    if (requestPlanPendingAngles > 0 && prefixVerdict.reviewerCount === 0) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact(s) for head ${options.headSha} (${requestPlans.map((p) => p.filePath).join(", ")}) pends ${requestPlanPendingAngles} pending angle(s), but the round recorded ZERO reviewer sentinels — a coordinator round whose plan recorded pending angles cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs / record-dispatch-prompt-layout.mjs), then re-consolidate.`);
     }
     if (prefixVerdict.reviewerCount > 0 && !prefixVerdict.verified) {
       throw new Error(`GATE-EXEC-BRIEFING-PREFIX verification failed for head ${options.headSha} (${prefixVerdict.reviewerCount} reviewer sentinel(s)): ${prefixVerdict.reason} — the fan-in refuses to consolidate a round whose invariant-briefing-prefix proof is broken. Re-run the offending reviewer(s), then re-consolidate.`);

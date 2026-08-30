@@ -3160,7 +3160,7 @@ test("#1868: a round whose request plan expects units but recorded ZERO sentinel
         await assert.rejects(
           () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
           (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX records-floor (#1868)")
-            && /expect 2 dispatch unit\(s\)/.test(err.message)
+            && /pends 2 pending angle\(s\)/.test(err.message)
             && /ZERO reviewer sentinels/.test(err.message),
         );
       } finally {

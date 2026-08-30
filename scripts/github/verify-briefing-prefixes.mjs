@@ -235,15 +235,16 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
  * When `expectedDispatchUnits` is > 0 (derived by the caller from the round's
- * persisted request-plan artifact, #1868), a round with ZERO sentinels FAILS
- * CLOSED (the GATE-EXEC-BRIEFING-PREFIX records-floor): a coordinator round
- * that dispatched units must record evidence — zero sentinels can no longer
+ * persisted request-plan artifact, #1868 — the pending-angle floor), a round
+ * with ZERO sentinels FAILS CLOSED (the GATE-EXEC-BRIEFING-PREFIX
+ * records-floor): a coordinator round whose plan recorded pending angles must
+ * record evidence — zero sentinels can no longer
  * pass vacuously. With `expectedDispatchUnits === 0` (no plan, or a plan
  * expecting no units) the zero-sentinel case stays a trivial pass.
  *
  * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
  * @param {Map<string, Set<string>>|null} [gateRecords] — sha256 -> set of gates
- * @param {number} [expectedDispatchUnits] — dispatch units the round's persisted request plan expects (0 = no floor)
+ * @param {number} [expectedDispatchUnits] — plan-derived floor count the caller passes (pending angles for the records-floor caller; 0 = no floor)
  * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string, reviewerCount:number}> }}
  */
 export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expectedDispatchUnits = 0) {
@@ -251,7 +252,7 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expected
     if (Number(expectedDispatchUnits) > 0) {
       return {
         verified: false,
-        reason: `GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted request plan expected ${expectedDispatchUnits} dispatch unit(s) but the round recorded ZERO reviewer sentinels — a coordinator round that dispatched units cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs), then re-verify.`,
+        reason: `GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted request plan records ${expectedDispatchUnits} pending angle(s) but the round recorded ZERO reviewer sentinels — a coordinator round whose plan recorded pending angles cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs), then re-verify.`,
       };
     }
     return { verified: true, reason: "no sentinels found for this round" };
@@ -367,7 +368,7 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expected
  * returns `verified: false` with a records-floor reason.
  * @param {string} tmpRoot
  * @param {string} headSha — already lowercased/trimmed by the caller
- * @param {number} [expectedDispatchUnits] — dispatch units the round's persisted request plan expects (0 = no floor)
+ * @param {number} [expectedDispatchUnits] — plan-derived floor count the caller passes (pending angles for the records-floor caller; 0 = no floor)
  * @returns {Promise<object>}
  */
 export async function verifyBriefingPrefixesForHead(tmpRoot, headSha, expectedDispatchUnits = 0) {
