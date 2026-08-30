@@ -26,6 +26,7 @@ import { readSuppressionMarker } from "./_post-convergence-review-suppression.mj
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -529,6 +530,11 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
 // unticked-AC check (#1621) without re-deriving it.
 async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild }) {
   const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  // #1866 follow-up: anchor linked refinement doc resolution to the repo root,
+  // never the ambient cwd — cwd is untrusted in this script (children run with
+  // cwd: repoRoot) and a subdirectory invocation would false-block refined
+  // issues whose tmp/refinement/*.md docs resolve only from the root.
+  const docAnchor = resolveRepoRoot(process.cwd());
   const evaluated = [];
   for (const issue of linkedIssues) {
     const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
@@ -536,7 +542,17 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       evaluated.push({ issue, artifact: null });
       continue;
     }
-    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
+    // #1866: a linked refinement doc satisfies the artifact check only when it
+    // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
+    // anchored to the repo root (see docAnchor above).
+    evaluated.push({
+      issue,
+      artifact: detectIssueRefinementArtifact({
+        body,
+        issueNumber: issue,
+        resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+      }),
+    });
   }
   const refinedIssues = evaluated
     .filter((e) => e.artifact && e.artifact.hasACs === true)

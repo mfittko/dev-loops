@@ -787,7 +787,7 @@ describe("move-queue-item", () => {
           { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
           {
             env: {},
-            runChild: mockRunChild(moveResponses("## Acceptance criteria\n- [ ] do it", true)),
+            runChild: mockRunChild(moveResponses("## Acceptance criteria\n- [ ] do it\n\n## Non-goals\n- none", true)),
             cwd,
           },
         );

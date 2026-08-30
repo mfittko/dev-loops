@@ -15,6 +15,9 @@ const REFINED_BODY = [
   "- [ ] first",
   "- [ ] second",
   "- [ ] third",
+  "",
+  "## Non-goals",
+  "- none",
 ].join("\n");
 
 // Umbrella-style body: numbered "Required work" list, no ACs/DoD heading → not refined.

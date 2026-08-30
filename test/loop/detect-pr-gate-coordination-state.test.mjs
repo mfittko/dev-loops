@@ -1346,7 +1346,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
       { stdout: '[]\n' },
       {
         stdout: JSON.stringify({
-          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n",
+          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Non-goals\n\n- None.\n",
         }) + "\n",
       },
       {
@@ -1875,7 +1875,7 @@ test("loadRefinementArtifact: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS — a tracker
         prData: {
           number: 12,
           closingIssuesReferences: [],
-          body: "## Probe\n\nProse only.\n\n## Acceptance criteria\n\n- [ ] the AC\n\n## Definition of done\n\n- [ ] the DoD\n",
+          body: "## Probe\n\nProse only.\n\n## Acceptance criteria\n\n- [ ] the AC\n\n## Definition of done\n\n- [ ] the DoD\n\n## Non-goals\n\n- None.\n",
         },
         prDraft: true,
         prClosed: false,
@@ -1932,7 +1932,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -1993,7 +1993,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],

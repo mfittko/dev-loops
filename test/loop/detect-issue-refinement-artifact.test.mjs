@@ -54,7 +54,7 @@ test("detectIssueRefinementArtifactFromOptions handles --input with ACs", async 
       JSON.stringify({
         repo: "owner/repo",
         issue: 532,
-        body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n",
+        body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Non-goals\n\n- None.\n",
       }),
       "utf8",
     );

@@ -877,6 +877,23 @@ replayed offline); the records-floor residual this closes is that the SANCTIONED
 longer silently be the one that never captures, since composing on that path now always
 captures.
 
+**Records-floor (issue #1868).** The remaining vacuous-pass shape — a coordinator round that
+records ZERO dispatch/briefing evidence for a gate that DID dispatch units — is closed
+mechanically: the conductor's Phase-1 request-plan artifact
+(`tmp/gate-context/**/<gate>-<headSha>.dispatch-plan.json`, written by `write-gate-context.mjs`)
+is the AUTHORITY for whether the round dispatched units. When `--head-sha` is given, the fan-in
+derives the expected dispatch-unit floor from every persisted plan for the head (the total
+pending angles across `requestGroups`) and FAILS CLOSED when the plan expects units but the round
+recorded zero reviewer sentinels — an entirely-unrecorded or angle-first agent-composed dispatch
+is no longer invisible to the gate. `verify-briefing-prefixes` correspondingly no longer returns
+`verified: true` for `sentinels.length === 0` when the plan-derived unit count is positive. A
+genuinely zero-unit gate (a plan whose `requestGroups` carry no angles — e.g. an all-carried
+round) is not forced to fail, and a corrupt/unparseable plan artifact fails closed (the plan is
+the enforcement authority, never silently ignorable). The optional
+`--expected-dispatch-units` flag is unchanged: it still reconciles the EXACT unit count when the
+caller knows it; the plan, not the flag, decides whether units were expected at all. This
+reconciles and closes the records-floor residual carried on #1468.
+
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
 (for example due to tooling or resource constraints), the fan-out MUST run all reviewers
