@@ -507,3 +507,15 @@ test("round-3 medium fix: CLI usage error exits 2", () => {
   }
   assert.equal(code, 2);
 });
+
+test("round-4 low fix: a bare marker earlier in the body invalidates a later valid marker", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "adr-tripwire:allow\nadr-tripwire:allow real reason here",
+  });
+  assert.equal(r.outcome, "block");
+  assert.equal(r.waiver.requested, true);
+  assert.equal(r.waiver.valid, false);
+});

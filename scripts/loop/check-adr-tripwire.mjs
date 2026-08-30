@@ -127,7 +127,7 @@ export function extractRuleModalities(content) {
     for (const m of lines[i].matchAll(RULE_MARKER_RE)) {
       if (modalities.has(m[1])) continue;
       let family = null;
-      const remainder = lines[i].slice((m.index ?? 0) + m[0].length);
+      const remainder = lines[i].slice((m.index ?? 0) + m[0].length).split("<!--")[0];
       const km = MODALITY_RE.exec(remainder);
       if (km) {
         family = modalityFamily(km[1]);
@@ -277,18 +277,19 @@ export function computeAdrTripwire({
     .filter((f) => !f.status.startsWith("D") && ADR_PATH_RE.test(f.path) && f.path !== "docs/decisions/0000-template.md")
     .map((f) => f.path);
 
-  // Waiver: first `adr-tripwire:allow <reason>` line in the PR body. A bare
-  // marker with no reason is invalid — the reason is the durable evidence a
-  // reviewer reads; without it the marker is decorative.
-  // Waiver scan is FIRST-marker-wins: a bare marker earlier in the body
-  // invalidates (and stops the scan at) a later valid marker — deliberate
-  // strictness, documented here.
+  // Waiver scan is FIRST-marker-wins: the first line carrying the marker —
+  // bare or with a reason — stops the scan. A bare marker (no reason) is
+  // invalid and therefore invalidates a later valid marker: the reason is
+  // the durable evidence a reviewer reads; without it the marker is
+  // decorative. Deliberate strictness, documented here.
+  const WAIVER_BARE_RE = /^\s*adr-tripwire:allow\s*$/u;
   let waiver = { requested: false, valid: false, reason: null };
   if (typeof prBody === "string" && prBody.length > 0) {
     for (const line of prBody.split("\n")) {
+      const bare = WAIVER_BARE_RE.test(line);
       const m = WAIVER_RE.exec(line);
-      if (m) {
-        const reason = m[1].trim();
+      if (bare || m) {
+        const reason = m ? m[1].trim() : "";
         waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
         break;
       }
