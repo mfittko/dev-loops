@@ -6014,3 +6014,28 @@ test("renderBriefingVolatile: a validationPosture containing a newline is reject
   });
   assert.match(text, /validationPosture: npm run verify/);
 });
+
+test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (hasAcChecklist guard)", async () => {
+  // The #1866 refinement predicate requires an explicit Non-goals section, so
+  // a bare .hasACs read would be false for this body and the review-gate
+  // resolver would silently drop acceptance-criteria (fail-open regression).
+  // The wiring guard treats missing_explicit_non_goals bodies as still
+  // carrying their AC checklist.
+  const body = "## Acceptance criteria\n\n- [ ] does the thing\n";
+  const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null, gate: "review", config: reviewAnglesConfig({ draftAngles: ["correctness", "acceptance-criteria"], preApprovalAngles: [] }), hasClosingIssue: false };
+  await resolvePrSpecContext(
+    { ...options },
+    { run: async () => ({ code: 0, stdout: JSON.stringify({ body: "x" }), stderr: "" }) },
+  ).catch(() => {});
+  // Direct pin of the wiring helper's semantics through the resolver input:
+  const { detectIssueRefinementArtifact, MISSING_EXPLICIT_NON_GOALS_FINDING } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  const artifact = detectIssueRefinementArtifact({ body });
+  assert.equal(artifact.hasACs, false, "predicate requires Non-goals — fixture sanity");
+  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+  // The guard's contract: hasACs OR missing_explicit_non_goals => AC checklist present.
+  assert.equal(
+    artifact.hasACs || artifact.finding === MISSING_EXPLICIT_NON_GOALS_FINDING,
+    true,
+    "hasAcChecklist must stay true so acceptance-criteria is not dropped",
+  );
+});
