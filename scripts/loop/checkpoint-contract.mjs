@@ -95,14 +95,18 @@ export function buildRetrospectiveCheckpointPayload({ state, notes = null, reaso
   const timestamp = now.toISOString();
   const normalizedIdentity = identity != null ? normalizeCheckpointCycleIdentity(identity) : null;
   const identityField = normalizedIdentity ? { identity: normalizedIdentity } : {};
-  const normalizedProvenance = provenance != null ? normalizeRetroProvenance(provenance) : null;
+  // Provenance is a `complete`-only field: normalize/validate it only when the
+  // payload will actually carry it, so a caller-supplied provenance object for
+  // a non-complete state is ignored (not normalized, not validated, not
+  // attached) rather than rejected.
+  const normalizedProvenance = state === "complete" && provenance != null ? normalizeRetroProvenance(provenance) : null;
   // Fail closed at WRITE time too: silently dropping an invalid provenance
   // would let a programmatic caller write a `complete` record that only fails
   // closed at read time, with no signal at the write. A null provenance
   // (absent) stays the CLI's legitimate "not provided" shape — the CLI itself
   // rejects `complete` without provenance, but the payload builder stays
   // permissive about absence for direct callers, mirroring identity handling.
-  if (provenance != null && normalizedProvenance === null) {
+  if (state === "complete" && provenance != null && normalizedProvenance === null) {
     throw new Error(`Invalid retrospective provenance for state "complete": must pin a fresh-context pass over the agent/subagent tool-call record (RETRO-FRESH-CONTEXT-MANDATORY)`);
   }
   const provenanceField = normalizedProvenance ? { provenance: normalizedProvenance } : {};

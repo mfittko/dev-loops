@@ -446,8 +446,11 @@ test("buildRetrospectiveCheckpointPayload throws on an invalid provenance instea
 
 test("buildRetrospectiveCheckpointPayload omits provenance for non-complete states even when provided", () => {
   const now = new Date("2026-06-05T00:00:00.000Z");
+  // Even an INVALID provenance object is ignored for a non-complete state:
+  // provenance is a complete-only field, so a skipped payload neither throws
+  // nor records any provenance (the same object would throw for "complete").
   const payload = buildRetrospectiveCheckpointPayload(
-    { state: "skipped", reason: "trivial", provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" } },
+    { state: "skipped", reason: "trivial", provenance: { context: "inline", seededFrom: "agent_tool_call_record", recordSource: "tmp/retro/record.jsonl" } },
     now,
   );
   assert.equal(payload.provenance, undefined);
