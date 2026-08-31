@@ -1727,7 +1727,11 @@ describe("tracker config (#1408)", () => {
       const { loadDevLoopConfig, resolveTrackerBoard } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(
-        result.errors.length > 0 || result.config.tracker?.board == null,
+        result.errors.length > 0,
+        "queue.board must fail schema validation",
+      );
+      assert.ok(
+        result.config.tracker?.board == null,
         "queue.board must not resolve onto tracker.board",
       );
       assert.equal(

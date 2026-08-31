@@ -1491,10 +1491,11 @@ function configError(message, code, filePath) {
 }
 
 /**
- * Try to load and merge one config layer (defaults, devloops, or settings).
+ * Try to load and merge one config layer (extensionDefaults, defaults, or
+ * devloops).
  * @param {Record<string, unknown>} merged - Current merged config
  * @param {string|string[]} basePaths - Config file base path(s) without extension
- * @param {"defaults"|"settings"|"devloops"} layer - Layer name
+ * @param {"extensionDefaults"|"defaults"|"devloops"} layer - Layer name
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
  * @param {{ warnOnMissing?: boolean }} [options]

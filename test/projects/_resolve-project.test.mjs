@@ -82,15 +82,13 @@ describe("_resolve-project — resolveSettings", () => {
 
   it("ignores a float projectNumber (fail-closed) with no boardTitle", () => {
     withTempDevloops("tracker:\n  board:\n    number: 5.5\n", "", (dir) => {
-      const s = resolveSettings(dir);
-      assert.ok(s === null || (s.project === undefined && s.title === undefined));
+      assert.strictEqual(resolveSettings(dir), null);
     });
   });
 
   it("ignores a quoted-string projectNumber (fail-closed) with no boardTitle", () => {
     withTempDevloops("tracker:\n  board:\n    number: \"5\"\n", "", (dir) => {
-      const s = resolveSettings(dir);
-      assert.ok(s === null || (s.project === undefined && s.title === undefined));
+      assert.strictEqual(resolveSettings(dir), null);
     });
   });
 });
