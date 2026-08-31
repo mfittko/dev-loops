@@ -82,7 +82,8 @@ the workflow does it (and is idempotent if you already created one).
   and re-push:
 
   ```bash
-  DEVLOOPS_ALLOW_MAIN=1 git commit -am "docs: add v<version> CHANGELOG section"
+  DEVLOOPS_ALLOW_MAIN=1 git add CHANGELOG.md
+  DEVLOOPS_ALLOW_MAIN=1 git commit -m "docs: add v<version> CHANGELOG section"
   DEVLOOPS_ALLOW_MAIN=1 git push origin main
   git tag -f v<version>
   git push --force origin v<version>
