@@ -67,9 +67,10 @@ generic "continue" instructions never satisfy this gate.
   exists for this exact version.
 - `npm-publish.yml` runs the same check (against both the root and the
   `@dev-loops/core` package versions), closing the direct `workflow_dispatch`
-  bypass against a stable version. The root and core versions are kept in
-  lockstep by `assert-core-dependency-version.mjs`, so one
-  `approve release v<version>` record covers both.
+  bypass against a stable version. The root and core package versions agree for
+  a normal release (`release.yml` asserts major.minor agreement via
+  `assert-core-dependency-version.mjs`), so one `approve release v<version>`
+  record covers both packages.
 - A prerelease (`rc`/`next`/`beta`/…) is out of scope: the gate applies to
   stable releases only and the prerelease flow is unchanged.
 

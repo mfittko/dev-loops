@@ -61,28 +61,32 @@ function escapeRegExp(s) {
  * Natural-language refusals are not always adjacent to the phrase
  * ("do not want to approve", "never said approve", "cannot in good conscience
  * approve"), so a fixed adjacent-form blocklist fails open. A negating marker
- * within a bounded window of the phrase (see negatesApproval) refuses the
- * comment. Fail closed: a comment that both negates and approves anywhere near
- * the phrase is refused — the operator should post an unambiguous approval.
+ * within the same clause as the phrase (see negatesApproval) refuses the
+ * comment. Fail closed: a comment that both negates and approves in the same
+ * clause is refused — the operator should post an unambiguous approval.
  */
 const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b/i;
 
+// A sentence/clause boundary: sentence-ending punctuation followed by
+// whitespace. Used to scope the negation scan to the clause that actually
+// contains the approval phrase.
+const CLAUSE_SPLIT = /[.!?;]\s+/;
+
 /**
- * True when a negating marker appears within a bounded window around the
- * approval phrase. Scans the clause-level distance before the match (120
- * chars — enough for a refusal with a few intervening words) and a short
- * trailing window (80 chars) for a trailing retraction ("approve release …;
- * do not"). Bounded so a negation in a distant, unrelated sentence does not
- * override a clear approval.
+ * True when a negating marker appears in the SAME clause as the approval
+ * phrase. Scopes the scan to the text since the last sentence-ending
+ * punctuation, so an intervening-word refusal ("do not want to approve",
+ * "never said approve", "cannot in good conscience approve") is refused while
+ * a negation in a distant, unrelated sentence ("this is not a prerelease;
+ * approve release …") does not override a clear approval.
  */
 function negatesApproval(body, pattern) {
   const m = body.match(pattern);
   if (!m) return false;
-  const start = m.index;
-  const end = start + m[0].length;
-  const before = body.slice(Math.max(0, start - 120), start);
-  const after = body.slice(end, end + 80);
-  return NEGATION_MARKER.test(before) || NEGATION_MARKER.test(after);
+  const before = body.slice(0, m.index);
+  const clauses = before.split(CLAUSE_SPLIT);
+  const clause = clauses[clauses.length - 1] ?? "";
+  return NEGATION_MARKER.test(clause);
 }
 
 /**
@@ -156,8 +160,8 @@ function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
  * issue where someone ELSE wrote the phrase — verify the operator authored it).
  * Bounded to 100 candidates via `per_page=100` (the GitHub search default is
  * 30, which silently truncates a busy repo before the real approval is seen).
- * Raw `gh api` output is parsed in-script (no `--jq`): the script is
- * node-builtins-only and must not depend on jq parsing behavior.
+ * Raw `gh api` output is parsed in-script via `JSON.parse` (not `gh --jq`), so
+ * the gate's decision never depends on jq parsing behavior.
  */
 function fetchApprovalCandidates({ repo, operator, ghCommand, runChild }) {
   const searchOut = runGh(

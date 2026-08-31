@@ -140,6 +140,20 @@ test("resolveApprovalState: negated operator text never satisfies the gate (#190
   }
 });
 
+test("resolveApprovalState: a negation in a different sentence does not refuse a clear approval (clause-scoped)", () => {
+  for (const body of [
+    "This is not a prerelease; approve release v1.0.0",
+    "I will not be available tomorrow. Approve release v1.0.0",
+  ]) {
+    const d = resolveApprovalState({
+      version: "1.0.0",
+      operator: "op",
+      comments: [{ author: "op", body }],
+    });
+    assert.equal(d.approved, true, `distant negation must not refuse: ${body}`);
+  }
+});
+
 test("resolveApprovalState: a mixed comment that negates and later approves is refused (fail closed)", () => {
   const d = resolveApprovalState({
     version: "1.0.0",
