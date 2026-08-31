@@ -270,7 +270,7 @@ const QUEUE_DESCRIPTIONS = {
 };
 const { run: _queueRunDescription, ...PROJECT_DESCRIPTIONS } = QUEUE_DESCRIPTIONS;
 
-const SUBCOMMAND_ROUTES = {
+export const SUBCOMMAND_ROUTES = {
   gate: {
     "upsert-verdict":     "scripts/github/upsert-checkpoint-verdict.mjs",
     "detect-evidence":    "scripts/github/detect-checkpoint-evidence.mjs",
@@ -332,7 +332,7 @@ const SUBCOMMAND_ROUTES = {
 // Back-compat subcommand aliases: { category: { oldName: { canonical, notice } } }.
 // Aliases keep existing callers working while emitting a one-line deprecation
 // notice to stderr so they migrate to the canonical subcommand.
-const SUBCOMMAND_ALIASES = {
+export const SUBCOMMAND_ALIASES = {
   pr: {
     "create-draft": {
       canonical: "create",
