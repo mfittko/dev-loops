@@ -117,6 +117,13 @@ test("resolveApprovalState: negated operator text never satisfies the gate (#190
     "don't approve release v1.0.0",
     "won't approve release v1.0.0",
     "never approve release v1.0.0",
+    "will not approve release v1.0.0",
+    "must not approve release v1.0.0",
+    "should not approve release v1.0.0",
+    "not approve release v1.0.0",
+    "I decline to approve release v1.0.0",
+    "I refuse to approve release v1.0.0",
+    "I reject approve release v1.0.0",
     "unapprove release v1.0.0",
     "disapprove release v1.0.0",
   ]) {

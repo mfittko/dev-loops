@@ -56,12 +56,20 @@ function escapeRegExp(s) {
 
 /**
  * Negated approval forms that must NOT satisfy the gate even though they
- * contain the positive phrase. Covers "do not/does not/don't/won't/never/
- * cannot/should not approve release …" and "unapprove/disapprove release …".
- * A mixed comment that both negates and later approves is rejected (fail
- * closed) — the operator should post an unambiguous approval.
+ * contain the positive phrase. Covers the direct negations (do/does/don't/
+ * won't/will not/must not/should not/cannot/can't/shouldn't/mustn't/never),
+ * a bare "not approve", decline/refuse/reject + (to) approve, and the
+ * unapprove/disapprove prefixes. A mixed comment that both negates and later
+ * approves is rejected (fail closed) — the operator should post an
+ * unambiguous approval.
  */
-const NEGATED_APPROVAL = /(?:^|[\s.!?,;:])(?:do\s+not|does\s+not|don['’]?t|won['’]?t|never|cannot|can['’]?t|should\s+not|shouldn['’]?t)\s+approve\s+release|\b(?:un|dis)approve\s+release/i;
+const NEGATED_APPROVAL = new RegExp(
+  "(?:^|[\\s.!?,;:])(?:" +
+    "do\\s+not\\s+|does\\s+not\\s+|don['’]?t\\s+|won['’]?t\\s+|never\\s+|cannot\\s+|can['’]?t\\s+|should\\s+not\\s+|shouldn['’]?t\\s+|must\\s+not\\s+|mustn['’]?t\\s+|will\\s+not\\s+|may\\s+not\\s+|not\\s+|decline[sd]?\\s+(?:to\\s+)?|refuse[sd]?\\s+(?:to\\s+)?|reject[sd]?\\s+" +
+    ")approve\\s+release" +
+  "|\\b(?:un|dis)approve\\s+release",
+  "i",
+);
 
 /**
  * The only accepted approval record: a comment by the operator whose body
