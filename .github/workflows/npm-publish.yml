@@ -29,6 +29,19 @@ jobs:
             exit 1
           fi
 
+      # #1901: the npm publish itself is a release boundary — a manual
+      # workflow_dispatch against a stable version must satisfy the same
+      # per-release operator-approval gate as the tag flow (closing the
+      # direct-dispatch bypass). Prereleases pass through unchanged.
+      - name: Assert operator release approval (stable releases)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(jq -r .version package.json)
+          node scripts/release/verify-release-approval.mjs \
+            --version "${VERSION}" \
+            --repo "${{ github.repository }}"
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:

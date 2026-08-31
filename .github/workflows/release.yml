@@ -51,6 +51,21 @@ jobs:
           node scripts/release/assert-core-dependency-version.mjs \
             --release-version "${{ steps.version.outputs.version }}"
 
+      # #1901: cutting a STABLE tag is a gated release decision, not an agent
+      # judgment call. The check fails closed (no Release, no npm-publish
+      # dispatch) unless an explicit per-release operator approval record
+      # exists (an issue comment by the repo owner stating
+      # "approve release v<version>"); blanket merge authorizations and
+      # generic continue instructions never satisfy it. Prereleases pass
+      # through unchanged (the gate applies to stable releases only).
+      - name: Assert operator release approval (stable releases)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/verify-release-approval.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}"
+
       - name: Skip if release already exists (idempotent)
         id: exists
         env:

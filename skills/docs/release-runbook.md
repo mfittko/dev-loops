@@ -40,6 +40,52 @@ manual step.** Everything after the tag is hands-off.
 That is the whole manual flow. Do **not** create the GitHub Release by hand —
 the workflow does it (and is idempotent if you already created one).
 
+## Operator release approval gate (stable releases)
+
+Cutting a **stable** tag (`vX.Y.Z`, no prerelease suffix) and publishing it to
+npm is a **gated release decision, not an agent judgment call**. The first
+v1.0.0 cut was tagged and published by a dev-loop subagent acting on a generic
+"continue" plus a blanket merge authorization, and had to be rolled back — the
+approval was read as transferable. It is not. Blanket merge authorizations and
+generic "continue" instructions never satisfy this gate.
+
+**Sanctioned division:**
+
+- **Agents may** stage, verify, and prepare everything up to and including the
+  release commit on a branch or `main` per the staging rules above.
+- **The operator** owns the tag-push + `npm publish`/dist-tag decision, per
+  release. The accepted approval record is an issue comment authored by the
+  repo owner (operator) on the release tracking issue stating
+  `approve release v<version>` — or the operator running the publish commands
+  themselves.
+
+**Deterministic enforcement (fail closed).** Both release workflows run
+`scripts/release/verify-release-approval.mjs` before anything is published:
+
+- `release.yml` (fired by the `v*` tag push) refuses — no GitHub Release, no
+  npm-publish dispatch — with a named refusal when no operator approval record
+  exists for this exact version.
+- `npm-publish.yml` runs the same check, closing the direct
+  `workflow_dispatch` bypass against a stable version.
+- A prerelease (`rc`/`next`/`beta`/…) is out of scope: the gate applies to
+  stable releases only and the prerelease flow is unchanged.
+
+The refusal names exactly what is missing:
+
+```text
+stable release v1.0.0 blocked: no explicit operator release approval record
+found. Expected an issue comment by the operator (@owner) stating
+"approve release v1.0.0", or the operator running the publish commands
+themselves. Blanket merge authorizations and generic continue instructions do
+NOT satisfy this gate.
+```
+
+**Operator path for a stable cut:** post the approval comment on the release
+tracking issue (then the automated flow proceeds), or run the publish steps
+manually. Local pre-flight (optional but recommended before pushing the tag):
+`node scripts/release/verify-release-approval.mjs --version <X.Y.Z> --repo
+<owner/name>`.
+
 ## What happens automatically
 
 - **`.github/workflows/release.yml`** fires on the `v*` tag push. It verifies the
