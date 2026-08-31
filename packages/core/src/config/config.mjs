@@ -1277,7 +1277,7 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
  * @typedef {object} ConfigLoadError
  * @property {string} path - Human-readable file path or layer name
  * @property {string} message - Error description
- * @property {"defaults"|"settings"|"devloops"|"extensionDefaults"|"merged"} layer - Which config layer failed
+ * @property {"extensionDefaults"|"defaults"|"devloops"|"merged"} layer - Which config layer failed
  */
 
 // ============================================================================
