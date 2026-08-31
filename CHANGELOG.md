@@ -4,8 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## 1.0.0 - 2026-08-31
-
 ### Added
 - **Enforce fresh-context provenance on the post-run retrospective (#1870).** A `complete` retrospective checkpoint is now provenance-gated: `resolveCheckpointStateFromArtifact` treats a record whose `provenance` does not pin a fresh-context pass over the cycle's full agent tool-call record (`context: "fresh"`, `seededFrom: "agent_tool_call_record"`, non-blank `recordSource`) as `MISSING`, so every legacy inline self-authored retro fails closed. `checkpoint-contract.mjs --state complete` requires `--retro-context fresh --record-source <path>` and rejects `--retro-context inline` outright; the retro procedure prose and the behavioral-review extension now mandate the independent fresh-context dispatch, matching how gate reviewers already run.
 - **Enforce explicit Non-goals on tracker-backed issue refinement (#1866).** `detectIssueRefinementArtifact` now requires an explicit, non-empty `## Non-goals` section on tracker-backed issues (fail-closed, distinct `missing_explicit_non_goals` finding), reconciling the predicate with the loop-grill synthesis contract; a linked refinement doc satisfies the artifact check only when it actually resolves. See `ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR` in the artifact-authority contract.
