@@ -466,30 +466,6 @@ function resolveTargetPreference(cwd) {
     } catch {
     }
   }
-  // Legacy .pi/dev-loop/settings.* (deprecated)
-  const legacyCandidates = [
-    path.join(cwd, ".pi", "dev-loop", "settings.yaml"),
-    path.join(cwd, ".pi", "dev-loop", "settings.yml"),
-    path.join(cwd, ".pi", "dev-loop", "settings.json"),
-  ];
-  for (const settingsPath of legacyCandidates) {
-    try {
-      const raw = readFileSync(settingsPath, "utf8");
-      if (settingsPath.endsWith(".json")) {
-        const parsed = JSON.parse(raw);
-        const val = parsed?.strategy;
-        if (val === "local-first") return "prefer_local";
-        if (val === "tracker-first" || val === "github-first") return "prefer_github_first";
-        continue;
-      }
-      const match = raw.match(/^strategy:\s*["']?([^"'\s]+)["']?/m);
-      if (match) {
-        if (match[1] === "local-first") return "prefer_local";
-        if (match[1] === "tracker-first" || match[1] === "github-first") return "prefer_github_first";
-      }
-    } catch {
-    }
-  }
   return "prefer_local";
 }
 function normalizeConfigInputSource(value) {

@@ -16,7 +16,7 @@ Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
-  --config <path>       Path to .devloops (default: auto-detect, tries .devloops then .pi/dev-loop/settings.*)
+  --config <path>       Path to .devloops (default: auto-detect .devloops at repo root)
   --label-check         Also check for explicit "internal_only" label on the PR
 Output (stdout, JSON):
   { "ok": true, "internalOnly": true|false, "files": ["path1", "path2", ...],
@@ -56,7 +56,7 @@ function findRepoRoot(cwd = process.cwd()) {
 /**
  * Load internal path patterns from config, with precedence:
  *   1. --config flag (explicit path)
- *   2. Auto-detect from repo root (.devloops first, then .pi/dev-loop/settings.* or overrides.*)
+ *   2. Auto-detect from repo root (.devloops)
  *   3. Shipped defaults
  *
  * Returns a flat array of regex pattern strings.
@@ -74,18 +74,11 @@ function loadInternalPathPatterns(configPath) {
   const repoRoot = findRepoRoot();
   if (repoRoot) {
     const candidates = [
-      // .devloops at repo root (primary)
+      // .devloops at repo root
       path.join(repoRoot, ".devloops"),
       path.join(repoRoot, ".devloops.yaml"),
       path.join(repoRoot, ".devloops.yml"),
       path.join(repoRoot, ".devloops.json"),
-      // Legacy .pi/dev-loop/settings.* or overrides.* (deprecated)
-      path.join(repoRoot, ".pi", "dev-loop", "settings.yaml"),
-      path.join(repoRoot, ".pi", "dev-loop", "settings.yml"),
-      path.join(repoRoot, ".pi", "dev-loop", "settings.json"),
-      path.join(repoRoot, ".pi", "dev-loop", "overrides.yaml"),
-      path.join(repoRoot, ".pi", "dev-loop", "overrides.yml"),
-      path.join(repoRoot, ".pi", "dev-loop", "overrides.json"),
     ];
     for (const candidate of candidates) {
       const patterns = tryLoadFromFile(candidate);

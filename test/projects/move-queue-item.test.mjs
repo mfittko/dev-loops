@@ -708,7 +708,7 @@ describe("move-queue-item", () => {
     // Writes a malformed .devloops so loadStateColumnMap returns a non-ENOENT
     // parse error (fail-closed CONFIG_ERROR path) and returns the cwd.
     function writeMalformedDevloops(dir) {
-      writeFileSync(nodePath.join(dir, ".devloops"), "queue:\n  board: [unclosed\n", "utf-8");
+      writeFileSync(nodePath.join(dir, ".devloops"), "tracker:\n  board: [unclosed\n", "utf-8");
       return dir;
     }
 

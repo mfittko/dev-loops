@@ -102,12 +102,12 @@ The effective default for a consumer comes from the config-merge layering in `pa
 
 1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy: local-first`. This is the code-level fallback when no other layer sets the key.
 2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
-3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
-4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
+3. Repo-local `.pi/dev-loop/defaults.*` — applied when present.
+4. Repo `.devloops` at repo root — the per-repo override, highest precedence.
 
 With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: tracker-first` in its own `.devloops` (`github-first` is a deprecated accepted alias, normalized with a load-time warning).
 
-Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load, per the precedence list above: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning).
+One legacy repo-local layer also exists under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`): `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`. The old `.pi/dev-loop/settings.*` / `overrides.*` fallback layers were removed at the v1.0.0 cut (ADR 0017) and no longer load — such files are simply ignored.
 
 ### Explicit non-knobs
 

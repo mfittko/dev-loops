@@ -303,7 +303,7 @@ human(s).
   (omit `--item` when the merged PR is itself the queue item — an unfilled/empty `--item` falls back to `--pr`; the
   `|| true` masks the residual usage-error exits the same way the archive step's does). `--logical-column done`
   resolves the Done column through `queue.statusColumns`, so a board that renamed Done still converges. Resolves the
-  board from `.devloops` (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using
+  board from `.devloops` (`tracker.board`) relative to `cwd` — there is no `--repo-root` flag — using
   local `gh` auth, so it must run from the main checkout: the next step removes the worktree, leaving it with no cwd.
   Best-effort and NON-FATAL on a parsed invocation: a board that is not configured, an item not on the board, or any
   API failure exits 0 with a JSON result describing the skip instead of failing the merge; a usage/argument error

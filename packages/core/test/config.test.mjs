@@ -976,7 +976,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L3: both files present, valid", async () => {
+  test("L3: both layers present, valid", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L3-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -986,13 +986,13 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first", refinement: { fanOut: 5 } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      // overrides.json beats defaults.json for strategy, but refinement falls through
+      // .devloops beats .pi/dev-loop/defaults.json for strategy, but refinement falls through
       assert.equal(result.config.strategy, "tracker-first");
       assert.equal(result.config.refinement.fanOut, 5);
     } finally {
@@ -1035,7 +1035,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L6: overrides.json exists but is not valid JSON", async () => {
+  test("L6: .devloops exists but is not valid JSON", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L6-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1044,12 +1044,12 @@ describe("loader — graceful degradation", () => {
         path.join(piDir, "defaults.json"),
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
-      await writeFile(path.join(piDir, "overrides.json"), "broken json [[[");
+      await writeFile(path.join(tmpDir, ".devloops"), "broken json [[[");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.strategy, "local-first");
-      assert.ok(result.errors.length > 0, "should error for broken overrides");
+      assert.ok(result.errors.length > 0, "should error for broken .devloops");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1108,7 +1108,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1c: workflow family merges correctly from defaults.yaml and settings.yaml", async () => {
+  test("Y1c: workflow family merges correctly from defaults.yaml and .devloops", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-workflow-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1121,7 +1121,7 @@ describe("loader — graceful degradation", () => {
         "  requireDraftFirst: false",
         "  devModeDefault: false",
       ].join("\n"));
-      await writeFile(path.join(piDir, "settings.yaml"), [
+      await writeFile(path.join(tmpDir, ".devloops"), [
         "version: 1",
         "workflow:",
         "  requireDraftFirst: true",
@@ -1141,36 +1141,46 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1d: loader falls back to legacy overrides.yaml when settings.yaml is absent", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-legacy-overrides-yaml-"));
-    try {
-      const piDir = path.join(tmpDir, ".pi", "dev-loop");
-      await mkdir(piDir, { recursive: true });
-      await writeFile(path.join(piDir, "overrides.yaml"), [
-        "version: 1",
-        "strategy: local-first",
-      ].join("\n"));
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
-      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy, "local-first");
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  test("Y1e: settings.yaml takes precedence over legacy overrides.yaml", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-settings-preferred-yaml-"));
+  test("Y1d: legacy .pi/dev-loop/settings.yaml is ignored (removed #1701) — no values load, no deprecation warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-legacy-ignored-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "settings.yaml"), [
         "version: 1",
-        "strategy: tracker-first",
+        // A value NO shipped/extension layer would set — if the legacy path
+        // were ever read again, this would surface in resolved config.
+        "refinement:",
+        "  fanOut: 9",
       ].join("\n"));
-      await writeFile(path.join(piDir, "overrides.yaml"), [
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      // No values are applied from the removed legacy path: fanOut stays the
+      // shipped extension default (3), never the settings.yaml value (9).
+      assert.equal(result.config.refinement.fanOut, 3);
+      assert.equal(
+        result.warnings.some((w) => /deprecated/i.test(w)),
+        false,
+        "no legacy deprecation warning should fire",
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Y1e: .devloops takes precedence over .pi/dev-loop/defaults.yaml", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devloops-preferred-yaml-"));
+    try {
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(path.join(piDir, "defaults.yaml"), [
         "version: 1",
         "strategy: local-first",
+      ].join("\n"));
+      await writeFile(path.join(tmpDir, ".devloops"), [
+        "version: 1",
+        "strategy: tracker-first",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
@@ -1181,7 +1191,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1g: settings.yaml can override only gates.draft.requireCi without losing default draft angles", async () => {
+  test("Y1g: .devloops can override only gates.draft.requireCi without losing default draft angles", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-gate-require-ci-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1196,7 +1206,7 @@ describe("loader — graceful degradation", () => {
         "    required: true",
         "    requireCi: true",
       ].join("\n"));
-      await writeFile(path.join(piDir, "settings.yaml"), [
+      await writeFile(path.join(tmpDir, ".devloops"), [
         "version: 1",
         "gates:",
         "  draft:",
@@ -1215,18 +1225,18 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1f: settings.json takes precedence over legacy overrides.json", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-settings-preferred-json-"));
+  test("Y1f: .devloops.json takes precedence over .pi/dev-loop/defaults.json", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devloops-preferred-json-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(
-        path.join(piDir, "settings.json"),
-        JSON.stringify({ version: 1, strategy: "tracker-first" }),
+        path.join(piDir, "defaults.json"),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 1, strategy: "local-first" }),
+        path.join(tmpDir, ".devloops.json"),
+        JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
@@ -1254,7 +1264,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L7: overrides.json is valid JSON but fails schema", async () => {
+  test("L7: .devloops is valid JSON but fails schema", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L7-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1264,14 +1274,14 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, unknownKey: true }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.strategy, "local-first");
-      assert.ok(result.errors.length > 0, "should error for bad overrides schema");
+      assert.ok(result.errors.length > 0, "should error for bad .devloops schema");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1325,7 +1335,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L13: overrides.json has only refinement.fanOut: 7", async () => {
+  test("L13: .devloops has only refinement.fanOut: 7", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L13-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1335,7 +1345,7 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1348,13 +1358,13 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L14: both files invalid — still returns extension defaults", async () => {
+  test("L14: both layers invalid — still returns extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L14-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "defaults.json"), "bad json");
-      await writeFile(path.join(piDir, "overrides.json"), "also bad");
+      await writeFile(path.join(tmpDir, ".devloops"), "also bad");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
@@ -1366,7 +1376,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L15: defaults.json has version: 1 but overrides.json has version: 2", async () => {
+  test("L15: defaults.json has version: 1 but .devloops has version: 2", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L15-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1376,13 +1386,13 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 2, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      // overrides.json rejected, defaults.json applied
+      // .devloops rejected (version mismatch), defaults.json applied
       assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length > 0, "should error for version mismatch");
     } finally {
@@ -1445,7 +1455,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M2: overrides.json beats defaults.json", async () => {
+  test("M2: .devloops beats .pi/dev-loop/defaults.json", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M2-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1455,7 +1465,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1, refinement: { fanOut: 5 } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1466,7 +1476,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M3: missing key in overrides falls through to defaults", async () => {
+  test("M3: missing key in .devloops falls through to defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M3-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1476,7 +1486,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1, refinement: { fanOut: 5, mode: "sequential" } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1505,7 +1515,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M5: overrides.json sets a key defaults.json doesn't mention", async () => {
+  test("M5: .devloops sets a key defaults.json doesn't mention", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M5-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1515,7 +1525,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1 }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, models: { conductor: "gpt-5" } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1526,7 +1536,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M6: shallow merge — models.roles in overrides replaces entire models.roles", async () => {
+  test("M6: shallow merge — models.roles in .devloops replaces entire models.roles", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M6-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1539,7 +1549,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           models: { roles: { correctness: "gpt-4" } },
@@ -1548,8 +1558,8 @@ describe("loader — precedence", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       const roles = result.config.models.roles;
-      // Shallow merge: overrides replaces entire models.roles
-      assert.ok(roles.correctness, "should have correctness from overrides");
+      // Shallow merge: .devloops replaces entire models.roles
+      assert.ok(roles.correctness, "should have correctness from .devloops");
       assert.ok(!roles.security, "should NOT have security (replaced by shallow merge)");
       assert.ok(!roles.style, "should NOT have style (replaced by shallow merge)");
     } finally {
@@ -1570,7 +1580,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           gates: { draft: { angles: [{ name: "dry", persona: "custom-dry-reviewer" }] } },
@@ -1590,7 +1600,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M8: workflow family merges correctly from defaults.json and overrides.json", async () => {
+  test("M8: workflow family merges correctly from defaults.json and .devloops", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M8-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1608,7 +1618,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           workflow: {
@@ -1648,14 +1658,10 @@ describe("tracker config (#1408)", () => {
     assert.equal(resolveTrackerProvider({ tracker: { provider: "jira" } }), "jira");
   });
 
-  test("resolveTrackerBoard prefers tracker.board over the deprecated queue.board", () => {
+  test("resolveTrackerBoard resolves tracker.board and ignores removed legacy keys", () => {
     assert.equal(resolveTrackerBoard({}), null);
-    assert.deepEqual(resolveTrackerBoard({ queue: { board: { title: "Q" } } }), { title: "Q" });
     assert.deepEqual(resolveTrackerBoard({ tracker: { board: { number: 3 } } }), { number: 3 });
-    assert.deepEqual(
-      resolveTrackerBoard({ queue: { board: { title: "Q" } }, tracker: { board: { number: 3 } } }),
-      { number: 3 },
-    );
+    assert.equal(resolveTrackerBoard({ queue: { board: { title: "Q" } } }), null, "queue.board is no longer an alias (removed #1701)");
   });
 
   test("tracker.provider accepts any non-empty string (schema does not preclude an external provider)", () => {
@@ -1671,16 +1677,15 @@ describe("tracker config (#1408)", () => {
     assert.ok(!result.success);
   });
 
-  test("tracker.board validation error names tracker.board, not queue.board", () => {
+  test("tracker.board validation error names tracker.board", () => {
     const result = FileConfigSchema.safeParse({ version: 1, tracker: { board: {} } });
     assert.ok(!result.success);
     assert.ok(result.error.issues.some((i) => i.message === "tracker.board must set number or title"));
   });
 
-  test("queue.board validation error still names queue.board", () => {
-    const result = FileConfigSchema.safeParse({ version: 1, queue: { board: {} } });
-    assert.ok(!result.success);
-    assert.ok(result.error.issues.some((i) => i.message === "queue.board must set number or title"));
+  test("queue.board is no longer a valid config key (#1701 removal)", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, queue: { board: { title: "Legacy Board" } } });
+    assert.ok(!result.success, "queue.board must fail schema validation");
   });
 
   test("strategy: \"github-first\" is accepted as a deprecated alias for tracker-first, with a warning", async () => {
@@ -1712,19 +1717,29 @@ describe("tracker config (#1408)", () => {
     }
   });
 
-  test("queue.board is accepted as a deprecated alias for tracker.board, with a warning", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-alias-board-"));
+  test("a .devloops setting only queue.board yields no board and no alias warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-board-only-"));
     try {
       await writeFile(
         path.join(tmpDir, ".devloops"),
         "version: 1\nqueue:\n  board:\n    title: Legacy Board\n",
       );
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { loadDevLoopConfig, resolveTrackerBoard } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(result.config.tracker.board, { title: "Legacy Board" });
-      assert.deepEqual(result.config.queue.board, { title: "Legacy Board" });
-      assert.ok(result.warnings.some((w) => /queue\.board is a deprecated alias for tracker\.board/.test(w)));
+      assert.ok(
+        result.errors.length > 0,
+        "queue.board must fail schema validation",
+      );
+      assert.ok(
+        result.config.tracker?.board == null,
+        "queue.board must not resolve onto tracker.board",
+      );
+      assert.equal(
+        result.warnings.some((w) => /deprecated alias for tracker\.board/.test(w)),
+        false,
+        "no alias warning should fire",
+      );
+      assert.deepEqual(resolveTrackerBoard(result.config), null);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1780,7 +1795,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage"] } } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         // Adds "custom-lens" only — does not restate scope/coverage.
         JSON.stringify({ version: 1, gates: { draft: { angles: ["custom-lens"] } } }),
       );
@@ -1804,7 +1819,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage", "correctness"] } } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         // Drops "coverage" only — does not restate scope/correctness.
         JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", enabled: false }] } } }),
       );
@@ -1838,7 +1853,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", mandatory: true }] } } }),
       );
       const { loadDevLoopConfig, resolveGateConfig } = await import("../src/config/config.mjs");

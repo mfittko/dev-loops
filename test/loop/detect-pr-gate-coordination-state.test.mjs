@@ -1120,9 +1120,8 @@ test("detect-pr-gate-coordination-state progresses past the removed retrospectiv
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-retro-"));
 
   try {
-    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       [
         "version: 1",
       ].join("\n"),

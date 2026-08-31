@@ -620,7 +620,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    number: 42",
         ].join("\n"));
@@ -636,7 +636,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.yaml"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: From Yaml",
         ].join("\n"));
@@ -652,7 +652,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.json"), JSON.stringify({
           version: 1,
-          queue: {
+          tracker: {
             board: { number: 99 },
           },
         }));
@@ -668,7 +668,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.yml"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: From Yml",
         ].join("\n"));
@@ -684,7 +684,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: My Board",
         ].join("\n"));

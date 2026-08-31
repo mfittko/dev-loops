@@ -563,17 +563,11 @@ function boardRefConfig(ownerKey) {
     });
 }
 
-const QueueBoardConfig = boardRefConfig("queue.board");
-
 /** Queue mode config */
 const QueueConfig = z.strictObject({
   maxParallel: z.number().int().min(1).max(10).default(3).describe("Maximum queue items worked in parallel."),
   maxAutoFiledIssues: z.number().int().min(0).max(100).default(10).describe("Cap on auto-filed issues per run."),
   reDispatchMaxRetries: z.number().int().min(0).max(10).default(1).describe("Retries when re-dispatching a failed queue item."),
-  // Deprecated: superseded by `tracker.board` (issue #1408, the tracker-agnostic
-  // seam). Kept accepted for back-compat — see resolveTrackerBoard, which reads
-  // `tracker.board` first and falls back to this field with a load-time warning.
-  board: QueueBoardConfig.describe("Deprecated: use tracker.board instead. GitHub Projects board identifier.").optional(),
   archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
 });
 
@@ -583,7 +577,7 @@ const QueueConfig = z.strictObject({
  * at `resolveTrackerAdapter` call time, not at config-parse time — the
  * seam/resolver must not preclude a consumer registering an external
  * provider post-1.0 (`plugin`, reserved, not implemented in this pass).
- * `board` supersedes the deprecated `queue.board` (see resolveTrackerBoard).
+ * `board` is the canonical GitHub Projects board identifier (see resolveTrackerBoard).
  *
  * No generic `fieldMappings` (logical-column -> provider-status) key here:
  * the github provider's logical-column -> Status mapping IS the existing,
@@ -598,7 +592,7 @@ const QueueConfig = z.strictObject({
 const TrackerConfig = z.strictObject({
   provider: z.string().trim().min(1).describe("Tracker provider registry key. Built-in: \"github\" (default).").optional(),
   plugin: z.string().trim().min(1).describe("Reserved: module specifier for an external tracker provider plugin (post-1.0, not implemented in this pass).").optional(),
-  board: boardRefConfig("tracker.board").describe("Tracker board identifier; supersedes the deprecated queue.board.").optional(),
+  board: boardRefConfig("tracker.board").describe("Tracker board identifier.").optional(),
 });
 
 /**
@@ -940,13 +934,11 @@ export const BUILT_IN_DEFAULTS = Object.freeze({
     maxParallel: 3,
     maxAutoFiledIssues: 10,
     reDispatchMaxRetries: 1,
-    // queue.board is intentionally absent from defaults — setting it is an
-    // explicit operator opt-in for Projects-based queue ordering.
   }),
   tracker: Object.freeze({
     provider: "github",
     // tracker.board is intentionally absent from defaults — setting it is an
-    // explicit operator opt-in (mirrors queue.board). The logical-column ->
+    // explicit operator opt-in for Projects-based queue ordering. The logical-column ->
     // Status mapping is queue.statusColumns (see TrackerConfig above), not a
     // tracker-owned default.
   }),
@@ -1285,7 +1277,7 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
  * @typedef {object} ConfigLoadError
  * @property {string} path - Human-readable file path or layer name
  * @property {string} message - Error description
- * @property {"defaults"|"settings"|"extensionDefaults"|"merged"} layer - Which config layer failed
+ * @property {"extensionDefaults"|"defaults"|"devloops"|"merged"} layer - Which config layer failed
  */
 
 // ============================================================================
@@ -1499,10 +1491,11 @@ function configError(message, code, filePath) {
 }
 
 /**
- * Try to load and merge one config layer (defaults or settings).
+ * Try to load and merge one config layer (extensionDefaults, defaults, or
+ * devloops).
  * @param {Record<string, unknown>} merged - Current merged config
  * @param {string|string[]} basePaths - Config file base path(s) without extension
- * @param {"defaults"|"settings"} layer - Layer name
+ * @param {"extensionDefaults"|"defaults"|"devloops"} layer - Layer name
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
  * @param {{ warnOnMissing?: boolean }} [options]
@@ -1628,7 +1621,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
 
 /**
  * Load the dev-loop configuration with full precedence:
- *   settings.(yaml|yml|json) > legacy overrides.(yaml|yml|json) > repo .pi/dev-loop/defaults.(yaml|yml|json) > extension defaults > built-in defaults
+ *   repo .devloops > repo .pi/dev-loop/defaults.(yaml|yml|json) > extension defaults > built-in defaults
  *
  * Never throws for config-related problems.
  * Returns extension defaults (with built-in defaults as the final fallback) even when all repo-local config files are missing or broken.
@@ -1641,7 +1634,6 @@ export async function loadDevLoopConfig(options = {}) {
   const configDir = path.join(repoRoot, ".pi", "dev-loop");
   const defaultsPath = path.join(configDir, "defaults");
   const devloopsPath = path.join(repoRoot, ".devloops");
-  const settingsPaths = [path.join(configDir, "settings"), path.join(configDir, "overrides")];
 
   /** @type {string[]} */
   const warnings = [];
@@ -1678,79 +1670,7 @@ export async function loadDevLoopConfig(options = {}) {
 
   if (primaryExists) {
     // .devloops is the primary override — apply it
-    merged = await applyLayer(merged, devloopsPath, "settings", warnings, errors);
-
-    // Warn if legacy files still exist alongside .devloops (but don't load them —
-    // .devloops is authoritative; legacy must not override it)
-    let legacyAlongside = false;
-    for (const legacyPath of settingsPaths) {
-      for (const ext of [".yaml", ".yml", ".json"]) {
-        try {
-          await readFile(legacyPath + ext, "utf8");
-          legacyAlongside = true;
-          break;
-        } catch (err) {
-          if (err?.code !== "ENOENT") {
-            // File exists but is unreadable — treat as "found" so the
-            // deprecation warning fires (applyLayer is not called for legacy
-            // paths when .devloops is present, so the flag only controls the warning).
-            legacyAlongside = true;
-            break;
-          }
-        }
-      }
-      if (legacyAlongside) break;
-    }
-    if (legacyAlongside) {
-      warnings.push(
-        `Deprecated config path(s) found under .pi/dev-loop/settings.* or .pi/dev-loop/overrides.*. ` +
-        `Migrate to .devloops (or .devloops.yaml/.devloops.yml/.devloops.json) at repo root. ` +
-        `Legacy paths will be removed in a future version.`
-      );
-    }
-  } else {
-    // No .devloops — fall back to legacy .pi/dev-loop/settings.* or overrides.* (deprecated)
-    let legacyFound = false;
-    for (const legacyPath of settingsPaths) {
-      for (const ext of [".yaml", ".yml", ".json"]) {
-        try {
-          await readFile(legacyPath + ext, "utf8");
-          legacyFound = true;
-          break;
-        } catch (err) {
-          if (err?.code !== "ENOENT") {
-            // File exists but is unreadable — treat as "found" so the
-            // deprecation warning fires and applyLayer can surface the error
-            // (legacy applyLayer runs in this branch).
-            legacyFound = true;
-            break;
-          }
-        }
-      }
-      if (legacyFound) break;
-    }
-    if (legacyFound) {
-      warnings.push(
-        `Deprecated config path(s) found under .pi/dev-loop/settings.* or .pi/dev-loop/overrides.*. ` +
-        `Migrate to .devloops (or .devloops.yaml/.devloops.yml/.devloops.json) at repo root. ` +
-        `Legacy paths will be removed in a future version.`
-      );
-      merged = await applyLayer(merged, settingsPaths, "settings", warnings, errors);
-    }
-  }
-
-  // Deprecated `queue.board` -> `tracker.board` alias (issue #1408, the
-  // tracker-agnostic seam). Runs on the fully-merged object (unlike the
-  // `strategy: "github-first"` alias above, this only affects cross-layer
-  // MERGE PRECEDENCE, not per-layer schema validity — queue.board is still a
-  // valid FileConfigSchema shape on its own — so normalizing once here, after
-  // every layer has merged, is sufficient).
-  if (isPlainObject(merged.queue?.board) && !isPlainObject(merged.tracker?.board)) {
-    warnings.push(
-      `queue.board is a deprecated alias for tracker.board (issue #1408). ` +
-      `Update .devloops to set tracker.board instead; the alias will be removed in a future version.`
-    );
-    merged = { ...merged, tracker: { ...(merged.tracker ?? {}), board: merged.queue.board } };
+    merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
   }
 
   // Validate final merged config
@@ -3085,19 +3005,13 @@ export function resolveTrackerProvider(config) {
 }
 
 /**
- * Resolve the effective tracker board identifier. `tracker.board` is
- * canonical; `queue.board` is a DEPRECATED alias, already normalized onto
- * `tracker.board` by `loadDevLoopConfig` (with a load-time warning) for any
- * config that went through the loader. This resolver also accepts a
- * hand-built config object that sets `queue.board` directly (bypassing the
- * loader, e.g. in a test) and falls back to it — with no warning, since only
- * the loader surfaces warnings.
+ * Resolve the effective tracker board identifier. `tracker.board` is the
+ * canonical (and only) board config key.
  *
  * @param {DevLoopConfig} config
  * @returns {{ number?: number, title?: string } | null}
  */
 export function resolveTrackerBoard(config) {
   if (isPlainObject(config?.tracker?.board)) return config.tracker.board;
-  if (isPlainObject(config?.queue?.board)) return config.queue.board;
   return null;
 }

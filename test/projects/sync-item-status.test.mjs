@@ -28,7 +28,7 @@ function failingRunChild() {
   return async () => ({ code: 1, stdout: "", stderr: "gh: authentication required" });
 }
 
-async function withBoardConfig(fn, { devloops = "version: 1\nqueue:\n  board:\n    number: 3\n" } = {}) {
+async function withBoardConfig(fn, { devloops = "version: 1\ntracker:\n  board:\n    number: 3\n" } = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "sync-item-status-board-"));
   try {
     writeFileSync(path.join(tempDir, ".devloops"), devloops, "utf8");
@@ -210,7 +210,7 @@ describe("sync-item-status", () => {
           assert.equal(calls.length, 1);
           assert.equal(calls[0].targetColumn, "Merged");
         },
-        { devloops: "version: 1\nqueue:\n  board:\n    number: 3\n  statusColumns:\n    done: Merged\n" },
+        { devloops: "version: 1\ntracker:\n  board:\n    number: 3\nqueue:\n  statusColumns:\n    done: Merged\n" },
       );
     });
 
@@ -224,7 +224,7 @@ describe("sync-item-status", () => {
           );
           assert.equal(calls[0].targetColumn, "Done");
         },
-        { devloops: "version: 1\nqueue:\n  board:\n    number: 3\n  statusColumns:\n    done: Merged\n" },
+        { devloops: "version: 1\ntracker:\n  board:\n    number: 3\nqueue:\n  statusColumns:\n    done: Merged\n" },
       );
     });
 
@@ -318,7 +318,7 @@ describe("sync-item-status", () => {
       try {
         writeFileSync(
           path.join(tempDir, ".devloops"),
-          "version: 1\nqueue:\n  board:\n    number: 3\n",
+          "version: 1\ntracker:\n  board:\n    number: 3\n",
           "utf8",
         );
         const result = await main(

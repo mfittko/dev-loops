@@ -15,7 +15,7 @@ Options:
   --project <number|id|board-uri>     Project number, node ID, or board URI
                                       (e.g. https://github.com/users/me/projects/3).
                                       When omitted, resolved from .devloops
-                                      queue.board.number / queue.board.title.
+                                      tracker.board number / title.
   --item <number|node-id>             Required. Item to move: issue/PR number, or project item node ID.
   --to-column <name>                  Required. Target Status column (e.g. "Next Up", "In Progress").
   --help, -h                          Show this help.

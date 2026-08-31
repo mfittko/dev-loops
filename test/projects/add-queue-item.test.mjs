@@ -733,7 +733,7 @@ describe("add-queue-item", () => {
     }
 
     it("main() lands --next-up in the overridden statusColumns.next_up column (\"Todo\")", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -754,7 +754,7 @@ describe("add-queue-item", () => {
     });
 
     it("main() accepts --next-up together with an agreeing --column \"Todo\" under the same override", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -775,7 +775,7 @@ describe("add-queue-item", () => {
     });
 
     it("main() rejects --next-up + the OLD literal --column \"Next Up\" once next_up is renamed to \"Todo\"", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         await assert.rejects(
           () =>
             main(
@@ -805,7 +805,7 @@ describe("add-queue-item", () => {
     it("main() with an override-free .devloops still resolves --next-up to the default \"Next Up\" (hermetic cwd)", async () => {
       // Hermetic: explicit empty-config temp cwd so this can't break if the real
       // repo's .devloops ever gains a next_up override.
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -1082,7 +1082,7 @@ describe("add-queue-item", () => {
     });
 
     it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -1092,7 +1092,7 @@ describe("add-queue-item", () => {
     });
 
     it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -1103,7 +1103,7 @@ describe("add-queue-item", () => {
 
     it("runCli: explicit --project wins over .devloops", async () => {
       const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         // Only project #9 is returned; if .devloops (#1) had won, resolution would 404.
         await runCli(["--repo", "mfittko/dev-loops", "--project", "9", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(other)),

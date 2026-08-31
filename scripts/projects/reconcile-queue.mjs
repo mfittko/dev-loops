@@ -29,8 +29,8 @@ Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id|board-uri>
                           Project number (integer), node ID, or board URI. When
-                          omitted, resolved from .devloops queue.board.number /
-                          queue.board.title.
+                          omitted, resolved from .devloops tracker.board number /
+                          title.
   --help, -h              Show this help.
 
 Output (stdout):

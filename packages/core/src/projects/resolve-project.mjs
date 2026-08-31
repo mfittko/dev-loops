@@ -6,9 +6,9 @@ import { parse as parseYaml } from "yaml";
 // resolution used by ensure-queue-board.mjs. Returns { project }, { title },
 // and/or { olderThanDays } when configured; never throws on a missing/bad file.
 //
-// `tracker.board` (issue #1408, the tracker-agnostic seam) takes priority over
-// the deprecated `queue.board` — same precedence as loadBoardConfig in
-// ../loop/queue-board-sync.mjs and resolveTrackerBoard in ../config/config.mjs.
+// The board resolves from `tracker.board` (issue #1408, the tracker-agnostic
+// seam) — same source as loadBoardConfig in ../loop/queue-board-sync.mjs and
+// resolveTrackerBoard in ../config/config.mjs.
 function resolveSettings(cwd) {
   const basePath = path.join(cwd, ".devloops");
   const extensions = ["", ".yaml", ".yml", ".json"];
@@ -18,7 +18,7 @@ function resolveSettings(cwd) {
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
       const queue = settings?.queue;
       const out = {};
-      const board = settings?.tracker?.board ?? queue?.board;
+      const board = settings?.tracker?.board;
       if (board && typeof board === "object") {
         if (typeof board.number === "number" && Number.isInteger(board.number) && board.number > 0) {
           out.project = board.number;
@@ -139,7 +139,7 @@ function resolveProjectSelector(args) {
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or set tracker.board — or the deprecated queue.board — number / title in .devloops)"),
+      new Error("--project is required (or set tracker.board number / title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }
@@ -178,7 +178,7 @@ function findProject(projects, { projectRef, projectTitle }, owner) {
 }
 
 // Apply .devloops board settings when --project was not passed. Precedence:
-// explicit --project flag > queue.board.number/queue.board.title. Mutates args.
+// explicit --project flag > tracker.board.number/tracker.board.title. Mutates args.
 function applyDevloopsBoard(args, cwd) {
   if (args.project === undefined) {
     const settings = resolveSettings(cwd);

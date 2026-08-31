@@ -717,9 +717,8 @@ test("outer-loop: maintainer-controlled asyncStartMode=allowed permits non-snaps
     await writeJson(copilotInputPath, MINIMAL_COPILOT_SNAPSHOT);
     const gitEnv = await writeGitStub(tempDir);
     const ghEnv = await writeGhStub(tempDir, { repo: "owner/repo", pr: 47 });
-    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       "version: 1\nworkflow:\n  asyncStartMode: allowed\n",
       "utf8",
     );

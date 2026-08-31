@@ -65,7 +65,7 @@ gates:
       - name: config-drift
         persona: review
         prompt: |-
-          Cross-check config, schema, and documentation for contract drift: - Verify that configuration files (.pi/dev-loop/settings.yaml,
+          Cross-check config, schema, and documentation for contract drift: - Verify that configuration files (.devloops,
             package.json, CI workflows, skill manifests) agree on canonical
             status tokens, support floors, and required flags.
           - Flag any instance where two sources of truth disagree about the
@@ -324,7 +324,7 @@ localImplementation:
     maxFiles: 2
     maxLines: 100
 
-# Queue defaults (repo-specific queue.board omitted by design).
+# Queue defaults (repo-specific tracker.board omitted by design).
 queue:
   maxParallel: 3
   # Local-first is PR-first (issues are skipped, #952), so auto-filing issues is
