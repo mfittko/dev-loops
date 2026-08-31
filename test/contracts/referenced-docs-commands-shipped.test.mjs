@@ -247,7 +247,7 @@ function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
 // fabricated link target). Escape control chars so the check's own output
 // cannot forge CI logs.
 function sanitizeForLog(value) {
-  return value.replace(/[\x00-\x1f\x7f-\x9f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return value.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 async function computeAllFailures(repoRoot) {
@@ -457,4 +457,6 @@ test("sanitizeForLog escapes control characters in doc-derived tokens before the
   assert.equal(sanitizeForLog("[x](\u001b[31mFAKE\u001b[0m)"), "[x](\\u001b[31mFAKE\\u001b[0m)");
   assert.equal(sanitizeForLog("tab\there"), "tab\\u0009here");
   assert.equal(sanitizeForLog("\x9b[31mFAKE\x9b[0m"), "\\u009b[31mFAKE\\u009b[0m");
+  assert.equal(sanitizeForLog("\u202eRLO"), "\\u202eRLO");
+  assert.equal(sanitizeForLog("\u2066LRI"), "\\u2066LRI");
 });
