@@ -16,6 +16,9 @@ jobs:
     permissions:
       contents: write
       actions: write
+      # #1901: the approval gate reads issue search + issue comments via
+      # GITHUB_TOKEN; explicit permissions default missing scopes to none.
+      issues: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v5

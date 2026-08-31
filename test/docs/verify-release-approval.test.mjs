@@ -319,6 +319,23 @@ test("CLI: gh failure fails closed (exit 1), never open", () => {
   }
 });
 
+test("CLI: candidate search requests per_page=100 (GitHub default 30 would silently truncate)", () => {
+  // The stub only answers the search call when the args carry per_page=100;
+  // if it regresses the stub exits 1 and the CLI reports gh failure, so this
+  // test fails closed on the arg itself.
+  const stub = stubbedGhDir([
+    ["search/issues .*per_page=100", { items: [] }],
+  ]);
+  try {
+    const r = runCli(["--version", "1.0.0", "--repo", "o/n", "--operator", "op"], stub.env);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /no explicit operator release approval record found/);
+    assert.doesNotMatch(r.stdout, /failed closed/);
+  } finally {
+    stub.cleanup();
+  }
+});
+
 test("CLI: usage errors exit 2 (no args, missing --repo, missing --version, garbage version, unknown arg)", () => {
   assert.equal(runCli([]).status, 2);
   assert.equal(runCli(["--version", "1.0.0"]).status, 2);

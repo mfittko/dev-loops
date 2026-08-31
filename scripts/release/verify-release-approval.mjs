@@ -138,17 +138,19 @@ function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
  * matching the per-release approval phrase, then verify the AUTHORING comment
  * exactly (search `commenter:` alone would match any operator comment on an
  * issue where someone ELSE wrote the phrase — verify the operator authored it).
- * Bounded to 50 candidates. Raw `gh api` output is parsed in-script (no `--jq`):
- * the script is node-builtins-only and must not depend on jq parsing behavior.
+ * Bounded to 100 candidates via `per_page=100` (the GitHub search default is
+ * 30, which silently truncates a busy repo before the real approval is seen).
+ * Raw `gh api` output is parsed in-script (no `--jq`): the script is
+ * node-builtins-only and must not depend on jq parsing behavior.
  */
 function fetchApprovalCandidates({ repo, operator, version, ghCommand, runChild }) {
   const searchOut = runGh(
-    ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "approve release"`],
+    ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "approve release"`, "-f", "per_page=100"],
     { ghCommand, runChild },
   );
   let candidates = [];
   try {
-    candidates = (JSON.parse(searchOut)?.items ?? []).map((item) => item?.number).filter((n) => Number.isInteger(n)).slice(0, 50);
+    candidates = (JSON.parse(searchOut)?.items ?? []).map((item) => item?.number).filter((n) => Number.isInteger(n)).slice(0, 100);
   } catch {
     throw new Error(`release-approval search returned non-JSON output — fail closed`);
   }
