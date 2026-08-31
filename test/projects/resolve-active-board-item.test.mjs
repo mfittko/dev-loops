@@ -630,7 +630,7 @@ describe("resolve-active-board-item CLI exit codes", () => {
 describe("resolve-active-board-item resolves the configured next_up column (#1098)", () => {
 
   it("pickup queries the overridden statusColumns.next_up column (\"Todo\"), not the literal", async () => {
-    await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+    await withTempCwd('tracker:\n  board:\n    number: 7\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
       // Head item lives ONLY in the renamed "Todo" column. If the resolver still
       // queried the literal "Next Up", it would see an empty column and fail
       // closed — so a resolved target proves it queried the configured name.
@@ -671,7 +671,7 @@ describe("resolve-active-board-item resolves the configured next_up column (#109
 describe("resolve-active-board-item resolves the configured in_progress column (#1143)", () => {
 
   it("pickup queries the overridden statusColumns.in_progress column (\"Doing\"), not the literal", async () => {
-    await withTempCwd('queue:\n  board:\n    number: 7\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
+    await withTempCwd('tracker:\n  board:\n    number: 7\nqueue:\n  statusColumns:\n    in_progress: "Doing"\n', async (cwd) => {
       // The single active item lives ONLY in the renamed "Doing" column. If the
       // resolver still queried the literal "In Progress", it would see an empty
       // column and fall through to Next Up instead — proving misdetection.
@@ -711,7 +711,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
 
 
   it("title-configured board resolves the in-progress item with no --project", async () => {
-    await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
+    await withTempCwd('tracker:\n  board:\n    title: "Board"\n', async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 42, title: "Doing" }] } });
       const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
@@ -720,7 +720,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   });
 
   it("title-configured board resolves the Next Up head with no --project (delegation forwards projectTitle)", async () => {
-    await withTempCwd('queue:\n  board:\n    title: "Board"\n', async (cwd) => {
+    await withTempCwd('tracker:\n  board:\n    title: "Board"\n', async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [], "Next Up": [{ issueNumber: 9, title: "Head" }] } });
       const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
@@ -738,7 +738,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
   });
 
   it("number-configured board resolves with no --project", async () => {
-    await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
+    await withTempCwd("tracker:\n  board:\n    number: 7\n", async (cwd) => {
       const child = boardRunChild({ columns: { "In Progress": [{ issueNumber: 5, title: "Doing" }] } });
       const { code, out } = await runCliCaptured(["--repo", "o/r"], child, cwd);
       assert.equal(code, 0);
@@ -754,7 +754,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     // injection and a PATH gh shim emulating an empty In Progress column plus
     // one unassigned Next Up item, so the run must traverse the ownership path
     // through the DEFAULT runChild to succeed.
-    await withTempCwd("queue:\n  board:\n    number: 7\n", async (cwd) => {
+    await withTempCwd("tracker:\n  board:\n    number: 7\n", async (cwd) => {
       const binDir = nodePath.join(cwd, "stub-bin");
       mkdirSync(binDir, { recursive: true });
       const shim = `#!${process.execPath}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mfittko/dev-loops/schemas/dev-loop-config.schema.json",
   "title": "dev-loops config",
-  "description": "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* layer, consumer .devloops (.yaml/.yml/.json), and the legacy .pi/dev-loop/settings.*/overrides.* fallbacks. The zod loader remains authoritative: cross-field refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) are enforced there and cannot be expressed in JSON Schema.",
+  "description": "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* layer, and consumer .devloops (.yaml/.yml/.json). The zod loader remains authoritative: cross-field refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) are enforced there and cannot be expressed in JSON Schema.",
   "type": "object",
   "properties": {
     "version": {
@@ -1087,23 +1087,6 @@
           "minimum": 0,
           "maximum": 10
         },
-        "board": {
-          "type": "object",
-          "properties": {
-            "number": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "description": "GitHub Projects board number."
-            },
-            "title": {
-              "type": "string",
-              "minLength": 1,
-              "description": "GitHub Projects board title."
-            }
-          },
-          "additionalProperties": false,
-          "description": "Deprecated: use tracker.board instead. GitHub Projects board identifier."
-        },
         "archiveOlderThanDays": {
           "type": "integer",
           "exclusiveMinimum": 0,
@@ -1141,7 +1124,7 @@
             }
           },
           "additionalProperties": false,
-          "description": "Tracker board identifier; supersedes the deprecated queue.board."
+          "description": "Tracker board identifier."
         }
       },
       "additionalProperties": false,

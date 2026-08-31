@@ -1064,9 +1064,8 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
   await withTempDir(async (tempDir) => {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
-    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       "version: 1\nstrategy: local-first\ninputSource: phase-docs\n",
       "utf8",
     );
@@ -1136,9 +1135,8 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
   await withTempDir(async (tempDir) => {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
-    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       "version: 1\ninputSource: phase-docs\n",
       "utf8",
     );
@@ -1924,7 +1922,7 @@ test("runCli --issue --lightweight threads canonicalSpecSource:pr_body onto the 
     // phase-docs inputSource short-circuits buildAutoResolvedInput before any gh
     // call, so the empty gh stub (exits non-zero on any call) proves zero side effects.
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       "version: 1\nstrategy: local-first\ninputSource: phase-docs\n",
       "utf8",
     );

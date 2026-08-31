@@ -126,7 +126,7 @@ Pi-harness only:
 
 ## Configuration
 
-Defaults ship in `packages/core/src/config/extension-defaults.yaml`. A repo-local `.pi/dev-loop/defaults.*` layer merges on top of them when present, then consumer repos override everything in a `.devloops` file at the repo root (`.devloops.yaml` / `.yml` / `.json` are also accepted); `.devloops` is authoritative when present. The legacy `.pi/dev-loop/settings.*` and `overrides.*` files load only as a fallback when no `.devloops` is present; when `.devloops` exists they are ignored (a deprecation warning still fires if they are present).
+Defaults ship in `packages/core/src/config/extension-defaults.yaml`. A repo-local `.pi/dev-loop/defaults.*` layer merges on top of them when present, then consumer repos override everything in a `.devloops` file at the repo root (`.devloops.yaml` / `.yml` / `.json` are also accepted); `.devloops` is authoritative when present. The legacy `.pi/dev-loop/settings.*` and `overrides.*` fallbacks were removed at the v1.0.0 cut (ADR 0017) and no longer load; move any such file's contents into `.devloops`.
 
 ```bash
 npx dev-loops@<version> gates   # print what reviewers will check

@@ -35,8 +35,8 @@ refinement-completeness check as the enqueue gate. It never grills or mutates.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.board.number /
-                          queue.board.title.
+                          resolved from .devloops tracker.board number /
+                          tracker.board.title.
   --help, -h              Show this help.
 
 Output (stdout):

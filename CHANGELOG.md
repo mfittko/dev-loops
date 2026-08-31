@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed (breaking — legacy config fallback and `queue.board` alias removed, #1701)
+
+Removed at the v1.0.0 cut per ADR 0017 (`docs/decisions/0017-devloops-root-config-layered-precedence.md`):
+
+- **The legacy `.pi/dev-loop/settings.*` / `.pi/dev-loop/overrides.*` config fallback no longer loads.** `.devloops` at the repo root is the only consumer override layer; those legacy files are now ignored silently (no deprecation warning, no values applied). The `.pi/dev-loop/defaults.*` layer is unchanged and still merges between the shipped extension defaults and `.devloops`.
+- **The `queue.board` → `tracker.board` alias is removed.** `queue.board` is no longer a valid `.devloops` key (it fails schema validation), `resolveTrackerBoard` reads only `tracker.board`, and every queue/project command, doc, and error message teaches `tracker.board` only. `scripts/loop/detect-internal-only-pr.mjs` no longer auto-detects the legacy config paths (explicit `--config` still works).
+
+Upgrading your `.devloops`:
+
+| Old key / path | New shape |
+|---|---|
+| `.pi/dev-loop/settings.yaml` / `.settings.yml` / `.settings.json` contents | move into `.devloops` (or `.devloops.yaml` / `.yml` / `.json`) at the repo root |
+| `.pi/dev-loop/overrides.yaml` / `.overrides.yml` / `.overrides.json` contents | move into `.devloops` (`.pi/dev-loop/defaults.*` still loads as the middle layer) |
+| `queue.board.number` / `queue.board.title` | `tracker.board.number` / `tracker.board.title` |
+
 ### Added
 - **Enforce fresh-context provenance on the post-run retrospective (#1870).** A `complete` retrospective checkpoint is now provenance-gated: `resolveCheckpointStateFromArtifact` treats a record whose `provenance` does not pin a fresh-context pass over the cycle's full agent tool-call record (`context: "fresh"`, `seededFrom: "agent_tool_call_record"`, non-blank `recordSource`) as `MISSING`, so every legacy inline self-authored retro fails closed. `checkpoint-contract.mjs --state complete` requires `--retro-context fresh --record-source <path>` and rejects `--retro-context inline` outright; the retro procedure prose and the behavioral-review extension now mandate the independent fresh-context dispatch, matching how gate reviewers already run.
 - **Enforce explicit Non-goals on tracker-backed issue refinement (#1866).** `detectIssueRefinementArtifact` now requires an explicit, non-empty `## Non-goals` section on tracker-backed issues (fail-closed, distinct `missing_explicit_non_goals` finding), reconciling the predicate with the loop-grill synthesis contract; a linked refinement doc satisfies the artifact check only when it actually resolves. See `ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR` in the artifact-authority contract.

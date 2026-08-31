@@ -209,9 +209,8 @@ test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allow
     loopState: "unresolved_feedback_present",
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
-    await mkdir(path.join(tmpDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tmpDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tmpDir, ".devloops"),
       "version: 1\nworkflow:\n  asyncStartMode: allowed\n",
       "utf8",
     );

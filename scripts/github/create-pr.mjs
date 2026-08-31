@@ -31,7 +31,7 @@ Behavior:
     occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
     \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
     lightweight and is auto-enqueued as a board PR item in the configured In Progress column
-    (reuses \`queue.board.number\` / \`queue.board.title\` from \`.devloops\`, same as the queue
+    (reuses \`tracker.board\` number / title from \`.devloops\`, same as the queue
     scripts). Requires an explicit \`--repo owner/name\` (space or = form). A trailing stdout
     line reports the outcome: \`{"board":{"enqueued":bool,...}}\`. No board configured, no
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
@@ -125,8 +125,8 @@ function parsePrNumberFromOutput(stdout) {
 // generic, idempotent, fail-open board add shared by create-pr (lightweight
 // PRs -> In Progress) and create-issue (new issues -> Backlog). This is the
 // "one guard where all callers route" fix for QUEUE-BOARD-LINKED: a guard that
-// only lives at one entry point. Reuses the same .devloops queue.board.number /
-// queue.board.title resolution and add-queue-item's idempotent add — never
+// only lives at one entry point. Reuses the same .devloops tracker.board
+// number / title resolution and add-queue-item's idempotent add — never
 // reimplements the board API calls. An ADD (not a status transition) — board
 // status transitions stay orchestrator-owned per sanctioned-commands.mjs.
 // Never throws: an unconfigured board, a missing --repo, an unparsed item

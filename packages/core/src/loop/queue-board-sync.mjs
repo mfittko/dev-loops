@@ -172,9 +172,8 @@ function readDevloopsSettings(repoRoot) {
     try {
       const raw = readFileSync(base + ext, "utf8");
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced
-      // alongside `queue` so loadBoardConfig can prefer tracker.board over
-      // the deprecated queue.board without a second file read.
+      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced so
+      // loadBoardConfig can read tracker.board directly.
       return { settings: settings?.queue ?? null, tracker: settings?.tracker ?? null };
     } catch (err) {
       if (err?.code === "ENOENT") {
@@ -204,18 +203,15 @@ function boardSelector(board) {
 }
 
 export function loadBoardConfig(repoRoot) {
-  const { settings: queue, tracker, error } = readDevloopsSettings(repoRoot);
+  const { tracker, error } = readDevloopsSettings(repoRoot);
   if (error) {
     return { enabled: false, reason: `config read/parse error: ${error}` };
   }
-  // tracker.board (canonical) takes priority over the deprecated queue.board
-  // (issue #1408) — see resolveTrackerBoard in ../config/config.mjs for the
-  // equivalent resolution against the validated, loaded config.
+  // tracker.board (canonical board key, issue #1408) — see resolveTrackerBoard
+  // in ../config/config.mjs for the equivalent resolution against the
+  // validated, loaded config.
   const trackerBoard = boardSelector(tracker?.board);
   if (trackerBoard) return trackerBoard;
-  if (!queue) return { enabled: false };
-  const queueBoard = boardSelector(queue.board);
-  if (queueBoard) return queueBoard;
   return { enabled: false };
 }
 

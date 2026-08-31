@@ -36,8 +36,7 @@ position and Status field values.
 
 <!-- rule: QUEUE-BOARD-DEVLOOPS-RESOLUTION -->
 Every operator-facing `scripts/projects/*` queue command **MUST** resolve the board from
-`.devloops` (`tracker.board` first, falling back to the deprecated `queue.board`; number or
-title) when `--project` is omitted; an explicit `--project` overrides. The structural halves
+`.devloops` (`tracker.board`; number or title) when `--project` is omitted; an explicit `--project` overrides. The structural halves
 (the `applyDevloopsBoard` call and `projectTitle` delegation forwarding) are enforced by
 `test/contracts/queue-board-resolution-contract.test.mjs`, which inspects commands that read
 `--project`/`args.project` and exempts the `_resolve-project.mjs` helper itself and the board
@@ -290,8 +289,8 @@ queue:
   nonSuccessStatus: Backlog # optional fallback column for non-success outcomes
 ```
 
-`tracker.board` is the preferred key; the deprecated `queue.board` (same shape) is still
-honored as a fallback. If neither is set (no `number`, no `title`), no board transitions
+`tracker.board` is the only board key. The former `queue`-section board alias was removed at
+the v1.0.0 cut (ADR 0017). If nothing is set (no `number`, no `title`), no board transitions
 are attempted and queue behavior is unchanged.
 
 ### Result shape
@@ -402,11 +401,11 @@ queue:
 
 ### Board title key
 
-The board `title` key (under `tracker.board`, or the deprecated `queue.board`) is the primary opt-in signal for Projects-based queue ordering (`number` is also available — see Project number key below):
+The board `title` key (under `tracker.board`) is the primary opt-in signal for Projects-based queue ordering (`number` is also available — see Project number key below):
 
 | Value | Meaning |
 |---|---|
-| Neither `tracker.board` nor `queue.board` set | Projects path not active; use positional ordering |
+| No `tracker.board` set | Projects path not active; use positional ordering |
 | `"Dev Loop Queue"` (recommended title) | Look up project by this title under the repo owner |
 | Any other string | Look up project by that exact title |
 
@@ -420,8 +419,7 @@ discovery. When both `number` and `title` are set on the same board entry, `numb
 
 ### Settings source
 
-Queue board settings (`tracker.board` first, then the deprecated `queue.board`; `title` /
-`number`) are read only from `.devloops` at the repo root. The queue tooling does not consult the shipped defaults
+Queue board settings (`tracker.board`; `title` / `number`) are read only from `.devloops` at the repo root. The queue tooling does not consult the shipped defaults
 (`packages/core/src/config/extension-defaults.yaml`) or the repo-local
 `.pi/dev-loop/defaults.*` override layer for them — both deliberately omit these keys.
 
@@ -483,7 +481,7 @@ The board provides durable, visible, shared state for queue ordering and item st
 
 - **Durable** — survives CI restarts, local machine wipes, and session boundaries
 - **Visible** — operators can inspect and reorder the queue from the GitHub UI
-- **Authoritative for membership + ordering when configured** — when a board is configured (`tracker.board`, or the deprecated `queue.board`; `number` or `title`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
+- **Authoritative for membership + ordering when configured** — when a board is configured (`tracker.board`; `number` or `title`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
 
 > Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports the canonical "queue empty — prioritize Backlog items into Next Up" (`reason: "next-up-empty"`) — distinct from the unconfigured-and-empty "Queue is empty".
 
@@ -580,8 +578,7 @@ is persisted.
 #### Configuring column names (opt-in)
 
 Both overrides live under the opt-in `queue` section in `.devloops`; board sync
-itself is enabled by a configured board (`tracker.board`, or the deprecated
-`queue.board`; `number` or `title`). When no board is configured or sync is
+itself is enabled by a configured board (`tracker.board`; `number` or `title`). When no board is configured or sync is
 disabled, status sync is a **no-op**: it makes **no
 GitHub API calls and no board mutations**. (It may still read the local
 `.devloops` config in order to determine that sync is disabled.)
@@ -784,7 +781,7 @@ board is configured, the queue falls back to its local entry order
 
 ### How to opt in
 
-The queue board resolves from `.devloops` (`tracker.board` / `queue.board`, by number or
+The queue board resolves from `.devloops` (`tracker.board`, by number or
 title) in every operator-facing queue command; an explicit `--project <number|id>` overrides it.
 
 First, bootstrap the board (one-time):
@@ -896,7 +893,7 @@ with the existing project details.
 
 ### How dev-loop treats board state
 
-When a board is **configured** (`queue.board.number` or `queue.board.title` in `.devloops`),
+When a board is **configured** (`tracker.board.number` or `tracker.board.title` in `.devloops`),
 it is the **authoritative source of queue membership and ordering** — not just status.
 `dev-loops queue run` resolves the board's `Next Up` column and reconciles those items into
 `.pi/dev-loop-queue.json` (appending a queued entry for any `Next Up` issue not already
