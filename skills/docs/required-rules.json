@@ -611,7 +611,7 @@
     {
       "id": "STYLE-CONSISTENCY-NOT-CONFORMANCE",
       "enforcement": "agent",
-      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — owned by contract-style-guide.md and the gate contradiction lens."
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
     },
     {
       "id": "STYLE-DEFINED-TERMS",
@@ -620,7 +620,7 @@
     {
       "id": "STYLE-DURABLE-RULE-HOME",
       "enforcement": "agent",
-      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — owned by contract-style-guide.md and the gate contradiction lens."
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
     },
     {
       "id": "STYLE-ID-SCHEME",
@@ -637,7 +637,7 @@
     {
       "id": "STYLE-NO-DRIFT-BLESSING",
       "enforcement": "agent",
-      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — owned by contract-style-guide.md and the gate contradiction lens."
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
     },
     {
       "id": "STYLE-PRECEDENCE-CONFLICT",
