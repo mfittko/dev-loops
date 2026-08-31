@@ -143,7 +143,7 @@ function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
  * Raw `gh api` output is parsed in-script (no `--jq`): the script is
  * node-builtins-only and must not depend on jq parsing behavior.
  */
-function fetchApprovalCandidates({ repo, operator, version, ghCommand, runChild }) {
+function fetchApprovalCandidates({ repo, operator, ghCommand, runChild }) {
   const searchOut = runGh(
     ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "approve release"`, "-f", "per_page=100"],
     { ghCommand, runChild },
@@ -203,7 +203,7 @@ export function verifyReleaseApproval({ version, repo, operator = null, ghComman
   if (!/^[a-zA-Z0-9-]+$/.test(operatorLogin)) {
     throw new Error(`operator login "${operatorLogin}" is not a valid GitHub login shape — fail closed`);
   }
-  const comments = fetchApprovalCandidates({ repo, operator: operatorLogin, version, ghCommand, runChild });
+  const comments = fetchApprovalCandidates({ repo, operator: operatorLogin, ghCommand, runChild });
   const decision = resolveApprovalState({ version, operator: operatorLogin, comments });
   if (!decision.approved) {
     return { ok: false, applies: true, refusal: decision.refusal };
