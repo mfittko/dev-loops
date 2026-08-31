@@ -194,10 +194,11 @@ test("loadInternalPathPatterns ignores removed legacy .pi/dev-loop settings/over
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"],
-        // Legacy paths are no longer auto-detected: the custom patterns above
-        // must NOT apply, so a consumer-facing change stays internalOnly=false
-        // (shipped-default fallback only matches internal dirs).
-        stdout: "src/consumer.ts\n",
+        // A consumer-facing path that WOULD match the shipped-default internal
+        // patterns' siblings: if the legacy patterns ("^bad/", "^good/") were
+        // ever auto-detected again, "bad/foo.mjs" would classify internalOnly
+        // — so internalOnly=false here proves the legacy patterns did NOT load.
+        stdout: "bad/foo.mjs\n",
       },
     ]);
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });

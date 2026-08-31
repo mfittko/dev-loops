@@ -1148,14 +1148,17 @@ describe("loader — graceful degradation", () => {
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "settings.yaml"), [
         "version: 1",
-        "strategy: local-first",
+        // A value NO shipped/extension layer would set — if the legacy path
+        // were ever read again, this would surface in resolved config.
+        "refinement:",
+        "  fanOut: 9",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.deepEqual(result.errors, []);
-      // No values are applied from the removed legacy path: strategy falls
-      // through to the shipped extension default, not the settings.yaml value.
-      assert.equal(result.config.strategy, "local-first");
+      // No values are applied from the removed legacy path: fanOut stays the
+      // shipped extension default (3), never the settings.yaml value (9).
+      assert.equal(result.config.refinement.fanOut, 3);
       assert.equal(
         result.warnings.some((w) => /deprecated/i.test(w)),
         false,

@@ -1277,7 +1277,7 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
  * @typedef {object} ConfigLoadError
  * @property {string} path - Human-readable file path or layer name
  * @property {string} message - Error description
- * @property {"defaults"|"settings"|"extensionDefaults"|"merged"} layer - Which config layer failed
+ * @property {"defaults"|"settings"|"devloops"|"extensionDefaults"|"merged"} layer - Which config layer failed
  */
 
 // ============================================================================
@@ -1491,10 +1491,10 @@ function configError(message, code, filePath) {
 }
 
 /**
- * Try to load and merge one config layer (defaults or settings).
+ * Try to load and merge one config layer (defaults, devloops, or settings).
  * @param {Record<string, unknown>} merged - Current merged config
  * @param {string|string[]} basePaths - Config file base path(s) without extension
- * @param {"defaults"|"settings"} layer - Layer name
+ * @param {"defaults"|"settings"|"devloops"} layer - Layer name
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
  * @param {{ warnOnMissing?: boolean }} [options]
@@ -1669,7 +1669,7 @@ export async function loadDevLoopConfig(options = {}) {
 
   if (primaryExists) {
     // .devloops is the primary override — apply it
-    merged = await applyLayer(merged, devloopsPath, "settings", warnings, errors);
+    merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
   }
 
   // Validate final merged config
