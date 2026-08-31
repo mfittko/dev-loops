@@ -243,11 +243,11 @@ function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
 
 // Doc-derived tokens interpolated into failure strings (script names,
 // subcommand names, anchor targets/fragments) come from arbitrary doc text
-// and could embed terminal control characters (e.g. an ANSI escape inside a
-// fabricated link target). Escape control chars so the check's own output
-// cannot forge CI logs.
+// and could embed terminal control/format characters or line/paragraph
+// separators (e.g. an ANSI escape inside a fabricated link target). Escape
+// them so the check's own output cannot forge CI logs.
 function sanitizeForLog(value) {
-  return value.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 async function computeAllFailures(repoRoot) {
@@ -452,11 +452,16 @@ test("loadTargetContentRelativeTo refuses a cross-file anchor link that traverse
   assert.equal(loadTargetContent("/etc/hosts"), null);
 });
 
-test("sanitizeForLog escapes control characters in doc-derived tokens before they reach failure output", () => {
+test("sanitizeForLog escapes control/format characters and line/paragraph separators in doc-derived tokens", () => {
   assert.equal(sanitizeForLog("plain"), "plain");
   assert.equal(sanitizeForLog("[x](\u001b[31mFAKE\u001b[0m)"), "[x](\\u001b[31mFAKE\\u001b[0m)");
   assert.equal(sanitizeForLog("tab\there"), "tab\\u0009here");
   assert.equal(sanitizeForLog("\x9b[31mFAKE\x9b[0m"), "\\u009b[31mFAKE\\u009b[0m");
   assert.equal(sanitizeForLog("\u202eRLO"), "\\u202eRLO");
   assert.equal(sanitizeForLog("\u2066LRI"), "\\u2066LRI");
+  // Previously-missed format marks (bidi LRM/RLM/ALM, zero-width) and the
+  // line/paragraph separators — all pass through the old enumerated class.
+  assert.equal(sanitizeForLog("\u200eLRM\u200fRLM"), "\\u200eLRM\\u200fRLM");
+  assert.equal(sanitizeForLog("\u061cALM\u200bZWSP\u2060WJ\ufeffZWNBSP"), "\\u061cALM\\u200bZWSP\\u2060WJ\\ufeffZWNBSP");
+  assert.equal(sanitizeForLog("\u2028LS\u2029PS"), "\\u2028LS\\u2029PS");
 });
