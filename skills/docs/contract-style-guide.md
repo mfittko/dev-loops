@@ -26,6 +26,9 @@ A short orientation paragraph introduces the document; normative rules live only
 | <!-- rule: STYLE-CANONICAL-OPENER --> `STYLE-CANONICAL-OPENER` | A contract document SHOULD open with `Canonical owner for X` and SHOULD end with a Cross-references section. |
 | <!-- rule: STYLE-CONTRADICTION-LENS --> `STYLE-CONTRADICTION-LENS` | A contract-touching PR MUST include an RFC-2119 contradiction check in `pre_approval_gate`: every added or changed rule is checked against the rule registry for opposing modality or a weaker restatement. |
 | <!-- rule: STYLE-LEXICAL-SCAN-LIMIT --> `STYLE-LEXICAL-SCAN-LIMIT` | The ownership validator's contradiction scan is lexical only; behavioral contradictions belong to the L2/L3 harness and semantic contradictions belong to the gate contradiction lens. |
+| <!-- rule: STYLE-DURABLE-RULE-HOME --> `STYLE-DURABLE-RULE-HOME` | A durable rule, contract, or lesson MUST be persisted in skill/contract prose or, where mechanically checkable, deterministic tooling (a validator, gate check, or test); agent memory MAY point to persisted truth but MUST never be its system of record. |
+| <!-- rule: STYLE-NO-DRIFT-BLESSING --> `STYLE-NO-DRIFT-BLESSING` | When produced output breached a contract, the contract MUST NOT be amended to bless that drift: enforcement MUST be fixed at the source and the missed artifacts backfilled instead. |
+| <!-- rule: STYLE-CONSISTENCY-NOT-CONFORMANCE --> `STYLE-CONSISTENCY-NOT-CONFORMANCE` | Uniform-looking artifacts are not self-certifying: conformance MUST be checked against each artifact's external spec (deterministically), never by comparing artifacts to each other. |
 
 ## Reference syntax
 
