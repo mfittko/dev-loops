@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- fix(test): the docs-reference contract test now also resolves unbackticked (fenced) CLI subcommand citations, sanitizes doc-derived tokens in failure output, and drops dead/speculative seams (gate round-1 fix).
+
 ## 1.0.0-rc.7 - 2026-08-27
 
 ### Security
