@@ -126,6 +126,9 @@ test("resolveApprovalState: negated operator text never satisfies the gate (#190
     "I reject approve release v1.0.0",
     "unapprove release v1.0.0",
     "disapprove release v1.0.0",
+    "I do not want to approve release v1.0.0",
+    "I never said approve release v1.0.0",
+    "I cannot in good conscience approve release v1.0.0",
   ]) {
     const d = resolveApprovalState({
       version: "1.0.0",
@@ -270,11 +273,9 @@ test("CLI: prerelease version passes with no gh invocation at all", () => {
   // PATH keeps node's own dir (spawnSync needs node) but nothing else, so any
   // gh call would fail ENOENT — proving the prerelease pass-through never
   // shells out to gh.
-  const nodeDir = mkdtempSync(path.join(tmpdir(), "vra-no-gh-path-"));
   const r = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n"], { PATH: path.dirname(process.execPath) });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /does not apply/);
-  rmSync(nodeDir, { recursive: true, force: true });
 });
 
 test("CLI: stable version with no approval record is refused (exit 1, named refusal)", () => {

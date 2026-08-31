@@ -55,9 +55,9 @@ generic "continue" instructions never satisfy this gate.
   release commit on a branch or `main` per the staging rules above.
 - **The operator** owns the tag-push + `npm publish`/dist-tag decision, per
   release. The accepted approval record is an issue comment authored by the
-  repo owner (operator) on the release tracking issue stating
-  `approve release v<version>` — or the operator running the publish commands
-  themselves.
+  repo owner (operator) on a repo issue (typically the release tracking issue)
+  stating `approve release v<version>` — or the operator running the publish
+  commands themselves.
 
 **Deterministic enforcement (fail closed).** Both release workflows run
 `scripts/release/verify-release-approval.mjs` before anything is published:
@@ -65,8 +65,11 @@ generic "continue" instructions never satisfy this gate.
 - `release.yml` (fired by the `v*` tag push) refuses — no GitHub Release, no
   npm-publish dispatch — with a named refusal when no operator approval record
   exists for this exact version.
-- `npm-publish.yml` runs the same check, closing the direct
-  `workflow_dispatch` bypass against a stable version.
+- `npm-publish.yml` runs the same check (against both the root and the
+  `@dev-loops/core` package versions), closing the direct `workflow_dispatch`
+  bypass against a stable version. The root and core versions are kept in
+  lockstep by `assert-core-dependency-version.mjs`, so one
+  `approve release v<version>` record covers both.
 - A prerelease (`rc`/`next`/`beta`/…) is out of scope: the gate applies to
   stable releases only and the prerelease flow is unchanged.
 

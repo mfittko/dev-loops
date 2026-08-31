@@ -27,7 +27,9 @@
  * not applicable), 1 on a named refusal or any gh failure (fail closed — a
  * flaky/forbidden lookup must never pass the gate), 2 on usage/parse error.
  *
- * Node builtins only: this script runs in the release workflows.
+ * No third-party/npm dependencies: this script runs in the release workflows
+ * before `npm ci`, but it may import sibling repo scripts (resolve-npm-dist-tag.mjs,
+ * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -55,21 +57,33 @@ function escapeRegExp(s) {
 }
 
 /**
- * Negated approval forms that must NOT satisfy the gate even though they
- * contain the positive phrase. Covers the direct negations (do/does/don't/
- * won't/will not/must not/should not/cannot/can't/shouldn't/mustn't/never),
- * a bare "not approve", decline/refuse/reject + (to) approve, and the
- * unapprove/disapprove prefixes. A mixed comment that both negates and later
- * approves is rejected (fail closed) — the operator should post an
- * unambiguous approval.
+ * Negating verbs/markers that refuse an otherwise-matching approval phrase.
+ * Natural-language refusals are not always adjacent to the phrase
+ * ("do not want to approve", "never said approve", "cannot in good conscience
+ * approve"), so a fixed adjacent-form blocklist fails open. A negating marker
+ * within a bounded window of the phrase (see negatesApproval) refuses the
+ * comment. Fail closed: a comment that both negates and approves anywhere near
+ * the phrase is refused — the operator should post an unambiguous approval.
  */
-const NEGATED_APPROVAL = new RegExp(
-  "(?:^|[\\s.!?,;:])(?:" +
-    "do\\s+not\\s+|does\\s+not\\s+|don['’]?t\\s+|won['’]?t\\s+|never\\s+|cannot\\s+|can['’]?t\\s+|should\\s+not\\s+|shouldn['’]?t\\s+|must\\s+not\\s+|mustn['’]?t\\s+|will\\s+not\\s+|may\\s+not\\s+|not\\s+|decline[sd]?\\s+(?:to\\s+)?|refuse[sd]?\\s+(?:to\\s+)?|reject[sd]?\\s+" +
-    ")approve\\s+release" +
-  "|\\b(?:un|dis)approve\\s+release",
-  "i",
-);
+const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b/i;
+
+/**
+ * True when a negating marker appears within a bounded window around the
+ * approval phrase. Scans the clause-level distance before the match (120
+ * chars — enough for a refusal with a few intervening words) and a short
+ * trailing window (80 chars) for a trailing retraction ("approve release …;
+ * do not"). Bounded so a negation in a distant, unrelated sentence does not
+ * override a clear approval.
+ */
+function negatesApproval(body, pattern) {
+  const m = body.match(pattern);
+  if (!m) return false;
+  const start = m.index;
+  const end = start + m[0].length;
+  const before = body.slice(Math.max(0, start - 120), start);
+  const after = body.slice(end, end + 80);
+  return NEGATION_MARKER.test(before) || NEGATION_MARKER.test(after);
+}
 
 /**
  * The only accepted approval record: a comment by the operator whose body
@@ -82,8 +96,10 @@ const NEGATED_APPROVAL = new RegExp(
 function approvalPattern(version) {
   // The trailing boundary refuses version extensions: another digit, a
   // `.digit` (v1.0.0.1), a `-` prerelease continuation (v1.0.0-rc.7), or any
-  // word character glued to the version.
-  return new RegExp(`approve\\s+release\\s+v?${escapeRegExp(version)}(?![\\w-])(?!\\.\\d)`, "i");
+  // word character glued to the version. The leading `\b` refuses the
+  // unapprove/disapprove prefixes ("unapprove release …" has no word boundary
+  // before "approve").
+  return new RegExp(`\\bapprove\\s+release\\s+v?${escapeRegExp(version)}(?![\\w-])(?!\\.\\d)`, "i");
 }
 
 /**
@@ -113,7 +129,7 @@ export function resolveApprovalState({ version, operator, comments }) {
       typeof c.body === "string" &&
       c.author.trim().toLowerCase() === operator.trim().toLowerCase() &&
       pattern.test(c.body) &&
-      !NEGATED_APPROVAL.test(c.body),
+      !negatesApproval(c.body, pattern),
   );
   return {
     applies: true,
@@ -247,7 +263,7 @@ async function main() {
   const options = parseArgs(argv);
   if (!options.version) usageError("--version is required (the workflows always pass it)");
   if (!options.repo) usageError("--repo <owner/name> is required");
-  if (!/^[^/\s]+\/[^/\s]+$/.test(options.repo)) usageError(`--repo must be owner/name shape: ${options.repo}`);
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(options.repo)) usageError(`--repo must be owner/name shape: ${options.repo}`);
 
   let result;
   try {
