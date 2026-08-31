@@ -1717,7 +1717,7 @@ describe("tracker config (#1408)", () => {
     }
   });
 
-  test("a .devloops setting only tracker.board resolves; queue.board alone yields no board and no alias warning", async () => {
+  test("a .devloops setting only queue.board yields no board and no alias warning", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-board-only-"));
     try {
       await writeFile(
