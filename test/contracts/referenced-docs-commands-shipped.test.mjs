@@ -85,33 +85,55 @@ function findUnknownNpmRunReferences(content, knownScriptNames) {
 
 // ── CLI subcommand resolution ──────────────────────────────────────
 
-// Only resolves the shape this repo's own docs actually use to cite a route:
-// a backtick-quoted `` `dev-loops <category> <subcommand>` `` (or the
-// equivalent direct `node cli/index.mjs <category> <subcommand>` form).
+// Resolves BOTH citation shapes this repo's own docs actually use: a
+// backtick-quoted `` `dev-loops <category> <subcommand>` `` (or the
+// equivalent direct `node cli/index.mjs <category> <subcommand>` form)
+// anywhere in a line, and an UNBACKTICKED citation on a line of its own —
+// the fenced usage-block form, where the line's trimmed content starts with
+// the command (e.g. `dev-loops gate consolidate-fanin --findings-dir <dir>`).
+// A `<placeholder>` argument after the category (e.g. `dev-loops queue
+// <subcommand>`) describes the CLI shape rather than citing a route, and is
+// skipped — the subcommand alternation only matches word/hyphen tokens.
 // Built from `SUBCOMMAND_ROUTES`'s own keys, so a newly-registered category
 // is covered without a matching regex edit here.
 const CLI_SUBCOMMAND_RE = new RegExp(
   "`(?:dev-loops|node cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)`",
   "g",
 );
+// Line-anchored variant for unbackticked citations: anchored at the start of
+// the (trimmed) line, no trailing backticks.
+const CLI_SUBCOMMAND_LINE_RE = new RegExp(
+  "^(?:dev-loops|node cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)",
+);
 
-function isKnownSubcommand(category, subcommand, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
+function isKnownSubcommand(category, subcommand) {
   if (subcommand === "--help" || subcommand === "-h") {
     return true; // generic category-help fast-path (cli/index.mjs), not a route
   }
-  if (Object.hasOwn(subcommandRoutes[category] ?? {}, subcommand)) {
+  if (Object.hasOwn(SUBCOMMAND_ROUTES[category] ?? {}, subcommand)) {
     return true;
   }
-  return Boolean(subcommandAliases[category]?.[subcommand]);
+  return Boolean(SUBCOMMAND_ALIASES[category]?.[subcommand]);
 }
 
-function findUnresolvedSubcommandReferences(content, subcommandRoutes = SUBCOMMAND_ROUTES, subcommandAliases = SUBCOMMAND_ALIASES) {
+function findUnresolvedSubcommandReferences(content) {
   const failures = [];
   const lines = content.split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
+    const lineAnchored = line.trimStart().match(CLI_SUBCOMMAND_LINE_RE);
+    if (lineAnchored) {
+      // An unbackticked citation opening the line (the fenced usage-block
+      // shape): validate that single citation and move on — a command line is
+      // not also scanned for backtick-quoted matches.
+      const [, category, subcommand] = lineAnchored;
+      if (!isKnownSubcommand(category, subcommand)) {
+        failures.push({ line: index + 1, category, subcommand });
+      }
+      continue;
+    }
     for (const match of line.matchAll(CLI_SUBCOMMAND_RE)) {
       const [, category, subcommand] = match;
-      if (!isKnownSubcommand(category, subcommand, subcommandRoutes, subcommandAliases)) {
+      if (!isKnownSubcommand(category, subcommand)) {
         failures.push({ line: index + 1, category, subcommand });
       }
     }
@@ -203,7 +225,7 @@ function extractHeadingAnchorIds(content) {
 // doesn't exist on disk — a missing target is already the existing
 // `validateMarkdownLinks` broken-link check's job, so this skips it rather
 // than double-reporting.
-function findDanglingAnchorReferences({ sourceRelPath, sourceContent, loadTargetContent }) {
+function findDanglingAnchorReferences({ sourceContent, loadTargetContent }) {
   const failures = [];
   for (const { line, pathPart, fragment } of extractAnchorLinks(sourceContent)) {
     const targetContent = pathPart === "" ? sourceContent : loadTargetContent(pathPart);
@@ -234,6 +256,15 @@ function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
 
 // ── Aggregate contract ──────────────────────────────────────────────
 
+// Doc-derived tokens interpolated into failure strings (script names,
+// subcommand names, anchor targets/fragments) come from arbitrary doc text
+// and could embed terminal control characters (e.g. an ANSI escape inside a
+// fabricated link target). Escape control chars so the check's own output
+// cannot forge CI logs.
+function sanitizeForLog(value) {
+  return value.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 async function computeAllFailures(repoRoot) {
   const knownScriptNames = loadPackageScriptNames(repoRoot);
   const scannedFiles = await collectMarkdownFiles(repoRoot);
@@ -248,21 +279,20 @@ async function computeAllFailures(repoRoot) {
     const content = fs.readFileSync(absPath, "utf8");
 
     for (const { line, name } of findUnknownNpmRunReferences(content, knownScriptNames)) {
-      failures.push(`${relPath}:${line} cites \`npm run ${name}\` — no such script in package.json`);
+      failures.push(`${relPath}:${line} cites \`npm run ${sanitizeForLog(name)}\` — no such script in package.json`);
     }
 
     if (!isExcludedFromSubcommandCheck(relPath)) {
       for (const { line, category, subcommand } of findUnresolvedSubcommandReferences(content)) {
-        failures.push(`${relPath}:${line} cites \`dev-loops ${category} ${subcommand}\` — no such subcommand in cli/index.mjs's route table`);
+        failures.push(`${relPath}:${line} cites \`dev-loops ${sanitizeForLog(category)} ${sanitizeForLog(subcommand)}\` — no such subcommand in cli/index.mjs's route table`);
       }
     }
 
     for (const { line, target, fragment } of findDanglingAnchorReferences({
-      sourceRelPath: relPath,
       sourceContent: content,
       loadTargetContent: loadTargetContentRelativeTo(repoRoot, absPath),
     })) {
-      failures.push(`${relPath}:${line} cites \`${target}#${fragment}\` — no heading in ${target} produces that anchor id`);
+      failures.push(`${relPath}:${line} cites \`${sanitizeForLog(target)}#${sanitizeForLog(fragment)}\` — no heading in ${sanitizeForLog(target)} produces that anchor id`);
     }
   }
 
@@ -334,6 +364,37 @@ test("findUnresolvedSubcommandReferences flags an unresolved subcommand and acce
   assert.deepEqual(nodeFormFailing[0], { line: 1, category: "queue", subcommand: "does-not-exist-synthetic-1865" });
 });
 
+test("findUnresolvedSubcommandReferences also resolves unbackticked line-anchored citations (fenced usage-block shape)", () => {
+  const failing = findUnresolvedSubcommandReferences("dev-loops queue does-not-exist-synthetic-1865\n");
+  assert.equal(failing.length, 1);
+  assert.deepEqual(failing[0], { line: 1, category: "queue", subcommand: "does-not-exist-synthetic-1865" });
+
+  const nodeFormFailing = findUnresolvedSubcommandReferences("node cli/index.mjs queue does-not-exist-synthetic-1865\n");
+  assert.equal(nodeFormFailing.length, 1);
+  assert.deepEqual(nodeFormFailing[0], { line: 1, category: "queue", subcommand: "does-not-exist-synthetic-1865" });
+
+  const passing = findUnresolvedSubcommandReferences("dev-loops loop startup\n");
+  assert.deepEqual(passing, []);
+
+  const aliased = findUnresolvedSubcommandReferences("dev-loops pr create-draft\n");
+  assert.deepEqual(aliased, [], "alias resolution must also apply to unbackticked line-anchored citations");
+
+  const withArgs = findUnresolvedSubcommandReferences("dev-loops gate consolidate-fanin --findings-dir <dir> --gate <gate>\n");
+  assert.deepEqual(withArgs, [], "trailing flags/args after a real citation must not hide it or false-positive");
+
+  const help = findUnresolvedSubcommandReferences("dev-loops queue --help\n");
+  assert.deepEqual(help, [], "--help fast-path must apply to unbackticked line-anchored citations too");
+
+  const placeholder = findUnresolvedSubcommandReferences("dev-loops queue <subcommand> [--help]\n");
+  assert.deepEqual(placeholder, [], "a <placeholder> subcommand token describes the CLI shape, not a citation of a route");
+
+  const indented = findUnresolvedSubcommandReferences("  dev-loops queue does-not-exist-synthetic-1865\n");
+  assert.equal(indented.length, 1, "leading indentation must not hide a fenced usage-block citation");
+
+  const prose = findUnresolvedSubcommandReferences("dev-loops supports three routing modes.\n");
+  assert.deepEqual(prose, [], "a prose line starting with dev-loops but no real category is not a citation");
+});
+
 test("isExcludedFromSubcommandCheck exempts docs/specs/ from the subcommand-route check but leaves everything else covered", () => {
   const content = "See `dev-loops queue does-not-exist-synthetic-1865`.";
   const specsPath = "docs/specs/queue-mode/SPEC.md";
@@ -367,7 +428,6 @@ test("extractHeadingAnchorIds mirrors github-slugger, including the double-hyphe
 test("findDanglingAnchorReferences flags a same-file anchor with no matching heading and accepts a real one", () => {
   const sourceContent = ["# Guide", "", "See [Overview](#overview) and [Real](#guide).", ""].join("\n");
   const failures = findDanglingAnchorReferences({
-    sourceRelPath: "docs/synthetic-1865.md",
     sourceContent,
     loadTargetContent: () => null,
   });
@@ -379,7 +439,6 @@ test("findDanglingAnchorReferences flags a cross-file anchor with no matching he
   const sourceContent = "See [Setup](./other.md#setup) and [Missing](./other.md#does-not-exist).";
   const otherContent = "# Other\n\n## Setup\n";
   const failures = findDanglingAnchorReferences({
-    sourceRelPath: "docs/synthetic-1865.md",
     sourceContent,
     loadTargetContent: (pathPart) => (pathPart === "./other.md" ? otherContent : null),
   });
@@ -389,7 +448,6 @@ test("findDanglingAnchorReferences flags a cross-file anchor with no matching he
 
 test("findDanglingAnchorReferences skips an anchor whose target file does not exist (the broken-link check's job)", () => {
   const failures = findDanglingAnchorReferences({
-    sourceRelPath: "docs/synthetic-1865.md",
     sourceContent: "See [Missing file](./missing.md#anything).",
     loadTargetContent: () => null,
   });
@@ -407,4 +465,10 @@ test("loadTargetContentRelativeTo refuses a cross-file anchor link that traverse
   // `/etc/hosts` exists on every runner this test targets, so a non-null return here
   // would prove the traversal guard failed and the file was read from outside the repo.
   assert.equal(loadTargetContent("/etc/hosts"), null);
+});
+
+test("sanitizeForLog escapes control characters in doc-derived tokens before they reach failure output", () => {
+  assert.equal(sanitizeForLog("plain"), "plain");
+  assert.equal(sanitizeForLog("[x](\u001b[31mFAKE\u001b[0m)"), "[x](\\u001b[31mFAKE\\u001b[0m)");
+  assert.equal(sanitizeForLog("tab\there"), "tab\\u0009here");
 });
