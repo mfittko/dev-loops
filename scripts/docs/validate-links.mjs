@@ -162,13 +162,13 @@ function shouldIgnoreRawTarget(rawTarget) {
   return false;
 }
 
-// Shared fence-aware line walk: yields every markdown link match (raw,
-// unfiltered) with its 1-based line number, skipping anything inside a
-// fenced code block. Both `extractRelativeMarkdownLinks` (file-target links,
-// used by the broken-link checker below) and `extractAnchorLinks` (fragment
-// links, used by the docs-reference contract test) build on this single
-// parse so the fence-tracking logic exists exactly once.
-function* iterateMarkdownLinkMatches(content) {
+// Shared fence-aware line walk: yields the 1-based line number and raw
+// (untrimmed) text of every line that is not a fenced code block delimiter
+// and not inside a fenced code block. Link parsing (`iterateMarkdownLinkMatches`
+// below, used by the broken-link checker and the docs-reference contract
+// test's anchor extractor) and the contract test's heading-id extraction both
+// build on this single walk so the fence-tracking logic exists exactly once.
+export function* iterNonFencedLines(content) {
   const lines = content.split(/\r?\n/);
   let activeFence = null;
 
@@ -195,8 +195,14 @@ function* iterateMarkdownLinkMatches(content) {
       continue;
     }
 
-    for (const match of line.matchAll(LINK_PATTERN)) {
-      yield { line: index + 1, rawTarget: normalizeLinkTarget(match[1] ?? "") };
+    yield { line: index + 1, text: line };
+  }
+}
+
+function* iterateMarkdownLinkMatches(content) {
+  for (const { line, text } of iterNonFencedLines(content)) {
+    for (const match of text.matchAll(LINK_PATTERN)) {
+      yield { line, rawTarget: normalizeLinkTarget(match[1] ?? "") };
     }
   }
 }
@@ -411,7 +417,7 @@ async function buildCandidateIndex(repoRoot) {
   return candidates;
 }
 
-function isInsideRepoRoot(repoRoot, candidatePath) {
+export function isInsideRepoRoot(repoRoot, candidatePath) {
   const relative = path.relative(repoRoot, candidatePath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

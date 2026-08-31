@@ -21,7 +21,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { SUBCOMMAND_ALIASES, SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
-import { collectMarkdownFiles, extractAnchorLinks } from "../../scripts/docs/validate-links.mjs";
+import {
+  collectMarkdownFiles,
+  extractAnchorLinks,
+  isInsideRepoRoot,
+  iterNonFencedLines,
+} from "../../scripts/docs/validate-links.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -173,29 +178,9 @@ function slugifyHeadingText(text) {
 function extractHeadingAnchorIds(content) {
   const ids = new Set();
   const seenCounts = new Map();
-  const lines = content.split(/\r?\n/);
-  let activeFence = null;
 
-  for (const line of lines) {
-    const trimmed = line.trimStart();
-    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const fenceToken = fenceMatch[1];
-      const fenceInfo = { marker: fenceToken[0], length: fenceToken.length };
-      if (!activeFence) {
-        activeFence = fenceInfo;
-        continue;
-      }
-      if (activeFence.marker === fenceInfo.marker && fenceInfo.length >= activeFence.length) {
-        activeFence = null;
-      }
-      continue;
-    }
-    if (activeFence) {
-      continue;
-    }
-
-    const headingMatch = trimmed.match(/^#{1,6}\s+(.+)$/);
+  for (const { text: line } of iterNonFencedLines(content)) {
+    const headingMatch = line.trimStart().match(/^#{1,6}\s+(.+)$/);
     if (!headingMatch) {
       continue;
     }
@@ -244,7 +229,7 @@ function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
     const targetAbs = path.resolve(path.dirname(sourceAbsPath), pathPart);
     // Guard against a link path traversing outside the repo (e.g. `../../../../etc/hosts`):
     // treat it the same as a missing target rather than reading outside the repo root.
-    if (targetAbs !== repoRoot && !targetAbs.startsWith(repoRoot + path.sep)) {
+    if (!isInsideRepoRoot(repoRoot, targetAbs)) {
       return null;
     }
     if (!fs.existsSync(targetAbs) || !fs.statSync(targetAbs).isFile()) {
@@ -262,7 +247,7 @@ function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
 // fabricated link target). Escape control chars so the check's own output
 // cannot forge CI logs.
 function sanitizeForLog(value) {
-  return value.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return value.replace(/[\x00-\x1f\x7f-\x9f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 async function computeAllFailures(repoRoot) {
@@ -279,12 +264,12 @@ async function computeAllFailures(repoRoot) {
     const content = fs.readFileSync(absPath, "utf8");
 
     for (const { line, name } of findUnknownNpmRunReferences(content, knownScriptNames)) {
-      failures.push(`${relPath}:${line} cites \`npm run ${sanitizeForLog(name)}\` — no such script in package.json`);
+      failures.push(`${sanitizeForLog(relPath)}:${line} cites \`npm run ${sanitizeForLog(name)}\` — no such script in package.json`);
     }
 
     if (!isExcludedFromSubcommandCheck(relPath)) {
       for (const { line, category, subcommand } of findUnresolvedSubcommandReferences(content)) {
-        failures.push(`${relPath}:${line} cites \`dev-loops ${sanitizeForLog(category)} ${sanitizeForLog(subcommand)}\` — no such subcommand in cli/index.mjs's route table`);
+        failures.push(`${sanitizeForLog(relPath)}:${line} cites \`dev-loops ${sanitizeForLog(category)} ${sanitizeForLog(subcommand)}\` — no such subcommand in cli/index.mjs's route table`);
       }
     }
 
@@ -292,7 +277,7 @@ async function computeAllFailures(repoRoot) {
       sourceContent: content,
       loadTargetContent: loadTargetContentRelativeTo(repoRoot, absPath),
     })) {
-      failures.push(`${relPath}:${line} cites \`${sanitizeForLog(target)}#${sanitizeForLog(fragment)}\` — no heading in ${sanitizeForLog(target)} produces that anchor id`);
+      failures.push(`${sanitizeForLog(relPath)}:${line} cites \`${sanitizeForLog(target)}#${sanitizeForLog(fragment)}\` — no heading in ${sanitizeForLog(target)} produces that anchor id`);
     }
   }
 
@@ -471,4 +456,5 @@ test("sanitizeForLog escapes control characters in doc-derived tokens before the
   assert.equal(sanitizeForLog("plain"), "plain");
   assert.equal(sanitizeForLog("[x](\u001b[31mFAKE\u001b[0m)"), "[x](\\u001b[31mFAKE\\u001b[0m)");
   assert.equal(sanitizeForLog("tab\there"), "tab\\u0009here");
+  assert.equal(sanitizeForLog("\x9b[31mFAKE\x9b[0m"), "\\u009b[31mFAKE\\u009b[0m");
 });
