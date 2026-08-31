@@ -110,6 +110,35 @@ test("resolveApprovalState: blanket merge authorizations and generic 'continue' 
   }
 });
 
+test("resolveApprovalState: negated operator text never satisfies the gate (#1901 fail-open fix)", () => {
+  for (const body of [
+    "do not approve release v1.0.0",
+    "does not approve release v1.0.0",
+    "don't approve release v1.0.0",
+    "won't approve release v1.0.0",
+    "never approve release v1.0.0",
+    "unapprove release v1.0.0",
+    "disapprove release v1.0.0",
+  ]) {
+    const d = resolveApprovalState({
+      version: "1.0.0",
+      operator: "op",
+      comments: [{ author: "op", body }],
+    });
+    assert.equal(d.approved, false, `negated form must not pass: ${body}`);
+    assert.ok(d.refusal && d.refusal.length > 0);
+  }
+});
+
+test("resolveApprovalState: a mixed comment that negates and later approves is refused (fail closed)", () => {
+  const d = resolveApprovalState({
+    version: "1.0.0",
+    operator: "op",
+    comments: [{ author: "op", body: "do not approve release v1.0.0 yet; approve release v1.0.0 once green" }],
+  });
+  assert.equal(d.approved, false);
+});
+
 test("resolveApprovalState: version boundary — v1.0.0.1 text does not approve v1.0.0", () => {
   const d = resolveApprovalState({
     version: "1.0.0",
@@ -166,6 +195,44 @@ test("verifyReleaseApproval: a search hit whose comments contain no matching ope
   });
   assert.equal(result.ok, false);
   assert.match(result.refusal, /no explicit operator release approval record/);
+});
+
+test("verifyReleaseApproval: multi-page --slurp comment payload is parsed correctly", () => {
+  let call = 0;
+  const result = verifyReleaseApproval({
+    version: "1.0.0",
+    repo: "o/n",
+    operator: "op",
+    runChild: () => {
+      if (call++ === 0) return JSON.stringify({ items: [{ number: 42 }] });
+      return JSON.stringify([
+        [{ user: { login: "other" }, body: "noise" }],
+        [{ user: { login: "op" }, body: "approve release v1.0.0" }],
+      ]);
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.message, /verified/);
+});
+
+test("verifyReleaseApproval: an invalid --operator login fails closed before any gh call", () => {
+  assert.throws(() => verifyReleaseApproval({
+    version: "1.0.0",
+    repo: "o/n",
+    operator: "op inject:qualifier",
+    runChild: () => { throw new Error("gh must not be called"); },
+  }), /not a valid GitHub login shape/);
+});
+
+test("verifyReleaseApproval: a padded version is trimmed before matching (entrypoint normalization)", () => {
+  const result = verifyReleaseApproval({
+    version: " 1.0.0 ",
+    repo: "o/n",
+    operator: "op",
+    runChild: () => JSON.stringify({ items: [] }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.refusal, /approve release v1\.0\.0/);
 });
 
 test("verifyReleaseApproval: prerelease passes through with no gh call at all", () => {
@@ -255,4 +322,17 @@ test("CLI: usage errors exit 2 (no args, missing --repo, missing --version, garb
 
 test("CLI: garbage repo shape exits 2", () => {
   assert.equal(runCli(["--version", "1.0.0", "--repo", "not-a-slug"]).status, 2);
+});
+
+test("CLI: --jq and --silent/-s are honored (jq-output CLI contract)", () => {
+  const jq = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n", "--jq", ".ok"]);
+  assert.equal(jq.status, 0, jq.stderr);
+  assert.equal(jq.stdout.trim(), "true");
+
+  const silent = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n", "--silent"]);
+  assert.equal(silent.status, 0, silent.stderr);
+  assert.equal(silent.stdout.trim(), "");
+
+  const short = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n", "-s"]);
+  assert.equal(short.status, 0, short.stderr);
 });

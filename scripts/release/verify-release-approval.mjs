@@ -32,7 +32,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
 
 const USAGE = `Usage: verify-release-approval.mjs --version <semver> --repo <owner/name> [--operator <login>] [--jq <filter>] [--silent]
@@ -53,6 +53,15 @@ function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+/**
+ * Negated approval forms that must NOT satisfy the gate even though they
+ * contain the positive phrase. Covers "do not/does not/don't/won't/never/
+ * cannot/should not approve release …" and "unapprove/disapprove release …".
+ * A mixed comment that both negates and later approves is rejected (fail
+ * closed) — the operator should post an unambiguous approval.
+ */
+const NEGATED_APPROVAL = /(?:^|[\s.!?,;:])(?:do\s+not|does\s+not|don['’]?t|won['’]?t|never|cannot|can['’]?t|should\s+not|shouldn['’]?t)\s+approve\s+release|\b(?:un|dis)approve\s+release/i;
 
 /**
  * The only accepted approval record: a comment by the operator whose body
@@ -95,7 +104,8 @@ export function resolveApprovalState({ version, operator, comments }) {
       typeof c.author === "string" &&
       typeof c.body === "string" &&
       c.author.trim().toLowerCase() === operator.trim().toLowerCase() &&
-      pattern.test(c.body),
+      pattern.test(c.body) &&
+      !NEGATED_APPROVAL.test(c.body),
   );
   return {
     applies: true,
@@ -124,9 +134,8 @@ function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
  * the script is node-builtins-only and must not depend on jq parsing behavior.
  */
 function fetchApprovalCandidates({ repo, operator, version, ghCommand, runChild }) {
-  const phrase = `approve release v${version}`;
   const searchOut = runGh(
-    ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "${phrase}"`],
+    ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "approve release"`],
     { ghCommand, runChild },
   );
   let candidates = [];
@@ -138,22 +147,29 @@ function fetchApprovalCandidates({ repo, operator, version, ghCommand, runChild 
   const comments = [];
   for (const issueNumber of candidates) {
     const body = runGh(
-      ["api", "repos/" + repo + "/issues/" + issueNumber + "/comments", "--paginate"],
+      ["api", "repos/" + repo + "/issues/" + issueNumber + "/comments", "--paginate", "--slurp"],
       { ghCommand, runChild },
     );
     try {
       const parsed = JSON.parse(body);
-      // --paginate emits a JSON array per page on stdout; a single page is one
-      // array, multiple pages would be consecutive arrays. Parse each page.
-      const pages = Array.isArray(parsed) ? [parsed] : [parsed].flat();
-      for (const page of pages) {
-        for (const c of Array.isArray(page) ? page : []) {
-          const author = c?.user?.login;
-          const commentBody = c?.body;
-          if (typeof author === "string" && typeof commentBody === "string") {
-            comments.push({ author, body: commentBody });
-          }
+      // --slurp wraps every page into one array of page-arrays; a single page
+      // may still arrive flat. Accept all three shapes (array-of-arrays, flat
+      // array, lone object) so a >30-comment tracking issue never fails closed
+      // on a pagination artifact.
+      const collect = (c) => {
+        const author = c?.user?.login;
+        const commentBody = c?.body;
+        if (typeof author === "string" && typeof commentBody === "string") {
+          comments.push({ author, body: commentBody });
         }
+      };
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (Array.isArray(item)) item.forEach(collect);
+          else collect(item);
+        }
+      } else {
+        collect(parsed);
       }
     } catch {
       throw new Error(`release-approval comment fetch returned non-JSON output — fail closed`);
@@ -163,6 +179,7 @@ function fetchApprovalCandidates({ repo, operator, version, ghCommand, runChild 
 }
 
 export function verifyReleaseApproval({ version, repo, operator = null, ghCommand = "gh", runChild = execFileSync } = {}) {
+  version = version.trim();
   const distTag = resolveNpmDistTag(version); // throws on garbage -> usage error upstream
   if (distTag !== "latest") {
     return { ok: true, applies: false, message: `prerelease v${version} publishes under dist-tag "${distTag}"; the stable-release operator-approval gate does not apply (prerelease flow unchanged).` };
@@ -170,6 +187,11 @@ export function verifyReleaseApproval({ version, repo, operator = null, ghComman
   const operatorLogin = operator ?? runGh(["api", "repo", "--jq", ".owner.login"], { ghCommand, runChild }).trim();
   if (!operatorLogin) {
     throw new Error("operator login could not be resolved (gh api repo returned empty) — fail closed");
+  }
+  // Reject a --operator override that could inject extra GitHub search
+  // qualifiers (spaces, colons, quotes) into `commenter:<login>`.
+  if (!/^[a-zA-Z0-9-]+$/.test(operatorLogin)) {
+    throw new Error(`operator login "${operatorLogin}" is not a valid GitHub login shape — fail closed`);
   }
   const comments = fetchApprovalCandidates({ repo, operator: operatorLogin, version, ghCommand, runChild });
   const decision = resolveApprovalState({ version, operator: operatorLogin, comments });
@@ -189,11 +211,15 @@ function parseArgs(argv) {
       options.repo = argv[++i] ?? null;
     } else if (token === "--operator") {
       options.operator = argv[++i] ?? null;
+    } else if (token === "--jq") {
+      options.jq = argv[++i];
+      if (options.jq == null) usageError("--jq requires a filter");
+    } else if (token === "--silent" || token === "-s") {
+      options.silent = true;
     } else if (token === "--help" || token === "-h") {
       process.stdout.write(USAGE + "\n");
       process.exit(0);
     } else {
-      if (matchJqOutputToken(token, options, (t) => usageError("--jq requires a filter"))) break;
       usageError(`unknown argument: ${token}`);
     }
   }
@@ -222,9 +248,6 @@ async function main() {
     if (/not a valid SemVer|non-empty string/.test(String(err?.message))) {
       usageError(err.message);
     }
-    if (/not a valid SemVer|non-empty string/.test(String(err?.message))) {
-      usageError(err.message);
-    }
     const failure = { ok: false, error: `operator-approval check failed closed: ${err?.message ?? err}` };
     process.exitCode = emitResult(failure, { jq: options.jq, silent: options.silent });
     process.exit(process.exitCode === 0 ? 1 : process.exitCode);
@@ -235,7 +258,7 @@ async function main() {
     const code = emitResult(failure, { jq: options.jq, silent: options.silent });
     process.exit(code === 0 ? 1 : code); // a clean jq-false must not mask a refusal
   }
-  process.exit(emitResult({ ok: true, ...(result.applies ? {} : { applies: false }), message: result.message }, { jq: options.jq, silent: options.silent }));
+  process.exit(emitResult(result, { jq: options.jq, silent: options.silent }));
 }
 
 if (isDirectCliRun(import.meta.url)) {

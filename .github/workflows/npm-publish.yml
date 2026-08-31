@@ -29,24 +29,28 @@ jobs:
             exit 1
           fi
 
-      # #1901: the npm publish itself is a release boundary — a manual
-      # workflow_dispatch against a stable version must satisfy the same
-      # per-release operator-approval gate as the tag flow (closing the
-      # direct-dispatch bypass). Prereleases pass through unchanged.
-      - name: Assert operator release approval (stable releases)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(jq -r .version package.json)
-          node scripts/release/verify-release-approval.mjs \
-            --version "${VERSION}" \
-            --repo "${{ github.repository }}"
-
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
+
+      # #1901: the npm publish itself is a release boundary — a manual
+      # workflow_dispatch against a stable version must satisfy the same
+      # per-release operator-approval gate as the tag flow (closing the
+      # direct-dispatch bypass). Both published packages are gated (root +
+      # @dev-loops/core) so a stable core cannot slip out under `latest` while
+      # the root stays a prerelease. Prereleases pass through unchanged.
+      - name: Assert operator release approval (stable releases)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/verify-release-approval.mjs \
+            --version "$(jq -r .version package.json)" \
+            --repo "${{ github.repository }}"
+          node scripts/release/verify-release-approval.mjs \
+            --version "$(jq -r .version packages/core/package.json)" \
+            --repo "${{ github.repository }}"
 
       - name: Install dependencies
         run: npm ci
