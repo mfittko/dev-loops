@@ -196,7 +196,7 @@ test("verifyReleaseApproval: a search hit whose comments contain no matching ope
     version: "1.0.0",
     repo: "o/n",
     operator: "op",
-    runChild: () => (call++ === 0 ? "42\n" : JSON.stringify([
+    runChild: () => (call++ === 0 ? JSON.stringify({ items: [{ number: 42 }] }) : JSON.stringify([
       { user: { login: "other" }, body: "approve release v1.0.0" },
     ])),
   });
