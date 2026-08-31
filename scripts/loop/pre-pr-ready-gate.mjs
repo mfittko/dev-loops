@@ -10,6 +10,8 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
+import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "./check-adr-tripwire.mjs";
+import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -19,9 +21,18 @@ Gate guard for gh pr ready (draft → ready-for-review transition). Blocks
 unless a visible clean draft_gate checkpoint verdict exists for the PR's
 current head SHA (on either surface it can live on: the round's PR review, or
 a legacy verdict issue comment) AND the fail-closed PR size budget
-(gates.size) does not return a block outcome. This is the guard the raw
-\`gh pr ready\` hook path runs — no --waive-size-budget surface here; a size
-waiver can only be granted through ready-for-review.mjs.
+(gates.size) does not return a block outcome AND — for a tracker-backed PR
+(one or more closing issue references) — the PR's own body passes the
+PR-description contract (Acceptance criteria + Definition of done checklists,
+an explicit Non-goals section, and a Closes #N/Fixes #N reference; issue
+#1863). This is the guard the raw \`gh pr ready\` hook path runs — no
+--waive-size-budget surface here; a size waiver can only be granted through
+ready-for-review.mjs. Also enforces the fail-closed ADR tripwire (issue
+#1867): a PR touching a decision-shaped surface (skills/docs/*-contract.md,
+the shared gate config, or a rule-modality reversal) must add/update a
+docs/decisions/NNNN-*.md record or carry \`adr-tripwire:allow <reason>\` in its
+PR body. The ADR waiver is body-derived, so unlike the size-budget flag it is
+honored identically on this raw path.
 
 Exit codes:
   0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
@@ -35,15 +46,19 @@ Output (stdout, JSON on success):
     "currentHeadSha": "abc1234",
     "draftGateSatisfied": true,
     "draftGate": { "visible": true, "headSha": "abc1234", "verdict": "clean", ... },
-    "sizeBudget": { "outcome": "pass"|"escalate", ... }
+    "sizeBudget": { "outcome": "pass"|"escalate", ... },
+    "adrTripwire": { "outcome": "pass", "satisfiedBy": "adr"|"waiver"|null, ... },
+    "prBodySpec": { "ok": true, "checker": "validate-pr-body-spec", ... } | null
   }
+  ("prBodySpec" is null for a PR with no closing issue reference — that path
+  stays the lightweight/issue-less path's job, unchanged.)
 
 Error output (stderr, JSON):
   { "ok": false, "error": "<reason>" }
 ${JQ_OUTPUT_USAGE}`.trim();
 
 const parseError = buildParseError(USAGE);
-const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state } } }`;
+const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state, body, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
 
 export function parsePrePrReadyGateCliArgs(argv) {
   const options = { help: false, repo: undefined, pr: undefined };
@@ -89,16 +104,21 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   );
   const d = r?.data?.repository?.pullRequest;
   if (!d) throw new Error(`Could not fetch PR #${pr}`);
+  const closingIssues = (d.closingIssuesReferences?.nodes ?? [])
+    .map((n) => n?.number)
+    .filter((n) => Number.isInteger(n) && n > 0);
   return {
     id: d.id,
     isDraft: d.isDraft === true,
     headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null,
     baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null,
     state: typeof d.state === "string" ? d.state.trim() : null,
+    body: typeof d.body === "string" ? d.body : "",
+    closingIssues,
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
@@ -174,6 +194,63 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
+  // Fail-closed ADR tripwire (issue #1867): the same body-derived check
+  // readyForReview() runs — a decision-shaped surface touch requires a
+  // docs/decisions/NNNN-*.md record in the diff or an `adr-tripwire:allow
+  // <reason>` waiver in the PR body. Body-derived, so this raw path honors
+  // the waiver exactly like the canonical path; no flag surface exists.
+  if (!prState.baseRefName) throw new Error(`Could not resolve PR #${options.pr} base branch`);
+  const adrTripwire = await evaluateAdrTripwire({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    prBody: prState.body,
+    repoRoot,
+  });
+  if (adrTripwire.outcome === "block") {
+    return {
+      ok: false,
+      error: `PR #${options.pr} blocked by the ADR tripwire: ${adrTripwire.reasons.join("; ")}`,
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+      adrTripwire,
+    };
+  }
+
+  // Fail-closed PR-description contract for a TRACKER-BACKED PR (issue #1863):
+  // the deterministic validate-pr-body-spec check, previously wired only to
+  // the lightweight/issue-less path (#1025), now also runs on a draft PR that
+  // closes one or more issues — a linked issue with real ACs is necessary but
+  // not sufficient; the PR's OWN body must carry Acceptance criteria +
+  // Definition of done checklists, an explicit Non-goals section, and a
+  // Closes #N/Fixes #N reference (skills/docs/copilot-loop-operations.md "PR
+  // description contract"). `null` (not run) for an issue-less PR — that path
+  // stays validate-pr-body-spec's existing --no-issue job, unchanged.
+  const prBodySpec = prState.closingIssues.length > 0
+    ? validateTrackerBackedPrBodySpec({ body: prState.body, closingIssues: prState.closingIssues })
+    : null;
+  if (prBodySpec && !prBodySpec.ok) {
+    return {
+      ok: false,
+      error: `PR #${options.pr} closes ${prState.closingIssues.map((n) => `#${n}`).join(", ")} but its own body fails the PR-description contract (validate-pr-body-spec: ${prBodySpec.errors.map((e) => e.code).join(", ")}); the PR body must independently carry Acceptance criteria + Definition of done checklists, an explicit Non-goals section, and a Closes #N/Fixes #N reference.`,
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+      adrTripwire,
+      prBodySpec,
+    };
+  }
+
   return {
     ok: true,
     repo: options.repo,
@@ -184,6 +261,8 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     draftGate: gate.draftGate,
     draftGateMarker: gate.draftGateMarker,
     sizeBudget,
+    adrTripwire,
+    prBodySpec,
   };
 }
 

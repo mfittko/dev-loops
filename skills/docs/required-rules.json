@@ -52,6 +52,9 @@
       "id": "ARTIFACT-TRACKER-FIRST-NO-DUP"
     },
     {
+      "id": "ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR"
+    },
+    {
       "id": "ARTIFACT-TWO-TIER-EXCLUSIVE"
     },
     {
@@ -379,6 +382,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "LIFECYCLE-CHANGELOG-COMPLETENESS"
+    },
+    {
       "id": "LIFECYCLE-CONFLICT-BLOCKS-PROGRESS"
     },
     {
@@ -417,6 +423,11 @@
     },
     {
       "id": "LOCAL-PREFLIGHT-GATE-MANDATORY"
+    },
+    {
+      "id": "LOCAL-RETRO-FRESH-CONTEXT-DISPATCH",
+      "enforcement": "agent",
+      "enforcementNote": "Fresh-context retro dispatch is agent discipline; the write path is runtime-enforced via RETRO-FRESH-CONTEXT-MANDATORY (checkpoint-contract.mjs)."
     },
     {
       "id": "LOCAL-RETROSPECTIVE-REQUIRED"
@@ -503,6 +514,9 @@
     },
     {
       "id": "RETRO-FINDINGS-ENVELOPE-CARRY"
+    },
+    {
+      "id": "RETRO-FRESH-CONTEXT-MANDATORY"
     },
     {
       "id": "RETRO-GATE-FAIL-CLOSED"
@@ -595,8 +609,18 @@
       "enforcement": "doc"
     },
     {
+      "id": "STYLE-CONSISTENCY-NOT-CONFORMANCE",
+      "enforcement": "agent",
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
+    },
+    {
       "id": "STYLE-DEFINED-TERMS",
       "enforcement": "doc"
+    },
+    {
+      "id": "STYLE-DURABLE-RULE-HOME",
+      "enforcement": "agent",
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
     },
     {
       "id": "STYLE-ID-SCHEME",
@@ -609,6 +633,11 @@
     {
       "id": "STYLE-LEXICAL-SCAN-LIMIT",
       "enforcement": "doc"
+    },
+    {
+      "id": "STYLE-NO-DRIFT-BLESSING",
+      "enforcement": "agent",
+      "enforcementNote": "Prose norm; mechanically uncheckable without NLP — agent-enforced, owned by contract-style-guide.md."
     },
     {
       "id": "STYLE-PRECEDENCE-CONFLICT",
@@ -669,6 +698,10 @@
     },
     {
       "id": "WORKTREE-CLEANUP"
+    },
+    {
+      "id": "WORKTREE-COMMIT-MSG-GUARD",
+      "enforcement": "runtime"
     },
     {
       "id": "WORKTREE-CREATE-PROVISION"

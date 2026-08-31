@@ -184,6 +184,39 @@ best-effort measure, not a substitute for `WORKTREE-CREATE-PROVISION` and
 `WORKTREE-DEFAULT-USE`'s own mandate to address git operations explicitly
 (below).
 
+### Commit-message contract guard
+
+<!-- rule: WORKTREE-COMMIT-MSG-GUARD -->
+`WORKTREE-COMMIT-MSG-GUARD`: `ensure-worktree.mjs` also best-effort installs a
+`commit-msg` hook into the same common hook directory as the default-branch
+guard above (reported separately, as `commitMsgGuard` in the result, since it
+guards message CONTENT rather than a branch). It enforces the commit-message
+contract at commit time instead of leaving it to agent discipline:
+
+- An agent-authored commit (`CLAUDECODE=1` in the environment — a plain
+  human commit is exempt, since it is never "Claude") must carry both
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and a
+  `Claude-Session:` trailer.
+- A bare non-issue `#<digits>` enumeration is rejected — GitHub auto-links it
+  to an unrelated issue/PR when rendered. A genuine `Closes #N` / `Fixes #N`
+  / `Refs #N` reference is allowed, including its trailer colon form
+  (`Closes: #N`).
+- The subject must be conventional-commit form `type(scope): summary` (type
+  one of `feat`/`fix`/`chore`/`docs`/`test`/`refactor`/`revert`/`perf`/
+  `style`/`ci`/`build`).
+- A default, unedited merge message (`Merge branch '...'`, `Merge pull
+  request #...`, `Merge tag '...'`), a default `git revert` message
+  (`Revert "..."`), or a `git commit --fixup`/`--squash` autosquash subject
+  (`fixup! ...` / `squash! ...`) is exempt — each is git/tooling-generated,
+  not operator-authored prose.
+- A per-commit waiver line (`dev-loops:commit-msg-guard:allow`) skips every
+  check above for a deliberate exception.
+
+Same refusal/degraded-coverage shape as the default-branch guard (a
+pre-existing `commit-msg` hook is never clobbered; `core.hooksPath` pointing
+elsewhere refuses the install) — see `installCommitMsgGuard` in
+`packages/core/src/loop/commit-msg-guard.mjs`.
+
 ### Post-merge cleanup
 
 <!-- rule: WORKTREE-CLEANUP -->

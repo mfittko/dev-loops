@@ -56,6 +56,54 @@ export const RETROSPECTIVE_QUALIFYING_GATES = Object.freeze([
 ]);
 
 /**
+ * Provenance context values for a recorded retrospective (issue #1870).
+ *
+ * A retrospective MUST be produced by a FRESH-CONTEXT, independent dispatch
+ * (analogous to a gate reviewer) seeded with the cycle's full agent/subagent
+ * tool-call/action/result record — never written inline by the same working
+ * context that did the work. A self-authored retro reflects the working
+ * agent's own blind spots back at it; it validates consistency, not
+ * conformance, so an inline retro fails the checkpoint.
+ */
+export const RETROSPECTIVE_PROVENANCE = Object.freeze({
+  /** Dispatched as a fresh, independent context (the only accepting value). */
+  CONTEXT_FRESH: "fresh",
+  /** Self-authored by the working context — rejected, fails closed. */
+  CONTEXT_INLINE: "inline",
+  /** The retro was seeded with the full agent/subagent tool-call record. */
+  SEEDED_FROM_RECORD: "agent_tool_call_record",
+});
+
+/**
+ * Normalizes a retrospective provenance record from a durable checkpoint
+ * artifact. Returns the normalized provenance only when it pins a valid
+ * fresh-context pass over the full tool-call record:
+ * - `context` must normalize to "fresh" (trimmed, case-insensitive; an
+ *   "inline"/self-authored retro is rejected — it fails closed, never accepted)
+ * - `seededFrom` must be exactly "agent_tool_call_record" (the retro audited
+ *   the cycle's actual behavior, not a summary)
+ * - `recordSource` must be a non-blank string (the transcript/journal path
+ *   the retro was seeded with)
+ *
+ * Returns null for anything else — absent, malformed, inline, or partial.
+ *
+ * @param {unknown} value
+ * @returns {{context: "fresh", seededFrom: "agent_tool_call_record", recordSource: string}|null}
+ */
+export function normalizeRetroProvenance(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const context = typeof value.context === "string" ? value.context.trim().toLowerCase() : "";
+  const seededFrom = typeof value.seededFrom === "string" ? value.seededFrom.trim().toLowerCase() : "";
+  const recordSource = typeof value.recordSource === "string" ? value.recordSource.trim() : "";
+  if (context !== RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH || seededFrom !== RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD || recordSource.length === 0) {
+    return null;
+  }
+  return { context: RETROSPECTIVE_PROVENANCE.CONTEXT_FRESH, seededFrom: RETROSPECTIVE_PROVENANCE.SEEDED_FROM_RECORD, recordSource };
+}
+
+/**
  * Normalizes an external retrospective checkpoint-state input to one of the
  * stable RETROSPECTIVE_CHECKPOINT_STATE values. Returns null when the value is
  * absent or unrecognized.
@@ -149,7 +197,17 @@ export function resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinc
     return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED;
   }
   if (rawState === "complete") {
-    return hasNewerMergeSinceCheckpoint ? RETROSPECTIVE_CHECKPOINT_STATE.MISSING : RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
+    if (hasNewerMergeSinceCheckpoint) {
+      return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+    }
+    // Fresh-context provenance is mandatory (issue #1870): a `complete` record
+    // without provenance that pins a fresh-context pass over the full
+    // tool-call record — including legacy inline/self-authored retros — fails
+    // closed to MISSING. The old inline self-review path is disallowed.
+    if (normalizeRetroProvenance(artifact.provenance) === null) {
+      return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;
+    }
+    return RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE;
   }
   // Malformed/unrecognized durable state — fail closed.
   return RETROSPECTIVE_CHECKPOINT_STATE.MISSING;

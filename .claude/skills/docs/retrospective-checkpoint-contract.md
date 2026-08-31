@@ -2,6 +2,27 @@
 
 Canonical owner for the enforcement seam of the post-run behavioral retrospective checkpoint after qualifying async `dev-loop` completions in this repository.
 
+## Fresh-context neutral retrospective (issue #1870)
+
+<!-- rule: RETRO-FRESH-CONTEXT-MANDATORY -->
+A qualifying retrospective MUST be produced by a **fresh-context, independent dispatch** — analogous to a gate reviewer — seeded with the cycle's **full agent/subagent tool-call/action/result record** (the existing session transcript/journal artifacts; no new transcript store). The retro evaluates neutrally against the contracts and the issue's acceptance criteria / definition of done / non-goals and produces its finding independently of the implementing agent's self-view.
+
+An **inline, self-authored retrospective** — written by the same working/session context that did the work, from its own self-narrative — is **disallowed and fails the checkpoint**. A self-review reflects the working agent's own blind spots back at it: it validates consistency, not conformance, and cannot see a systematic error it itself committed (e.g. a uniformly-wrong PR template raises no anomaly signal to a self-referential reflection).
+
+The requirement is pinned by the **write mechanism**, not convention: the CLI rejects an inline retro outright and the read side fails closed on every record the CLI could not have produced. The dispatch half (point 1) is agent discipline (`LOCAL-RETRO-FRESH-CONTEXT-DISPATCH`, `enforcement: "agent"`) — provenance is self-attested at write time, so a determined working session could self-author a retro and type `--retro-context fresh` regardless; the durable guarantee is that no inline/legacy record passes the checkpoint, not that the attestation itself is verifiable.
+
+1. the retro pass is dispatched as a fresh-context subagent (no inherited working/session context or self-narrative) with the record path as its primary input;
+2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with; `--record-source` MUST resolve (from the invocation cwd; absolute paths allowed) to an existing, non-empty file, so a retro attested against a record that does not exist is rejected at write time;
+3. the durable artifact carries that provenance, and the pure resolver (`resolveCheckpointStateFromArtifact`) treats a `complete` record whose `provenance` does not pin a fresh-context pass over the record as `MISSING` — fail-closed, including every legacy inline retro.
+
+Provenance shape:
+
+```json
+{ "context": "fresh", "seededFrom": "agent_tool_call_record", "recordSource": "<path to transcript/journal artifact>" }
+```
+
+`skipped` records are not provenance-gated: no retro ran, so there is nothing to have provenance.
+
 <!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
 Whether a missing checkpoint blocks the next qualifying start/resume MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in.
 
@@ -40,7 +61,8 @@ A fresh session determines the status of the required retrospective by reading `
 | File absent (ENOENT) | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | No requirement has ever been observed on this working copy |
 | `{ "state": "none" }` | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | Explicitly recorded as no requirement |
 | `{ "state": "required" }` or `{ "state": "missing" }` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Retrospective pending; blocks the next qualifying start/resume |
-| `{ "state": "complete", "identity": {...} }`, nothing has merged since the recorded `mergeCommit` | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded for the current cycle; requirement satisfied |
+| `{ "state": "complete", "identity": {...}, "provenance": {...} }`, nothing has merged since the recorded `mergeCommit` | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded for the current cycle as a fresh-context pass over the tool-call record; requirement satisfied |
+| `{ "state": "complete", "identity": {...} }` with no/invalid/inline `provenance`, nothing merged since | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Inline or unverifiable retro — fails closed (see [RETRO-FRESH-CONTEXT-MANDATORY](#fresh-context-neutral-retrospective-issue-1870)); re-discharge with `--retro-context fresh --record-source <path>` |
 | `{ "state": "complete", "identity": {...} }`, something has merged since (or the recorded `mergeCommit` cannot be resolved locally) | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Stale completion; a newer cycle has not been discharged |
 | `{ "state": "complete" }` or `{ "state": "skipped" }` with no `identity` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Legacy identity-less record — the shape every pre-cycle-scoping checkpoint has. It cannot be verified against any cycle, so it fails closed without running the ancestry check; discharge it by re-recording with the identity flags |
 | `{ "state": "skipped", "identity": {...} }`, nothing has merged since the recorded `mergeCommit` | `RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED` | Explicitly skipped with reason for the current cycle; requirement satisfied |
@@ -203,9 +225,9 @@ advisory reflection whose findings reach the conductor via the envelope.
 - **The question is recency, not identity.** Has anything merged to the base branch since the checkpoint's recorded discharge point? That is a purely local, deterministic fact of this repo's own commit graph — it needs no GitHub query and no proxy for "was that merge actually a qualifying completion". (An earlier approach tried deriving "the latest qualifying completion" via a live `gh pr list` query proxying "the most recently merged PR assigned to Copilot" — a proxy that matched zero real PRs in this repo's own merge history and so never fired. It has been removed entirely, along with the query, the availability/degradation handling it needed, and the recent-history scan-window limit.)
 - **Derivation, at read time, on every evaluation.** There is no write-time "arming" step. `resolveHasNewerMergeSinceCheckpoint` (`scripts/loop/resolve-dev-loop-startup.mjs`) runs a best-effort `git fetch origin <baseBranch>` (so the ordinary case — a commit merged after this checkout last fetched — resolves correctly) and then `git log <mergeCommit>..origin/<baseBranch> --oneline`; a non-empty result means something has merged since. This repo (and any repo using this mechanism) squash-merges, so the check does **not** filter on `--merges` — that would match nothing against a squash-merged history. Nothing has to remember to write `state: "required"` for the gate to fire correctly, so there is no seam that can be skipped, hit from the wrong working directory, triggered by a read-only preview, or raced.
 - **Unresolvable recorded commit fails closed.** When the checkpoint's recorded `mergeCommit` cannot be resolved against `origin/<baseBranch>` at all — unfetched, a shallow clone missing the history, or a garbage value — the check fails closed to `MISSING` rather than reporting "unknown, so trust the record". An unverifiable discharge claim must not be trusted; the outcome is identical to a confirmed newer merge.
-- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity` — the CLI rejects `complete`/`skipped` with no identity at all (previously optional, which could write a record that then failed closed forever with no way to clear it by re-running the same command). `--merge-commit` MUST be the full merge commit oid (`gh pr view --json mergeCommit --jq .mergeCommit.oid`), not an abbreviated/short sha — the CLI rejects anything that is not exactly 40 hex characters, since a short sha can never match a real commit oid on a later ancestry check and would leave the checkpoint permanently unresolvable (and so permanently stale). `--repo` MUST be `owner/name` shape. `skipped` is scoped exactly like `complete` — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
+- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity` — the CLI rejects `complete`/`skipped` with no identity at all (previously optional, which could write a record that then failed closed forever with no way to clear it by re-running the same command). A `complete` record additionally MUST carry the fresh-context provenance via `--retro-context fresh --record-source <path>` (the CLI rejects `inline` outright and rejects `complete` with no provenance flags at all). `--merge-commit` MUST be the full merge commit oid (`gh pr view --json mergeCommit --jq .mergeCommit.oid`), not an abbreviated/short sha — the CLI rejects anything that is not exactly 40 hex characters, since a short sha can never match a real commit oid on a later ancestry check and would leave the checkpoint permanently unresolvable (and so permanently stale). `--repo` MUST be `owner/name` shape. `skipped` is scoped exactly like `complete` — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
 - **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) takes the caller-derived ancestry result as a boolean (`hasNewerMergeSinceCheckpoint`) and treats a `complete`/`skipped` checkpoint as `MISSING`, not `COMPLETE`/`SKIPPED`, whenever it is set. It also treats a present-but-malformed artifact (not a JSON object — including the JSON literal `null`, which is present-but-broken rather than absent — or an unrecognized `state`) as `MISSING`. Only a genuinely absent file (no `.pi/dev-loop-retrospective-checkpoint.json` at all) resolves to `NONE` — see "RETRO-ABSENT-NEVER-BLOCKS" above.
-- **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never performs the ancestry check — the checkpoint file (if one happens to exist) is still honored at face value, and no ancestry fetch or log runs. (The repo-root path resolution itself still runs one local `git worktree list` on every resolve, config-independent.)
+- **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never performs the ancestry check and never reads or applies the checkpoint file at all — the resolver's entire checkpoint read/injection block is gated on `requireRetrospective` being true, so any checkpoint file that happens to exist is inert. No ancestry fetch or log runs either. (The repo-root path resolution itself still runs one local `git worktree list` on every resolve, config-independent.)
 
 ### Checkpoint path resolves from the repo root, not cwd
 
@@ -231,17 +253,21 @@ advisory reflection whose findings reach the conductor via the envelope.
 ### After retrospective is done (written by operator or skill)
 
 A minimal completion clears the startup/resume completion gate. The checkpoint
-file carries **only completion state** plus the cycle `identity` — retrospective
+file carries **completion state**, the cycle `identity`, and the **fresh-context
+provenance** (issue #1870) — retrospective
 *findings* (`behavioralReview`, `rawCallViolations`, `internalToolingOnly`) do not
 live on disk; they travel in the handoff envelope's `retrospectiveFindings` field
-and an advisory PR comment (issue #1077, Reading B):
+and an advisory PR comment (issue #1077, Reading B). A `complete` record without
+provenance that pins a fresh-context pass over the tool-call record — including
+every legacy inline self-authored retro — fails closed to `MISSING`:
 
 ```json
 {
   "state": "complete",
   "completedAt": "2026-05-29T16:30:00.000Z",
   "notes": "Loop followed working agreement; minor drift on thread resolution.",
-  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" }
+  "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" },
+  "provenance": { "context": "fresh", "seededFrom": "agent_tool_call_record", "recordSource": "tmp/retrospectives/pr-1613/record.jsonl" }
 }
 ```
 

@@ -496,10 +496,11 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
 
 ### Mandatory post-merge retrospective checkpoint write
 
-After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective gate is derived at the START of the NEXT loop by checking local git ancestry between this checkpoint's recorded `identity.mergeCommit` and the base branch — an identity-less record can never be verified, so it is treated the same as a stale one; carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `node <resolved-skill-scripts>/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid` reports) is MUST, not optional (the CLI now rejects `complete`/`skipped` without it):
+After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective itself MUST be a fresh-context, independent pass over the cycle's full agent/subagent tool-call record — dispatched like a gate reviewer, never self-authored inline by the working session (an inline retro fails the checkpoint; see [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md) `RETRO-FRESH-CONTEXT-MANDATORY`). The retrospective gate is derived at the START of the NEXT loop by checking local git ancestry between this checkpoint's recorded `identity.mergeCommit` and the base branch — an identity-less record can never be verified, so it is treated the same as a stale one; carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `node <resolved-skill-scripts>/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid` reports) is MUST, not optional (the CLI now rejects `complete`/`skipped` without it). A `complete` record also MUST carry the fresh-context provenance (`--retro-context fresh --record-source <path-to-tool-call-record>`; `inline` is rejected outright):
 
 ```sh
 node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --notes "<one-line retrospective summary>" \
+  --retro-context fresh --record-source <path to the seeded agent/subagent tool-call record> \
   --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
 ```
 

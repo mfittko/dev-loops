@@ -2,7 +2,9 @@ import {
   evaluateRetrospectiveGate,
   normalizeRetrospectiveCheckpointState,
   normalizeCheckpointCycleIdentity,
+  normalizeRetroProvenance,
   resolveCheckpointStateFromArtifact,
+  RETROSPECTIVE_PROVENANCE,
 } from "./retrospective-checkpoint.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -43,7 +45,9 @@ export * from "./public-dev-loop-routing-contract.mjs";
 // package export (see skills/docs/retrospective-checkpoint-contract.md).
 export {
   normalizeCheckpointCycleIdentity,
+  normalizeRetroProvenance,
   resolveCheckpointStateFromArtifact,
+  RETROSPECTIVE_PROVENANCE,
 };
 
 const COPILOT_ISSUE_ASSIGNEE = "copilot-swe-agent";

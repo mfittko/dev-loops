@@ -20,6 +20,16 @@ manual step.** Everything after the tag is hands-off.
    DEVLOOPS_ALLOW_MAIN=1 git commit -m "chore(release): v<version>"
    DEVLOOPS_ALLOW_MAIN=1 git push origin main
    ```
+
+   **Staging the release commit.** Stage the exact release files explicitly
+   (the version bump, `CHANGELOG.md`, and any regenerated assets) — never
+   `git add -A` or `git add .`. The release commit runs with
+   `DEVLOOPS_ALLOW_MAIN=1`, which intentionally turns the default-branch guard
+   off, so a broad add sweeps accumulated main-checkout scratch straight into
+   the release commit (this has already cost a cancelled publish run and a tag
+   re-cut). Before committing, run `git status --porcelain` and verify every
+   staged path is an intended release file; abort the commit if anything
+   unexpected is staged.
 2. Tag the release commit and push the tag:
 
    ```bash
@@ -53,6 +63,16 @@ the workflow does it (and is idempotent if you already created one).
 
 ## Failure modes
 
+- Release commit contains unintended content: cancel the publish run
+  **first** (the run is the irreversible step — it publishes from the tag),
+  then clean up `main`, then delete and re-cut the tag:
+
+  ```bash
+  gh run cancel <publish-run-id>          # 1. stop the publish run first
+  # 2. fix/remove the unintended commit on main (guard override as above)
+  git tag -d v<version> && git push origin :refs/tags/v<version>
+  git tag v<version> && git push origin v<version>   # 3. re-cut the tag
+  ```
 - Tag not on `main`: the release workflow fails the on-main guard — re-tag the
   correct commit.
 - Missing CHANGELOG section: the extraction step exits non-zero and no Release is
@@ -62,7 +82,8 @@ the workflow does it (and is idempotent if you already created one).
   and re-push:
 
   ```bash
-  DEVLOOPS_ALLOW_MAIN=1 git commit -am "docs: add v<version> CHANGELOG section"
+  DEVLOOPS_ALLOW_MAIN=1 git add CHANGELOG.md
+  DEVLOOPS_ALLOW_MAIN=1 git commit -m "docs: add v<version> CHANGELOG section"
   DEVLOOPS_ALLOW_MAIN=1 git push origin main
   git tag -f v<version>
   git push --force origin v<version>
