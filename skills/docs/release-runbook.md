@@ -1,7 +1,10 @@
 # Release runbook
 
-Releasing is fully automated from a tag. **Pushing a `v<version>` tag is the only
-manual step.** Everything after the tag is hands-off.
+Releasing is fully automated from a tag. **Pushing a `v<version>` tag is the
+only manual step** for prereleases; a **stable** cut additionally requires the
+operator `approve release v<version>` comment **before** the tag push — see
+[Operator release approval gate](#operator-release-approval-gate-stable-releases).
+Everything after the tag is hands-off.
 
 ## Procedure
 
@@ -36,6 +39,11 @@ manual step.** Everything after the tag is hands-off.
    git tag v<version>
    git push origin v<version>
    ```
+
+   For a **stable** version, post the operator `approve release v<version>`
+   comment **before** pushing the tag — the gate refuses a stable tag with no
+   approval record (see
+   [Operator release approval gate](#operator-release-approval-gate-stable-releases)).
 
 That is the whole manual flow. Do **not** create the GitHub Release by hand —
 the workflow does it (and is idempotent if you already created one).
