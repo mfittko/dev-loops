@@ -10,7 +10,7 @@ import { main, parseCliArgs } from "../../scripts/projects/list-parked-unrefined
 const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-isolated-"));
 after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
-const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Non-goals\n- none\n";
+const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Definition of done\n- [x] All checks pass\n\n## Non-goals\n- none\n";
 const UNREFINED_BODY = "Just some prose describing a problem. No ACs, no DoD.";
 
 // runChild stub: drives list-queue-items (GraphQL) AND the per-issue
@@ -91,6 +91,39 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
       "Definition of done section",
       "linked refinement doc",
     ]);
+  });
+
+  it("reports the actually-missing matrix arm for a #1877 matrix miss (one taxonomy with the enqueue gate)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 55, title: "AC-only (matrix miss)" }] },
+      bodies: { 55: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_dod_checklist");
+    assert.deepEqual(item.missing, ["Definition of done checklist"]);
+  });
+
+  it("reports the actually-missing matrix arm for a DoD-only body (missing_ac_checklist arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 56, title: "DoD-only (matrix miss)" }] },
+      bodies: { 56: "## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_ac_checklist");
+    assert.deepEqual(item.missing, ["Acceptance criteria checklist"]);
+  });
+
+  it("reports the actually-missing matrix arm for a Non-goals miss (missing_explicit_non_goals arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 57, title: "No Non-goals" }] },
+      bodies: { 57: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_explicit_non_goals");
+    assert.deepEqual(item.missing, ["explicit Non-goals section"]);
   });
 
   it("excludes refined issues (the fail-safe only parks un-refined ones)", async () => {

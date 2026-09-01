@@ -27,10 +27,12 @@ Options:
                               for --column <that column>; cannot be combined with
                               a conflicting --column/--status.
   --auto                      Headless mode. When an issue targets the pickup
-                              (next_up) column without a refinement artifact
-                              (Acceptance criteria/DoD/linked doc), divert it
-                              to the non-pickup park column instead of failing.
-                              Without --auto, the same case throws
+                              (next_up) column without the full refinement
+                              matrix (Acceptance criteria checklist + DoD
+                              checklist + explicit Non-goals, or a linked
+                              refinement doc), divert it to the non-pickup
+                              park column instead of failing. Without --auto,
+                              the same case throws
                               MISSING_REFINEMENT_ARTIFACT.
   --help, -h                  Show this help.
 

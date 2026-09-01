@@ -47,11 +47,15 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
-// GFM checklist line: optional indentation, a `-`/`*`/`+` bullet, a `[ ]`/`[x]`
-// box, then the label. Capture indent + bullet so we preserve them on flip, and
+// GFM checklist line: optional indentation (or blockquote-nesting), a `-`/`*`/`+
+// bullet or an ordered `N.`/`N)` marker, a `[ ]`/`[x]` box, then the label.
+// Grammar parity with extractChecklistItems in packages/core/src/loop/
+// issue-refinement-artifact.mjs (#1877 round-1 grammar-parity fix): both accept
+// bullets, ordered markers, and blockquote-nested forms. Capture the leading
+// bytes (indent, blockquote prefix, marker) so they are preserved on flip, and
 // an optional trailing `\r` so CRLF bodies (as returned by `gh pr view`) round-
 // trip byte-for-byte instead of silently failing to match.
-const CHECKBOX_RE = /^(\s*)([-*+])\s+\[([ xX])\]\s+(.*?)(\r?)$/;
+const CHECKBOX_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*?)(\r?)$/;
 
 // PURE: flip only unchecked checklist lines whose trimmed label EXACTLY equals a
 // verified label. Never unchecks. Never touches non-checkbox text. Idempotent:
@@ -68,13 +72,13 @@ export function tickVerifiedCheckboxes(body, verifiedLabels) {
   const nextLines = lines.map((line) => {
     const m = line.match(CHECKBOX_RE);
     if (!m) return line;
-    const [, indent, bullet, mark, rest, cr] = m;
+    const [, indent, quote, marker, mark, rest, cr] = m;
     const label = rest.trim();
     if (!verified.has(label)) return line;
     found.add(label);
     if (mark !== " ") return line; // already checked — leave it, idempotent
     if (!flipped.includes(label)) flipped.push(label); // duplicate lines: report once
-    return `${indent}${bullet} [x] ${rest}${cr}`;
+    return `${indent}${quote}${marker} [x] ${rest}${cr}`;
   });
   const unmatched = [...verified].filter((label) => !found.has(label));
   return { body: nextLines.join("\n"), flipped, unmatched };

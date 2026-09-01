@@ -3328,7 +3328,9 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     isp: ["review", "Interface Segregation Principle"],
     dip: ["review", "Dependency Inversion Principle"],
     "renderer-security": ["review", "Review this change for renderer security"],
-    "pr-checklist-matrix": ["review", "Verify before approval that the PR checklist"],
+    // #1877: the prompt was rewritten from the soft completeness judgment to
+    // the truthfulness backstop behind the deterministic pre-approval block.
+    "pr-checklist-matrix": ["review", "Completeness is enforced deterministically"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
   // Angles used by the shipped gates that never had a personas[angle] entry
@@ -3502,10 +3504,14 @@ describe("shipped defaults docs and deep angle wiring", () => {
 
       assert.deepEqual(result.errors, []);
       assert.equal(checklistRole.persona, "review");
-      assert.match(checklistRole.prompt, /checkbox/i);
-      assert.match(checklistRole.prompt, /AC\/DoD\/non-goals matrix/i);
-      assert.match(checklistRole.prompt, /markdown table/i);
+      // #1877: the angle is the truthfulness backstop behind the deterministic
+      // completeness block — it must name the matrix, checked boxes, the
+      // unchecked-box block, and the completeness-not-truthfulness boundary.
+      assert.match(checklistRole.prompt, /checked/i);
+      assert.match(checklistRole.prompt, /AC\/DoD\/Non-goals matrix/i);
       assert.match(checklistRole.prompt, /unchecked/i);
+      assert.match(checklistRole.prompt, /completeness/i);
+      assert.match(checklistRole.prompt, /TRUTHFULNESS/i);
       assert.ok(preApprovalAngles.includes("pr-checklist-matrix"), "pr-checklist-matrix must be in pre-approval gate angles after settings opt-in");
       assert.equal(checklistRole.fallback, false);
     } finally {

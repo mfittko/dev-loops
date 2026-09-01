@@ -3,6 +3,11 @@ import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+} from "./issue-refinement-artifact.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -241,15 +246,35 @@ function normalizeRefinementArtifactStatus(value) {
 // their own validation-failure reason from the detector; that reason must
 // replace the "linked issue" wording, which does not apply when the PR is the
 // spec-of-record and no linked issue was ever expected.
+// #1877 full-matrix vocabulary for the draft-gate blocked reason: which
+// matrix arm is missing per finding — the SAME finding taxonomy the enqueue
+// gate's guidance (decideEnqueueRefinementGate) and the detector
+// (detectIssueRefinementArtifact) use, so the draft gate (the unconditional
+// backstop for that floor) cannot drift from it. An AC-only or DoD-only
+// linked issue is a matrix miss, not "no artifact" — the guidance must name
+// the actually-missing arm so the fix is not misdirected.
+const REFINEMENT_MISSING_ARM_BY_FINDING = Object.freeze({
+  [MISSING_DOD_CHECKLIST_FINDING]: "a Definition of done checklist (mapped to the acceptance criteria)",
+  [MISSING_AC_CHECKLIST_FINDING]: "an Acceptance criteria checklist (for the DoD items to map to)",
+  [MISSING_EXPLICIT_NON_GOALS_FINDING]: "an explicit Non-goals section",
+});
+
 function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
   const specSource = refinementArtifact?.specSource;
   if (specSource != null && specSource !== REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
     return `The draft gate cannot complete: ${refinementArtifact.reason} finding=${REFINEMENT_ARTIFACT_FINDING}`;
   }
-  if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
-    return `Linked issue #${linkedIssue} has no refinement artifact (Acceptance criteria / DoD / linked refinement doc). Run refinement first, add ACs/DoD to the issue, then re-open the draft PR. finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  const finding = typeof refinementArtifact?.finding === "string" && refinementArtifact.finding.length > 0
+    ? refinementArtifact.finding
+    : REFINEMENT_ARTIFACT_FINDING;
+  const missingArm = REFINEMENT_MISSING_ARM_BY_FINDING[finding];
+  if (missingArm !== undefined) {
+    return `Linked issue #${linkedIssue} has an incomplete refinement matrix — it is missing ${missingArm}. Add it to the issue body to complete the full AC/DoD/Non-goals matrix, then re-open the draft PR. finding=${finding}`;
   }
-  return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (Acceptance criteria / DoD / linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
+    return `Linked issue #${linkedIssue} has no refinement artifact (no Acceptance criteria checklist, DoD checklist, or resolvable linked refinement doc). Refine the issue to the full AC/DoD/Non-goals matrix — or link a refinement doc (tmp/refinement/*.md), a complete artifact on its own — then re-open the draft PR. finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  }
+  return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (no Acceptance criteria checklist, DoD checklist, or resolvable linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
 }
 
 // #1472: describes the CI state a round-cap-reached fallback branch actually

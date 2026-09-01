@@ -50,7 +50,7 @@ Before doing anything else:
 - **PR body:** fetch the PR body via `scripts/github/view-pr.mjs` (never raw `gh`).
 - **Local-planning:** read the plan file from disk.
 
-"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact (AC/DoD present) is a zero-iteration `grill_clean`: do not rewrite the body.
+"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact — the full AC/DoD/Non-goals matrix per `detectIssueRefinementArtifact` — is a zero-iteration `grill_clean`: do not rewrite the body.
 
 ## Step 1b — Surface external resources
 

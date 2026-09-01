@@ -22,7 +22,13 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { detectIssueRefinementArtifact, REFINEMENT_ARTIFACT_SOURCES } from "@dev-loops/core/loop/issue-refinement-artifact";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+  detectIssueRefinementArtifact,
+  REFINEMENT_ARTIFACT_SOURCES,
+} from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--project <number|id>]
 
@@ -128,6 +134,17 @@ async function mapConcurrent(items, limit, fn) {
 
 const BODY_FETCH_CONCURRENCY = 4;
 
+// The enqueue gate's per-finding vocabulary (one taxonomy, no drift):
+// a matrix miss reports the actually-missing arm, not the full source
+// list — an AC-only issue is missing its DoD checklist, not everything.
+// Keys derive from the exported findings so the map cannot drift from the
+// predicate's vocabulary (a typo'd key would silently fall back).
+const MISSING_BY_FINDING = new Map([
+  [MISSING_DOD_CHECKLIST_FINDING, ["Definition of done checklist"]],
+  [MISSING_AC_CHECKLIST_FINDING, ["Acceptance criteria checklist"]],
+  [MISSING_EXPLICIT_NON_GOALS_FINDING, ["explicit Non-goals section"]],
+]);
+
 async function main(args, { env = process.env, runChild = _runChild, cwd = process.cwd() } = {}) {
   // The park column is where the enqueue fail-safe diverts un-refined issues.
   const parkedColumn = nonSuccessBoardColumn(cwd);
@@ -145,7 +162,9 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       { env, runChild },
     );
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
-    // finding !== null is the explicit "has NO refinement artifact" signal.
+    // finding !== null is the explicit "fails the refinement floor" signal:
+    // no refinement artifact, or an incomplete matrix arm (#1877 — an
+    // AC-only or DoD-only body carries a partial artifact but still fails).
     if (artifact.finding === null) return null;
     return {
       issueNumber: item.issueNumber,
@@ -154,9 +173,7 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       itemId: item.itemId ?? null,
       finding: artifact.finding,
       reason: artifact.reason,
-      // The three artifact sources any ONE of which clears the gate — the same
-      // single-source vocabulary the enqueue gate reports (one taxonomy, no drift).
-      missing: [...REFINEMENT_ARTIFACT_SOURCES],
+      missing: MISSING_BY_FINDING.get(artifact.finding) ?? [...REFINEMENT_ARTIFACT_SOURCES],
     };
   });
   const unrefined = perItem.filter((x) => x !== null);

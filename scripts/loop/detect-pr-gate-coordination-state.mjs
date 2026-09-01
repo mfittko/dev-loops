@@ -113,7 +113,7 @@ Output (stdout, JSON):
       "status": "present",
       "specSource": "linked_issue",
       "reason": "...",
-      "finding": null
+      "finding": "missing_refinement_artifact" | "missing_dod_checklist" | "missing_ac_checklist" | "missing_explicit_non_goals" | null
     },
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
@@ -599,9 +599,28 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       refinedIssues,
       _onlyEnforcedWhenDraft: false,
     };
+    // #1877: the PR body's own AC/DoD checklist is the derived, self-contained
+    // checklist mirroring the issue matrix. Surface its unchecked boxes so the
+    // pre_approval_gate can fail closed on ANY open acceptance criterion in the
+    // PR body itself (completeness check), independent of the spec-of-record
+    // unticked-AC read above (#1621). Sections absent from the body contribute
+    // no items — the draft-exit validateTrackerBackedPrBodySpec check (#1863)
+    // owns requiring the sections to exist. Computed BEFORE the allFailed early
+    // return: the extractor is pure and its only input (prData.body) is already
+    // in hand, so the #1877 block must not be hostage to a linked-issue fetch
+    // failure (#1621's "cannot verify what it cannot read" covers the
+    // spec-of-record check, not this one).
+    const { extractPrBodyUncheckedChecklistItems } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    const prBody = typeof prData?.body === "string" ? prData.body : "";
+    const prBodyUnchecked = extractPrBodyUncheckedChecklistItems({ body: prBody });
+    const prBodyUncheckedFields = {
+      prBodyUncheckedAcItems: prBodyUnchecked.uncheckedAcItems,
+      prBodyUncheckedDodItems: prBodyUnchecked.uncheckedDodItems,
+    };
     if (allFailed) {
       return {
         ...base,
+        ...prBodyUncheckedFields,
         reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
       };
     }
@@ -631,6 +650,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       acItems: unionAc.length > 0 ? unionAc : a.acItems,
       uncheckedAcItems: unionUnchecked,
       dodItems: unionDod.length > 0 ? unionDod : a.dodItems,
+      ...prBodyUncheckedFields,
       sections: a.sections,
       linkedDoc: a.linkedDoc,
       reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft, so the check is informational only. The spec-of-record AC data is fetched for the pre_approval_gate unticked-AC precondition (#1621).`,
@@ -708,7 +728,14 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     reason: isUmbrella
       ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
       : first.reason,
-    finding: "missing_refinement_artifact",
+    // #1877: thread the detector's per-finding taxonomy through (an AC-only
+    // linked issue is a missing_dod_checklist matrix miss, not a bare
+    // artifact miss) so the draft gate — the unconditional backstop for the
+    // enqueue gate's full-matrix floor — surfaces the same finding vocabulary
+    // and guidance naming the actually-missing arm. The umbrella arm keeps the
+    // generic finding: the first evaluated issue is not necessarily the one
+    // whose specific matrix arm is missing across the umbrella's scope.
+    finding: isUmbrella ? "missing_refinement_artifact" : (first.finding ?? "missing_refinement_artifact"),
     _onlyEnforcedWhenDraft: prDraft === true,
   };
 }

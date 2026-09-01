@@ -110,7 +110,7 @@ function issueBodyResponse(body) {
 }
 
 function refinedIssueBodyResponse() {
-  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- None.\n");
+  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n");
 }
 
 function unrefinedIssueBodyResponse() {
@@ -893,14 +893,14 @@ describe("add-queue-item", () => {
       assert.equal(result.refinement.refined, true);
     });
 
-    it("lands a DoD-only refined issue in Next Up untouched", async () => {
+    it("lands a fully-refined (AC+DoD matrix) issue in Next Up untouched (#1877)", async () => {
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- None.\n") },
+        { payload: issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- None.\n") },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];

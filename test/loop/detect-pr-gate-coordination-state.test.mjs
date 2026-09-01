@@ -1345,7 +1345,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
       { stdout: '[]\n' },
       {
         stdout: JSON.stringify({
-          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Non-goals\n\n- None.\n",
+          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n",
         }) + "\n",
       },
       {
@@ -1840,6 +1840,105 @@ test("loadRefinementArtifact: non-draft issue-less PR stays unknown (refinement 
   assert.equal(result.linkedIssue, null);
 });
 
+test("loadRefinementArtifact: #1877 allFailed arm still surfaces prBodyUncheckedAcItems/prBodyUncheckedDodItems (PR body is local, not hostage to issue-fetch health)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // Linked-issue body fetch FAILS (non-zero gh exit), but the PR body — the
+    // #1877 block's only input — is in hand and carries an unchecked AC box.
+    const { env } = await writeGhStubHelper(tmp, [
+      { exitCode: 1, stdout: "", stderr: "gh: issue view failed (simulated transient failure)\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [{ number: 900 }],
+          body: "Closes #900\n\n## Acceptance criteria\n\n- [ ] open AC\n\n## Definition of done\n\n- [x] done item\n",
+        },
+        prDraft: false,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    // allFailed arm: status stays unknown, but the #1877 fields must be
+    // populated from the PR body so the deterministic pre-approval block
+    // stays armed (no fail-open on a transient issue-fetch failure).
+    assert.equal(result.status, "unknown");
+    assert.match(result.reason, /Failed to fetch issue bodies/);
+    assert.deepEqual(result.prBodyUncheckedAcItems, ["open AC"]);
+    assert.deepEqual(result.prBodyUncheckedDodItems, []);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (AC-only body) surfaces the detector's finding, not the generic artifact miss — the draft gate is the backstop for the enqueue gate's full-matrix floor", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // AC checklist + Non-goals present, DoD checklist ABSENT: a #1877 matrix
+    // miss (missing_dod_checklist), not a bare no-artifact miss. The mixed
+    // branch must thread the detector's finding through so the draft gate —
+    // the unconditional backstop for the enqueue gate's full-matrix floor
+    // (QUEUE-ENQUEUE-REFINEMENT-GATE) — surfaces the same taxonomy.
+    const acOnlyIssueBody = [
+      "## Problem", "", "Fix the thing.", "",
+      "## Acceptance criteria", "", "- [ ] AC1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: acOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssue, 900);
+    assert.equal(result.specSource, "linked_issue");
+    assert.equal(result.finding, "missing_dod_checklist");
+    assert.match(result.reason, /no Definition of done checklist/);
+    assert.equal(result._onlyEnforcedWhenDraft, true);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (DoD-only body) surfaces missing_ac_checklist", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const dodOnlyIssueBody = [
+      "## Definition of done", "", "- [ ] DoD1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: dodOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.finding, "missing_ac_checklist");
+    assert.match(result.reason, /no Acceptance criteria checklist/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferences keeps linked-issue behavior (regression)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
@@ -1931,7 +2030,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -1992,7 +2091,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],

@@ -1857,13 +1857,14 @@ export function buildGateContextArtifact(options) {
   // How scope.acceptanceCriteria came to be — "provided" (caller flag,
   // regardless of whether an issue body was also fetched); "linked-issue"
   // (resolved from the PR's closing reference(s), and at least one resolved
-  // issue has an Acceptance-criteria/DoD section or linked refinement doc, per
+  // issue carries the full refinement matrix — Acceptance criteria checklist +
+  // DoD checklist + explicit Non-goals, or a linked refinement doc, per
   // detectIssueRefinementArtifact); "linked-issue-unrefined" (resolved, but
-  // every linked issue is prose-only — a distinguishable "linked, no
-  // refinement artifact" marker, AC4 of #1496); or "none" (the PR closes no
-  // issue). Only the CLI path sets it, so a null acceptanceCriteria WITH this
-  // field means "genuinely absent" and one WITHOUT it means "never resolved"
-  // (#1496).
+  // no linked issue carries the full refinement matrix — a distinguishable
+  // "linked, unrefined or matrix-incomplete" marker, AC4 of #1496); or "none"
+  // (the PR closes no issue). Only the CLI path sets it, so a null
+  // acceptanceCriteria WITH this field means "genuinely absent" and one
+  // WITHOUT it means "never resolved" (#1496).
   if (typeof options.acceptanceCriteriaSource === "string") {
     artifact.scope.acceptanceCriteriaSource = options.acceptanceCriteriaSource;
   }

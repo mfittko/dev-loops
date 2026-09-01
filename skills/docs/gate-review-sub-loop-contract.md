@@ -182,10 +182,11 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
     be: `"provided"` (caller flag, regardless of whether an issue body was independently
     supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
-    resolved issue carries a real Acceptance-criteria/DoD section or linked refinement doc),
-    `"linked-issue-unrefined"` (resolved, but every linked issue is prose-only — distinguishes
-    "linked, no refinement artifact" from "not fetched"), or `"none"` (the PR closes no
-    issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
+    resolved issue carries the full refinement matrix — Acceptance criteria checklist + DoD
+    checklist + explicit Non-goals, or a linked refinement doc),
+    `"linked-issue-unrefined"` (resolved, but no linked issue carries the full refinement
+    matrix — distinguishes "linked, unrefined or matrix-incomplete" from "not fetched"), or
+    `"none"` (the PR closes no issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
     omit it entirely, so a null `acceptanceCriteria` WITHOUT this field means "never
     resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
     PR closing several issues resolves ALL of them (not just the first), concatenated under
@@ -950,8 +951,9 @@ manual chore:
 plain re-invocation of the same angle collides with its own pass-1 sentinel and fails closed
 exactly like genuine contamination would. The sanctioned scenarios are:
 
-- **PR-body/description-only fix** (e.g. adding a missing acceptance-criteria matrix to
-  satisfy `pr-checklist-matrix`): a body edit never changes the head SHA, so the round key
+- **PR-body/description-only fix** (e.g. editing the PR body's AC/DoD checkboxes
+  so the deterministic #1877 unchecked-box block passes): a body edit never
+  changes the head SHA, so the round key
   stays the same.
 - **Interrupted reviewer**: a reviewer killed or interrupted AFTER running the sentinel
   check but BEFORE writing its findings artifact burned the (scope, round) sentinel while
@@ -1194,7 +1196,11 @@ threads `overallVerdict` into the durable ledger for verdict-consistency
 enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
 an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
 the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
-asked (`--pr-checklist-matrix clean`). Its stdout result carries `overallVerdict`,
+asked (`--pr-checklist-matrix clean`; since #1877 the completeness half of that
+angle is enforced deterministically by the pre-approval unchecked-box block, so
+this upsert records the fan-in bookkeeping entry, not the enforcement itself —
+see [Acceptance Criteria Verification](acceptance-criteria-verification.md)).
+Its stdout result carries `overallVerdict`,
 `severityCounts` (the true, unbudgeted totals), and the `out`/`ledgerOut` paths
 it actually wrote — a caller narrows that same stdout to just the severity
 breakdown with `--jq '.severityCounts'` (as above) without a second
@@ -2159,7 +2165,14 @@ the angle (e.g. the shipped draft pool) accepts it without listing it per-gate; 
 disabled-entry ceiling above still governs pool WIDENING (dynamic dispatch), while this
 exemption covers only the fan-in-minted recorded entry. The angle may additionally be
 pool-configured where a gate wants it reviewed as a real angle — the shipped preApproval
-pool lists `pr-checklist-matrix` as mandatory.
+pool lists `pr-checklist-matrix` as mandatory. Since #1877 the angle's completeness duty is
+machine-backed: the deterministic pre-approval block (`upsert-checkpoint-verdict.mjs`, see
+[Acceptance Criteria Verification](acceptance-criteria-verification.md) step 7) fails the gate
+closed on any unchecked `- [ ]` in the PR body's AC/DoD checklist, so the angle's reviewer
+keeps only the TRUTHFULNESS half (verify each ticked `[x]` is real) plus matrix-mirror
+conformance — completeness itself is no longer a soft reviewer judgment. The boundary is
+explicit: the deterministic check enforces completeness (nothing left unchecked/forgotten),
+NOT truthfulness; both layers stay.
 This is independent of `requireFanoutProvenance`, and is exempt for
 `inline_single_agent` verdicts (light-mode inline runs carry no per-angle fan-out
 data to validate). At merge-evidence time, when a gate configures any mandatory
