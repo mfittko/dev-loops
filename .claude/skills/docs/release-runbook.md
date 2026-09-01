@@ -13,7 +13,14 @@ Everything after the tag is hands-off.
    into the generated `npx dev-loops@<version>` pins and the plugin manifest;
    a stale manifest fails `verify` at publish), and add the matching
    `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
-   heading stays above the latest version). Committing and pushing this release
+   heading stays above the latest version). Regenerate `package-lock.json` so
+   its root/workspace version fields and the `@dev-loops/core` dependency spec
+   track the full new version including the prerelease token
+   (`npm install --package-lock-only`) and stage it with the release files —
+   `release.yml`'s lockstep guard
+   (`scripts/release/assert-core-dependency-version.mjs`) now fails the tag if
+   the lockfile is out of lockstep, so a stale lockfile can never ship a
+   release green (rc.7 did: #1886). Committing and pushing this release
    commit lands directly on `main`, which the default-branch guard hooks (see
    [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
    by default — a sanctioned release commits and pushes with
@@ -25,7 +32,8 @@ Everything after the tag is hands-off.
    ```
 
    **Staging the release commit.** Stage the exact release files explicitly
-   (the version bump, `CHANGELOG.md`, and any regenerated assets) — never
+   (the version bump, `CHANGELOG.md`, `package-lock.json`, and any regenerated
+   assets) — never
    `git add -A` or `git add .`. The release commit runs with
    `DEVLOOPS_ALLOW_MAIN=1`, which intentionally turns the default-branch guard
    off, so a broad add sweeps accumulated main-checkout scratch straight into
