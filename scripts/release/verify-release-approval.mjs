@@ -68,25 +68,38 @@ function escapeRegExp(s) {
 const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b/i;
 
 // A sentence/clause boundary: sentence-ending punctuation followed by
-// whitespace. Used to scope the negation scan to the clause that actually
-// contains the approval phrase.
+// whitespace. Used to scope the BEFORE scan to the clause that actually
+// contains the approval phrase (so a negation in a prior sentence does not
+// override a clear approval).
 const CLAUSE_SPLIT = /[.!?;]\s+/;
+
+// A hard sentence end (period/exclamation/question, not semicolon/comma) for
+// the AFTER scan: a trailing "approve release …; do not proceed" or
+// "approve release …, do not publish" is a same-sentence retraction and must
+// refuse, while "approve release …. I will not be available" is a separate
+// statement and the approval stands.
+const HARD_SENTENCE_END = /[.!?]\s+/;
 
 /**
  * True when a negating marker appears in the SAME clause as the approval
- * phrase. Scopes the scan to the text since the last sentence-ending
- * punctuation, so an intervening-word refusal ("do not want to approve",
- * "never said approve", "cannot in good conscience approve") is refused while
- * a negation in a distant, unrelated sentence ("this is not a prerelease;
- * approve release …") does not override a clear approval.
+ * phrase (before) or immediately trailing it in the same sentence (after).
+ * The BEFORE scan is clause-scoped so an intervening-word refusal
+ * ("do not want to approve", "never said approve", "cannot in good conscience
+ * approve") is refused while a negation in a distant prior sentence
+ * ("this is not a prerelease; approve release …") does not override a clear
+ * approval. The AFTER scan catches a same-sentence retraction
+ * ("approve release …; do not proceed") without treating a later separate
+ * statement as a retraction.
  */
 function negatesApproval(body, pattern) {
   const m = body.match(pattern);
   if (!m) return false;
-  const before = body.slice(0, m.index);
-  const clauses = before.split(CLAUSE_SPLIT);
-  const clause = clauses[clauses.length - 1] ?? "";
-  return NEGATION_MARKER.test(clause);
+  const start = m.index;
+  const end = start + m[0].length;
+  const beforeClause = body.slice(0, start).split(CLAUSE_SPLIT).pop() ?? "";
+  if (NEGATION_MARKER.test(beforeClause)) return true;
+  const afterClause = body.slice(end).split(HARD_SENTENCE_END)[0] ?? "";
+  return NEGATION_MARKER.test(afterClause);
 }
 
 /**

@@ -129,6 +129,8 @@ test("resolveApprovalState: negated operator text never satisfies the gate (#190
     "I do not want to approve release v1.0.0",
     "I never said approve release v1.0.0",
     "I cannot in good conscience approve release v1.0.0",
+    "approve release v1.0.0; do not proceed",
+    "approve release v1.0.0, do not publish",
   ]) {
     const d = resolveApprovalState({
       version: "1.0.0",
@@ -144,6 +146,7 @@ test("resolveApprovalState: a negation in a different sentence does not refuse a
   for (const body of [
     "This is not a prerelease; approve release v1.0.0",
     "I will not be available tomorrow. Approve release v1.0.0",
+    "approve release v1.0.0. I will not be available tomorrow",
   ]) {
     const d = resolveApprovalState({
       version: "1.0.0",
