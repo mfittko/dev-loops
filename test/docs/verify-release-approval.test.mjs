@@ -129,6 +129,10 @@ test("resolveApprovalState: negated operator text never satisfies the gate (#190
     "I do not want to approve release v1.0.0",
     "I never said approve release v1.0.0",
     "I cannot in good conscience approve release v1.0.0",
+    "no need to approve release v1.0.0",
+    "no need approve release v1.0.0",
+    "not required to approve release v1.0.0",
+    "approve release v1.0.0 without approval",
     "approve release v1.0.0; do not proceed",
     "approve release v1.0.0, do not publish",
   ]) {
@@ -155,6 +159,15 @@ test("resolveApprovalState: a negation in a different sentence does not refuse a
     });
     assert.equal(d.approved, true, `distant negation must not refuse: ${body}`);
   }
+});
+
+test("resolveApprovalState: a trailing benign 'no further changes needed' still approves (no false refusal)", () => {
+  const d = resolveApprovalState({
+    version: "1.0.0",
+    operator: "op",
+    comments: [{ author: "op", body: "approve release v1.0.0, no further changes needed" }],
+  });
+  assert.equal(d.approved, true);
 });
 
 test("resolveApprovalState: a mixed comment that negates and later approves is refused (fail closed)", () => {

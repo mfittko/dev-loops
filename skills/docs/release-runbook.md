@@ -65,12 +65,13 @@ generic "continue" instructions never satisfy this gate.
 - `release.yml` (fired by the `v*` tag push) refuses — no GitHub Release, no
   npm-publish dispatch — with a named refusal when no operator approval record
   exists for this exact version.
-- `npm-publish.yml` runs the same check (against both the root and the
-  `@dev-loops/core` package versions), closing the direct `workflow_dispatch`
-  bypass against a stable version. The root and core package versions agree for
-  a normal release (`release.yml` asserts major.minor agreement via
-  `assert-core-dependency-version.mjs`), so one `approve release v<version>`
-  record covers both packages.
+- `npm-publish.yml` runs the same check against the root and the
+  `@dev-loops/core` package versions independently, closing the direct
+  `workflow_dispatch` bypass against a stable version. Each invocation matches
+  its package version exactly, so one `approve release v<version>` record
+  covers both packages only while their versions are byte-identical (the
+  normal case). If the core patch version diverges from the root, the core
+  publish needs its own `approve release v<core-version>` record.
 - A prerelease (`rc`/`next`/`beta`/…) is out of scope: the gate applies to
   stable releases only and the prerelease flow is unchanged.
 

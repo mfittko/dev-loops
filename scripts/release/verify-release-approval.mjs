@@ -60,12 +60,17 @@ function escapeRegExp(s) {
  * Negating verbs/markers that refuse an otherwise-matching approval phrase.
  * Natural-language refusals are not always adjacent to the phrase
  * ("do not want to approve", "never said approve", "cannot in good conscience
- * approve"), so a fixed adjacent-form blocklist fails open. A negating marker
- * within the same clause as the phrase (see negatesApproval) refuses the
- * comment. Fail closed: a comment that both negates and approves in the same
- * clause is refused — the operator should post an unambiguous approval.
+ * approve", "no need to approve", "without approval"), so a fixed
+ * adjacent-form blocklist fails open. A negating marker within the same clause
+ * as the phrase (see negatesApproval) refuses the comment. Fail closed: a
+ * comment that both negates and approves in the same clause is refused — the
+ * operator should post an unambiguous approval. A bare `no` is deliberately
+ * omitted so a trailing "approve release v1.0.0, no further changes needed"
+ * still approves; the specific denial forms `no need (to)` and
+ * `without approval` catch "no need to approve …" without that false refusal.
+ * (`not required` is already covered by the `not` marker.)
  */
-const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b/i;
+const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b|no\s+need\b(?:\s+to\b)?|without\s+approval\b/i;
 
 // A sentence/clause boundary: sentence-ending punctuation followed by
 // whitespace. Used to scope the BEFORE scan to the clause that actually
