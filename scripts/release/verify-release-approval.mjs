@@ -23,7 +23,7 @@
  *     --version "${VERSION}" --repo "${GITHUB_REPOSITORY}"
  *
  * `--operator <login>` overrides the operator identity (default: the repo
- * owner, resolved via `gh api repo`). Exit 0 when the gate passes (approved or
+ * owner, taken from the `--repo` slug's owner part). Exit 0 when the gate passes (approved or
  * not applicable), 1 on a named refusal or any gh failure (fail closed — a
  * flaky/forbidden lookup must never pass the gate), 2 on usage/parse error.
  *
@@ -227,9 +227,14 @@ export function verifyReleaseApproval({ version, repo, operator = null, ghComman
   if (distTag !== "latest") {
     return { ok: true, applies: false, message: `prerelease v${version} publishes under dist-tag "${distTag}"; the stable-release operator-approval gate does not apply (prerelease flow unchanged).` };
   }
-  const operatorLogin = operator ?? runGh(["api", "repo", "--jq", ".owner.login"], { ghCommand, runChild }).trim();
+  // The operator is the repo owner, which the `--repo` slug already names
+  // (owner/name). Derive it from `--repo` so the gate honors its own `--repo`
+  // argument instead of depending on the CWD's git remote (`gh api repo`), which
+  // fails closed from outside a checkout — or against a different repo than CWD —
+  // even when approval exists.
+  const operatorLogin = (operator ?? repo.split("/")[0]).trim();
   if (!operatorLogin) {
-    throw new Error("operator login could not be resolved (gh api repo returned empty) — fail closed");
+    throw new Error("operator login could not be resolved (repo slug has no owner) — fail closed");
   }
   // Reject a --operator override that could inject extra GitHub search
   // qualifiers (spaces, colons, quotes) into `commenter:<login>`.

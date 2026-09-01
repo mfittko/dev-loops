@@ -262,6 +262,26 @@ test("verifyReleaseApproval: a padded version is trimmed before matching (entryp
   assert.match(result.refusal, /approve release v1\.0\.0/);
 });
 
+test("verifyReleaseApproval: default operator resolves from the --repo slug owner, not gh api repo", () => {
+  // A local pre-flight run from outside a checkout (or against a different repo
+  // than CWD) must still resolve the operator from --repo's owner, never from
+  // the CWD's git remote (gh api repo), which would fail closed despite a
+  // valid approval record existing for the named repo.
+  const result = verifyReleaseApproval({
+    version: "1.0.0",
+    repo: "acme/widgets",
+    // operator omitted — the owner must come from the --repo slug
+    runChild: (cmd, args) => {
+      if (cmd === "gh" && Array.isArray(args) && args[0] === "api" && args[1] === "repo") {
+        throw new Error("gh api repo must not be called for default operator resolution");
+      }
+      return JSON.stringify({ items: [] });
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.refusal, /@acme/);
+});
+
 test("verifyReleaseApproval: prerelease passes through with no gh call at all", () => {
   const result = verifyReleaseApproval({
     version: "1.0.0-rc.7",
