@@ -733,3 +733,186 @@ test("#1877 seam pin (mixed exact+alias): issue side — exact section wins over
     uncheckedDodItems: ["alias DoD open", "exact DoD open"],
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1877 round-6 parser-hardening pins (draft_gate round-6 act list): GFM
+// task-list marker grammar, decorated-heading normalization, heading-name
+// re-injection, malformed-input guard. Fail arms were reproduced against the
+// pre-fix parser before the fix landed (star/plus/ordered/blockquote forms
+// and decorated headings returned empty unchecked lists; a checkbox-shaped
+// heading name fabricated a phantom item; a fence-opening heading name ate
+// following boxes).
+// ---------------------------------------------------------------------------
+
+test("#1877 round-6 grammar pin: a star-bullet unchecked AC box IS surfaced (fail arm: pre-fix returned [])", () => {
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n* [ ] star unchecked\n" }),
+    { uncheckedAcItems: ["star unchecked"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-6 grammar pin: a plus-bullet unchecked AC box IS surfaced", () => {
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n+ [ ] plus unchecked\n" }),
+    { uncheckedAcItems: ["plus unchecked"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-6 grammar pin: an ordered-list unchecked AC box IS surfaced", () => {
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n1. [ ] ordered unchecked\n" }),
+    { uncheckedAcItems: ["ordered unchecked"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-6 grammar pin: a blockquote-nested unchecked AC box IS surfaced", () => {
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n> - [ ] blockquote unchecked\n" }),
+    { uncheckedAcItems: ["blockquote unchecked"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-6 grammar pin: the unticked-AC read (#1621) and the issue-side matrix read recognize star-only checklists", () => {
+  // Issue side: a full matrix written with star bullets is a complete artifact
+  // (pre-fix: star-only AC section false-blocked as missing_ac_checklist).
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n* [x] star AC\n\n## Definition of done\n\n* [x] star DoD\n\n## Non-goals\n\n- none",
+  });
+  assert.equal(artifact.finding, null);
+  assert.deepEqual(artifact.acItems, ["star AC"]);
+  // #1621 unticked read: a star unchecked box is an unticked AC item.
+  assert.deepEqual(
+    extractUncheckedChecklistItems("* [ ] star unchecked"),
+    ["star unchecked"],
+  );
+});
+
+test("#1877 round-6 anti-spoof pin: a code-fenced star checkbox still cannot spoof the count (#1025)", () => {
+  // The fence skip is shared with the widened grammar: a star box inside a
+  // fenced block is invisible to every read, exactly as the dash form is.
+  const body = "## Acceptance criteria\n\n```\n* [ ] fenced star unchecked\n```\n\n- [x] real ticked";
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }),
+    { uncheckedAcItems: [], uncheckedDodItems: [] },
+  );
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n```\n* [ ] fenced star unchecked\n```\n\n## Definition of done\n\n- [x] DoD\n\n## Non-goals\n\n- none",
+  });
+  // A fenced-only star AC section is still an empty section (anti-spoof): the
+  // issue-side read must NOT count it as a real AC checklist.
+  assert.equal(artifact.acItems.length, 0);
+});
+
+test("#1877 round-6 grammar pin: tick-verified-checkboxes parity — star/plus/ordered forms are checklist items for every consumer of parseChecklistItems", () => {
+  // tick-verified-checkboxes.mjs CHECKBOX_RE accepts [-*+]; the extractor must
+  // agree, so a box the tick tool can flip is never invisible to the block.
+  assert.deepEqual(extractChecklistItems("* [x] star item"), ["star item"]);
+  assert.deepEqual(extractChecklistItems("+ [x] plus item"), ["plus item"]);
+  assert.deepEqual(extractChecklistItems("1. [x] ordered item"), ["ordered item"]);
+  // checked-state read: star/plus/ordered ticked boxes are checked, not unticked.
+  assert.deepEqual(extractUncheckedChecklistItems("* [x] star ticked\n* [ ] star unticked"), ["star unticked"]);
+  // Empty placeholders are skipped in the widened grammar too.
+  assert.deepEqual(extractChecklistItems("* [ ]\n1. [x]\n- [ ] real"), ["real"]);
+});
+
+test("#1877 round-6 decorated-heading pin: bolded/colon/suffixed AC and DoD headings are recognized on the PR side", () => {
+  const body = [
+    "## **Acceptance criteria**", "", "- [ ] bolded ac unchecked", "",
+    "## Acceptance criteria:", "", "- [ ] colon ac unchecked", "",
+    "## Definition of done ##", "", "- [ ] suffixed dod unchecked",
+  ].join("\n");
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }),
+    { uncheckedAcItems: ["bolded ac unchecked", "colon ac unchecked"], uncheckedDodItems: ["suffixed dod unchecked"] },
+  );
+});
+
+test("#1877 round-6 decorated-heading pin: a decorated-variant canonical heading (v2/dash suffix) matches the exact anchor family", () => {
+  // The exact pattern is an anchor family (^acceptance criteria\\b), so a
+  // variant like `## Acceptance criteria (v2)` lands in the exact bucket
+  // rather than matching no pattern at all.
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria (v2)\n\n- [ ] under v2\n" }),
+    { uncheckedAcItems: ["under v2"], uncheckedDodItems: [] },
+  );
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Definition of done — core\n\n- [ ] dod item\n" }),
+    { uncheckedAcItems: [], uncheckedDodItems: ["dod item"] },
+  );
+});
+
+test("#1877 round-6 decorated-heading pin: the issue-side presence read recognizes a decorated full matrix", () => {
+  // Pre-fix: a full matrix under decorated headings false-blocked as
+  // missing_refinement_artifact. Both decorated canonical sections AND the
+  // anchor-family variants are recognized.
+  const artifact = detectIssueRefinementArtifact({
+    body: [
+      "## **Acceptance criteria**", "", "- [x] AC1", "",
+      "## **Definition of done**", "", "- [x] DoD1", "",
+      "## Non-goals", "", "- none",
+    ].join("\n"),
+  });
+  assert.equal(artifact.finding, null);
+  assert.equal(artifact.hasACs, true);
+  assert.deepEqual(artifact.acItems, ["AC1"]);
+  assert.deepEqual(artifact.dodItems, ["DoD1"]);
+});
+
+test("#1877 round-6 re-injection pin: a checkbox-shaped sub-heading name produces NO phantom item; real boxes under it stay visible", () => {
+  // Pre-fix: the heading name `### - [ ] fake dod box as heading` was
+  // re-injected into the flattened body and counted as an unchecked DoD item.
+  const body = [
+    "## Definition of done", "",
+    "### - [ ] fake dod box as heading", "",
+    "- [x] real one",
+  ].join("\n");
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }),
+    { uncheckedAcItems: [], uncheckedDodItems: [] },
+  );
+  // And a checked-shaped heading name injects no phantom checked item:
+  // the real unchecked box after it is still surfaced (no fence corruption,
+  // no swallow).
+  const bodyChecked = [
+    "## Definition of done", "",
+    "### - [x] fake checked heading", "",
+    "- [ ] real unchecked",
+  ].join("\n");
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: bodyChecked }),
+    { uncheckedAcItems: [], uncheckedDodItems: ["real unchecked"] },
+  );
+});
+
+test("#1877 round-6 re-injection pin: a fence-opening sub-heading name does NOT eat the boxes after it", () => {
+  // Pre-fix: `### ` + ``` as the heading NAME re-opened fence state in the
+  // flattened string and swallowed every following real box (fail-open,
+  // defeating the #1025 anti-spoof invariant for the heading-name form).
+  const body = [
+    "## Acceptance criteria", "",
+    "- [x] AC1", "",
+    "### ```", "",
+    "- [ ] AC2 after fence heading",
+  ].join("\n");
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }),
+    { uncheckedAcItems: ["AC2 after fence heading"], uncheckedDodItems: [] },
+  );
+  // Same arm with an info-string suffix on the fence-like name.
+  const bodyInfo = [
+    "## Acceptance criteria", "",
+    "### notes ```js", "",
+    "- [ ] AC3 after info-string heading",
+  ].join("\n");
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: bodyInfo }),
+    { uncheckedAcItems: ["AC3 after info-string heading"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-6 malformed-input pin: extractPrBodyUncheckedChecklistItems guards non-string bodies", () => {
+  // The guard exists specifically for malformed input; this pins it.
+  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: null }), { uncheckedAcItems: [], uncheckedDodItems: [] });
+  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: 42 }), { uncheckedAcItems: [], uncheckedDodItems: [] });
+  assert.deepEqual(extractPrBodyUncheckedChecklistItems({}), { uncheckedAcItems: [], uncheckedDodItems: [] });
+});

@@ -82,15 +82,53 @@ export const MISSING_AC_CHECKLIST_FINDING = "missing_ac_checklist";
  *   - one DoD-style section (DoD or Definition of Done)
  */
 const ACCEPTANCE_SECTION_PATTERNS = Object.freeze([
-  /^acceptance criteria\s*$/i,
+  // #1877 round-6: index 0 is the exact-canonical ANCHOR family —
+  // `^acceptance criteria\b` — so a decorated-variant canonical heading
+  // (`## Acceptance criteria (v2)`, `## Definition of done — core`) still lands
+  // in the exact bucket rather than matching NO pattern at all (the alias
+  // families anchor on the `AC`/`DoD` abbreviations and never fire for the
+  // spelled-out phrase). The anchor stays distinct from the alias family below
+  // (`/^ac\b/`), so the precedence contract is unchanged: a spelled-out
+  // canonical heading always outranks an abbreviation-shaped alias heading.
+  /^acceptance criteria\b.*$/i,
   /^ac\b.*$/i,
 ]);
 
 const DOD_SECTION_PATTERNS = Object.freeze([
-  /^definition of done\s*$/i,
+  // Same anchor-family widening as the AC family (see above).
+  /^definition of done\b.*$/i,
   /^done\s*$/i,
   /^dod\s*$/i,
 ]);
+
+/**
+ * Normalize a heading name before section-pattern matching (#1877 round-6
+ * parser hardening): GitHub authors legitimately write decorated canonical
+ * headings — `## **Acceptance criteria**`, `## Acceptance criteria:`,
+ * `## Acceptance criteria ##` — and the raw ATX capture (`match[2]`)
+ * fails every pattern family on them, silently disarming the deterministic
+ * AC/DoD reads (PR-side extractor fail-open; issue-side false
+ * missing_refinement_artifact). Strip the harmless decoration once, at the
+ * parse boundary, so exact-vs-alias precedence stays intact: a normalized
+ * `Acceptance criteria` still matches the exact pattern, a decorated alias
+ * still matches its alias family. Strips: surrounding `**`/`__` emphasis
+ * runs, surrounding backtick runs, trailing `:` and surrounding whitespace.
+ * Deliberately NOT touched: interior text (a real `AC (v2) - final` name keeps
+ * its interior), leading `#` (ATX markers never reach `match[2]`), and any
+ * decoration a section pattern itself could rely on (none does — every family
+ * anchors at the name's start).
+ */
+function normalizeHeadingName(name) {
+  if (typeof name !== "string") return name;
+  return name
+    // trailing decoration first: closing `##` ATX-style, colons, whitespace
+    .replace(/\s*:*\s*$/u, "")
+    .replace(/\s*#+\s*$/u, "")
+    // surrounding emphasis/backtick runs (any length, must pair)
+    .replace(/^(\*\*|__|`+)+/u, "")
+    .replace(/(\*\*|__|`+)+$/u, "")
+    .trim();
+}
 
 // #1877 alias-precedence: exact canonical headings (the first pattern in each
 // family) must outrank loose aliases (`/^ac\b/`, `/^dod\b/`) so a matrix-shaped
@@ -162,10 +200,21 @@ function findAllSectionsByPatterns(sections, patterns) {
  */
 function flattenSectionDeep(sections, startIndex) {
   const start = sections[startIndex];
+  // #1877 round-6 heading-name re-injection fix: the raw sub-heading NAME is
+  // NEVER re-injected into the text the checklist parser re-parses. A name is
+  // a different input class from checklist body text: a fence-opening name
+  // (`### ``` `) used to corrupt the parser's fence state and eat every real
+  // box after it (fail-open), and a checkbox-shaped name (`### - [ ] fake`)
+  // used to be counted as a phantom unchecked item (spurious fail-closed).
+  // Only already-classified bodyLines are joined — a heading can never match
+  // any line-level grammar, and real boxes under sub-headings stay visible
+  // because their bodyLines still join normally. (Keeping a marker line is
+  // unnecessary: parseChecklistItems never needed the heading boundary to
+  // track fence state — body lines carry their own fences.)
   const parts = [start.bodyLines.join("\n")];
   for (let i = startIndex + 1; i < sections.length; i += 1) {
     if (sections[i].level <= start.level) break;
-    parts.push(sections[i].name, sections[i].bodyLines.join("\n"));
+    parts.push(sections[i].bodyLines.join("\n"));
   }
   return parts.join("\n");
 }
@@ -233,7 +282,13 @@ export function parseMarkdownSections(body) {
       }
       current = {
         level: match[1].length,
-        name: match[2],
+        // #1877 round-6: normalize the captured name so decorated canonical
+        // headings (`## **Acceptance criteria**`) match the section patterns.
+        // The RAW name is never re-parsed as body text (flattenSectionDeep no
+        // longer re-injects it), so normalization is the only consumer of the
+        // capture.
+        name: normalizeHeadingName(match[2]),
+        rawName: match[2],
         bodyLines: [],
       };
       continue;
@@ -285,17 +340,21 @@ function parseChecklistItems(sectionBody) {
     if (step.insideFence) {
       continue;
     }
-    // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
-    // Consume ANY checkbox-marker line here; push only when it carries text,
-    // so empty placeholders (`- [ ]`) are skipped rather than counted.
-    const checkboxMatch = /^\s*-\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
+    // Checklist item: GFM/CommonMark task-list markers (#1877 round-6 parser
+    // hardening): `-`/`*`/`+` bullets, ordered `N.`/`N)`, and blockquote-nested
+    // `> - [ ]` — the forms GitHub itself renders as interactive checkboxes
+    // (parity with tick-verified-checkboxes.mjs's CHECKBOX_RE, which accepts
+    // `[-*+]`). Consume ANY checkbox-marker line here; push only when it
+    // carries text, so empty placeholders (`- [ ]`) are skipped rather than
+    // counted.
+    const checkboxMatch = /^\s*(?:>|\s)*(?:[-*+]|\d+[.)])\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
     if (checkboxMatch) {
       const text = (checkboxMatch[1] ?? "").trim();
       if (text.length > 0) {
         // `checked` is true only for a ticked box; `[ ]` (space) is false.
         // A plain bullet has no checkbox, so it stays `null` below — it is
         // neither ticked nor unticked and does not count as an unticked AC.
-        items.push({ text, checked: /^\s*-\s+\[[xX]\]/u.test(line) });
+        items.push({ text, checked: /\[(?:[xX])\]/u.test(line) });
       }
       continue;
     }
