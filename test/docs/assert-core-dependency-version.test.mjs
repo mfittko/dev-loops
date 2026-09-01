@@ -242,6 +242,36 @@ test("CLI fails closed (exit 1) on a synthetic stale lockfile (rc.6 vs rc.7)", a
   }
 });
 
+test("CLI output cannot be forged by crafted manifest/lockfile values (annotation-injection pin)", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "lockfile-forge-"));
+  const manifest = path.join(dir, "package.json");
+  const lockfile = path.join(dir, "package-lock.json");
+  await writeFile(
+    manifest,
+    JSON.stringify({ version: "1.0.0-rc.7", dependencies: { "@dev-loops/core": "^1.0.0-rc.7" } }),
+  );
+  const forged = lockfileAtVersion("1.0.0-rc.6");
+  forged.version = `1.0.0-rc.6\n::warning::lockfile check passed, publishing`;
+  await writeFile(lockfile, JSON.stringify(forged));
+  try {
+    const res = spawnSync(
+      "node",
+      [scriptPath, "--manifest", manifest, "--lockfile", lockfile],
+      { encoding: "utf8" },
+    );
+    assert.equal(res.status, 1, res.stderr);
+    // The injected newline must be escaped, so the only annotation line is
+    // the guard's own `::error::` prefix — no forged ::warning:: LINE.
+    const annotationLines = res.stderr.split("\n").filter((line) => /^::/.test(line));
+    assert.equal(annotationLines.length, 1, res.stderr);
+    assert.match(annotationLines[0], /^::error::/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI exits 2 on an unreadable lockfile (parse error)", async () => {
   const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
   const os = await import("node:os");

@@ -171,6 +171,23 @@ export function assertPackageLockInLockstep({ releaseVersion, lockfile } = {}) {
   };
 }
 
+/**
+ * Escape untrusted interpolated values for GitHub-Actions log output the way
+ * the toolkit does: percent-encode `%`, then escape carriage returns and
+ * newlines (`%0D`/`%0A`). A crafted manifest/lockfile value containing a
+ * newline can otherwise forge `::error::`/`::warning::` annotation lines into
+ * the release workflow log and obscure or fake the guard's verdict (Copilot
+ * round-2 / pre-approval round-1 finding on #1886).
+ * @param {string} text
+ * @returns {string}
+ */
+function ciSafe(text) {
+  return String(text)
+    .replace(/%/g, "%25")
+    .replace(/\r/g, "%0D")
+    .replace(/\n/g, "%0A");
+}
+
 function usageError(message) {
   const err = new Error(message);
   err.usage = true;
@@ -212,7 +229,9 @@ async function main(argv) {
     coreRange: pkg.dependencies?.[CORE_DEP],
   });
   process.stdout.write(
-    `${CORE_DEP} ${coreResult.coreRange} is in lockstep with release ${coreResult.releaseVersion} (version ${coreResult.fullVersion}).\n`,
+    ciSafe(
+      `${CORE_DEP} ${coreResult.coreRange} is in lockstep with release ${coreResult.releaseVersion} (version ${coreResult.fullVersion}).\n`,
+    ),
   );
 
   // #1886: the lockfile version fields are also part of the release contract.
@@ -226,13 +245,15 @@ async function main(argv) {
   }
   const lockResult = assertPackageLockInLockstep({ releaseVersion: version, lockfile });
   process.stdout.write(
-    `package-lock.json version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).\n`,
+    ciSafe(
+      `package-lock.json version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).\n`,
+    ),
   );
 }
 
 if (isDirectCliRun(import.meta.url)) {
   main(process.argv.slice(2)).catch((err) => {
-    process.stderr.write(`::error::${err.message}\n`);
+    process.stderr.write(`::error::${ciSafe(err.message)}\n`);
     process.exit(err.usage ? 2 : 1);
   });
 }
