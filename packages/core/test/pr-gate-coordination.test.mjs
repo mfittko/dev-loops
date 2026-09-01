@@ -2012,6 +2012,36 @@ test("draft PR blocked reason names the missing matrix arm for a #1877 DoD-only 
   assert.doesNotMatch(result.reason, /no refinement artifact/);
 });
 
+test("draft PR blocked reason names the missing matrix arm for a #1877 AC+DoD linked issue with no Non-goals (missing_explicit_non_goals)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 902,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 902,
+      specSource: "linked_issue",
+      source: "issue-body-ac",
+      reason: "Issue body carries the Acceptance criteria and Definition of done checklists but no explicit Non-goals section; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_explicit_non_goals",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(result.refinementArtifact?.status, "missing");
+  assert.match(result.reason, /#902/);
+  assert.match(result.reason, /incomplete refinement matrix/);
+  assert.match(result.reason, /explicit Non-goals section/);
+  assert.match(result.reason, /finding=missing_explicit_non_goals/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
 test("draft PR is not blocked when refinement artifact is present (#532)", () => {
   const result = evaluatePrGateCoordination({
     pr: 532,

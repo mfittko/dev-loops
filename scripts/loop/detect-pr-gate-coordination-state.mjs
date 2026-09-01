@@ -113,7 +113,7 @@ Output (stdout, JSON):
       "status": "present",
       "specSource": "linked_issue",
       "reason": "...",
-      "finding": null
+      "finding": "missing_refinement_artifact" | "missing_dod_checklist" | "missing_ac_checklist" | "missing_explicit_non_goals" | null
     },
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],

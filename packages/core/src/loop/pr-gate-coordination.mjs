@@ -3,6 +3,11 @@ import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+} from "./issue-refinement-artifact.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -249,9 +254,9 @@ function normalizeRefinementArtifactStatus(value) {
 // linked issue is a matrix miss, not "no artifact" — the guidance must name
 // the actually-missing arm so the fix is not misdirected.
 const REFINEMENT_MISSING_ARM_BY_FINDING = Object.freeze({
-  ["missing_dod_checklist"]: "a Definition of done checklist (mapped to the acceptance criteria)",
-  ["missing_ac_checklist"]: "an Acceptance criteria checklist (for the DoD items to map to)",
-  ["missing_explicit_non_goals"]: "an explicit Non-goals section",
+  [MISSING_DOD_CHECKLIST_FINDING]: "a Definition of done checklist (mapped to the acceptance criteria)",
+  [MISSING_AC_CHECKLIST_FINDING]: "an Acceptance criteria checklist (for the DoD items to map to)",
+  [MISSING_EXPLICIT_NON_GOALS_FINDING]: "an explicit Non-goals section",
 });
 
 function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
