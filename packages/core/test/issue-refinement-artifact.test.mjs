@@ -674,3 +674,62 @@ test("#1877 enqueue gate: the generic no-artifact reason states the full-matrix 
   assert.match(decision.reason, /complete artifact on its own/);
   assert.doesNotMatch(decision.reason, /Add at least ONE of them/);
 });
+
+// ---- #1877 round-2 pins: draft-gate wrapper + issue/PR read asymmetry ----
+
+test("#1877 draft-gate wrapper: summarizeRefinementGateCheck blocks on missing_dod_checklist (AC-only body with Non-goals)", () => {
+  const summary = summarizeRefinementGateCheck({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS,
+  });
+  assert.equal(summary.verdict, "blocked");
+  assert.equal(summary.blocking, true);
+  assert.equal(summary.finding, MISSING_DOD_CHECKLIST_FINDING);
+});
+
+test("#1877 draft-gate wrapper: summarizeRefinementGateCheck blocks on missing_ac_checklist (DoD-only body with Non-goals)", () => {
+  const summary = summarizeRefinementGateCheck({
+    body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
+  });
+  assert.equal(summary.verdict, "blocked");
+  assert.equal(summary.blocking, true);
+  assert.equal(summary.finding, MISSING_AC_CHECKLIST_FINDING);
+});
+
+test("#1877 seam pin: issue side reads ONE exact-first AC section with NO deep flattening — a sub-heading-only AC checklist reports missing (intentional asymmetry)", () => {
+  // The same body shape on the PR side yields its boxes (hard gate must never
+  // miss an unchecked box); on the issue side the strict presence read fails
+  // CLOSED — the issue stays parked for human refinement. Both directions are
+  // deliberate; see the CONSUMER-CONTRACT BOUNDARY comment in the source.
+  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n### edge cases\n\n- [ ] AC1 hidden under a sub-heading\n\n## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" });
+  assert.deepEqual(artifact.acItems, []);
+  assert.equal(artifact.finding, MISSING_AC_CHECKLIST_FINDING, "sub-heading-only AC checklist fails closed as a matrix miss");
+  // PR side: the same shape surfaces the unchecked box (deep flatten + union).
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n### edge cases\n\n- [ ] AC1 hidden\n" }),
+    { uncheckedAcItems: ["AC1 hidden"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 seam pin (mixed exact+alias): issue side — exact section wins over an earlier alias; PR side — BOTH sections' unchecked boxes are surfaced", () => {
+  const body = [
+    "## AC checklist", "", "- [ ] alias AC open", "",
+    "## Acceptance criteria", "", "- [ ] exact AC open", "",
+    "## DoD", "", "- [ ] alias DoD open", "",
+    "## Definition of done", "", "- [ ] exact DoD open", "",
+    "## Non-goals", "", "- none",
+  ].join("\n");
+
+  // Issue side: the single exact-first read picks the canonical sections; the
+  // earlier alias sections' boxes are NOT in acItems/dodItems.
+  const artifact = detectIssueRefinementArtifact({ body });
+  assert.deepEqual(artifact.acItems, ["exact AC open"]);
+  assert.deepEqual(artifact.dodItems, ["exact DoD open"]);
+  assert.equal(artifact.finding, null);
+
+  // PR side: the union surfaces unchecked boxes from BOTH the alias and the
+  // exact sections — a hard gate must never miss an unchecked box.
+  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body }), {
+    uncheckedAcItems: ["alias AC open", "exact AC open"],
+    uncheckedDodItems: ["alias DoD open", "exact DoD open"],
+  });
+});

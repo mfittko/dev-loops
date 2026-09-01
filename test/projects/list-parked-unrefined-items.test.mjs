@@ -104,6 +104,28 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     assert.deepEqual(item.missing, ["Definition of done checklist"]);
   });
 
+  it("reports the actually-missing matrix arm for a DoD-only body (missing_ac_checklist arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 56, title: "DoD-only (matrix miss)" }] },
+      bodies: { 56: "## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_ac_checklist");
+    assert.deepEqual(item.missing, ["Acceptance criteria checklist"]);
+  });
+
+  it("reports the actually-missing matrix arm for a Non-goals miss (missing_explicit_non_goals arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 57, title: "No Non-goals" }] },
+      bodies: { 57: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_explicit_non_goals");
+    assert.deepEqual(item.missing, ["explicit Non-goals section"]);
+  });
+
   it("excludes refined issues (the fail-safe only parks un-refined ones)", async () => {
     const r = await run(boardRunChild({
       columns: { Backlog: [

@@ -453,6 +453,18 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
   const acceptanceSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
 
+  // CONSUMER-CONTRACT BOUNDARY (#1877, intentional asymmetry): the issue-side
+  // reads above are strict — ONE exact-first section, NO deep flattening —
+  // while extractPrBodyUncheckedChecklistItems (PR side) unions ALL matching
+  // sections and deep-flattens past ### sub-headings. The issue side is a
+  // presence check of the refinement matrix: a checklist hidden entirely
+  // under a ### sub-heading fails CLOSED (reported missing, the issue stays
+  // parked for human refinement). The PR side enforces a hard gate over the
+  // derived checklist: it must NEVER miss an unchecked box, so it fails open
+  // on nothing — it unions and deep-flattens. Do not "unify" these reads: the
+  // two failure directions are both deliberate (issue side = safe direction,
+  // PR side = fail-closed gate).
+
   const acItems = acceptanceSection ? extractChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
   // Unticked AC checkboxes (`- [ ]`) of the spec-of-record — the
   // ACCEPT-CRITERIA-VERIFY-AND-REFLECT precondition a clean pre_approval_gate

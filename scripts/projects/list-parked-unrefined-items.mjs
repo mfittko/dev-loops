@@ -22,7 +22,13 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { detectIssueRefinementArtifact, REFINEMENT_ARTIFACT_SOURCES } from "@dev-loops/core/loop/issue-refinement-artifact";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+  detectIssueRefinementArtifact,
+  REFINEMENT_ARTIFACT_SOURCES,
+} from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--project <number|id>]
 
@@ -150,10 +156,12 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
     // The enqueue gate's per-finding vocabulary (one taxonomy, no drift):
     // a matrix miss reports the actually-missing arm, not the full source
     // list — an AC-only issue is missing its DoD checklist, not everything.
+    // Keys derive from the exported findings so the map cannot drift from the
+    // predicate's vocabulary (a typo'd key would silently fall back).
     const missingByFinding = new Map([
-      ["missing_dod_checklist", ["Definition of done checklist"]],
-      ["missing_ac_checklist", ["Acceptance criteria checklist"]],
-      ["missing_explicit_non_goals", ["explicit Non-goals section"]],
+      [MISSING_DOD_CHECKLIST_FINDING, ["Definition of done checklist"]],
+      [MISSING_AC_CHECKLIST_FINDING, ["Acceptance criteria checklist"]],
+      [MISSING_EXPLICIT_NON_GOALS_FINDING, ["explicit Non-goals section"]],
     ]);
     return {
       issueNumber: item.issueNumber,
