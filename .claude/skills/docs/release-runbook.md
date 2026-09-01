@@ -18,9 +18,10 @@ Everything after the tag is hands-off.
    track the full new version including the prerelease token
    (`npm install --package-lock-only`) and stage it with the release files —
    `release.yml`'s lockstep guard
-   (`scripts/release/assert-core-dependency-version.mjs`) now fails the tag if
-   the lockfile is out of lockstep, so a stale lockfile can never ship a
-   release green (rc.7 did: #1886). Committing and pushing this release
+   (`scripts/release/assert-core-dependency-version.mjs`) now fails the release
+   workflow before the GitHub Release is created if the lockfile is out of
+   lockstep, so the documented tag-push path can never ship a stale lockfile
+   green (rc.7 did: #1886). Committing and pushing this release
    commit lands directly on `main`, which the default-branch guard hooks (see
    [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
    by default — a sanctioned release commits and pushes with
