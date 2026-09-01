@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
   MISSING_EXPLICIT_NON_GOALS_FINDING,
   REFINEMENT_SOURCE,
   decideEnqueueRefinementGate,
@@ -10,6 +12,7 @@ import {
   detectGrillMarker,
   detectGrillEmbedHeading,
   extractChecklistItems,
+  extractPrBodyUncheckedChecklistItems,
   extractUncheckedChecklistItems,
   parseMarkdownSections,
   summarizeRefinementGateCheck,
@@ -19,6 +22,9 @@ import {
 // section (loop-grill / artifact-authority contract). Fixture suffix shared by
 // every "artifact present" fixture below.
 const NGOALS = "\n\n## Non-goals\n\n- None beyond the stated scope.\n";
+// #1877: the refinement floor is the full AC/DoD/Non-goals matrix — every
+// "matrix present" fixture pairs the AC checklist with a DoD checklist.
+const DOD = "\n\n## Definition of done\n\n- [x] All checks pass\n";
 
 test("parseMarkdownSections returns heading boundaries", () => {
   const sections = parseMarkdownSections("## Problem\n\nText.\n\n## Acceptance criteria\n\n- [ ] AC1\n");
@@ -42,7 +48,7 @@ test("detectIssueRefinementArtifact returns missing for prose-only bodies", () =
 
 test("detectIssueRefinementArtifact detects Acceptance criteria with checkboxes", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n" + NGOALS,
+    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n" + DOD + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -52,7 +58,7 @@ test("detectIssueRefinementArtifact detects Acceptance criteria with checkboxes"
 
 test("detectIssueRefinementArtifact detects Acceptance criteria with plain bullets", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- First AC\n- Second AC\n" + NGOALS,
+    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- First AC\n- Second AC\n" + DOD + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -64,8 +70,10 @@ test("detectIssueRefinementArtifact detects DoD section with plain bullets when 
   const result = detectIssueRefinementArtifact({
     body: "## Problem\n\nX\n\n## Definition of Done\n\n- Ship it\n- Docs updated\n" + NGOALS,
   });
-  assert.equal(result.hasACs, true);
+  // #1877 matrix floor: DoD-only is an incomplete matrix (missing AC arm).
+  assert.equal(result.hasACs, false);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
+  assert.equal(result.finding, MISSING_AC_CHECKLIST_FINDING);
   assert.deepEqual(result.dodItems, ["Ship it", "Docs updated"]);
 });
 
@@ -87,7 +95,7 @@ test("detectIssueRefinementArtifact ignores plain bullets under an unrecognized 
 
 test("detectIssueRefinementArtifact counts only top-level bullets, not indented sub-bullets", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- foo\n  - detail of foo\n- bar\n" + NGOALS,
+    body: "## Acceptance criteria\n\n- foo\n  - detail of foo\n- bar\n" + DOD + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -98,8 +106,10 @@ test("detectIssueRefinementArtifact detects DoD section when AC is absent", () =
   const result = detectIssueRefinementArtifact({
     body: "## Problem\n\nX\n\n## Definition of Done\n\n- [ ] DoD1\n- [x] DoD2\n" + NGOALS,
   });
-  assert.equal(result.hasACs, true);
+  // #1877 matrix floor: DoD-only is an incomplete matrix (missing AC arm).
+  assert.equal(result.hasACs, false);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
+  assert.equal(result.finding, MISSING_AC_CHECKLIST_FINDING);
   assert.deepEqual(result.dodItems, ["DoD1", "DoD2"]);
 });
 
@@ -157,7 +167,7 @@ test("detectIssueRefinementArtifact rejects an AC section of only empty checkbox
 
 test("detectIssueRefinementArtifact drops empty checkbox placeholders but keeps filled ones", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n" + NGOALS,
+    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n" + DOD + NGOALS,
   });
   assert.equal(result.hasACs, true);
   assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
@@ -185,7 +195,7 @@ test("detectLinkedRefinementDoc finds explicit tmp/refinement path", () => {
 
 test("summarizeRefinementGateCheck maps to clean verdict when artifact present", () => {
   const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS,
+    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + NGOALS,
   });
   assert.equal(summary.verdict, "clean");
   assert.equal(summary.finding, null);
@@ -202,15 +212,16 @@ test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing
 });
 
 test("decideEnqueueRefinementGate enqueues a refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS });
+  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
 });
 
-test("decideEnqueueRefinementGate enqueues a DoD-only refined issue into the pickup column", () => {
+test("decideEnqueueRefinementGate blocks a DoD-only issue (incomplete #1877 matrix)", () => {
   const artifact = detectIssueRefinementArtifact({ body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-  assert.deepEqual(decision, { action: "enqueue" });
+  assert.equal(decision.action, "block");
+  assert.equal(artifact.finding, MISSING_AC_CHECKLIST_FINDING);
 });
 
 test("decideEnqueueRefinementGate enqueues a linked-doc-only refined issue into the pickup column", () => {
@@ -372,7 +383,7 @@ test("#1866 rejects an empty Non-goals section (heading only, or fenced-only bod
 
 test("#1866 accepts 'out of scope' as an explicit non-goals heading (shared patterns)", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Out of scope\n\n- everything else\n",
+    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + "\n## Out of scope\n\n- everything else\n",
   });
   assert.equal(artifact.hasACs, true);
   assert.equal(artifact.finding, null);
@@ -412,7 +423,7 @@ test("#1866 without resolveLinkedDoc the predicate stays pure and unchanged (no 
 
 test("#1866 an unresolved linked doc falls back to AC/DoD artifacts when present", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Plan\n\nSee tmp/refinement/gone.md.\n" + NGOALS,
+    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + "\n## Plan\n\nSee tmp/refinement/gone.md.\n" + NGOALS,
     resolveLinkedDoc: () => false,
   });
   assert.equal(artifact.hasACs, true);
@@ -479,4 +490,68 @@ test("#1866 containment: a linked-doc path with '..' segments is rejected, never
   function existsProbe() {
     throw new Error("resolveLinkedDoc must not be called for a traversal-shaped path");
   }
+});
+
+test("#1877 matrix floor: AC checklist without DoD checklist fails closed with missing_dod_checklist", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n- [x] AC2\n" + NGOALS,
+  });
+  assert.equal(artifact.hasACs, false);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.finding, MISSING_DOD_CHECKLIST_FINDING);
+  assert.match(artifact.reason, /AC\/DoD\/Non-goals matrix/);
+});
+
+test("#1877 matrix floor: full AC + DoD + Non-goals matrix passes", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.finding, null);
+});
+
+test("#1877 matrix floor: Non-goals miss is reported before the DoD arm (ordering preserved)", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n",
+  });
+  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+});
+
+test("#1877 matrix floor: linked refinement doc alone stays a complete artifact", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Plan\n\nSee tmp/refinement/10-plan.md for the AC/DoD matrix.\n" + NGOALS,
+    resolveLinkedDoc: () => true,
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.LINKED_DOC);
+  assert.equal(artifact.finding, null);
+});
+
+test("#1877 extractPrBodyUncheckedChecklistItems returns unchecked AC and DoD boxes only", () => {
+  const { uncheckedAcItems, uncheckedDodItems } = extractPrBodyUncheckedChecklistItems({
+    body: [
+      "## Summary", "", "text", "",
+      "## Acceptance criteria", "", "- [ ] open AC", "- [x] done AC", "- plain bullet (not a box)", "",
+      "## Definition of done", "", "- [ ] open DoD", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n"),
+  });
+  assert.deepEqual(uncheckedAcItems, ["open AC"]);
+  assert.deepEqual(uncheckedDodItems, ["open DoD"]);
+});
+
+test("#1877 extractPrBodyUncheckedChecklistItems: empty body and absent sections contribute no items", () => {
+  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: "" }), { uncheckedAcItems: [], uncheckedDodItems: [] });
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Summary\n\nno AC/DoD sections at all\n" }),
+    { uncheckedAcItems: [], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 extractPrBodyUncheckedChecklistItems: a fenced checkbox cannot spoof the count", () => {
+  const { uncheckedAcItems } = extractPrBodyUncheckedChecklistItems({
+    body: "## Acceptance criteria\n\n```\n- [ ] spoofed\n```\n\n- [x] real\n",
+  });
+  assert.deepEqual(uncheckedAcItems, []);
 });

@@ -10,11 +10,15 @@ import {
 } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 
 // AC/DoD body that detectIssueRefinementArtifact recognises as refined.
+// #1877: the refinement floor is the full AC/DoD/Non-goals matrix.
 const REFINED_BODY = [
   "## Acceptance criteria",
   "- [ ] first",
   "- [ ] second",
   "- [ ] third",
+  "",
+  "## Definition of done",
+  "- [ ] tests pass",
   "",
   "## Non-goals",
   "- none",

@@ -1345,7 +1345,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
       { stdout: '[]\n' },
       {
         stdout: JSON.stringify({
-          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Non-goals\n\n- None.\n",
+          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n",
         }) + "\n",
       },
       {
@@ -1931,7 +1931,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -1992,7 +1992,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],

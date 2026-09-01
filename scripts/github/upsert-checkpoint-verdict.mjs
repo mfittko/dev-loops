@@ -2085,6 +2085,37 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. Tick the satisfied ACs in the tracker issue before declaring the pre-approval gate clean — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
     );
   }
+  // #1877 deterministic pre-approval block: the PR body's own AC/DoD
+  // checklist is the derived, self-contained checklist mirroring the issue
+  // matrix. ANY unchecked `- [ ]` in the PR body's Acceptance criteria or
+  // Definition of done sections fails the round closed — a PR cannot reach
+  // approval with an open acceptance criterion. This is the deterministic
+  // replacement for the soft pr-checklist-matrix reviewer judgment: it
+  // enforces COMPLETENESS (nothing left unchecked/forgotten), NOT
+  // truthfulness — a dishonestly-ticked `[x]` passes this mechanical check
+  // and stays the reviewer/judge's responsibility. It composes with
+  // tick-verified-checkboxes (a box the gate could not verify stays
+  // unchecked and therefore blocks). Sections absent from the body
+  // contribute no items; requiring the sections to exist is the draft-exit
+  // validateTrackerBackedPrBodySpec check (#1863), not this precondition.
+  if (options.verdict === "clean" && options.gate === "pre_approval_gate") {
+    const prBodyUncheckedAc = coordinationContext.refinementArtifact?.prBodyUncheckedAcItems;
+    const prBodyUncheckedDod = coordinationContext.refinementArtifact?.prBodyUncheckedDodItems;
+    const uncheckedAc = Array.isArray(prBodyUncheckedAc) ? prBodyUncheckedAc : [];
+    const uncheckedDod = Array.isArray(prBodyUncheckedDod) ? prBodyUncheckedDod : [];
+    if (uncheckedAc.length > 0 || uncheckedDod.length > 0) {
+      const parts = [];
+      if (uncheckedAc.length > 0) {
+        parts.push(`${uncheckedAc.length} unchecked Acceptance criteria box(es): ${uncheckedAc.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${uncheckedAc.length > 3 ? ", …" : ""}`);
+      }
+      if (uncheckedDod.length > 0) {
+        parts.push(`${uncheckedDod.length} unchecked Definition-of-done box(es): ${uncheckedDod.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${uncheckedDod.length > 3 ? ", …" : ""}`);
+      }
+      throw new Error(
+        `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the PR body's own AC/DoD checklist still has ${parts.join("; ")}. Every acceptance criterion must be complete before approval — the deterministic pre-approval block (#1877) fails closed on any unchecked box. Tick the verified boxes via scripts/github/tick-verified-checkboxes.mjs (only actually-verified items; never blanket-check) or finish the remaining work — a box the gate could not verify stays unchecked and therefore blocks. This check enforces completeness, not truthfulness: verifying each [x] is real remains the reviewer's responsibility (skills/docs/acceptance-criteria-verification.md).`,
+      );
+    }
+  }
   // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
   // (#1621): a non-clean verdict must not carry an advancing next action. The
   // mandated next action for a round that found blocking findings is a closed

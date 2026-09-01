@@ -55,6 +55,24 @@ export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
 export const MISSING_EXPLICIT_NON_GOALS_FINDING = "missing_explicit_non_goals";
 
 /**
+ * #1877: finding reported when the issue body carries an AC checklist (and
+ * the Non-goals floor is met) but NO DoD checklist — the tracker-backed
+ * refinement floor is the full AC/DoD/Non-goals matrix (each AC mapped to its
+ * DoD item(s), plus explicit Non-goals), not AC-or-DoD. This lifts the
+ * epic-only matrix requirement (epic-tree-refinement-procedure.md) into the
+ * general refinement predicate, reconciled with #1866's Non-goals parity.
+ */
+export const MISSING_DOD_CHECKLIST_FINDING = "missing_dod_checklist";
+
+/**
+ * #1877: the symmetric matrix miss — a DoD checklist with no Acceptance
+ * criteria checklist. The matrix is authored at refinement on the issue; the
+ * PR then carries the derived checklist whose boxes the pre-approval gate
+ * requires all ticked.
+ */
+export const MISSING_AC_CHECKLIST_FINDING = "missing_ac_checklist";
+
+/**
  * Canonical list of section headings that satisfy the refinement check.
  * Matching is case-insensitive and tolerates trailing/leading whitespace.
  * The two-element minimum keeps the contract explicit:
@@ -420,6 +438,25 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
       };
     }
     if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_AC) {
+      // #1877 matrix floor: an AC checklist alone is no longer a complete
+      // refinement artifact on a tracker-backed issue — the matrix is each AC
+      // mapped to its DoD item(s) plus explicit Non-goals, so a missing DoD
+      // checklist fails closed with its own finding. A linked refinement doc
+      // stays a complete artifact on its own (the doc itself carries the
+      // matrix).
+      if (dodItems.length === 0) {
+        return {
+          ...base,
+          hasACs: false,
+          source: artifactSource,
+          reason:
+            "Issue body carries an Acceptance criteria checklist but no Definition of done checklist; " +
+            "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
+            "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
+            "without a DoD checklist mapped to the acceptance criteria.",
+          finding: MISSING_DOD_CHECKLIST_FINDING,
+        };
+      }
       return {
         ...base,
         hasACs: true,
@@ -429,12 +466,18 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
       };
     }
     if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_DOD) {
+      // #1877 matrix floor, symmetric arm: a DoD checklist with no Acceptance
+      // criteria checklist is an incomplete matrix, not a refined issue.
       return {
         ...base,
-        hasACs: true,
+        hasACs: false,
         source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
-        reason: `Found ${dodItems.length} DoD checklist item(s) in the issue body.`,
-        finding: null,
+        reason:
+          "Issue body carries a Definition of done checklist but no Acceptance criteria checklist; " +
+          "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
+          "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
+          "without acceptance criteria for the DoD items to map to.",
+        finding: MISSING_AC_CHECKLIST_FINDING,
       };
     }
     return {
@@ -728,6 +771,48 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
 export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] } = {}) {
   const expectedIssue = Array.isArray(closingIssues) && closingIssues.length === 1 ? closingIssues[0] : null;
   return validatePrBodySpec({ body, expectedIssue, requireOpenQuestions: false });
+}
+
+/**
+ * #1877: extract the UNCHECKED AC/DoD checkbox items from a PR body's own
+ * Acceptance criteria / Definition of done checklists — the derived,
+ * self-contained checklist that mirrors the linked issue's AC/DoD/Non-goals
+ * matrix. Any unchecked `- [ ]` in those sections means an acceptance
+ * criterion or definition-of-done item is still open, and the deterministic
+ * pre-approval block (`upsert-checkpoint-verdict.mjs`) fails the gate closed:
+ * the round is `blocked` and the PR cannot reach approval with an open
+ * acceptance criterion. This enforces COMPLETENESS (nothing left
+ * unchecked/forgotten), not truthfulness — a dishonestly-ticked `[x]` passes
+ * this mechanical check and remains the reviewer/judge's responsibility
+ * (ACCEPT-CRITERIA-VERIFY-AND-REFLECT). Composes with
+ * `tick-verified-checkboxes.mjs`: a box the gate could not verify stays
+ * unchecked and therefore blocks.
+ *
+ * Pure; no I/O. Reuses the shared section patterns and checklist parser
+ * (same `parseMarkdownSections` + `extractUncheckedChecklistItems` seams as
+ * `detectIssueRefinementArtifact` / `validatePrBodySpec`) so no parallel
+ * parser can drift. Sections absent from the body contribute no items — the
+ * draft-exit `validateTrackerBackedPrBodySpec` check (#1863) already owns
+ * requiring the sections to EXIST.
+ *
+ * @param {{ body?: string }} input
+ * @returns {{ uncheckedAcItems: string[], uncheckedDodItems: string[] }}
+ */
+export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
+  if (typeof body !== "string" || body.length === 0) {
+    return { uncheckedAcItems: [], uncheckedDodItems: [] };
+  }
+  const sections = parseMarkdownSections(body);
+  const acceptanceSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
+  const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
+  return {
+    uncheckedAcItems: acceptanceSection
+      ? extractUncheckedChecklistItems(acceptanceSection.bodyLines.join("\n"))
+      : [],
+    uncheckedDodItems: dodSection
+      ? extractUncheckedChecklistItems(dodSection.bodyLines.join("\n"))
+      : [],
+  };
 }
 
 /**

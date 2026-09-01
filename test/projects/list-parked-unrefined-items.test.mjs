@@ -10,7 +10,7 @@ import { main, parseCliArgs } from "../../scripts/projects/list-parked-unrefined
 const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-isolated-"));
 after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
-const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Non-goals\n- none\n";
+const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Definition of done\n- [x] All checks pass\n\n## Non-goals\n- none\n";
 const UNREFINED_BODY = "Just some prose describing a problem. No ACs, no DoD.";
 
 // runChild stub: drives list-queue-items (GraphQL) AND the per-issue

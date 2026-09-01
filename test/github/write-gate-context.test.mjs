@@ -3424,7 +3424,7 @@ test("resolvePrSpecContext fetches the live PR body and the closing issue's body
 test("resolvePrSpecContext: a linked issue with a real Acceptance criteria section records acceptanceCriteriaSource=linked-issue (AC4 of #1496)", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n\n- [ ] does the thing\n\n\n## Non-goals\n- none" }),
+    run: specStubRun({ closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n\n- [ ] does the thing\n\n## Definition of done\n- all pass\n\n\n## Non-goals\n- none" }),
   });
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
@@ -3487,8 +3487,8 @@ test("resolvePrSpecContext: an umbrella PR closing multiple issues resolves ALL 
     run: specStubRun({
       closing: [{ number: 1496 }, { number: 1511 }],
       issueBodies: {
-        "owner/repo#1496": "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none",
-        "owner/repo#1511": "## Acceptance criteria\n\n- [ ] b\n\n\n## Non-goals\n- none",
+        "owner/repo#1496": "## Acceptance criteria\n\n- [ ] a\n\n## Definition of done\n- b\n\n\n## Non-goals\n- none",
+        "owner/repo#1511": "## Acceptance criteria\n\n- [ ] b\n\n## Definition of done\n- c\n\n\n## Non-goals\n- none",
       },
     }),
   });
@@ -3500,8 +3500,8 @@ test("resolvePrSpecContext: an umbrella PR closing multiple issues resolves ALL 
   // each label as its own heading, outside any fence.
   assert.equal(options.issueBody, null, "multi-issue bodies are structured data, not pre-joined into issueBody");
   assert.deepEqual(options.issueSections, [
-    { label: "#1496", body: "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none" },
-    { label: "#1511", body: "## Acceptance criteria\n\n- [ ] b\n\n\n## Non-goals\n- none" },
+    { label: "#1496", body: "## Acceptance criteria\n\n- [ ] a\n\n## Definition of done\n- b\n\n\n## Non-goals\n- none" },
+    { label: "#1511", body: "## Acceptance criteria\n\n- [ ] b\n\n## Definition of done\n- c\n\n\n## Non-goals\n- none" },
   ]);
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
 });
@@ -3528,7 +3528,7 @@ test("resolvePrSpecContext: a resolved linked issue with a genuinely empty body 
 test("resolvePrSpecContext: a PR whose closing links never registered on GitHub falls back to a Closes/Fixes/Resolves #N body keyword (same detector as the enqueue gate)", async () => {
   const options = { repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ prBody: "Closes #99", closing: [], issueBodies: { "owner/repo#99": "## Acceptance criteria\n\n- [ ] a\n\n\n## Non-goals\n- none" } }),
+    run: specStubRun({ prBody: "Closes #99", closing: [], issueBodies: { "owner/repo#99": "## Acceptance criteria\n\n- [ ] a\n\n## Definition of done\n- b\n\n\n## Non-goals\n- none" } }),
   });
   assert.equal(options.acceptanceCriteria, "#99");
   assert.equal(options.acceptanceCriteriaSource, "linked-issue");
@@ -3564,7 +3564,7 @@ test("CLI: a PR with a body renders that body in the prefix and never the absent
     await main([
       "--repo", "owner/repo", "--pr", "77", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
-    ], { repoRoot, run: specStubRun({ prBody: "## Summary\nreal description", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- [ ] a\n\n## Non-goals\n- none" }) });
+    ], { repoRoot, run: specStubRun({ prBody: "## Summary\nreal description", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" }) });
 
     const prefixPath = buildGateBriefingPrefixPath({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha });
     const text = await readFile(path.resolve(repoRoot, prefixPath), "utf8");
@@ -3706,7 +3706,7 @@ test("resolvePrSpecContext: a programmatic caller that OMITS the spec fields sti
   // leaves undefined, which must not read as "the caller provided this".
   const options = { repo: "owner/repo", pr: 95 };
   await resolvePrSpecContext(options, {
-    run: specStubRun({ prBody: "live body", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Non-goals\n- none" }),
+    run: specStubRun({ prBody: "live body", closing: [{ number: 42 }], issueBody: "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" }),
   });
   assert.equal(options.prBody, "live body");
   assert.equal(options.acceptanceCriteria, "#42");
@@ -3721,13 +3721,13 @@ test("resolvePrSpecContext: two same-numbered issues in different repos both sur
         { number: 5 },
         { number: 5, repository: { owner: { login: "owner" }, name: "other" } },
       ],
-      issueBodies: { "owner/repo#5": "## Acceptance criteria\n- a\n\n## Non-goals\n- none", "owner/other#5": "other-repo body" },
+      issueBodies: { "owner/repo#5": "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none", "owner/other#5": "other-repo body" },
     }),
   });
   assert.equal(options.acceptanceCriteria, "#5, owner/other#5");
   assert.equal(options.issueBody, null);
   assert.deepEqual(options.issueSections, [
-    { label: "#5", body: "## Acceptance criteria\n- a\n\n## Non-goals\n- none" },
+    { label: "#5", body: "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" },
     { label: "owner/other#5", body: "other-repo body" },
   ], "the cross-repo issue's body is not dropped");
 });
@@ -3737,7 +3737,7 @@ test("resolvePrSpecContext: --repo Owner/Repo still labels a same-repo issue bar
   await resolvePrSpecContext(options, {
     run: specStubRun({
       closing: [{ number: 42, repository: { owner: { login: "owner" }, name: "repo" } }],
-      issueBodies: { "owner/repo#42": "## Acceptance criteria\n- a\n\n## Non-goals\n- none" },
+      issueBodies: { "owner/repo#42": "## Acceptance criteria\n- a\n\n## Definition of done\n- b\n\n## Non-goals\n- none" },
     }),
   });
   assert.equal(options.acceptanceCriteria, "#42");

@@ -263,9 +263,15 @@ gates:
         mandatory: true
         persona: review
         prompt: |-
-          Verify before approval that the PR checklist and AC/DoD/non-goals matrix are complete. - Every PR checkbox (`- [ ]`) must be checked. If any box is unchecked, flag it as a blocking finding. - The PR body must contain an AC/DoD/non-goals matrix that maps each acceptance criterion
-            to its definition-of-done item(s) and lists explicit non-goals.
-          - The matrix must have a markdown table with at least a header row and one content row. - Flag the matrix as incomplete if any acceptance criterion, definition-of-done item, or non-goal is missing.
+          Completeness is enforced deterministically (#1877): the pre_approval_gate fails closed on any
+          unchecked `- [ ]` in the PR body's AC/DoD checklist, so this angle's completeness duty is
+          machine-backed. Your remaining duty is TRUTHFULNESS, which the machine cannot check: verify
+          that every checked `- [x]` box in the PR body's Acceptance criteria / Definition of done
+          checklists is actually satisfied by the implementation — cite concrete code/test/behavior
+          evidence; flag a dishonestly-ticked box as a blocking finding. Also verify the checked
+          content mirrors the linked issue's AC/DoD/Non-goals matrix and that declared non-goals are
+          respected (no scope creep). The boundary is explicit: the deterministic block enforces
+          completeness (nothing left unchecked/forgotten); you verify each [x] is real.
       - contradiction-lens
       - correctness-final
       - ui-validation

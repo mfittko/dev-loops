@@ -6672,6 +6672,18 @@ const TICKED_AC_ISSUE_BODY = [
   "## Acceptance criteria", "",
   "- [x] first AC is done", "- [x] second AC is done", "",
 ].join("\n");
+// #1877: a PR body whose own AC/DoD checklist is fully ticked — the derived,
+// self-contained checklist mirroring the issue matrix. All boxes checked is
+// the precondition for a clean pre_approval_gate under the deterministic
+// completeness block.
+const FULLY_TICKED_PR_BODY = [
+  "## Acceptance criteria", "",
+  "- [x] first AC is done", "",
+  "## Definition of done", "",
+  "- [x] tests pass", "",
+  "## Non-goals", "",
+  "- none", "",
+].join("\n");
 
 // Permissive dispatch runChild for #1621 AC tests: answers every gh call the
 // coordination + post path makes from arg shape (not fragile sequential order),
@@ -6685,11 +6697,12 @@ function makeAcRunChild({
   reviews = [],
   issueComments = [],
   ciSuccess = true,
+  prBody = DEFAULT_TEST_PR_BODY,
 } = {}) {
   const calls = [];
   const prJson = JSON.stringify({
     number: 17, state: "OPEN", isDraft, headRefOid: headSha,
-    body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: closingIssues,
+    body: prBody, closingIssuesReferences: closingIssues,
     reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ciSuccess ? "SUCCESS" : "FAILURE", name: "ci" }],
   }) + "\n";
   const runChild = async (cmd, args = [], _env, _stdin = "") => {
@@ -6985,6 +6998,8 @@ test("#1621: a clean pre_approval_gate verdict is ALLOWED when the spec-of-recor
       isDraft: false,
       closingIssues: [{ number: 900 }],
       issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      // #1877: the PR body's own AC/DoD checklist must be fully ticked too.
+      prBody: FULLY_TICKED_PR_BODY,
       reviews: [1, 2, 3, 4, 5].map((i) => ({
         author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
         submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
@@ -7189,6 +7204,189 @@ test("#1621: an umbrella ready PR whose first-linked issue is ticked but a sibli
         return true;
       },
     );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1877: a clean pre_approval_gate verdict is REFUSED while the PR body's own AC checklist has an unchecked box", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      // Spec-of-record fully ticked, but the PR body still has `- [ ] the open AC`.
+      prBody: [
+        "## Acceptance criteria", "",
+        "- [x] first AC is done", "- [ ] the open AC", "",
+        "## Definition of done", "",
+        "- [x] tests pass", "",
+        "## Non-goals", "",
+        "- none", "",
+      ].join("\n"),
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline deterministic-block test",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /Cannot set verdict "clean" for pre_approval_gate/);
+        assert.match(err.message, /PR body's own AC\/DoD checklist/);
+        assert.match(err.message, /the open AC/);
+        assert.match(err.message, /deterministic pre-approval block \(#1877\)/);
+        assert.match(err.message, /completeness, not truthfulness/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1877: a clean pre_approval_gate verdict is REFUSED while the PR body's own DoD checklist has an unchecked box", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      prBody: [
+        "## Acceptance criteria", "",
+        "- [x] first AC is done", "",
+        "## Definition of done", "",
+        "- [ ] an unfinished DoD item", "",
+        "## Non-goals", "",
+        "- none", "",
+      ].join("\n"),
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline deterministic-block dod test",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /unchecked Definition-of-done box/);
+        assert.match(err.message, /an unfinished DoD item/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("#1877: composition with tick-verified-checkboxes — an unverifiable box stays unchecked and blocks; ticked boxes compose to a pass", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    // Arm 1: tick-verified-checkboxes flipped one verified box but the gate could
+    // not verify `cannot verify this` — it stays `- [ ]` and the verdict is refused.
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      prBody: [
+        "## Acceptance criteria", "",
+        "- [x] verified and ticked", "- [ ] cannot verify this", "",
+        "## Definition of done", "",
+        "- [x] tests pass", "",
+        "## Non-goals", "",
+        "- none", "",
+      ].join("\n"),
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline deterministic-block composition test",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /cannot verify this/);
+        assert.doesNotMatch(err.message, /verified and ticked/);
+        return true;
+      },
+    );
+
+    // Arm 2: the same PR after the remaining box was verified and ticked passes.
+    const { runChild: runChild2 } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      prBody: FULLY_TICKED_PR_BODY,
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline composition green arm (deterministic checklist block)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: runChild2 });
+    assert.equal(result.action, "created");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
