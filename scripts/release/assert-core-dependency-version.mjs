@@ -63,14 +63,20 @@ export function extractMajorMinor(spec) {
 
 /**
  * Extract the full version token (`major.minor.patch[-prerelease]`) from a
- * semver version or npm range. Strips leading range operators (^, ~, >=, …)
- * and takes the first version occurrence in a compound range; build metadata
- * (`+build`) is dropped because it does not affect version precedence.
+ * semver version or npm range. Anchored at the start of the spec: only leading
+ * range operators (^, ~, >=, <, =) and whitespace plus a `v`/`V` shorthand may
+ * precede the version, so a spec that merely CONTAINS a version substring
+ * (e.g. `workspace:^1.0.0-rc.7`, `file:core-1.0.0-rc.7.tgz`) fails closed
+ * instead of false-passing (Copilot round-2 finding on #1886). Takes the first
+ * version token in a compound range; build metadata (`+build`) is dropped
+ * because it does not affect version precedence.
  * @param {string} spec
  * @returns {string} e.g. "1.0.0-rc.7"
  */
 export function extractFullVersion(spec) {
-  const match = String(spec).match(/(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/);
+  const match = String(spec).match(
+    /^[\s^~>=<]*[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?/,
+  );
   if (!match) {
     throw new Error(`cannot parse a full version from "${spec}"`);
   }

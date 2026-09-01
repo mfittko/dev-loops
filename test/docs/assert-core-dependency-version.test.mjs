@@ -80,7 +80,25 @@ test("extractFullVersion keeps the prerelease token and strips range operators",
   assert.equal(extractFullVersion("~1.4.9"), "1.4.9");
   assert.equal(extractFullVersion(">=0.6.0 <0.7.0"), "0.6.0");
   assert.equal(extractFullVersion("0.6.2"), "0.6.2");
+  assert.equal(extractFullVersion("v1.2.3"), "1.2.3");
+  assert.equal(extractFullVersion("1.0.0-rc.7+build.5"), "1.0.0-rc.7");
+  assert.equal(extractFullVersion("1.0.0+build.5"), "1.0.0");
   assert.throws(() => extractFullVersion("latest"), /cannot parse/);
+});
+
+test("extractFullVersion fails closed on non-semver specs that merely contain a version (Copilot round-2 finding)", () => {
+  assert.throws(
+    () => extractFullVersion("workspace:^1.0.0-rc.7"),
+    /cannot parse/,
+  );
+  assert.throws(
+    () => extractFullVersion("file:core-1.0.0-rc.7.tgz"),
+    /cannot parse/,
+  );
+  assert.throws(
+    () => extractFullVersion("npm:@dev-loops/core@1.0.0-rc.7"),
+    /cannot parse/,
+  );
 });
 
 function lockfileAtVersion(version) {
