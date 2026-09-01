@@ -1038,7 +1038,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
   }
   const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
-    `Issue has no refinement artifact (none of: ${missing.join(", ")}, and no explicit ## Non-goals section). ` +
+    `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
     "Refine the issue to the full AC/DoD/Non-goals matrix — an Acceptance criteria checklist, a Definition of done checklist, and an explicit Non-goals section — " +
     "or link a refinement doc (tmp/refinement/*.md), which is a complete artifact on its own " +
     "(e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself), or the refiner) — before it enters the pickup queue.";
