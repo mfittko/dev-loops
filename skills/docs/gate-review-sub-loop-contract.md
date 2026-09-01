@@ -182,10 +182,11 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
     be: `"provided"` (caller flag, regardless of whether an issue body was independently
     supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
-    resolved issue carries a real Acceptance-criteria/DoD section or linked refinement doc),
-    `"linked-issue-unrefined"` (resolved, but every linked issue is prose-only — distinguishes
-    "linked, no refinement artifact" from "not fetched"), or `"none"` (the PR closes no
-    issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
+    resolved issue carries the full refinement matrix — Acceptance criteria checklist + DoD
+    checklist + explicit Non-goals, or a linked refinement doc),
+    `"linked-issue-unrefined"` (resolved, but no linked issue carries the full refinement
+    matrix — distinguishes "linked, unrefined or matrix-incomplete" from "not fetched"), or
+    `"none"` (the PR closes no issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
     omit it entirely, so a null `acceptanceCriteria` WITHOUT this field means "never
     resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
     PR closing several issues resolves ALL of them (not just the first), concatenated under

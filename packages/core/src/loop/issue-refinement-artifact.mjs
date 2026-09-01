@@ -3,14 +3,15 @@
  *
  * Implements the bounded refinement check required by the draft gate per
  * issue #532: a draft PR cannot leave draft unless the linked issue has an
- * explicit refinement artifact (Acceptance criteria section, DoD section,
- * or a linked refinement doc) that the pre-approval gate can verify
- * against. Prose-only issues (Problem / Root Cause / Fix) without an
- * `Acceptance criteria` or `DoD` section cause the draft gate to post
- * `verdict=blocked` with the `missing_refinement_artifact` finding.
- *
- * Since #1866 the check ALSO requires an explicit Non-goals section on the
- * issue body (see `MISSING_EXPLICIT_NON_GOALS_FINDING` below).
+ * explicit refinement artifact — the full matrix of an Acceptance criteria
+ * checklist plus a Definition of done checklist plus an explicit Non-goals
+ * section, or a linked refinement doc that is a complete artifact on its own —
+ * that the pre-approval gate can verify against. An issue missing any matrix
+ * part fails closed with the matching finding (`missing_dod_checklist`,
+ * `missing_ac_checklist`, `missing_explicit_non_goals`, or
+ * `missing_refinement_artifact`); prose-only issues (Problem / Root Cause /
+ * Fix) cause the draft gate to post `verdict=blocked` with the
+ * `missing_refinement_artifact` finding.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
