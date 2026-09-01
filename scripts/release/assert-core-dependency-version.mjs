@@ -230,8 +230,8 @@ async function main(argv) {
   });
   process.stdout.write(
     ciSafe(
-      `${CORE_DEP} ${coreResult.coreRange} is in lockstep with release ${coreResult.releaseVersion} (version ${coreResult.fullVersion}).\n`,
-    ),
+      `${CORE_DEP} ${coreResult.coreRange} is in lockstep with release ${coreResult.releaseVersion} (version ${coreResult.fullVersion}).`,
+    ) + "\n",
   );
 
   // #1886: the lockfile version fields are also part of the release contract.
@@ -246,8 +246,8 @@ async function main(argv) {
   const lockResult = assertPackageLockInLockstep({ releaseVersion: version, lockfile });
   process.stdout.write(
     ciSafe(
-      `package-lock.json version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).\n`,
-    ),
+      `package-lock.json version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).`,
+    ) + "\n",
   );
 }
 
