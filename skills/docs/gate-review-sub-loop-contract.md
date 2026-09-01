@@ -951,8 +951,9 @@ manual chore:
 plain re-invocation of the same angle collides with its own pass-1 sentinel and fails closed
 exactly like genuine contamination would. The sanctioned scenarios are:
 
-- **PR-body/description-only fix** (e.g. adding a missing acceptance-criteria matrix to
-  satisfy `pr-checklist-matrix`): a body edit never changes the head SHA, so the round key
+- **PR-body/description-only fix** (e.g. editing the PR body's AC/DoD checkboxes
+  so the deterministic #1877 unchecked-box block passes): a body edit never
+  changes the head SHA, so the round key
   stays the same.
 - **Interrupted reviewer**: a reviewer killed or interrupted AFTER running the sentinel
   check but BEFORE writing its findings artifact burned the (scope, round) sentinel while

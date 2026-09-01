@@ -7444,6 +7444,99 @@ test("#1877: composition with tick-verified-checkboxes — an unverifiable box s
   }
 });
 
+// #1877 round-1 grammar parity: composition must hold for every marker form the
+// extractor accepts (ordered `N.`/`N)` and blockquote-nested `>`), not only dash
+// bullets. Arm 1: an unticked ordered-form box blocks a clean verdict (the
+// extractor surfaces it in prBodyUncheckedAcItems). Arm 2: after the tick tool
+// flips the same ordered + blockquote forms, the fully-ticked body passes.
+test("#1877: composition with tick-verified-checkboxes holds for ordered and blockquote checkbox forms", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    const orderedBlockPrBody = [
+      "## Acceptance criteria", "",
+      "1. [x] verified ordered item", "1. [ ] cannot verify this ordered item", "",
+      "## Definition of done", "",
+      "> - [x] tests pass", "",
+      "## Non-goals", "",
+      "- none", "",
+    ].join("\n");
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      prBody: orderedBlockPrBody,
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    // Arm 1: the unticked ordered-form box blocks the clean verdict.
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+        verdict: "clean", findingsSummary: "no issues found",
+        findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+        nextAction: "await final human approval",
+        executionMode: "inline_single_agent", inlineReason: "inline composition ordered-form block arm",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild }),
+      (err) => {
+        assert.match(err.message, /cannot verify this ordered item/);
+        return true;
+      },
+    );
+
+    // Arm 2: tick-verified-checkboxes now flips the ordered form (grammar parity),
+    // and the fully-ticked ordered/blockquote body passes.
+    const { runChild: runChild2 } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [{ number: 900 }],
+      issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+      prBody: [
+        "## Acceptance criteria", "",
+        "1. [x] verified ordered item", "1. [x] cannot verify this ordered item", "",
+        "## Definition of done", "",
+        "> - [x] tests pass", "",
+        "## Non-goals", "",
+        "- none", "",
+      ].join("\n"),
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline composition ordered-form green arm",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: runChild2 });
+    assert.equal(result.action, "created");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("#1621: an inline free-text-only findings_present round (no structuredFindings, no counts) escalates gate:full via the verdict fallback", async () => {
   const repoRoot = await stageConfigRepoRoot(true);
   try {

@@ -295,9 +295,8 @@ export function parseMarkdownSections(body) {
         // headings (`## **Acceptance criteria**`) match the section patterns.
         // The RAW name is never re-parsed as body text (flattenSectionDeep no
         // longer re-injects it), so normalization is the only consumer of the
-        // capture.
+        // capture — the raw form is not retained (no consumer reads it).
         name: normalizeHeadingName(match[2]),
-        rawName: match[2],
         bodyLines: [],
       };
       continue;
@@ -355,14 +354,16 @@ function parseChecklistItems(sectionBody) {
     }
     // Checklist item: GFM/CommonMark task-list markers (#1877 round-6 parser
     // hardening): `-`/`*`/`+` bullets, ordered `N.`/`N)`, and blockquote-nested
-    // `> - [ ]` — the forms GitHub itself renders as interactive checkboxes
-    // (parity with tick-verified-checkboxes.mjs's CHECKBOX_RE, which accepts
-    // `[-*+]`). Consume ANY checkbox-marker line here; push only when it
-    // carries text, so empty placeholders (`- [ ]`) are skipped rather than
-    // counted. #1877 round-7: the tick state comes from the CAPTURED marker
-    // group of this single match — never a second whole-line re-test. An
-    // unanchored `/\[(?:[xX])\]/u.test(line)` reads an UNCHECKED box whose
-    // label text merely mentions `[x]` (e.g. `- [ ] verify [x] flags`) as
+    // `> - [ ]` — the forms GitHub itself renders as interactive checkboxes.
+    // Grammar parity with tick-verified-checkboxes.mjs's CHECKBOX_RE (same
+    // #1877 round-1 widening): both accept bullets, ordered markers, and
+    // blockquote-nested forms, so every form this extractor surfaces as
+    // unchecked is flippable by the tick tool. Consume ANY checkbox-marker line
+    // here; push only when it carries text, so empty placeholders (`- [ ]`) are
+    // skipped rather than counted. #1877 round-7: the tick state comes from the
+    // CAPTURED marker group of this single match — never a second whole-line
+    // re-test. An unanchored `/\[(?:[xX])\]/u.test(line)` reads an UNCHECKED box
+    // whose label text merely mentions `[x]` (e.g. `- [ ] verify [x] flags`) as
     // checked, silently disarming the deterministic block — the exact
     // fail-open class the marker-anchored pre-#1877 read could not produce.
     const checkboxMatch =
