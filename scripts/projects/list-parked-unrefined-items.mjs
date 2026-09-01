@@ -147,6 +147,14 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
     // finding !== null is the explicit "has NO refinement artifact" signal.
     if (artifact.finding === null) return null;
+    // The enqueue gate's per-finding vocabulary (one taxonomy, no drift):
+    // a matrix miss reports the actually-missing arm, not the full source
+    // list — an AC-only issue is missing its DoD checklist, not everything.
+    const missingByFinding = new Map([
+      ["missing_dod_checklist", ["Definition of done checklist"]],
+      ["missing_ac_checklist", ["Acceptance criteria checklist"]],
+      ["missing_explicit_non_goals", ["explicit Non-goals section"]],
+    ]);
     return {
       issueNumber: item.issueNumber,
       title: item.title ?? null,
@@ -154,9 +162,7 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       itemId: item.itemId ?? null,
       finding: artifact.finding,
       reason: artifact.reason,
-      // The three artifact sources any ONE of which clears the gate — the same
-      // single-source vocabulary the enqueue gate reports (one taxonomy, no drift).
-      missing: [...REFINEMENT_ARTIFACT_SOURCES],
+      missing: missingByFinding.get(artifact.finding) ?? [...REFINEMENT_ARTIFACT_SOURCES],
     };
   });
   const unrefined = perItem.filter((x) => x !== null);

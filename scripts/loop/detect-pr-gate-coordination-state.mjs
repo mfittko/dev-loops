@@ -599,9 +599,28 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       refinedIssues,
       _onlyEnforcedWhenDraft: false,
     };
+    // #1877: the PR body's own AC/DoD checklist is the derived, self-contained
+    // checklist mirroring the issue matrix. Surface its unchecked boxes so the
+    // pre_approval_gate can fail closed on ANY open acceptance criterion in the
+    // PR body itself (completeness check), independent of the spec-of-record
+    // unticked-AC read above (#1621). Sections absent from the body contribute
+    // no items — the draft-exit validateTrackerBackedPrBodySpec check (#1863)
+    // owns requiring the sections to exist. Computed BEFORE the allFailed early
+    // return: the extractor is pure and its only input (prData.body) is already
+    // in hand, so the #1877 block must not be hostage to a linked-issue fetch
+    // failure (#1621's "cannot verify what it cannot read" covers the
+    // spec-of-record check, not this one).
+    const { extractPrBodyUncheckedChecklistItems } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    const prBody = typeof prData?.body === "string" ? prData.body : "";
+    const prBodyUnchecked = extractPrBodyUncheckedChecklistItems({ body: prBody });
+    const prBodyUncheckedFields = {
+      prBodyUncheckedAcItems: prBodyUnchecked.uncheckedAcItems,
+      prBodyUncheckedDodItems: prBodyUnchecked.uncheckedDodItems,
+    };
     if (allFailed) {
       return {
         ...base,
+        ...prBodyUncheckedFields,
         reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
       };
     }
@@ -624,16 +643,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     const unionUnchecked = dedupe(fetchedArtifacts.flatMap((x) => x.uncheckedAcItems ?? []));
     const unionAc = dedupe(fetchedArtifacts.flatMap((x) => x.acItems ?? []));
     const unionDod = dedupe(fetchedArtifacts.flatMap((x) => x.dodItems ?? []));
-    // #1877: the PR body's own AC/DoD checklist is the derived, self-contained
-    // checklist mirroring the issue matrix. Surface its unchecked boxes so the
-    // pre_approval_gate can fail closed on ANY open acceptance criterion in the
-    // PR body itself (completeness check), independent of the spec-of-record
-    // unticked-AC read above (#1621). Sections absent from the body contribute
-    // no items — the draft-exit validateTrackerBackedPrBodySpec check (#1863)
-    // owns requiring the sections to exist.
-    const { extractPrBodyUncheckedChecklistItems } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-    const prBody = typeof prData?.body === "string" ? prData.body : "";
-    const prBodyUnchecked = extractPrBodyUncheckedChecklistItems({ body: prBody });
     return {
       ...base,
       linkedIssue: (firstPresent ?? firstFetched).issue,
@@ -641,8 +650,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       acItems: unionAc.length > 0 ? unionAc : a.acItems,
       uncheckedAcItems: unionUnchecked,
       dodItems: unionDod.length > 0 ? unionDod : a.dodItems,
-      prBodyUncheckedAcItems: prBodyUnchecked.uncheckedAcItems,
-      prBodyUncheckedDodItems: prBodyUnchecked.uncheckedDodItems,
+      ...prBodyUncheckedFields,
       sections: a.sections,
       linkedDoc: a.linkedDoc,
       reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft, so the check is informational only. The spec-of-record AC data is fetched for the pre_approval_gate unticked-AC precondition (#1621).`,

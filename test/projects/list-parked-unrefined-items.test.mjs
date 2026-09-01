@@ -93,6 +93,17 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     ]);
   });
 
+  it("reports the actually-missing matrix arm for a #1877 matrix miss (one taxonomy with the enqueue gate)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 55, title: "AC-only (matrix miss)" }] },
+      bodies: { 55: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_dod_checklist");
+    assert.deepEqual(item.missing, ["Definition of done checklist"]);
+  });
+
   it("excludes refined issues (the fail-safe only parks un-refined ones)", async () => {
     const r = await run(boardRunChild({
       columns: { Backlog: [

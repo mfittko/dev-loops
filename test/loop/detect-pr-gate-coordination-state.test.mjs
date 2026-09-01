@@ -1840,6 +1840,40 @@ test("loadRefinementArtifact: non-draft issue-less PR stays unknown (refinement 
   assert.equal(result.linkedIssue, null);
 });
 
+test("loadRefinementArtifact: #1877 allFailed arm still surfaces prBodyUncheckedAcItems/prBodyUncheckedDodItems (PR body is local, not hostage to issue-fetch health)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // Linked-issue body fetch FAILS (non-zero gh exit), but the PR body — the
+    // #1877 block's only input — is in hand and carries an unchecked AC box.
+    const { env } = await writeGhStubHelper(tmp, [
+      { exitCode: 1, stdout: "", stderr: "gh: issue view failed (simulated transient failure)\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [{ number: 900 }],
+          body: "Closes #900\n\n## Acceptance criteria\n\n- [ ] open AC\n\n## Definition of done\n\n- [x] done item\n",
+        },
+        prDraft: false,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    // allFailed arm: status stays unknown, but the #1877 fields must be
+    // populated from the PR body so the deterministic pre-approval block
+    // stays armed (no fail-open on a transient issue-fetch failure).
+    assert.equal(result.status, "unknown");
+    assert.match(result.reason, /Failed to fetch issue bodies/);
+    assert.deepEqual(result.prBodyUncheckedAcItems, ["open AC"]);
+    assert.deepEqual(result.prBodyUncheckedDodItems, []);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferences keeps linked-issue behavior (regression)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {

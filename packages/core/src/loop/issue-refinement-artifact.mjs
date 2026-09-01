@@ -36,9 +36,10 @@ export const REFINEMENT_SOURCE = Object.freeze({
 
 const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
-// The three artifact sources, any ONE of which satisfies the refinement gate.
-// Single source of truth for the "missing" vocabulary reported when none is
-// present — consumed by the enqueue gate and the parked-unrefined discovery.
+// REFINEMENT_ARTIFACT_SOURCES: the full-matrix floor vocabulary (#1877). The
+// refinement floor is the FULL AC/DoD/Non-goals matrix (a linked refinement
+// doc remains a complete artifact on its own) — this list is the shape of a
+// COMPLETE artifact, not a menu where any one entry suffices.
 export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
   "Acceptance criteria section",
   "Definition of done section",
@@ -89,6 +90,84 @@ const DOD_SECTION_PATTERNS = Object.freeze([
   /^done\s*$/i,
   /^dod\s*$/i,
 ]);
+
+// #1877 alias-precedence: exact canonical headings (the first pattern in each
+// family) must outrank loose aliases (`/^ac\b/`, `/^dod\b/`) so a matrix-shaped
+// heading the refined-issue contract itself produces (`## AC/DoD matrix`,
+// `## AC → DoD mapping`) can never hijack the canonical section read. Split
+// each pattern family into [exact, aliases] by convention: pattern index 0
+// is the exact canonical match, the rest are aliases.
+const EXACT_PATTERN_INDEX = 0;
+
+/**
+ * Resolve the sections matching a heading-pattern family with exact-first
+ * precedence (#1877): the first section matching the EXACT canonical pattern
+ * (index 0) wins over any earlier section that only matched a loose alias
+ * (e.g. `## AC/DoD matrix` before `## Acceptance criteria`). When no exact
+ * match exists, the first alias match is returned (alias-only bodies keep
+ * working). Returns null when no section matches at all.
+ */
+function findSectionByPatterns(sections, patterns) {
+  const exact = patterns[EXACT_PATTERN_INDEX];
+  for (const section of sections) {
+    if (exact.test(section.name)) {
+      return section;
+    }
+  }
+  for (const section of sections) {
+    for (let i = 1; i < patterns.length; i += 1) {
+      if (patterns[i].test(section.name)) {
+        return section;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect ALL sections matching a heading-pattern family, exact-first ordered
+ * (exact canonical matches before alias-only matches). Shared with
+ * `findSectionByPatterns`'s precedence semantics so single-section consumers
+ * and union consumers (#1877 PR-body unchecked-box extraction) cannot drift.
+ */
+function findAllSectionsByPatterns(sections, patterns) {
+  const exact = patterns[EXACT_PATTERN_INDEX];
+  const exactMatches = [];
+  const aliasMatches = [];
+  for (const section of sections) {
+    if (exact.test(section.name)) {
+      exactMatches.push(section);
+    } else {
+      for (let i = 1; i < patterns.length; i += 1) {
+        if (patterns[i].test(section.name)) {
+          aliasMatches.push(section);
+          break;
+        }
+      }
+    }
+  }
+  return [...exactMatches, ...aliasMatches];
+}
+
+/**
+ * Flatten a section (heading record) into a body string that extends past
+ * `###` sub-headings (#1877): a section's checklist may nest items under
+ * deeper sub-headings (`### edge cases` inside `## Acceptance criteria`), so
+ * join the section and every following section of a DEEPER heading level up
+ * to the next same-or-shallower heading. `parseMarkdownSections` terminates a
+ * section's `bodyLines` at ANY heading, which is correct for heading
+ * matching but hides unchecked boxes from consumers that must see ALL of a
+ * canonical section's boxes.
+ */
+function flattenSectionDeep(sections, startIndex) {
+  const start = sections[startIndex];
+  const parts = [start.bodyLines.join("\n")];
+  for (let i = startIndex + 1; i < sections.length; i += 1) {
+    if (sections[i].level <= start.level) break;
+    parts.push(sections[i].name, sections[i].bodyLines.join("\n"));
+  }
+  return parts.join("\n");
+}
 
 /**
  * Fenced-code-span tracker. Given the previous fence state and the current
@@ -170,16 +249,6 @@ export function parseMarkdownSections(body) {
   return sections;
 }
 
-function findSectionByPatterns(sections, patterns) {
-  for (const section of sections) {
-    for (const pattern of patterns) {
-      if (pattern.test(section.name)) {
-        return section;
-      }
-    }
-  }
-  return null;
-}
 
 /**
  * Parse bullet/checkbox items from a section body into item states. Each
@@ -803,15 +872,24 @@ export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
     return { uncheckedAcItems: [], uncheckedDodItems: [] };
   }
   const sections = parseMarkdownSections(body);
-  const acceptanceSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
-  const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
+  // Union the unchecked boxes across ALL sections matching each pattern
+  // family (exact-first ordered), flattening each section past its deeper
+  // sub-headings (#1877): a body nesting ACs under `###` subsections, or
+  // repeating an AC/DoD heading, must not hide unchecked boxes from the
+  // deterministic completeness block. Deduped by text (same box re-read in a
+  // duplicate section is the same box).
+  const collect = (patterns) => {
+    const matched = findAllSectionsByPatterns(sections, patterns);
+    const items = [];
+    for (let i = 0; i < sections.length; i += 1) {
+      if (!matched.includes(sections[i])) continue;
+      items.push(...extractUncheckedChecklistItems(flattenSectionDeep(sections, i)));
+    }
+    return [...new Set(items)];
+  };
   return {
-    uncheckedAcItems: acceptanceSection
-      ? extractUncheckedChecklistItems(acceptanceSection.bodyLines.join("\n"))
-      : [],
-    uncheckedDodItems: dodSection
-      ? extractUncheckedChecklistItems(dodSection.bodyLines.join("\n"))
-      : [],
+    uncheckedAcItems: collect(ACCEPTANCE_SECTION_PATTERNS),
+    uncheckedDodItems: collect(DOD_SECTION_PATTERNS),
   };
 }
 
@@ -834,8 +912,8 @@ export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
 export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
   // `artifact.finding === null` is the explicit "passes the full refinement
   // check" signal (artifact AND — since #1866 — an explicit Non-goals
-  // section), clearer than reading `hasACs`, whose name understates what it
-  // covers.
+  // section AND — since #1877 — the full AC/DoD checklist matrix), clearer
+  // than reading `hasACs`, whose name understates what it covers.
   if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
   }
@@ -848,10 +926,28 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
       "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without an explicit Non-goals section.";
     return { action: auto ? "divert" : "block", reason, missing: ["explicit Non-goals section"] };
   }
+  // #1877 matrix arms: name the actual missing matrix arm — an AC-only or
+  // DoD-only issue is NOT artifact-less, so the generic reason below would be
+  // factually wrong and would misdirect the fix.
+  if (artifact.finding === MISSING_DOD_CHECKLIST_FINDING) {
+    const reason =
+      "Issue carries an Acceptance criteria checklist but no Definition of done checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
+      "Add a Definition of done checklist to the issue body (mapped to the acceptance criteria) " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["Definition of done checklist"] };
+  }
+  if (artifact.finding === MISSING_AC_CHECKLIST_FINDING) {
+    const reason =
+      "Issue carries a Definition of done checklist but no Acceptance criteria checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
+      "Add an Acceptance criteria checklist to the issue body (for the DoD items to map to) " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["Acceptance criteria checklist"] };
+  }
   const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
-    `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
-    "Add at least ONE of them — an Acceptance criteria section, a Definition of done section, or a linked refinement doc " +
+    `Issue has no refinement artifact (none of: ${missing.join(", ")}, and no explicit ## Non-goals section). ` +
+    "Refine the issue to the full AC/DoD/Non-goals matrix — an Acceptance criteria checklist, a Definition of done checklist, and an explicit Non-goals section — " +
+    "or link a refinement doc (tmp/refinement/*.md), which is a complete artifact on its own " +
     "(e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself), or the refiner) — before it enters the pickup queue.";
   return { action: auto ? "divert" : "block", reason, missing };
 }
