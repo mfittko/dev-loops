@@ -1,7 +1,10 @@
 name: Create GitHub Release
 
-# Tagging is the only manual release step. Pushing a "v*" tag creates the
-# GitHub Release, then dispatches npm-publish.yml explicitly: releases
+# Tagging is the only manual release step for prereleases; a stable release
+# also requires the operator "approve release v<version>" comment first (see
+# "Operator release approval gate" in skills/docs/release-runbook.md). Pushing
+# a "v*" tag creates the GitHub Release, then dispatches npm-publish.yml
+# explicitly: releases
 # created with GITHUB_TOKEN never fire `on: release`, so event chaining
 # alone silently skips npm publishing (#1187). workflow_dispatch is the
 # documented GITHUB_TOKEN exception.
@@ -16,6 +19,9 @@ jobs:
     permissions:
       contents: write
       actions: write
+      # #1901: the approval gate reads issue search + issue comments via
+      # GITHUB_TOKEN; explicit permissions default missing scopes to none.
+      issues: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -50,6 +56,21 @@ jobs:
         run: |
           node scripts/release/assert-core-dependency-version.mjs \
             --release-version "${{ steps.version.outputs.version }}"
+
+      # #1901: cutting a STABLE tag is a gated release decision, not an agent
+      # judgment call. The check fails closed (no Release, no npm-publish
+      # dispatch) unless an explicit per-release operator approval record
+      # exists (an issue comment by the repo owner stating
+      # "approve release v<version>"); blanket merge authorizations and
+      # generic continue instructions never satisfy it. Prereleases pass
+      # through unchanged (the gate applies to stable releases only).
+      - name: Assert operator release approval (stable releases)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/verify-release-approval.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}"
 
       - name: Skip if release already exists (idempotent)
         id: exists
