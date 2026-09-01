@@ -7063,6 +7063,58 @@ test("#1621: a clean pre_approval_gate verdict is ALLOWED when there is no linke
   }
 });
 
+// #1877 explicit non-goal boundary pin: the deterministic unchecked-box block
+// is scoped to tracker-backed ready PRs with a resolvable linked issue (a
+// loadRefinementArtifact early return with NO prBodyUnchecked* fields — the
+// issue-less path is unchanged, an explicit non-goal). A no-linked-issue PR
+// body with deliberately unchecked AC/DoD boxes must therefore still allow a
+// clean pre_approval_gate verdict. Uses a LOCAL fixture, not the shared
+// DEFAULT_TEST_PR_BODY, so the unchecked boxes are deliberate here.
+test("#1877 non-goal boundary: no linked issue — unchecked AC/DoD boxes in the PR body do not block a clean pre_approval_gate (lightweight path unchanged)", async () => {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    // LOCAL fixture: no closing reference, deliberately unchecked AC/DoD boxes.
+    const uncheckedBoxesPrBody = [
+      "## Acceptance criteria", "",
+      "- [ ] an unchecked AC box", "",
+      "## Definition of done", "",
+      "- [ ] an unchecked DoD box", "",
+      "## Non-goals", "",
+      "- none", "",
+    ].join("\n");
+    const { runChild } = makeAcRunChild({
+      isDraft: false,
+      closingIssues: [],
+      prBody: uncheckedBoxesPrBody,
+      reviews: [1, 2, 3, 4, 5].map((i) => ({
+        author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+        submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+      })),
+      issueComments: [{
+        id: 91,
+        body: renderGateReviewCommentBody({
+          gate: "draft_gate", headSha: GATE_FULL_HEAD, verdict: "clean",
+          findingsSummary: "no issues found", nextAction: "mark ready for review",
+          executionMode: "fanout_fanin",
+        }),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-06-01T19:55:00Z",
+      }],
+    });
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: GATE_FULL_HEAD,
+      verdict: "clean", findingsSummary: "no issues found",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      nextAction: "await final human approval",
+      executionMode: "inline_single_agent", inlineReason: "inline pre-approval test",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
+    assert.equal(result.action, "created");
+    assert.equal(result.gate, "pre_approval_gate");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("#1621: a blocked draft_gate verdict DERIVES 'stay draft and fix' (not the caller's advancing action)", async () => {
   const repoRoot = await stageConfigRepoRoot(false);
   try {

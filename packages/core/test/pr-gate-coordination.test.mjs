@@ -1951,6 +1951,67 @@ test("draft PR is blocked when refinement artifact is missing on linked issue (#
   assert.equal(result.refinementArtifact?.linkedIssue, 532);
 });
 
+// #1877: the draft gate is the unconditional backstop for the enqueue gate's
+// full-matrix floor, so its blocked reason must use the SAME finding taxonomy
+// and name the actually-missing matrix arm — an AC-only linked issue is a
+// missing_dod_checklist matrix miss, not "no artifact" (the stale generic
+// wording would misdirect the fix and drift from QUEUE-ENQUEUE-REFINEMENT-
+// GATE / ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR guidance).
+test("draft PR blocked reason names the missing matrix arm for a #1877 AC-only linked issue (missing_dod_checklist)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 900,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 900,
+      specSource: "linked_issue",
+      source: "issue-body-ac",
+      reason: "Issue body carries an Acceptance criteria checklist but no Definition of done checklist; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_dod_checklist",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(result.refinementArtifact?.status, "missing");
+  assert.match(result.reason, /#900/);
+  assert.match(result.reason, /incomplete refinement matrix/);
+  assert.match(result.reason, /Definition of done checklist/);
+  assert.match(result.reason, /finding=missing_dod_checklist/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
+test("draft PR blocked reason names the missing matrix arm for a #1877 DoD-only linked issue (missing_ac_checklist)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 901,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 901,
+      specSource: "linked_issue",
+      source: "issue-body-dod",
+      reason: "Issue body carries a Definition of done checklist but no Acceptance criteria checklist; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_ac_checklist",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.match(result.reason, /Acceptance criteria checklist/);
+  assert.match(result.reason, /finding=missing_ac_checklist/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
 test("draft PR is not blocked when refinement artifact is present (#532)", () => {
   const result = evaluatePrGateCoordination({
     pr: 532,

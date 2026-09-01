@@ -728,7 +728,14 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     reason: isUmbrella
       ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
       : first.reason,
-    finding: "missing_refinement_artifact",
+    // #1877: thread the detector's per-finding taxonomy through (an AC-only
+    // linked issue is a missing_dod_checklist matrix miss, not a bare
+    // artifact miss) so the draft gate — the unconditional backstop for the
+    // enqueue gate's full-matrix floor — surfaces the same finding vocabulary
+    // and guidance naming the actually-missing arm. The umbrella arm keeps the
+    // generic finding: the first evaluated issue is not necessarily the one
+    // whose specific matrix arm is missing across the umbrella's scope.
+    finding: isUmbrella ? "missing_refinement_artifact" : (first.finding ?? "missing_refinement_artifact"),
     _onlyEnforcedWhenDraft: prDraft === true,
   };
 }

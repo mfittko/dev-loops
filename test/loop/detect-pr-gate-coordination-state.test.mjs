@@ -1874,6 +1874,71 @@ test("loadRefinementArtifact: #1877 allFailed arm still surfaces prBodyUnchecked
   }
 });
 
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (AC-only body) surfaces the detector's finding, not the generic artifact miss — the draft gate is the backstop for the enqueue gate's full-matrix floor", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // AC checklist + Non-goals present, DoD checklist ABSENT: a #1877 matrix
+    // miss (missing_dod_checklist), not a bare no-artifact miss. The mixed
+    // branch must thread the detector's finding through so the draft gate —
+    // the unconditional backstop for the enqueue gate's full-matrix floor
+    // (QUEUE-ENQUEUE-REFINEMENT-GATE) — surfaces the same taxonomy.
+    const acOnlyIssueBody = [
+      "## Problem", "", "Fix the thing.", "",
+      "## Acceptance criteria", "", "- [ ] AC1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: acOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssue, 900);
+    assert.equal(result.specSource, "linked_issue");
+    assert.equal(result.finding, "missing_dod_checklist");
+    assert.match(result.reason, /no Definition of done checklist/);
+    assert.equal(result._onlyEnforcedWhenDraft, true);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (DoD-only body) surfaces missing_ac_checklist", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const dodOnlyIssueBody = [
+      "## Definition of done", "", "- [ ] DoD1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: dodOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.finding, "missing_ac_checklist");
+    assert.match(result.reason, /no Acceptance criteria checklist/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferences keeps linked-issue behavior (regression)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
