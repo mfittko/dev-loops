@@ -95,10 +95,14 @@ const ACCEPTANCE_SECTION_PATTERNS = Object.freeze([
 ]);
 
 const DOD_SECTION_PATTERNS = Object.freeze([
-  // Same anchor-family widening as the AC family (see above).
+  // Same anchor-family widening as the AC family (see above). #1877 round-7:
+  // the ALIAS arms are widened symmetrically with the AC family too — a
+  // decorated-variant alias heading (`## DoD (v2)`, `## Done — core`) must land
+  // in the alias bucket, not in NO bucket (a `$`-anchored alias silently
+  // disarms the PR-side DoD read and false-blocks the issue side).
   /^definition of done\b.*$/i,
-  /^done\s*$/i,
-  /^dod\s*$/i,
+  /^done\b.*$/i,
+  /^dod\b.*$/i,
 ]);
 
 /**
@@ -111,8 +115,10 @@ const DOD_SECTION_PATTERNS = Object.freeze([
  * missing_refinement_artifact). Strip the harmless decoration once, at the
  * parse boundary, so exact-vs-alias precedence stays intact: a normalized
  * `Acceptance criteria` still matches the exact pattern, a decorated alias
- * still matches its alias family. Strips: surrounding `**`/`__` emphasis
- * runs, surrounding backtick runs, trailing `:` and surrounding whitespace.
+ * still matches its alias family. Strips: surrounding emphasis runs of any
+ * of `*`/`_` (bold `**`/`__` and single-char italic `*`/`_` alike, #1877
+ * round-7), surrounding backtick runs, trailing `:` and surrounding
+ * whitespace.
  * Deliberately NOT touched: interior text (a real `AC (v2) - final` name keeps
  * its interior), leading `#` (ATX markers never reach `match[2]`), and any
  * decoration a section pattern itself could rely on (none does — every family
@@ -124,9 +130,12 @@ function normalizeHeadingName(name) {
     // trailing decoration first: closing `##` ATX-style, colons, whitespace
     .replace(/\s*:*\s*$/u, "")
     .replace(/\s*#+\s*$/u, "")
-    // surrounding emphasis/backtick runs (any length, must pair)
-    .replace(/^(\*\*|__|`+)+/u, "")
-    .replace(/(\*\*|__|`+)+$/u, "")
+    // surrounding emphasis/backtick runs (any length, must pair; #1877
+    // round-7: a run may be single-char italic `*`/`_` as well as bold
+    // `**`/`__`, so `## *Acceptance criteria*` and `## _Definition of done_`
+    // normalize exactly like their bold forms)
+    .replace(/^[*_`]+/u, "")
+    .replace(/[*_`]+$/u, "")
     .trim();
 }
 
@@ -308,9 +317,13 @@ export function parseMarkdownSections(body) {
 
 /**
  * Parse bullet/checkbox items from a section body into item states. Each
- * checkbox item (`- [ ]`/`- [x]`/`- [X]`) becomes `{ text, checked }`
- * (`checked` true only for a ticked `[x]`/`[X]`); a top-level plain bullet
- * (`- text`, dash at column 0 so nested/indented sub-bullets are not counted)
+ * checkbox item — any GFM/CommonMark task-list marker: `-`/`*`/`+` bullets,
+ * ordered `N.`/`N)`, and blockquote-nested `> - [ ]` (#1877 round-6 grammar
+ * widening; parity with tick-verified-checkboxes.mjs's `[-*+]`) — becomes
+ * `{ text, checked }` (`checked` true only for a ticked `[x]`/`[X]` marker,
+ * read from the captured marker group, never a whole-line re-test); a
+ * top-level plain bullet (`- text`, dash at column 0 so nested/indented
+ * sub-bullets are not counted)
  * becomes `{ text, checked: null }` — it has no checkbox to tick. Empty
  * checkbox placeholders (`- [ ]` / `- [x]` with no trailing text) are skipped,
  * not counted, so a section of only unfilled placeholders reports as unrefined.
@@ -346,15 +359,22 @@ function parseChecklistItems(sectionBody) {
     // (parity with tick-verified-checkboxes.mjs's CHECKBOX_RE, which accepts
     // `[-*+]`). Consume ANY checkbox-marker line here; push only when it
     // carries text, so empty placeholders (`- [ ]`) are skipped rather than
-    // counted.
-    const checkboxMatch = /^\s*(?:>|\s)*(?:[-*+]|\d+[.)])\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
+    // counted. #1877 round-7: the tick state comes from the CAPTURED marker
+    // group of this single match — never a second whole-line re-test. An
+    // unanchored `/\[(?:[xX])\]/u.test(line)` reads an UNCHECKED box whose
+    // label text merely mentions `[x]` (e.g. `- [ ] verify [x] flags`) as
+    // checked, silently disarming the deterministic block — the exact
+    // fail-open class the marker-anchored pre-#1877 read could not produce.
+    const checkboxMatch =
+      /^\s*(?:>|\s)*(?:[-*+]|\d+[.)])\s+\[([ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
     if (checkboxMatch) {
-      const text = (checkboxMatch[1] ?? "").trim();
+      const text = (checkboxMatch[2] ?? "").trim();
       if (text.length > 0) {
-        // `checked` is true only for a ticked box; `[ ]` (space) is false.
+        // `checked` is true only for a ticked marker (`[x]`/`[X]`); a space
+        // marker (`[ ]`) is false — regardless of what the label text says.
         // A plain bullet has no checkbox, so it stays `null` below — it is
         // neither ticked nor unticked and does not count as an unticked AC.
-        items.push({ text, checked: /\[(?:[xX])\]/u.test(line) });
+        items.push({ text, checked: checkboxMatch[1] !== " " });
       }
       continue;
     }

@@ -916,3 +916,116 @@ test("#1877 round-6 malformed-input pin: extractPrBodyUncheckedChecklistItems gu
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: 42 }), { uncheckedAcItems: [], uncheckedDodItems: [] });
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({}), { uncheckedAcItems: [], uncheckedDodItems: [] });
 });
+
+// #1877 round-7 parser-hardening pins (draft_gate round-7 act list): the
+// round-6 fix's own residuals — marker-anchored checked-read (a label that
+// merely mentions `[x]` can never flip an unchecked box), single-char italic
+// heading emphasis, DoD alias-family symmetry, and the unpinned `N)`/nested-
+// blockquote marker forms. Fail arms reproduced against the round-6 head
+// dbc300e8 before this fix landed (an unchecked box labeled with a literal
+// `[x]` read as checked; `*…*`/`_…_` italic headings and `## DoD (v2)`-style
+// alias headings returned empty reads; `1)`/`> >` forms were unpinned).
+// ---------------------------------------------------------------------------
+
+test("#1877 round-7 marker-anchor pin: an UNCHECKED box whose label mentions a literal [x] is still unchecked", () => {
+  // Pre-fix (round-6 regression): `checked` was re-derived by testing the
+  // WHOLE line for `[x]`/`[X]`, so this box read as ticked and the unchecked
+  // box silently vanished from the deterministic block (fail-open).
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n- [ ] verify [x] flags\n" }),
+    { uncheckedAcItems: ["verify [x] flags"], uncheckedDodItems: [] },
+  );
+  // The mirrored DoD arm and the uppercase inline form.
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Definition of done\n\n- [ ] confirm [X] marks\n" }),
+    { uncheckedDodItems: ["confirm [X] marks"], uncheckedAcItems: [] },
+  );
+  // A genuinely ticked box still reads checked (marker group, not label).
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n- [x] done one (see [ ] empty)\n" }),
+    { uncheckedAcItems: [], uncheckedDodItems: [] },
+  );
+  // The #1621 unticked-AC read shares the marker-anchored state.
+  assert.deepEqual(
+    extractUncheckedChecklistItems("- [ ] label with [x] inside"),
+    ["label with [x] inside"],
+  );
+  assert.deepEqual(
+    extractUncheckedChecklistItems("- [x] label with [ ] inside"),
+    [],
+  );
+});
+
+test("#1877 round-7 grammar pins: the unpinned `N)` paren-ordered and nested `> >` blockquote forms surface unchecked boxes", () => {
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n1) [ ] paren ordered unchecked\n" }),
+    { uncheckedAcItems: ["paren ordered unchecked"], uncheckedDodItems: [] },
+  );
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n> > - [ ] nested blockquote unchecked\n" }),
+    { uncheckedAcItems: ["nested blockquote unchecked"], uncheckedDodItems: [] },
+  );
+});
+
+test("#1877 round-7 decorated-heading pin: single-char italic AC and DoD headings are recognized (PR side and issue side)", () => {
+  // Pre-fix: the stripper handled only `**`/`__`/backtick runs, so
+  // `## *Acceptance criteria*` and `## _Definition of done_` normalized
+  // unchanged and failed every pattern family (PR-side boxes invisible;
+  // issue-side full matrix false-blocked as missing_*_checklist).
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## *Acceptance criteria*\n\n- [ ] italic ac\n" }),
+    { uncheckedAcItems: ["italic ac"], uncheckedDodItems: [] },
+  );
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## _Definition of done_\n\n- [ ] italic dod\n" }),
+    { uncheckedDodItems: ["italic dod"], uncheckedAcItems: [] },
+  );
+  // Issue side: a full matrix under italic headings is a complete artifact.
+  const artifact = detectIssueRefinementArtifact({
+    body: [
+      "## *Acceptance criteria*", "",
+      "- [x] italic AC", "",
+      "## _Definition of done_", "",
+      "- [x] italic DoD", "",
+      "## Non-goals", "",
+      "- none",
+    ].join("\n"),
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.finding, null);
+  assert.deepEqual(artifact.acItems, ["italic AC"]);
+});
+
+test("#1877 round-7 DoD-alias-symmetry pin: decorated-variant DoD alias headings are recognized (PR side and issue side)", () => {
+  // Pre-fix: the AC family's alias arm was anchor-widened (`^ac\b.*$`) but the
+  // DoD aliases stayed `$`-anchored, so `## DoD (v2)` / `## Done — core`
+  // matched NO pattern family — an unchecked DoD box under them was invisible
+  // to the deterministic block (fail-open), and the issue side false-blocked
+  // a full matrix as missing_dod_checklist.
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## DoD (v2)\n\n- [ ] unchecked under alias\n" }),
+    { uncheckedDodItems: ["unchecked under alias"], uncheckedAcItems: [] },
+  );
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## DoD checklist\n\n- [ ] unchecked under alias checklist\n" }),
+    { uncheckedDodItems: ["unchecked under alias checklist"], uncheckedAcItems: [] },
+  );
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body: "## Done — core\n\n- [ ] unchecked under done alias\n" }),
+    { uncheckedDodItems: ["unchecked under done alias"], uncheckedAcItems: [] },
+  );
+  // Issue side: a full matrix under a decorated DoD alias heading is complete.
+  const artifact = detectIssueRefinementArtifact({
+    body: [
+      "## Acceptance criteria", "",
+      "- [x] AC one", "",
+      "## DoD (v2)", "",
+      "- [x] DoD one", "",
+      "## Non-goals", "",
+      "- none",
+    ].join("\n"),
+  });
+  assert.equal(artifact.hasACs, true);
+  assert.equal(artifact.finding, null);
+  assert.deepEqual(artifact.dodItems, ["DoD one"]);
+});
