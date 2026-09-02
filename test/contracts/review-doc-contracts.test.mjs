@@ -25,9 +25,10 @@ import { makeGhMock, resolverTestEnv, runNode, writeGhStub, initGitFixture } fro
 //   half A — the review pipeline entrypoint (write-gate-context.mjs --gate
 //   review, the first stage every /loop-review run executes) PROCEEDS on a
 //   foreign-owned PR and never resolves a viewer identity: makeGhMock answers
-//   ONLY the spec-of-record PR read and fails closed (exit 97) on any extra gh
-//   call, so wiring `gh api user` (or any viewer-identity read) into the review
-//   pipeline fails this test loudly.
+//   the spec-of-record PR read (plus any legitimate closing-issue reads) and
+//   fails closed (exit 97) on any extra unstubbed gh call, so wiring `gh api
+//   user` (or any viewer-identity read) into the review pipeline fails this
+//   test loudly.
 //
 //   half B — the write/merge startup route (resolve-dev-loop-startup.mjs
 //   --pr, the single-contributor ownership gate) on the SAME foreign-owned
@@ -73,13 +74,18 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
     );
     assert.ok(artifact, "review gate-context artifact written for the foreign-owned PR (the review route proceeded past ownership)");
 
-    // No viewer-identity resolution ever happened: the review half made exactly
-    // one gh call, the spec-of-record PR read — never `gh api user` (the
-    // ownership gate's mechanism). makeGhMock would have failed the run closed
-    // on any second call; this assertion pins that fact against the recorded
-    // calls so a future mock change cannot silently weaken the pin.
-    assert.equal(gh.calls.length, 1, `the review half must make exactly one gh call (the spec-of-record PR read), got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`);
-    assert.ok(gh.calls.every((call) => !call.args.includes("user") && call.args[0] !== "api"), `no gh api user call may occur in the review pipeline, got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`);
+    // No viewer-identity resolution ever happened: the review pipeline never
+    // calls `gh api user` — the ownership gate's mechanism — regardless of the
+    // PR's spec shape (a closing-issue fixture legitimately makes additional
+    // gh calls, e.g. viewIssue in resolvePrSpecContext, so the pin is on the
+    // viewer-identity read specifically, never on an exact call count; the
+    // coverage angle's round-3 finding). makeGhMock still fails closed on any
+    // UNSTUBBED gh call, so a wired-in ownership read would fail loudly even
+    // before this assertion.
+    assert.ok(
+      gh.calls.every((call) => !(call.args[0] === "api" && call.args[1] === "user")),
+      `no gh api user (viewer-identity) call may occur in the review pipeline, got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`,
+    );
   } finally {
     rmSync(reviewHalfRoot, { recursive: true, force: true });
   }
