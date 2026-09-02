@@ -9,6 +9,120 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { makeGhMock, resolverTestEnv, runNode, writeGhStub, initGitFixture } from "../_helpers.mjs";
+
+// Behavioral pin for the standalone review ownership exemption (issue #1893,
+// fixing the AC over-claim PR 1851 shipped: its "tests pin review on a
+// foreign-owned PR proceeds (no gate block); a fix/merge route on the same
+// foreign PR is still blocked" AC was backed only by the doc-grep test
+// "standalone review route stays structurally decoupled..." below). This test
+// drives the REAL routing/exemption logic with one foreign-owned PR fixture,
+// both halves in one test so the DIFFERENTIAL itself is the pinned contract:
+//
+//   half A — the review pipeline's Phase-1 entrypoint (write-gate-context.mjs
+//   --gate review, the first stage every /loop-review run executes) PROCEEDS
+//   on a foreign-owned PR and never resolves a viewer identity: makeGhMock
+//   answers the spec-of-record PR read (plus any legitimate closing-issue
+//   reads) and fails closed (exit 97) on any extra unstubbed gh call, so
+//   wiring `gh api user` (or any viewer-identity read) into write-gate-context
+//   fails this test loudly. (Phase 3 of the review pipeline — the verdict
+//   poster — DOES read `gh api user` for marker provenance; that is a
+//   different, exempt mechanism, NOT the ownership gate's.)
+//
+//   half B — the write/merge startup route (resolve-dev-loop-startup.mjs
+//   --pr, the single-contributor ownership gate) on the SAME foreign-owned
+//   fixture fails closed naming the foreign assignee.
+test("behavioral pin: review proceeds on a foreign-owned PR while the write/merge startup route is blocked (issue #1893, AC for PR 1851)", async () => {
+  const REPO = "mfittko/dev-loops";
+  const PR = 740;
+  const HEAD_SHA = "e0f1c2d3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9";
+  const FOREIGN_ASSIGNEE = "foreign-dev";
+
+  // ---- Half A: the review pipeline proceeds on the foreign-owned PR ----
+  const { main, readGateContext } = await import("../../scripts/github/write-gate-context.mjs");
+  const reviewHalfRoot = mkdtempSync(path.join(os.tmpdir(), "review-pin-1893-a-"));
+  try {
+    const gh = makeGhMock([
+      {
+        assertArgs: ["pr", "view", String(PR), "--json", "body,closingIssuesReferences"],
+        stdout: JSON.stringify({
+          body: "Foreign-owned fixture PR (assigned to foreign-dev, not the current viewer).",
+          closingIssuesReferences: [],
+        }),
+      },
+    ]);
+
+    const savedExitCode = process.exitCode;
+    try {
+      await main([
+        "--repo", REPO,
+        "--pr", String(PR),
+        "--gate", "review",
+        "--head-sha", HEAD_SHA,
+        "--silent",
+      ], { repoRoot: reviewHalfRoot, run: gh.runChild });
+    } finally {
+      process.exitCode = savedExitCode;
+    }
+
+    // The review gate-context artifact exists: the review route proceeded all
+    // the way through Phase 1 on a PR the viewer does not own.
+    const artifact = await readGateContext(
+      { repo: REPO, pr: PR, gate: "review", headSha: HEAD_SHA, tmpRoot: "tmp" },
+      { repoRoot: reviewHalfRoot },
+    );
+    assert.ok(artifact, "review gate-context artifact written for the foreign-owned PR (the review route proceeded past ownership)");
+
+    // No viewer-identity resolution ever happened in the pinned Phase-1
+    // surface: write-gate-context --gate review never calls `gh api user` —
+    // the ownership gate's mechanism — regardless of the PR's spec shape (a
+    // closing-issue fixture legitimately makes additional stubbed gh calls,
+    // e.g. viewIssue in resolvePrSpecContext, so the pin is on the
+    // viewer-identity read specifically, never on an exact call count; the
+    // coverage angle's round-3 finding). makeGhMock still fails closed on any
+    // UNSTUBBED gh call, so a wired-in ownership read would fail loudly even
+    // before this assertion. (Phase 3's marker-provenance `api user` read in
+    // the verdict poster is a different, exempt mechanism, not pinned here.)
+    assert.ok(
+      gh.calls.every((call) => !(call.args[0] === "api" && call.args[1] === "user")),
+      `no gh api user (viewer-identity) call may occur in write-gate-context --gate review, got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`,
+    );
+  } finally {
+    rmSync(reviewHalfRoot, { recursive: true, force: true });
+  }
+
+  // ---- Half B: the write/merge startup route blocks on the SAME fixture ----
+  const resolverHalfRoot = mkdtempSync(path.join(os.tmpdir(), "review-pin-1893-b-"));
+  try {
+    // initGitFixture (not a bare execFileSync git init): it hardens the git
+    // calls against an ambient GIT_DIR/GIT_WORK_TREE redirect (the hazard its
+    // own JSDoc documents) and persists a repo-local identity — the
+    // determinism angle's finding (draft_gate round 2).
+    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, commit: null });
+    const ghStub = await writeGhStub(resolverHalfRoot, [
+      {
+        assertArgs: ["pr", "view", String(PR)],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: FOREIGN_ASSIGNEE }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+
+    const result = await runNode(path.resolve("scripts/loop/resolve-dev-loop-startup.mjs"), ["--pr", String(PR)], {
+      cwd: resolverHalfRoot,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+
+    assert.equal(result.code, 1, `the write/merge startup route must exit 1 on the foreign-owned PR (got exit ${result.code}; stdout: ${result.stdout})`);
+    assert.equal(result.stdout, "", "no readiness bundle may be emitted for a foreign-owned PR");
+    assert.match(result.stderr, new RegExp(`PR #${PR} is assigned to ${FOREIGN_ASSIGNEE}, not the current viewer`));
+    assert.match(result.stderr, /fail closed/);
+  } finally {
+    rmSync(resolverHalfRoot, { recursive: true, force: true });
+  }
+});
 
 test("copilot skill does not contain known imported blocker phrases", async () => {
   const content = await readRepo("skills/copilot-pr-followup/SKILL.md");
@@ -185,6 +299,12 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
 });
 
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
+  // Prose/structure companion to the behavioral pin above ("behavioral pin:
+  // review proceeds on a foreign-owned PR...", issue #1893): that test drives
+  // the actual routing/exemption logic on a foreign-owned PR fixture — the
+  // differential AC PR 1851 originally claimed — while THIS test pins the
+  // decoupling's doc/structure surface so the exemption's mechanism stays
+  // documented and structurally unreachable from the review pipeline.
   const [devLoopSkill, reviewSkill, publicContract, writeGateContextSrc, consolidateFaninSrc, upsertVerdictSrc] = await Promise.all([
     readRepo("skills/dev-loop/SKILL.md"),
     readRepo("skills/review/SKILL.md"),
