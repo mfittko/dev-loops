@@ -9,11 +9,10 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeGhMock, resolverTestEnv, runNode, writeGhStub } from "../_helpers.mjs";
+import { makeGhMock, resolverTestEnv, runNode, writeGhStub, initGitFixture } from "../_helpers.mjs";
 
 // Behavioral pin for the standalone review ownership exemption (issue #1893,
 // fixing the AC over-claim PR 1851 shipped: its "tests pin review on a
@@ -88,8 +87,11 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
   // ---- Half B: the write/merge startup route blocks on the SAME fixture ----
   const resolverHalfRoot = mkdtempSync(path.join(os.tmpdir(), "review-pin-1893-b-"));
   try {
-    execFileSync("git", ["init"], { cwd: resolverHalfRoot, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", `git@github.com:${REPO}.git`], { cwd: resolverHalfRoot, stdio: "ignore" });
+    // initGitFixture (not a bare execFileSync git init): it hardens the git
+    // calls against an ambient GIT_DIR/GIT_WORK_TREE redirect (the hazard its
+    // own JSDoc documents) and persists a repo-local identity — the
+    // determinism angle's finding (draft_gate round 2).
+    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, commit: null });
     const ghStub = await writeGhStub(resolverHalfRoot, [
       {
         assertArgs: ["pr", "view", String(PR)],
