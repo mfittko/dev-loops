@@ -96,9 +96,11 @@ repeat phases those gates run:
      an `AskUserQuestion` multiple choice (mirroring `/loop-grill`'s
      interactive pattern, `skills/loop-grill/SKILL.md`):
      - **Leave pending (default)** — print the PR review URL and how to
-       finish it (open the URL, or re-invoke with `--submit
-       comment`/`approve`/`request-changes` — see the option below); warn it
-       stays invisible to other reviewers until submitted.
+       finish it (open the URL, or re-invoke with `--submit comment`, or
+       `--submit approve --interactive-confirm`/`--submit
+       request-changes --interactive-confirm` for a human-confirmed submit
+       — see the option below); warn it stays invisible to other reviewers
+       until submitted.
      - **Submit as Comment** — re-run `upsert-checkpoint-verdict.mjs --gate
        review --submit comment` for the SAME round (do not re-fan-out).
      - **Submit as Request-changes** — same re-run with `--submit

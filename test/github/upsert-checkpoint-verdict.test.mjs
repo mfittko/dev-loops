@@ -6385,6 +6385,20 @@ test("parseUpsertCheckpointVerdictCliArgs: --submit approve --auto is still refu
   }
 });
 
+test("parseUpsertCheckpointVerdictCliArgs: --interactive-confirm=false does NOT confirm (fail-safe value parse, #1888)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  // An explicit falsy value must not confirm: approve still requires the token.
+  for (const value of ["false", "0", "no"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", `--interactive-confirm=${value}`]),
+      /--submit approve\|request-changes requires --interactive-confirm/is,
+    );
+  }
+  // The bare flag and `=true` still confirm.
+  assert.equal(parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", "--interactive-confirm"]).interactiveConfirm, true);
+  assert.equal(parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", "--interactive-confirm=true"]).interactiveConfirm, true);
+});
+
 test("parseUpsertCheckpointVerdictCliArgs: the interactive path is unchanged — --interactive-confirm reaches approve/request-changes (#1888 AC-3)", () => {
   const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
   for (const submit of ["approve", "request-changes"]) {
@@ -6400,7 +6414,7 @@ test("parseUpsertCheckpointVerdictCliArgs: the interactive path is unchanged —
   }
 });
 
-test("upsertCheckpointVerdict runtime: --gate review --submit approve without interactiveConfirm is refused (structural, direct-call safety hole closed)", async () => {
+test("upsertCheckpointVerdict runtime: --gate review --submit approve|request-changes without interactiveConfirm is refused (direct callers cannot bypass)", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
     const entries = [...reviewGateFindingSurfaceEntries({ files: null })];
@@ -6424,6 +6438,34 @@ test("upsertCheckpointVerdict runtime: --gate review --submit approve without in
     const postCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
     assert.equal(postCalls.length, 0);
   }, { prefix: "dev-loops-upsert-review-no-token-" });
+});
+
+test("upsertCheckpointVerdict runtime: --gate review --submit approve|request-changes with auto: true is refused even with interactiveConfirm (the token is not a runtime --auto bypass)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [...reviewGateFindingSurfaceEntries({ files: null })];
+    const { runChild, calls } = makeGhMock(entries);
+    for (const submit of ["approve", "request-changes"]) {
+      await assert.rejects(
+        upsertCheckpointVerdict({
+          repo: "owner/repo",
+          pr: 17,
+          gate: "review",
+          headSha: SINGLE_SURFACE_HEAD,
+          nextAction: "none — informational review, no re-gate required",
+          findingsLedger: ledgerPath,
+          executionMode: "fanout_fanin",
+          submit,
+          auto: true,
+          interactiveConfirm: true,
+        }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+        /not allowed with --auto/is,
+      );
+    }
+    // No review POST ever reached GitHub.
+    const postCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.equal(postCalls.length, 0);
+  }, { prefix: "dev-loops-upsert-review-runtime-auto-" });
 });
 
 test("upsertCheckpointVerdict runtime: --gate review --submit approve WITH interactiveConfirm still posts the APPROVE event (interactive path unchanged)", async () => {
