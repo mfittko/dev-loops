@@ -287,6 +287,12 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
 });
 
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
+  // Prose/structure companion to the behavioral pin above ("behavioral pin:
+  // review proceeds on a foreign-owned PR...", issue #1893): that test drives
+  // the actual routing/exemption logic on a foreign-owned PR fixture — the
+  // differential AC PR 1851 originally claimed — while THIS test pins the
+  // decoupling's doc/structure surface so the exemption's mechanism stays
+  // documented and structurally unreachable from the review pipeline.
   const [devLoopSkill, reviewSkill, publicContract, writeGateContextSrc, consolidateFaninSrc, upsertVerdictSrc] = await Promise.all([
     readRepo("skills/dev-loop/SKILL.md"),
     readRepo("skills/review/SKILL.md"),
