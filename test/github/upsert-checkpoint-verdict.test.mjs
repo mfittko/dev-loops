@@ -6394,6 +6394,26 @@ test("parseUpsertCheckpointVerdictCliArgs: --interactive-confirm=false does NOT 
       /--submit approve\|request-changes requires --interactive-confirm/is,
     );
   }
+  // The falsy set is case-insensitive (pins the regex `i` flag, #1888 round 2).
+  for (const value of ["FALSE", "No"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", `--interactive-confirm=${value}`]),
+      /--submit approve\|request-changes requires --interactive-confirm/is,
+    );
+  }
+  assert.throws(
+    () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", "--interactive-confirm=FALSE"]),
+    /--submit approve\|request-changes requires --interactive-confirm/is,
+  );
+  // An EMPTY/whitespace-only inline value must NOT confirm either
+  // (#1888 round 2: the `--flag=$VAR` unset-expansion shape fail-opens
+  // without this — an absent value never confirms).
+  for (const value of ["", "   "]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", `--interactive-confirm=${value}`]),
+      /--submit approve\|request-changes requires --interactive-confirm/is,
+    );
+  }
   // The bare flag and `=true` still confirm.
   assert.equal(parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", "--interactive-confirm"]).interactiveConfirm, true);
   assert.equal(parseUpsertCheckpointVerdictCliArgs([...base, "--submit", "approve", "--interactive-confirm=true"]).interactiveConfirm, true);

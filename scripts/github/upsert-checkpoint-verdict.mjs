@@ -698,9 +698,13 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     }
     if (token.name === "interactive-confirm") {
       // Bare flag or `=true` confirms; an explicit `=false`/`=0`/`=no` must
-      // NOT confirm (fail-safe — same shape as ui-review-teardown.mjs's
+      // NOT confirm, and neither must an EMPTY/whitespace-only value
+      // (`--interactive-confirm=` — the common `--flag=$VAR` unset-expansion
+      // shape, #1888 round 2: fail-closed means an absent value never
+      // confirms; fail-safe — same shape as ui-review-teardown.mjs's
       // --confirm: destructives stay gated unless truly asked).
-      options.interactiveConfirm = token.value === undefined || !/^(false|0|no)$/iu.test(token.value.trim());
+      const confirmValue = token.value === undefined ? undefined : token.value.trim();
+      options.interactiveConfirm = confirmValue === undefined || (confirmValue !== "" && !/^(false|0|no)$/iu.test(confirmValue));
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
