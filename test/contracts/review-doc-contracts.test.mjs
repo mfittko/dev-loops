@@ -22,13 +22,15 @@ import { makeGhMock, resolverTestEnv, runNode, writeGhStub, initGitFixture } fro
 // drives the REAL routing/exemption logic with one foreign-owned PR fixture,
 // both halves in one test so the DIFFERENTIAL itself is the pinned contract:
 //
-//   half A — the review pipeline entrypoint (write-gate-context.mjs --gate
-//   review, the first stage every /loop-review run executes) PROCEEDS on a
-//   foreign-owned PR and never resolves a viewer identity: makeGhMock answers
-//   the spec-of-record PR read (plus any legitimate closing-issue reads) and
-//   fails closed (exit 97) on any extra unstubbed gh call, so wiring `gh api
-//   user` (or any viewer-identity read) into the review pipeline fails this
-//   test loudly.
+//   half A — the review pipeline's Phase-1 entrypoint (write-gate-context.mjs
+//   --gate review, the first stage every /loop-review run executes) PROCEEDS
+//   on a foreign-owned PR and never resolves a viewer identity: makeGhMock
+//   answers the spec-of-record PR read (plus any legitimate closing-issue
+//   reads) and fails closed (exit 97) on any extra unstubbed gh call, so
+//   wiring `gh api user` (or any viewer-identity read) into write-gate-context
+//   fails this test loudly. (Phase 3 of the review pipeline — the verdict
+//   poster — DOES read `gh api user` for marker provenance; that is a
+//   different, exempt mechanism, NOT the ownership gate's.)
 //
 //   half B — the write/merge startup route (resolve-dev-loop-startup.mjs
 //   --pr, the single-contributor ownership gate) on the SAME foreign-owned
@@ -74,17 +76,19 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
     );
     assert.ok(artifact, "review gate-context artifact written for the foreign-owned PR (the review route proceeded past ownership)");
 
-    // No viewer-identity resolution ever happened: the review pipeline never
-    // calls `gh api user` — the ownership gate's mechanism — regardless of the
-    // PR's spec shape (a closing-issue fixture legitimately makes additional
-    // gh calls, e.g. viewIssue in resolvePrSpecContext, so the pin is on the
+    // No viewer-identity resolution ever happened in the pinned Phase-1
+    // surface: write-gate-context --gate review never calls `gh api user` —
+    // the ownership gate's mechanism — regardless of the PR's spec shape (a
+    // closing-issue fixture legitimately makes additional stubbed gh calls,
+    // e.g. viewIssue in resolvePrSpecContext, so the pin is on the
     // viewer-identity read specifically, never on an exact call count; the
     // coverage angle's round-3 finding). makeGhMock still fails closed on any
     // UNSTUBBED gh call, so a wired-in ownership read would fail loudly even
-    // before this assertion.
+    // before this assertion. (Phase 3's marker-provenance `api user` read in
+    // the verdict poster is a different, exempt mechanism, not pinned here.)
     assert.ok(
       gh.calls.every((call) => !(call.args[0] === "api" && call.args[1] === "user")),
-      `no gh api user (viewer-identity) call may occur in the review pipeline, got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`,
+      `no gh api user (viewer-identity) call may occur in write-gate-context --gate review, got: ${JSON.stringify(gh.calls.map((c) => c.args.join(" ")))}`,
     );
   } finally {
     rmSync(reviewHalfRoot, { recursive: true, force: true });
