@@ -6338,13 +6338,123 @@ test("parseUpsertCheckpointVerdictCliArgs: --auto refuses --submit approve/reque
     assert.equal(parsed.submit, submit);
     assert.equal(parsed.auto, true);
   }
-  // approve/request-changes ARE reachable without --auto (the interactive path).
+  // approve/request-changes are NOT reachable merely by omitting --auto (#1888):
+  // a headless caller that omits --auto is exactly the safety hole this issue
+  // closes — the omission proves nothing. They are reachable only with the
+  // explicit interactive-confirmation token.
   for (const submit of ["approve", "request-changes"]) {
     const interactiveBase = base.filter((token) => token !== "--auto");
-    const parsed = parseUpsertCheckpointVerdictCliArgs([...interactiveBase, "--submit", submit]);
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...interactiveBase, "--submit", submit]),
+      /requires --interactive-confirm.*fail closed/is,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1888 — fail closed on --submit approve/request-changes unless PROVABLY
+// interactive: the absence of --auto is not proof of interactivity (a headless
+// caller can simply omit the flag), so approve/request-changes now require the
+// explicit --interactive-confirm token, both at CLI parse time and in the
+// direct upsertCheckpointVerdict() runtime entry (structural enforcement, not
+// a caller self-identification honor system).
+// ---------------------------------------------------------------------------
+
+test("parseUpsertCheckpointVerdictCliArgs: --submit approve without --interactive-confirm is refused even with no --auto (#1888 AC-1)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  for (const submit of ["approve", "request-changes"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit]),
+      /--submit approve\|request-changes requires --interactive-confirm/is,
+    );
+  }
+});
+
+test("parseUpsertCheckpointVerdictCliArgs: --submit approve --auto is still refused — --auto is not a license, and its absence is not proof (#1888 AC-2)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin", "--auto"];
+  for (const submit of ["approve", "request-changes"]) {
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit]),
+      /not allowed with --auto/is,
+    );
+    // The token is deliberately NOT a --auto bypass: --auto still refuses.
+    assert.throws(
+      () => parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit, "--interactive-confirm"]),
+      /not allowed with --auto/is,
+    );
+  }
+});
+
+test("parseUpsertCheckpointVerdictCliArgs: the interactive path is unchanged — --interactive-confirm reaches approve/request-changes (#1888 AC-3)", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  for (const submit of ["approve", "request-changes"]) {
+    const parsed = parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit, "--interactive-confirm"]);
     assert.equal(parsed.submit, submit);
+    assert.equal(parsed.interactiveConfirm, true);
     assert.equal(parsed.auto, false);
   }
+  // pending/comment still need no token (the headless-safe modes are unchanged).
+  for (const submit of ["pending", "comment"]) {
+    const parsed = parseUpsertCheckpointVerdictCliArgs([...base, "--submit", submit]);
+    assert.equal(parsed.submit, submit);
+  }
+});
+
+test("upsertCheckpointVerdict runtime: --gate review --submit approve without interactiveConfirm is refused (structural, direct-call safety hole closed)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [...reviewGateFindingSurfaceEntries({ files: null })];
+    const { runChild, calls } = makeGhMock(entries);
+    for (const submit of ["approve", "request-changes"]) {
+      await assert.rejects(
+        upsertCheckpointVerdict({
+          repo: "owner/repo",
+          pr: 17,
+          gate: "review",
+          headSha: SINGLE_SURFACE_HEAD,
+          nextAction: "none — informational review, no re-gate required",
+          findingsLedger: ledgerPath,
+          executionMode: "fanout_fanin",
+          submit,
+        }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+        /--submit approve\|request-changes requires --interactive-confirm/is,
+      );
+    }
+    // No review POST ever reached GitHub.
+    const postCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.equal(postCalls.length, 0);
+  }, { prefix: "dev-loops-upsert-review-no-token-" });
+});
+
+test("upsertCheckpointVerdict runtime: --gate review --submit approve WITH interactiveConfirm still posts the APPROVE event (interactive path unchanged)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":952,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-952"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "approve",
+      interactiveConfirm: true,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.submit, "approve");
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const postedPayload = JSON.parse(postCall.stdinText);
+    assert.equal(postedPayload.event, "APPROVE");
+  }, { prefix: "dev-loops-upsert-review-token-approve-" });
 });
 
 for (const { submit, expectedEvent, label } of [
@@ -6372,6 +6482,10 @@ for (const { submit, expectedEvent, label } of [
         nextAction: "none — informational review, no re-gate required",
         findingsLedger: ledgerPath,
         executionMode: "fanout_fanin",
+        // #1888: approve/request-changes carry the interactive-confirmation
+        // token exactly as the review skill's interactive submit choice does;
+        // pending/comment need no token.
+        ...((submit === "approve" || submit === "request-changes") ? { interactiveConfirm: true } : {}),
         ...(submit !== undefined ? { submit } : {}),
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 

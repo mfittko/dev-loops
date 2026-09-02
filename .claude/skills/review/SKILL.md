@@ -84,7 +84,9 @@ repeat phases those gates run:
    coordination-context read, no auto-resolve, no forbidden-action check
    (those are draft/pre-approval-only machinery `review` never touches). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
-   for the `--submit` vocabulary.
+   for the `--submit` vocabulary. `approve`/`request-changes` additionally
+   REQUIRE `--interactive-confirm` (#1888) — fail closed unless provably
+   interactive, so omitting `--auto` is not a license for a headless caller.
 5. **Phase 4 — submit choice.**
    - **Interactive run:** the review was posted `--submit pending` — an
      author-only draft, invisible to other reviewers until submitted. Present
@@ -97,10 +99,13 @@ repeat phases those gates run:
      - **Submit as Comment** — re-run `upsert-checkpoint-verdict.mjs --gate
        review --submit comment` for the SAME round (do not re-fan-out).
      - **Submit as Request-changes** — same re-run with `--submit
-       request-changes`. State inline: this is a GitHub-native review event
-       that can BLOCK merge (branch protection) until dismissed, independent
-       of any dev-loops gate.
-     - **Submit as Approve** — same re-run with `--submit approve`. State
+       request-changes --interactive-confirm` (#1888: the token records that
+       a human made this choice in this prompt). State inline: this is a
+       GitHub-native review event that can BLOCK merge (branch protection)
+       until dismissed, independent of any dev-loops gate.
+     - **Submit as Approve** — same re-run with `--submit approve
+       --interactive-confirm` (#1888: the token records that a human made
+       this choice in this prompt). State
        inline: this is a GitHub-native review event that SATISFIES a
        required-approvals branch-protection rule, independent of any
        dev-loops gate — it never satisfies `draft_gate`/`pre_approval_gate`
@@ -151,7 +156,10 @@ toward GitHub branch protection (satisfying a required-approvals rule) — that
 is expected and separate, and is exactly why headless `--auto` review runs
 are refused `--submit approve`/`--submit request-changes` (see
 [`--submit`](#interface) above); only a deliberate interactive choice reaches
-those two events.
+those two events. Since #1888 that guarantee is structural, not caller-
+self-identified: `approve`/`request-changes` fail closed without
+`--interactive-confirm` (and still refuse `--auto` even with it), so a
+headless caller cannot reach them by merely omitting `--auto`.
 
 ## Non-goals
 

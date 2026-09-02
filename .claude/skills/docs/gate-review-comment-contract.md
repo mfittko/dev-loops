@@ -121,6 +121,16 @@ approve`/`--submit request-changes` are REFUSED headless, so automation can
 never auto-approve or auto-block a PR; they are reachable only through the
 [Review skill](../review/SKILL.md)'s interactive multiple-choice submit step.
 
+Since #1888 that guarantee is STRUCTURAL, not caller self-identification:
+the absence of `--auto` proves nothing (a headless caller can simply omit
+the flag), so `approve`/`request-changes` additionally REQUIRE the explicit
+`--interactive-confirm` token — passed only by the review skill's
+interactive submit step after a human made the choice — and are REFUSED
+without it, both at CLI parse time and in the `upsertCheckpointVerdict()`
+runtime entry (direct callers cannot bypass the CLI parser). `--auto` still
+refuses those modes even WITH the token. Headless/agent callers may use
+`--submit pending` or `--submit comment`.
+
 Every submit mode — including `approve` — stays a NON-evidence `review`
 verdict for dev-loops gates: the authoritative-`review`-header guard above
 reads only the comment body, never the review's `event`/`state`, so
