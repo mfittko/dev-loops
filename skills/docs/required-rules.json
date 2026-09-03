@@ -538,6 +538,10 @@
       "id": "RETRO-GATE-FAIL-CLOSED"
     },
     {
+      "id": "REVIEW-GATE-VERDICT-CANONICAL",
+      "enforcement": "doc"
+    },
+    {
       "id": "REVIEWER-BOUNDARY-CONTRACT"
     },
     {
