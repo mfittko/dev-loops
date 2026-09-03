@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
   MEDIUM_FIX_WINDOW,
@@ -74,7 +74,8 @@ Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
     "deferredResolved": <disposition reply+resolve count>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585)>,
-    "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present only when this pass deferred at least one thread (#1807)> }
+    "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present only when this pass deferred at least one thread (#1807)>,
+    "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -176,8 +177,9 @@ function windowReason(severity, mediumFixWindow) {
 // GitHub issue (never only the thread marker and the ephemeral tmp ledger).
 // Only ever called for a FILEABLE target (isFileableDeferral true) — see
 // unfiledResolutionMessage below for the nit / non-operator-visible-low reply.
-function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber }) {
-  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
+function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber, body, operatorVisible }) {
+  const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
+  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
 }
 
 // #1846 net-reduction filing bar: the reply for a thread that is RESOLVED
@@ -193,8 +195,39 @@ function unfiledResolutionReason(severity) {
   return "this low finding carries no operator-visibility signal, so it is resolved with rationale at gate close instead of filed to a tracked follow-up issue (net-reduction disposition policy)";
 }
 
-function unfiledResolutionMessage({ fp, severity, angle, round }) {
-  return `Resolved at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${unfiledResolutionReason(severity)}.`;
+// A severity/round rule only selects an eligible disposition boundary; it is
+// not a per-finding reason to close. Require the rendered finding summary so
+// every resolve-without-fix reply records what was examined, rather than a
+// bare "low -> defer"/"nit -> resolve" label (#1882).
+function extractFindingSummary(body) {
+  const match = typeof body === "string"
+    ? body.match(/^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):\s+(.+)$/mu)
+    : null;
+  const summary = match?.[1]?.replace(/\s+— judge:.*$/u, "").trim();
+  if (!summary) {
+    throw new Error("GATE-EXEC-THREAD-DISPOSITION violation: selected finding has no parseable finding summary; refuse severity-only closure");
+  }
+  return summary;
+}
+
+export function buildMeritRationale({ body, severity, operatorVisible = false, round, mediumFixWindow }) {
+  // Collapse any embedded double quote to a single quote: the summary is wrapped
+  // in literal double quotes below, and sanitizeInline does not escape `"`, so an
+  // embedded one would render as confusing nested quotes (no injection risk).
+  const summary = sanitizeInline(extractFindingSummary(body)).replace(/"/g, "'");
+  const reason = severity === "medium"
+    ? `it remained open past the round-${mediumFixWindow} fix window and no in-scope fix was selected`
+    : severity === "low" && operatorVisible
+      ? "fixer triage found no same-commit fix warranted, while tracking preserves the operator-visible concern"
+      : severity === "low"
+        ? "fixer triage found no same-commit fix warranted and the finding does not clear the operator-visibility filing bar"
+        : "it is cosmetic and does not warrant a fixer cycle or tracked follow-up";
+  return `Examined on merits: \"${summary}\" was reviewed against current scope and acceptance criteria; ${reason}.`;
+}
+
+function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVisible, mediumFixWindow }) {
+  const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
+  return `Resolved at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${unfiledResolutionReason(severity)}.`;
 }
 
 // Every currently-unresolved gate-authored thread, whether newly posted this
@@ -242,6 +275,7 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow) {
       // that clears the net-reduction bar).
       operatorVisible: marker.operatorVisible === true,
       alreadyStamped: marker.disposition === "deferred",
+      body: thread.body,
     });
   }
   return targets;
@@ -348,58 +382,108 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
   // batch creates NO follow-up issue, even when the PR already has one from an
   // earlier round's fileable deferral (nothing here appends to it).
   let issueNumber;
+  let fileableResolved = 0;
+  let unfiledResolved = 0;
+  // #1882: build (and thereby validate) every reply BEFORE any mutating GitHub
+  // call. buildMeritRationale throws on a malformed/off-shape thread body; if
+  // that throw happened AFTER stampDeferredDisposition's PATCH (or after the
+  // follow-up-issue append), the target would be left stamped-but-unresolved and
+  // deadlock every retry, and the uncaught throw would abort disposition for the
+  // rest of the batch. A target whose reply cannot be built (or whose GitHub
+  // reply/resolve later fails) is recorded in dispositionFailures and skipped; it
+  // stays unresolved, so the gate-close assertion keeps blocking until it is
+  // repaired, but one bad body never blocks the other well-formed threads.
+  const dispositionFailures = [];
+  const recordFailure = (target, err) => {
+    dispositionFailures.push({
+      commentId: target.commentId,
+      threadId: target.threadId,
+      severity: target.severity,
+      angle: target.angle,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  };
   if (fileableTargets.length > 0) {
-    // #1807: ONE tracked follow-up issue per PR for the whole batch of
-    // FILEABLE targets this pass defers — reuse an existing one (found on an
-    // earlier round's stamped marker) rather than mint a duplicate.
-    const existingIssueNumber = findExistingFollowUpIssueNumber(threads, login);
-    // Idempotency (Copilot review, PR #1809): a target already stamped
-    // `disposition=deferred issue=<n>` on a PRIOR (interrupted) run of this
-    // pass was already recorded on the follow-up issue — appending it again
-    // here would duplicate the "additional finding(s)" comment on every retry.
-    // Only targets NOT yet stamped still need to reach the follow-up issue;
-    // an already-stamped target still needs its reply+resolve below (that is
-    // exactly the retry gap: the stamp landed, the resolve did not), but never
-    // a second append.
-    const unstampedFileable = fileableTargets.filter((target) => !target.alreadyStamped);
-    issueNumber = existingIssueNumber;
-    if (unstampedFileable.length > 0) {
-      const entries = unstampedFileable.map((target) => ({
-        fingerprint: target.fp,
-        severity: target.severity,
-        angle: target.angle,
-        refUrl: `https://github.com/${repo}/pull/${pr}#discussion_r${target.commentId}`,
-      }));
-      ({ issueNumber } = await ensureFollowUpIssue(
-        { repo, pr, entries, existingIssueNumber },
-        { env, ghCommand },
-      ));
-    }
-    // A pure retry (every fileable target already stamped) must always
-    // resolve to the existing issue found on the threads' own markers — the
-    // guard in stampDeferredDisposition below fails closed if this is ever
-    // null/mismatched.
+    // Partition off any fileable target whose merit rationale cannot be built —
+    // BEFORE the follow-up-issue append, so an unresolvable target is never
+    // recorded on the follow-up issue it can never be replied against (#1882).
+    const buildableFileable = [];
     for (const target of fileableTargets) {
-      await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });
-      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber });
-      await replyAndMaybeResolve(
-        { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
-        { env, ghCommand },
-      );
+      try {
+        buildMeritRationale({ body: target.body, severity: target.severity, operatorVisible: target.operatorVisible, round, mediumFixWindow });
+        buildableFileable.push(target);
+      } catch (err) {
+        recordFailure(target, err);
+      }
+    }
+    if (buildableFileable.length > 0) {
+      // #1807: ONE tracked follow-up issue per PR for the whole batch of
+      // FILEABLE targets this pass defers — reuse an existing one (found on an
+      // earlier round's stamped marker) rather than mint a duplicate.
+      const existingIssueNumber = findExistingFollowUpIssueNumber(threads, login);
+      // Idempotency (Copilot review, PR #1809): a target already stamped
+      // `disposition=deferred issue=<n>` on a PRIOR (interrupted) run of this
+      // pass was already recorded on the follow-up issue — appending it again
+      // here would duplicate the "additional finding(s)" comment on every retry.
+      // Only targets NOT yet stamped still need to reach the follow-up issue;
+      // an already-stamped target still needs its reply+resolve below (that is
+      // exactly the retry gap: the stamp landed, the resolve did not), but never
+      // a second append.
+      const unstampedFileable = buildableFileable.filter((target) => !target.alreadyStamped);
+      issueNumber = existingIssueNumber;
+      if (unstampedFileable.length > 0) {
+        const entries = unstampedFileable.map((target) => ({
+          fingerprint: target.fp,
+          severity: target.severity,
+          angle: target.angle,
+          refUrl: `https://github.com/${repo}/pull/${pr}#discussion_r${target.commentId}`,
+        }));
+        ({ issueNumber } = await ensureFollowUpIssue(
+          { repo, pr, entries, existingIssueNumber },
+          { env, ghCommand },
+        ));
+      }
+      // A pure retry (every fileable target already stamped) must always
+      // resolve to the existing issue found on the threads' own markers — the
+      // guard in stampDeferredDisposition below fails closed if this is ever
+      // null/mismatched. The message is (re)built first inside the try, so a
+      // per-target failure never lands a stamp without its reply.
+      for (const target of buildableFileable) {
+        try {
+          const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
+          await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });
+          await replyAndMaybeResolve(
+            { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
+            { env, ghCommand },
+          );
+          fileableResolved += 1;
+        } catch (err) {
+          recordFailure(target, err);
+        }
+      }
     }
   }
   // #1846: a nit or a non-operator-visible low is resolved-with-rationale
   // in-thread — no GET/PATCH round-trip (there is nothing to stamp: the
   // marker's disposition field stays absent), no follow-up issue.
   for (const target of unfiledTargets) {
-    const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round });
-    await replyAndMaybeResolve(
-      { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
-      { env, ghCommand },
-    );
+    try {
+      const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, body: target.body, operatorVisible: target.operatorVisible, mediumFixWindow });
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
+        { env, ghCommand },
+      );
+      unfiledResolved += 1;
+    } catch (err) {
+      recordFailure(target, err);
+    }
   }
-  const deferredResolved = fileableTargets.length + unfiledTargets.length;
-  return issueNumber !== undefined ? { deferredResolved, followUpIssueNumber: issueNumber } : { deferredResolved };
+  const deferredResolved = fileableResolved + unfiledResolved;
+  const result = issueNumber !== undefined ? { deferredResolved, followUpIssueNumber: issueNumber } : { deferredResolved };
+  if (dispositionFailures.length > 0) {
+    result.dispositionFailures = dispositionFailures;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +577,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // earlier round must be reconciled against THIS round regardless of whether
   // this round posted anything of its own.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
-  const { deferredResolved, followUpIssueNumber } = await runDispositionPass(
+  const { deferredResolved, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
     { repo, pr, round, threads, snapshot, login, mediumFixWindow },
     gh,
   );
@@ -510,8 +594,10 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses to
   // mark ready while this is non-zero, so a clean verdict can never again leave
   // a gate-authored thread dangling. Computed in-memory from the pre-defer
-  // snapshot (runDispositionPass throws if any target's resolve failed, so
-  // deferredResolved is exact) — no second thread walk.
+  // snapshot: deferredResolved counts only the targets runDispositionPass
+  // actually replied+resolved this pass (a per-target build/reply failure is
+  // recorded in dispositionFailures and left unresolved, so it stays counted
+  // here rather than deadlocking the batch — #1882) — no second thread walk.
   // `threads` is the PRE-DEFER snapshot fetched above (fetchThreadsWithFullBodies);
   // runDispositionPass resolves threads via the GitHub API but does NOT mutate this
   // in-memory array's `isResolved` flags, so the pre-defer count minus the resolved
@@ -525,6 +611,12 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // with nothing to defer creates no follow-up issue and reports none.
   if (followUpIssueNumber !== undefined) {
     result.followUpIssueNumber = followUpIssueNumber;
+  }
+  // #1882: surface any target whose reply could not be built/posted this pass,
+  // so a malformed thread body is diagnosable instead of silently swallowed
+  // (it also keeps unresolvedGateThreadCount non-zero, blocking gate close).
+  if (dispositionFailures !== undefined) {
+    result.dispositionFailures = dispositionFailures;
   }
   return result;
 }

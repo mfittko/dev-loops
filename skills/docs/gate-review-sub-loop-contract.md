@@ -1340,7 +1340,11 @@ Consolidation:
 - classify each finding: `high`, `medium`, `low` (defects), or `question`/`nit`
   (non-defects) — severity is the reviewer's advisory weight only; deferral is a
   DISPOSITION — derived at fan-in for non-blocking findings, finalized per thread by the
-  fix cycle / gate close — so no severity is spelled "defer" — the pre-rename spellings
+  fix cycle / gate close — so no severity is spelled "defer" — and a severity/round
+  eligibility rule is never sufficient merit for closure. Every resolve-without-fix
+  reply for a low, medium, or nit MUST include an `Examined on merits:` rationale
+  identifying the finding and its scope, acceptance-criteria, fix-window, or filing-bar
+  basis; a severity-only dismissal is non-conforming. The pre-rename spellings
   (`must-fix`, `worth-fixing-now`, `nice-to-have`, `defer`) are normalized to their
   canonical replacement on read. A LOCATABLE `question` is answered, never deferred: the
   fixer replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
@@ -1853,7 +1857,14 @@ severity-blind act filter); the closing sweep resolves a still-unresolved nit th
 whether the fixer looked at it. A nit is NEVER filed to the PR's follow-up issue and NEVER stamped
 `disposition=deferred` (#1846, net-reduction disposition policy) — its resolving reply names the
 rationale in-thread and nothing more; this is unconditional, unlike the low gate above, which at
-least has an opt-in path. GATE-CLOSE requires 0 unresolved
+least has an opt-in path. Every resolve-without-fix reply the disposition pass posts for a low,
+medium, or nit MUST carry an explicit `Examined on merits:` rationale that names the finding
+summary and the applicable scope, acceptance-criteria, fix-window, or filing-bar basis (#1882): a
+severity-or-round-eligibility label is never itself sufficient merit for closure. `close-gate-findings.mjs`
+builds that rationale from the thread's rendered finding summary and fails closed on any target
+whose summary cannot be parsed — recording it in `dispositionFailures` and leaving the thread
+unresolved (which keeps `unresolvedGateThreadCount` non-zero) rather than emitting a severity-only
+note or, worse, a stamped-but-unresolved thread. GATE-CLOSE requires 0 unresolved
 gate-authored threads: `draftGateSatisfied` / `ready-for-review` / `pre-pr-ready-gate` assert
 that every gate-authored review thread (any severity: high, medium, low,
 question, OR nit) is resolved before the gate is considered satisfied and before `ready-for-review`
