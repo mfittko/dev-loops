@@ -486,6 +486,7 @@ function buildCliHelpLines() {
     "- dev-loops status                 Show readiness snapshot",
     "- dev-loops doctor                 Show full diagnostic checks",
     "- dev-loops gates                  Print gate state",
+    "- dev-loops --version              Print version and exit",
     "",
     "Subcommands:",
     ...TOP_LEVEL_HELP_CATEGORY_ORDER.flatMap((category) => buildSubcommandLines(category, { includeHeader: true })),
@@ -503,6 +504,8 @@ function buildCliUsageLines(action) {
   switch (action) {
     case "help": case "status": case "doctor": case "gates":
       return ["Usage:", `- dev-loops ${action}`];
+    case "version":
+      return ["Usage:", "- dev-loops --version"];
     case "hide":
       return ["Usage:", "- dev-loops hide", "`hide` is only supported without extra arguments, and only inside the Pi extension."];
     default:
@@ -582,6 +585,15 @@ function parseTopLevelCommand(argv) {
   // Bare --help / -h
   if (cmd === "--help" || cmd === "-h") return { kind: "help" };
 
+  // Version flag (#1897): stable single-line output, no @dev-loops/core
+  // import, so it works in a deps-less marketplace checkout too.
+  if (cmd === "--version" || cmd === "-v") {
+    if (args.length > 1) {
+      return { kind: "malformed", message: "`--version` does not accept additional arguments.", usageAction: "version" };
+    }
+    return { kind: "version" };
+  }
+
   // Top-level commands
   if (TOP_LEVEL_COMMANDS.has(cmd)) {
     if (args.some((a) => a === "--help" || a === "-h")) return { kind: "help" };
@@ -634,6 +646,11 @@ export async function runCli({
   switch (fromTop.kind) {
     case "help": {
       writeLines(stdout, buildCliHelpLines());
+      return 0;
+    }
+    case "version": {
+      const version = readOwnVersion() ?? "unknown";
+      writeLines(stdout, [`dev-loops ${version}`]);
       return 0;
     }
     case "category_help": {

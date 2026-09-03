@@ -115,6 +115,37 @@ test("CLI renderer keeps shared status behavior and shell-friendly argument erro
   assert.match(malformedStderr.read(), /Usage:\n- dev-loops status/);
 });
 
+test("--version/-v prints stable parseable version info (#1897)", async () => {
+  for (const flag of ["--version", "-v"]) {
+    const out = createBufferStream();
+    const err = createBufferStream();
+    const exitCode = await runCli({
+      argv: [flag],
+      runtime: createRuntime(),
+      stdout: out.stream,
+      stderr: err.stream,
+    });
+    assert.equal(exitCode, 0, `flag ${flag} should exit 0`);
+    assert.match(out.read(), /^dev-loops \d+\.\d+\.\d+(-[\w.]+)?\+?[\w.-]*\n$/);
+    assert.equal(err.read(), "");
+  }
+});
+
+test("--version rejects extra arguments like other top-level commands (#1897)", async () => {
+  const out = createBufferStream();
+  const err = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["--version", "extra"],
+    runtime: createRuntime(),
+    stdout: out.stream,
+    stderr: err.stream,
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(out.read(), "");
+  assert.match(err.read(), /`--version` does not accept additional arguments\./);
+  assert.match(err.read(), /Usage:\n- dev-loops --version/);
+});
+
 test("CLI setup guidance for failing checks is the shared core map (#1421)", async () => {
   const failingRuntime = createRuntime({
     async commandExists() {
