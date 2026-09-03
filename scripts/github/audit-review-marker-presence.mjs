@@ -221,9 +221,11 @@ async function main() {
   }
   try {
     const result = await auditReviewMarkerPresence(options);
-    // Advisory-only: --silent still prints nothing (mirrors audit-gate-evidence's
-    // machine-predicate mode) but ALWAYS exits 0 — a warning here must never
-    // fail a caller's script, only inform it.
+    // Advisory-only: the audit itself never throws or fails the process on a
+    // completed run (a warning informs, never blocks — ok:true, so a default or
+    // whole-object run exits 0). --silent/--jq still follow the standard base-CLI
+    // predicate exit-code contract (BASE-JQ-OUTPUT-GUARANTEE): a --silent run with
+    // a falsy --jq predicate maps to exit 1 as a query result, NOT a gate failure.
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout: process.stdout, stderr: process.stderr, ok: true });
   } catch (err) {
     console.error(formatCliError(err));

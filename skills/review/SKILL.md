@@ -103,8 +103,8 @@ repeat phases those gates run:
    ([Fallback gate-comment poster](../dev-loop/SKILL.md#fallback-gate-comment-poster))
    exists ONLY for the missing-`@dev-loops/core` case — it is not a
    convenience substitute for `review` when the full helper is reachable, and
-   it does not even accept `--gate review` today. `audit-review-marker-
-   presence.mjs` (`scripts/github/`) is a standalone, advisory-only check that
+   it does not even accept `--gate review` today.
+   `audit-review-marker-presence.mjs` (`scripts/github/`) is a standalone, advisory-only check that
    flags a posted round missing the marker (or, when a `--findings-ledger`
    carries locatable findings, missing inline comments) with a WARNING; it
    never blocks and never becomes gate evidence — running it is optional, not
