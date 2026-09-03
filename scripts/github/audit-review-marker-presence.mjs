@@ -55,8 +55,10 @@ Output (stdout, JSON):
   { "ok": true, "repo", "pr", "headSha", "markerFound", "reviewId", "round",
     "locatableFindingsCount", "inlineCommentCount", "warnings": [...] }
 Exit codes:
-  0   Always (advisory-only; never fails the run on a warning)
-  1   Usage/IO/gh error
+  0   Completed audit (advisory-only; a warning never fails the run) on a
+      default or whole-object run
+  1   Usage/IO/gh error; ALSO a falsy --silent/--jq predicate (the standard
+      base-CLI query result per BASE-JQ-OUTPUT-GUARANTEE, not a gate failure)
   2   Invalid --jq filter
 
 ${JQ_OUTPUT_USAGE}
@@ -167,8 +169,8 @@ export async function auditReviewMarkerPresence(options, { env = process.env, gh
     // loadMatchingFindingsLedger fail-closed pattern): a ledger for a
     // different repo/PR/head is a stale or wrong-round file. Unlike that
     // sibling (a posting path, where it throws), this script is advisory-only
-    // and must always exit 0 — so a mismatch is WARNED and the cross-check is
-    // skipped, never silently accepted as if it matched this round.
+    // and must not throw/fail the run — so a mismatch is WARNED and the
+    // cross-check is skipped, never silently accepted as if it matched this round.
     if (ledger.repo !== repo || ledger.pr !== pr || ledger.headSha !== currentHeadSha) {
       warnings.push(
         `--findings-ledger "${options.findingsLedger}" is for ${ledger.repo}#${ledger.pr} ${ledger.gate} @ ${ledger.headSha}, ` +
