@@ -63,13 +63,19 @@ export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
 }
 
 /**
- * Adaptive 429-backoff concurrency (issue #1601): halve the active batch before
- * escalating to foreground one-at-a-time fallback. On a 429, the conductor
- * recomputes the wave plan with `backoffMaxConcurrent(maxConcurrent)` and
- * retries the failed wave; if a single-unit wave still 429s, it falls back to
- * foreground (one-at-a-time) dispatch. The backoff is recorded in the round's
- * provenance (see skills/docs/gate-review-sub-loop-contract.md). Pure; never
- * returns 0 (a backoff from 1 stays 1 → foreground fallback owns that path).
+ * Adaptive concurrency backoff (issue #1601; retry discipline refined by #1907):
+ * halve the active batch before escalating to foreground one-at-a-time fallback.
+ * A transient dispatch failure (429/5xx) is first retried on the SAME unit with
+ * exponential backoff — safe because a reviewer's findings artifact is an
+ * idempotent single-write at a deterministic path — and the conductor reduces
+ * concurrency ONLY after that unit's retries are exhausted (~3 failed attempts),
+ * recomputing the wave plan with `backoffMaxConcurrent(maxConcurrent)` and
+ * retrying the reduced wave; if a single-unit wave still fails, it falls back to
+ * foreground (one-at-a-time) dispatch. This "retry the unit before reducing
+ * concurrency" ordering is owned by GATE-EXEC-DISPATCH-RETRY-BACKOFF in
+ * skills/docs/gate-review-sub-loop-contract.md; the backoff is recorded in the
+ * round's provenance. Pure; never returns 0 (a backoff from 1 stays 1 →
+ * foreground fallback owns that path).
  * @param {number} maxConcurrent
  * @returns {number}
  */
