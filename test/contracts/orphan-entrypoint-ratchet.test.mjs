@@ -62,6 +62,7 @@ const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "vendor", "site", "tmp",
 // wiring/deleting a script and removing its line here.
 const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/audit-gate-evidence.mjs", "standalone — post-drive gate-evidence audit step (issue #1729), agent-invoked to scan both verdict surfaces"],
+  ["scripts/github/audit-review-marker-presence.mjs", "standalone — advisory review-gate marker-presence audit (issue #1899), agent/operator-invoked, never gate-wired"],
   ["scripts/github/close-gate-findings.mjs", "standalone — gate fan-in close step, invoked by gate procedure subagents, not code/CI wired"],
   ["scripts/github/compose-reviewer-prompt.mjs", "standalone — sanctioned reviewer-prompt composer for the gate fan-out (issue #1852), agent/orchestrator-invoked per dispatch unit"],
   ["scripts/github/create-label.mjs", "standalone — operator tool for one-off label creation"],

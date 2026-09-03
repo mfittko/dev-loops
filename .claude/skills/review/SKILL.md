@@ -87,6 +87,25 @@ repeat phases those gates run:
    for the `--submit` vocabulary. `approve`/`request-changes` additionally
    REQUIRE `--interactive-confirm` (#1888) — fail closed unless provably
    interactive, so omitting `--auto` is not a license for a headless caller.
+
+   <!-- rule: REVIEW-GATE-VERDICT-CANONICAL -->
+   `REVIEW-GATE-VERDICT-CANONICAL`: the `review` verdict MUST be posted through
+   `upsert-checkpoint-verdict.mjs --gate review --findings-ledger <path>`
+   (above) and MUST NOT be posted with a raw `gh pr review` or `gh api
+   .../reviews` call. A raw post skips the `dev-loops:gate-findings-review
+   review <sha> round=<n>` marker (`buildReviewHeaderMarker`,
+   `_gate-finding-surface.mjs`) and every inline finding comment, so a reader
+   cannot tell a contract-compliant round from a hand-authored comment that
+   merely looks like one. The dev-loop skill's gh-only fallback poster
+   ([Fallback gate-comment poster](../dev-loop/SKILL.md#fallback-gate-comment-poster))
+   exists ONLY for the missing-`@dev-loops/core` case — it is not a
+   convenience substitute for `review` when the full helper is reachable, and
+   it does not even accept `--gate review` today. `audit-review-marker-
+   presence.mjs` (`scripts/github/`) is a standalone, advisory-only check that
+   flags a posted round missing the marker (or, when a `--findings-ledger`
+   carries locatable findings, missing inline comments) with a WARNING; it
+   never blocks and never becomes gate evidence — running it is optional, not
+   part of this skill's own procedure.
 5. **Phase 4 — submit choice.**
    - **Interactive run:** the review was posted `--submit pending` — an
      author-only draft, invisible to other reviewers until submitted. Present
