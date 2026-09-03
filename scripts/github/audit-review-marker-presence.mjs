@@ -163,17 +163,30 @@ export async function auditReviewMarkerPresence(options, { env = process.env, gh
     if (ledger.gate !== "review") {
       throw parseError(`--findings-ledger "${options.findingsLedger}" is for gate "${ledger.gate}", not "review"`);
     }
-    locatableFindingsCount = ledger.findings.filter(hasLocatableShape).length;
-    if (markerFound && locatableFindingsCount > 0) {
-      inlineCommentCount = await fetchInlineCommentCountForReview(
-        { repo, pr, reviewId: found.reviewId },
-        { env, ghCommand, runChild },
+    // Identity cross-check (mirrors upsert-checkpoint-verdict.mjs's
+    // loadMatchingFindingsLedger fail-closed pattern): a ledger for a
+    // different repo/PR/head is a stale or wrong-round file. Unlike that
+    // sibling (a posting path, where it throws), this script is advisory-only
+    // and must always exit 0 — so a mismatch is WARNED and the cross-check is
+    // skipped, never silently accepted as if it matched this round.
+    if (ledger.repo !== repo || ledger.pr !== pr || ledger.headSha !== currentHeadSha) {
+      warnings.push(
+        `--findings-ledger "${options.findingsLedger}" is for ${ledger.repo}#${ledger.pr} ${ledger.gate} @ ${ledger.headSha}, ` +
+        `but this audit is for ${repo}#${pr} review @ ${currentHeadSha}; ignoring the ledger cross-check for this round.`,
       );
-      if (inlineCommentCount === 0) {
-        warnings.push(
-          `Ledger "${options.findingsLedger}" reports ${locatableFindingsCount} locatable finding(s), ` +
-          `but the marked review (id ${found.reviewId}) carries no inline comments.`,
+    } else {
+      locatableFindingsCount = ledger.findings.filter(hasLocatableShape).length;
+      if (markerFound && locatableFindingsCount > 0) {
+        inlineCommentCount = await fetchInlineCommentCountForReview(
+          { repo, pr, reviewId: found.reviewId },
+          { env, ghCommand, runChild },
         );
+        if (inlineCommentCount === 0) {
+          warnings.push(
+            `Ledger "${options.findingsLedger}" reports ${locatableFindingsCount} locatable finding(s), ` +
+            `but the marked review (id ${found.reviewId}) carries no inline comments.`,
+          );
+        }
       }
     }
   }

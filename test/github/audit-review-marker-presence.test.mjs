@@ -140,7 +140,7 @@ test("audit-review-marker-presence: marker present but zero inline comments desp
   });
 });
 
-test("audit-review-marker-presence: a bare verdict ledger (no locatable findings) never requires inline comments", async () => {
+test("audit-review-marker-presence: no --findings-ledger at all never requires inline comments", async () => {
   const result = await auditReviewMarkerPresence(
     { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: null },
     { runChild: stubRunChild({ reviews: [markerReview({ id: 501 })] }) },
@@ -150,6 +150,56 @@ test("audit-review-marker-presence: a bare verdict ledger (no locatable findings
   assert.equal(result.locatableFindingsCount, null);
   assert.equal(result.inlineCommentCount, null);
   assert.deepEqual(result.warnings, []);
+});
+
+test("audit-review-marker-presence: a real clean-verdict ledger (findings: []) reads locatableFindingsCount 0 and never requires inline comments", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewLedger(tempDir, []);
+    const result = await auditReviewMarkerPresence(
+      { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: ledgerPath },
+      { runChild: stubRunChild({ reviews: [markerReview({ id: 501 })] }) },
+    );
+
+    assert.equal(result.markerFound, true);
+    assert.equal(result.locatableFindingsCount, 0);
+    assert.equal(result.inlineCommentCount, null);
+    assert.deepEqual(result.warnings, []);
+  });
+});
+
+test("audit-review-marker-presence: a findings-ledger for a different PR (identity mismatch) is ignored with a warning, not cross-checked", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewLedger(tempDir, [LOCATABLE_FINDING], { pr: 99 });
+    const result = await auditReviewMarkerPresence(
+      { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: ledgerPath },
+      { runChild: stubRunChild({ reviews: [markerReview({ id: 501 })], reviewComments: [] }) },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.markerFound, true);
+    assert.equal(result.locatableFindingsCount, null);
+    assert.equal(result.inlineCommentCount, null);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /does not match|ignoring the ledger cross-check/);
+  });
+});
+
+test("audit-review-marker-presence: a findings-ledger for a stale head (identity mismatch) is ignored with a warning, not cross-checked", async () => {
+  await withTempDir(async (tempDir) => {
+    const staleHeadSha = "9999999000000000000000000000000000000000";
+    const ledgerPath = await writeReviewLedger(tempDir, [LOCATABLE_FINDING], { headSha: staleHeadSha });
+    const result = await auditReviewMarkerPresence(
+      { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: ledgerPath },
+      { runChild: stubRunChild({ reviews: [markerReview({ id: 501 })], reviewComments: [] }) },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.markerFound, true);
+    assert.equal(result.locatableFindingsCount, null);
+    assert.equal(result.inlineCommentCount, null);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /ignoring the ledger cross-check/);
+  });
 });
 
 test("audit-review-marker-presence: a ledger for a different gate is rejected (scoped to review only)", async () => {
@@ -177,6 +227,38 @@ test("audit-review-marker-presence: latest (highest-round) marker on the head wi
 
   assert.equal(result.reviewId, 2);
   assert.equal(result.round, 2);
+});
+
+test("audit-review-marker-presence: an abbreviated marker head-sha that is a PREFIX of the full target head matches", async () => {
+  const result = await auditReviewMarkerPresence(
+    { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: null },
+    { runChild: stubRunChild({ reviews: [markerReview({ id: 501, headSha: HEAD_SHA.slice(0, 7) })] }) },
+  );
+
+  assert.equal(result.markerFound, true);
+  assert.equal(result.reviewId, 501);
+});
+
+test("audit-review-marker-presence: a full marker head-sha that is PREFIXED BY an abbreviated target head matches", async () => {
+  const abbreviatedTargetHead = HEAD_SHA.slice(0, 7);
+  const result = await auditReviewMarkerPresence(
+    { repo: "owner/repo", pr: 17, headSha: abbreviatedTargetHead, findingsLedger: null },
+    { runChild: stubRunChild({ reviews: [markerReview({ id: 501, headSha: HEAD_SHA })] }) },
+  );
+
+  assert.equal(result.markerFound, true);
+  assert.equal(result.reviewId, 501);
+});
+
+test("audit-review-marker-presence: an unrelated (non-prefix) marker head-sha is correctly NOT matched", async () => {
+  const unrelatedHeadSha = "deadbeef000000000000000000000000000000";
+  const result = await auditReviewMarkerPresence(
+    { repo: "owner/repo", pr: 17, headSha: HEAD_SHA, findingsLedger: null },
+    { runChild: stubRunChild({ reviews: [markerReview({ id: 501, headSha: unrelatedHeadSha })] }) },
+  );
+
+  assert.equal(result.markerFound, false);
+  assert.equal(result.reviewId, null);
 });
 
 test("parseAuditReviewMarkerPresenceCliArgs: rejects malformed inputs (coverage regression)", () => {
