@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
   MEDIUM_FIX_WINDOW,
@@ -176,8 +176,9 @@ function windowReason(severity, mediumFixWindow) {
 // GitHub issue (never only the thread marker and the ephemeral tmp ledger).
 // Only ever called for a FILEABLE target (isFileableDeferral true) — see
 // unfiledResolutionMessage below for the nit / non-operator-visible-low reply.
-function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber }) {
-  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
+function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber, body, operatorVisible }) {
+  const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
+  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
 }
 
 // #1846 net-reduction filing bar: the reply for a thread that is RESOLVED
@@ -193,8 +194,36 @@ function unfiledResolutionReason(severity) {
   return "this low finding carries no operator-visibility signal, so it is resolved with rationale at gate close instead of filed to a tracked follow-up issue (net-reduction disposition policy)";
 }
 
-function unfiledResolutionMessage({ fp, severity, angle, round }) {
-  return `Resolved at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${unfiledResolutionReason(severity)}.`;
+// A severity/round rule only selects an eligible disposition boundary; it is
+// not a per-finding reason to close. Require the rendered finding summary so
+// every resolve-without-fix reply records what was examined, rather than a
+// bare "low -> defer"/"nit -> resolve" label (#1882).
+function extractFindingSummary(body) {
+  const match = typeof body === "string"
+    ? body.match(/^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):\s+(.+)$/mu)
+    : null;
+  const summary = match?.[1]?.replace(/\s+— judge:.*$/u, "").trim();
+  if (!summary) {
+    throw new Error("GATE-EXEC-THREAD-DISPOSITION violation: selected finding has no parseable finding summary; refuse severity-only closure");
+  }
+  return summary;
+}
+
+export function buildMeritRationale({ body, severity, operatorVisible = false, round, mediumFixWindow }) {
+  const summary = sanitizeInline(extractFindingSummary(body));
+  const reason = severity === "medium"
+    ? `it remained open past the round-${mediumFixWindow} fix window and no in-scope fix was selected`
+    : severity === "low" && operatorVisible
+      ? "fixer triage found no same-commit fix warranted, while tracking preserves the operator-visible concern"
+      : severity === "low"
+        ? "fixer triage found no same-commit fix warranted and the finding does not clear the operator-visibility filing bar"
+        : "it is cosmetic and does not warrant a fixer cycle or tracked follow-up";
+  return `Examined on merits: \"${summary}\" was reviewed against current scope and acceptance criteria; ${reason}.`;
+}
+
+function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVisible, mediumFixWindow }) {
+  const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
+  return `Resolved at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${unfiledResolutionReason(severity)}.`;
 }
 
 // Every currently-unresolved gate-authored thread, whether newly posted this
@@ -242,6 +271,7 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow) {
       // that clears the net-reduction bar).
       operatorVisible: marker.operatorVisible === true,
       alreadyStamped: marker.disposition === "deferred",
+      body: thread.body,
     });
   }
   return targets;
@@ -381,7 +411,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
     // null/mismatched.
     for (const target of fileableTargets) {
       await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });
-      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber });
+      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
       await replyAndMaybeResolve(
         { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
         { env, ghCommand },
@@ -392,7 +422,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
   // in-thread — no GET/PATCH round-trip (there is nothing to stamp: the
   // marker's disposition field stays absent), no follow-up issue.
   for (const target of unfiledTargets) {
-    const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round });
+    const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, body: target.body, operatorVisible: target.operatorVisible, mediumFixWindow });
     await replyAndMaybeResolve(
       { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
       { env, ghCommand },

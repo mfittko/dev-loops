@@ -7,6 +7,7 @@ import test from "node:test";
 import { runNode, writeGhStub } from "../_helpers.mjs";
 
 import {
+  buildMeritRationale,
   closeGateFindings,
   parseCloseGateFindingsCliArgs,
 } from "../../scripts/github/close-gate-findings.mjs";
@@ -470,6 +471,18 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
 // ---------------------------------------------------------------------------
 // Disposition pass: the round window
 // ---------------------------------------------------------------------------
+
+test("buildMeritRationale requires per-finding engagement, not severity-only closure text", () => {
+  const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): wrong guidance reaches operators`;
+  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  assert.match(rationale, /^Examined on merits:/);
+  assert.match(rationale, /wrong guidance reaches operators/);
+  assert.match(rationale, /scope and acceptance criteria/);
+  assert.throws(
+    () => buildMeritRationale({ body: "<!-- dev-loops:finding aaaaaaaaaaaaaaaa severity=low angle=correctness round=1 -->", severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
+    /finding summary/,
+  );
+});
 
 const wfnBody = (fp, round = 1) => `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "perf", round })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`;
 

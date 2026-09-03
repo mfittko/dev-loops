@@ -1340,7 +1340,11 @@ Consolidation:
 - classify each finding: `high`, `medium`, `low` (defects), or `question`/`nit`
   (non-defects) — severity is the reviewer's advisory weight only; deferral is a
   DISPOSITION — derived at fan-in for non-blocking findings, finalized per thread by the
-  fix cycle / gate close — so no severity is spelled "defer" — the pre-rename spellings
+  fix cycle / gate close — so no severity is spelled "defer" — and a severity/round
+  eligibility rule is never sufficient merit for closure. Every resolve-without-fix
+  reply for a low, medium, or nit MUST include an `Examined on merits:` rationale
+  identifying the finding and its scope, acceptance-criteria, fix-window, or filing-bar
+  basis; a severity-only dismissal is non-conforming. The pre-rename spellings
   (`must-fix`, `worth-fixing-now`, `nice-to-have`, `defer`) are normalized to their
   canonical replacement on read. A LOCATABLE `question` is answered, never deferred: the
   fixer replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
