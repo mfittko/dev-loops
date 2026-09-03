@@ -484,6 +484,38 @@ test("buildMeritRationale requires per-finding engagement, not severity-only clo
   );
 });
 
+test("buildMeritRationale pins each severity/visibility reason branch by content (#1882)", () => {
+  const bodyFor = (severity, summary = "wrong guidance reaches operators") =>
+    `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity, angle: "correctness", round: 1 })}\n**${severity}** (\`correctness\`): ${summary}`;
+  // medium: names the fix window it aged out of
+  assert.match(
+    buildMeritRationale({ body: bodyFor("medium"), severity: "medium", operatorVisible: false, round: 4, mediumFixWindow: 3 }),
+    /remained open past the round-3 fix window and no in-scope fix was selected/,
+  );
+  // low + operator-visible: tracking preserves the operator-visible concern
+  assert.match(
+    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: true, round: 1, mediumFixWindow: 3 }),
+    /tracking preserves the operator-visible concern/,
+  );
+  // low + not visible: below the operator-visibility filing bar
+  assert.match(
+    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
+    /does not clear the operator-visibility filing bar/,
+  );
+  // nit / default: cosmetic
+  assert.match(
+    buildMeritRationale({ body: bodyFor("nit"), severity: "nit", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
+    /it is cosmetic and does not warrant a fixer cycle or tracked follow-up/,
+  );
+});
+
+test("buildMeritRationale collapses embedded double quotes so the wrapped summary stays legible (#1882)", () => {
+  const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): the "foo" bug bites`;
+  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  assert.match(rationale, /"the 'foo' bug bites"/);
+  assert.doesNotMatch(rationale, /"foo"/);
+});
+
 const wfnBody = (fp, round = 1) => `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "perf", round })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`;
 
 function openWfnThread({ commentId, fp = "1111111111111111", id = "THREAD_D", author = AUTHENTICATED_LOGIN } = {}) {
@@ -574,6 +606,44 @@ test("an unresolved OPERATOR-VISIBLE low thread is replied-to + resolved AND fil
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
       assert.equal(result.followUpIssueNumber, 9500);
+    },
+  ));
+});
+
+// #1882: a fileable target whose SECOND line is malformed (valid marker, so it
+// is still selected, but no parseable finding summary) must NOT deadlock the
+// batch. buildMeritRationale throws for it, so the disposition pass records it in
+// dispositionFailures and skips it BEFORE any GitHub mutation (no follow-up-issue
+// append, no marker stamp, no reply) — while the well-formed fileable target in
+// the SAME batch is still stamped, replied, and resolved. The malformed target
+// stays unresolved (unresolvedGateThreadCount stays non-zero), which keeps the
+// gate blocked rather than leaving a stamped-but-unresolved thread that would
+// re-throw on every retry. The stub deliberately provides NO get/patch/reply for
+// the malformed comment id 9301: a regression that mutates it first would fail.
+test("#1882: a malformed fileable target is isolated (no partial stamp) and does not abort the well-formed batch", async () => {
+  const okBody = `${buildFindingMarker({ fp: "eeee0000eeee0000", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes`;
+  const badBody = `${buildFindingMarker({ fp: "ffff0000ffff0000", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\nthis line carries no parseable finding shape at all`;
+  const okThread = threadNode({ id: "THREAD_OK", path: "src/x.mjs", line: 4, commentId: 9300, body: okBody });
+  const badThread = threadNode({ id: "THREAD_BAD", path: "src/y.mjs", line: 4, commentId: 9301, body: badBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [okThread, badThread] }),
+      listFollowUpIssuesEntry(),
+      createFollowUpIssueEntry(9500),
+      getReviewCommentEntry(9300, okBody),
+      patchReviewCommentEntry(9300),
+      postReplyEntry(9300, { id: 7300 }),
+      resolveThreadEntry("THREAD_OK"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 1, "the well-formed target still resolves");
+      assert.equal(result.unresolvedGateThreadCount, 1, "the malformed target stays unresolved, keeping the gate blocked");
+      assert.equal(result.followUpIssueNumber, 9500);
+      assert.ok(Array.isArray(result.dispositionFailures), "malformed target is surfaced");
+      assert.equal(result.dispositionFailures.length, 1);
+      assert.equal(result.dispositionFailures[0].commentId, 9301);
+      assert.match(result.dispositionFailures[0].error, /finding summary/);
     },
   ));
 });
