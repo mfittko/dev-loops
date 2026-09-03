@@ -297,6 +297,110 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
   }
 });
 
+// #1915: the "don't go ready dirty" invariant must hold regardless of how the
+// draft->ready transition happened (wrapper, raw `gh pr ready`, or the GitHub
+// UI). This pins that the loop's OWN state detection — not just the caller-side
+// ready-for-review.mjs guard — routes a non-draft PR carrying only unresolved
+// GATE-AUTHORED finding threads (bot-authored, dev-loops:finding marker) back
+// to the fixer/disposition path (unresolved_feedback_present / feedback_resolution),
+// never forward to pre_approval_gate, even when draft_gate itself posted clean.
+test("detect-pr-gate-coordination-state routes a ready PR with only unresolved gate-authored threads to feedback_resolution, not pre_approval_gate (#1915)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-gate-authored-thread-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [],
+        }),
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
+        stdout: jsonLine({ users: [], teams: [] }),
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=266"],
+        stdout: jsonLine({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "PRRT_1",
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "scripts/foo.mjs",
+                      line: 10,
+                      comments: {
+                        nodes: [
+                          {
+                            id: "PRRC_1",
+                            databaseId: 111,
+                            body: "<!-- dev-loops:finding 0123456789abcdef severity=high angle=correctness round=1 -->\nFix this bug.",
+                            author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      },
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "def56789abcdef" }),
+      },
+      {
+        // #1584/#1585 reproduction shape: draft_gate posted clean on the current
+        // head even though gate-authored threads remain unresolved.
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 11,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: def56789abcdef",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            html_url: "https://example.test/comment/11",
+            updated_at: "2026-05-31T20:00:00Z",
+          },
+        ]]),
+      },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.lifecycleState, "unresolved_feedback_present");
+    assert.equal(parsed.loopDisposition, "unresolved_feedback");
+    assert.equal(parsed.gateBoundary, "feedback_resolution");
+    assert.equal(parsed.nextAction, "address_review_feedback");
+    assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PRs with no draft_gate evidence", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-no-draft-evidence-"));
 
