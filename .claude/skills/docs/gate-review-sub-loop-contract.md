@@ -896,9 +896,16 @@ caller knows it; the plan, not the flag, decides whether units were expected at 
 reconciles and closes the records-floor residual carried on #1468.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
-`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Reviewers SHOULD run in parallel when practical; when parallel execution is impractical
-(for example due to tooling or resource constraints), the fan-out MUST run all reviewers
-sequentially and MUST record why parallel execution was impractical.
+`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
+fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
+(this repo: 3, aligned with `queue.maxParallel`) via the blocking wave-by-wave join described
+above — the conductor awaits each wave before releasing the next. `gates.fanout.sequential:
+true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
+that SIGTERMs heavy reviewers under parallel overload (ADR 0049) — a repo that enables it MUST
+record why parallel execution was impractical for its environment; it is a fallback, never the
+default. The conductor NEVER ends its turn mid-chain to await a nested reviewer, judge, or
+fixer it just dispatched — see `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](./anti-patterns.md)
+for the sanctioned blocking-join (or `bg_wait` subscription) alternative.
 
 **Re-run rule:** In subsequent retry cycles (Phase 5), re-running is governed by
 [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed): carry-forward is the
@@ -907,6 +914,29 @@ angle it proves untouched keeps its clean verdict, everything it leaves unproven
 re-reviewed, and every mandatory / always-run angle is re-reviewed regardless. A clean
 angle is re-reviewed whenever the new head's delta touches its surface or the prior log
 attributes any finding to it; it is spared only when the delta provably cannot affect it.
+
+<!-- rule: GATE-EXEC-DISPATCH-RETRY-BACKOFF -->
+`GATE-EXEC-DISPATCH-RETRY-BACKOFF`: A dispatch that fails on a transient provider error (429
+rate-limit, 5xx) MUST be retried on the SAME dispatch unit with exponential backoff
+(30s/60s/120s) rather than abandoned or re-planned — safe because a reviewer's findings
+artifact is an idempotent single-write at a deterministic path
+(`GATE-EXEC-COLLECTABLE-DISPATCH`), so retrying the same unit can never double-write or
+corrupt fan-in. Only after ~3 failed attempts on a unit does the conductor reduce concurrency
+(halve the active batch via `backoffMaxConcurrent`, above) rather than keep retrying at full
+concurrency. A hard 4xx (e.g. `402 Insufficient Balance`) is never transient: the conductor
+MUST escalate to the supervisor/operator immediately instead of retrying into the same wall.
+Provider choice for the retry (or any later dispatch) is a PER-DISPATCH decision —
+`STICKY-PROVIDER-PIN` in [Anti-patterns](./anti-patterns.md) forbids pinning later dispatches
+to a fallback provider once a transient failure's cap window has passed.
+
+<!-- rule: GATE-EXEC-END-OF-RUN-CONTRACT -->
+`GATE-EXEC-END-OF-RUN-CONTRACT`: Once a PR has merged, the ONLY remaining steps are the
+main-green check, one board-move attempt, and the final report. The conductor MUST NOT re-run
+consolidation machinery (fan-in, judge, disposition-ledger writes) whose artifacts already
+exist on disk for the merged head — a completed round's artifacts are its durable record,
+never a prompt to redo the round. Any path the final report cites MUST be independently
+verified to exist before citation, never assumed from a probe that could have failed silently
+— see `SILENT-STDERR-PROBE` in [Anti-patterns](./anti-patterns.md).
 
 #### Sentinel lifecycle
 
