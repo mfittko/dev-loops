@@ -504,6 +504,10 @@
       "id": "QUEUE-RENAME-CONFLICT-NO-MUTATION"
     },
     {
+      "id": "RAW-GH-PR-READY-BYPASS",
+      "enforcement": "doc"
+    },
+    {
       "id": "REFINER-DOD-PROPOSED-SUBSECTION"
     },
     {
