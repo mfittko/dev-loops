@@ -219,7 +219,21 @@ Optional:
                                             headless so automation can never
                                             auto-approve or auto-block a PR —
                                             they are reachable only through an
-                                            interactive choice.
+                                            interactive choice. #1888: they
+                                            additionally REQUIRE
+                                            --interactive-confirm even WITHOUT
+                                            --auto (the flag's absence proves
+                                            nothing — a headless caller can
+                                            simply omit it), so they fail
+                                            closed unless provably interactive.
+  --interactive-confirm                    The explicit interactive-confirmation
+                                            token for --submit
+                                            approve|request-changes (#1888).
+                                            Pass it ONLY from the review skill's
+                                            interactive multiple-choice submit
+                                            step after a human made the choice;
+                                            it is not a headless bypass and is
+                                            refused together with --auto.
   --auto                                   Headless/non-interactive run (mirrors
                                             scripts/projects/add-queue-item.mjs's
                                             --auto). Only meaningful together with
@@ -509,6 +523,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "size-budget-json": { type: "string" },
       submit: { type: "string" },
       auto: { type: "boolean" },
+      "interactive-confirm": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -535,6 +550,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     sizeBudgetJson: undefined,
     submit: undefined,
     auto: false,
+    interactiveConfirm: false,
     jq: undefined,
     silent: false,
   };
@@ -680,6 +696,17 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.auto = true;
       continue;
     }
+    if (token.name === "interactive-confirm") {
+      // Bare flag or `=true` confirms; an explicit `=false`/`=0`/`=no` must
+      // NOT confirm, and neither must an EMPTY/whitespace-only value
+      // (`--interactive-confirm=` — the common `--flag=$VAR` unset-expansion
+      // shape, #1888 round 2: fail-closed means an absent value never
+      // confirms; fail-safe — same shape as ui-review-teardown.mjs's
+      // --confirm: destructives stay gated unless truly asked).
+      const confirmValue = token.value === undefined ? undefined : token.value.trim();
+      options.interactiveConfirm = confirmValue === undefined || (confirmValue !== "" && !/^(false|0|no)$/iu.test(confirmValue));
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -744,6 +771,23 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
       `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+    );
+  }
+  // PROVABLE interactivity, not caller self-identification (#1888): the
+  // #1840 guard above keys on the caller honestly passing --auto, but the
+  // DEFAULT posture (no --auto) also permitted approve/request-changes — so a
+  // headless/agent caller could simply omit --auto and POST an APPROVE review,
+  // a branch-protection signal that can satisfy required approvals and enable
+  // merge independent of any dev-loops gate. The absence of --auto proves
+  // nothing. approve/request-changes now fail closed unless the caller carries
+  // the explicit interactive-confirmation token (--interactive-confirm), which
+  // only the review skill's interactive multiple-choice submit step passes —
+  // the same shape as ui-review-teardown.mjs's --confirm. --auto still refuses
+  // regardless of the token (checked above first, so the more specific
+  // headless error wins).
+  if (options.gate === "review" && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit) && !options.interactiveConfirm) {
+    throw parseError(
+      `--submit approve|request-changes requires --interactive-confirm (fail closed unless provably interactive, #1888): these are GitHub-native branch-protection signals, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
     );
   }
   try {
@@ -1827,8 +1871,23 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const isReviewGate = options.gate === "review";
   // Resolved submit mode for the review gate only (#1840); parseUpsertCheckpointVerdictCliArgs
   // already refused --submit on any other gate and refused approve/request-changes
-  // under --auto, so this is a pure default-fill, not further validation.
+  // without --interactive-confirm, so this is a pure default-fill, not further
+  // validation. But this function is also a PUBLIC runtime entry (tests, direct
+  // callers) that bypasses the CLI parser, so the #1888 fail-closed guard is
+  // re-enforced here structurally — never trust the caller's self-identification.
   const reviewSubmitMode = isReviewGate ? (options.submit ?? DEFAULT_REVIEW_SUBMIT_MODE) : undefined;
+  if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
+    if (options.auto) {
+      throw new Error(
+        `--submit ${reviewSubmitMode} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+      );
+    }
+    if (options.interactiveConfirm !== true) {
+      throw new Error(
+        `--submit approve|request-changes requires --interactive-confirm (fail closed unless provably interactive, #1888): these are GitHub-native branch-protection signals, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
+      );
+    }
+  }
   let coordinationContext = null;
   let evidence = null;
   let coordination = null;
