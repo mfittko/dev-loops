@@ -129,6 +129,10 @@
       "id": "COPILOT-STATE-WATCH-PERSISTENCE"
     },
     {
+      "id": "END-TURN-AND-AWAIT-WAKE",
+      "enforcement": "doc"
+    },
+    {
       "id": "EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE"
     },
     {
@@ -253,7 +257,15 @@
       "id": "GATE-EXEC-DIFF-CLASS-TIER"
     },
     {
+      "id": "GATE-EXEC-DISPATCH-RETRY-BACKOFF",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-DISPOSITION-LEDGER"
+    },
+    {
+      "id": "GATE-EXEC-END-OF-RUN-CONTRACT",
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-FANOUT-DISPATCH-KEY",
@@ -541,6 +553,10 @@
       "id": "ROUTING-PRIORITY-ORDER"
     },
     {
+      "id": "SILENT-STDERR-PROBE",
+      "enforcement": "doc"
+    },
+    {
       "id": "SPIKE-DISCARD-ZERO-MUTATION"
     },
     {
@@ -566,6 +582,10 @@
     },
     {
       "id": "STEERING-SEQ-MONOTONIC"
+    },
+    {
+      "id": "STICKY-PROVIDER-PIN",
+      "enforcement": "doc"
     },
     {
       "id": "STOP-APPROVAL-001"
