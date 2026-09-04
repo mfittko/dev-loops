@@ -79,7 +79,10 @@ test("analyzer fails closed on missing, failed, inventory, identity, or fingerpr
   assert.equal(analyzeBenchmark([good()[0]]).pass, false);
   const failed = good(); failed[0].installs.bun.cold.measured[3].exitCode = 1; assert.equal(analyzeBenchmark(failed).pass, false);
   const missing = good(); missing[0].verify.pop(); assert.equal(analyzeBenchmark(missing).pass, false);
-  const inventory = good(); inventory[1].inventory.bun.packages.push("extra@1"); assert.equal(analyzeBenchmark(inventory).pass, false);
+  const packages = good(); packages[1].inventory.bun.packages.push("extra@1"); assert.ok(analyzeBenchmark(packages).errors.includes("session 2: dependency package identities differ"));
+  const bins = good(); bins[1].inventory.bun.bins.push("extra"); assert.ok(analyzeBenchmark(bins).errors.includes("session 2: root executable bins differ"));
+  const workspaces = good(); workspaces[1].inventory.bun.workspaceLinks.push({ location: "node_modules/example", kind: "symlink", target: "../example" }); assert.ok(analyzeBenchmark(workspaces).errors.includes("session 2: workspace links differ"));
+  const missingInventory = good(); delete missingInventory[0].inventory.bun.bins; assert.ok(analyzeBenchmark(missingInventory).errors.includes("session 1: missing root executable bin inventories"));
   const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
   const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);
   const fingerprint = good(); fingerprint[1].sourceFingerprint.bun = "changed"; assert.equal(analyzeBenchmark(fingerprint).pass, false);

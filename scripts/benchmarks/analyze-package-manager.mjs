@@ -16,7 +16,16 @@ export function analyzeBenchmark(sessions) {
     if (evidence?.protocolVersion !== 2) errors.push(`session ${index + 1}: unsupported protocolVersion`);
     if (!evidence?.sessionId || !evidence?.sessionRoot) errors.push(`session ${index + 1}: missing session identity/root`);
     for (const key of ["platform", "arch", "cpu", "node", "bun", "npm", "powerState"]) if (!evidence?.environment?.[key]) errors.push(`session ${index + 1}: missing environment.${key}`);
-    if (stable(evidence?.inventory?.npm) !== stable(evidence?.inventory?.bun)) errors.push(`session ${index + 1}: dependency inventories differ`);
+    for (const [field, label, missingLabel] of [
+      ["packages", "dependency package identities", "dependency package identity inventories"],
+      ["bins", "root executable bins", "root executable bin inventories"],
+      ["workspaceLinks", "workspace links", "workspace link inventories"],
+    ]) {
+      const npmInventory = evidence?.inventory?.npm?.[field];
+      const bunInventory = evidence?.inventory?.bun?.[field];
+      if (!Array.isArray(npmInventory) || !Array.isArray(bunInventory)) errors.push(`session ${index + 1}: missing ${missingLabel}`);
+      else if (stable(npmInventory) !== stable(bunInventory)) errors.push(`session ${index + 1}: ${label} differ`);
+    }
     if (stable(evidence?.suiteInventory?.npm) !== stable(evidence?.suiteInventory?.bun)) errors.push(`session ${index + 1}: verification suite inventories differ`);
   }
   if (first?.sessionId === second?.sessionId || first?.sessionRoot === second?.sessionRoot) errors.push("sessions must have distinct ids and temporary roots");
