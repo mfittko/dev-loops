@@ -40,7 +40,7 @@ import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@de
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { REFINEMENT_SOURCE, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -2558,15 +2558,18 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
 // #1866 review-gate coverage guard: hasAcChecklist must reflect "an AC
-// checklist exists" (artifact source = issue-body AC), independent of the
-// Non-goals floor the predicate also enforces, so a PR body with a real AC
-// checklist but no Non-goals still keeps the acceptance-criteria angle.
+// checklist exists", independent of the Non-goals floor the predicate also
+// enforces, so a PR body with a real AC checklist but no Non-goals still keeps
+// the acceptance-criteria angle. #1951: this runs on the PR body, which carries
+// list-form AC/DoD checklists (never a matrix), so read `acItems` directly
+// rather than the artifact source — the matrix floor is an issue-side concern.
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
-  // Exact semantics: an AC checklist exists only when the artifact source IS
-  // the issue-body AC checklist. A missing_explicit_non_goals finding on a
-  // DoD-only or linked-doc-only body does NOT imply an AC checklist.
-  return artifact.source === REFINEMENT_SOURCE.ISSUE_BODY_AC;
+  // An AC checklist exists when the body carries acceptance-criteria checklist
+  // items (`acItems`). A missing_explicit_non_goals finding does NOT clear
+  // acItems, so a PR body with a real AC checklist but no Non-goals still
+  // reports true.
+  return artifact.acItems.length > 0;
 }
 
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
@@ -2874,7 +2877,10 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
-      if (detectIssueRefinementArtifact({ body, issueNumber: number }).hasACs) anyRefined = true;
+      // #1951: "gives a reviewer real criteria to read" is AC-content presence
+      // (checklist items or matrix-derived criteria), not the full matrix
+      // refinement floor (`hasACs`) the draft gate enforces separately.
+      if (detectIssueRefinementArtifact({ body, issueNumber: number }).acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
     }
     // A single linked issue renders exactly as before (no redundant `### #N`
@@ -2894,7 +2900,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
     // network call whose result would be discarded.
-    options.acceptanceCriteriaSource = detectIssueRefinementArtifact({ body: options.issueBody }).hasACs
+    options.acceptanceCriteriaSource = detectIssueRefinementArtifact({ body: options.issueBody }).acItems.length > 0
       ? "linked-issue"
       : "linked-issue-unrefined";
   }

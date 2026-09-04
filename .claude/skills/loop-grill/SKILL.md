@@ -47,7 +47,7 @@ Before doing anything else:
 - **PR body:** fetch the PR body via `scripts/github/view-pr.mjs` (never raw `gh`).
 - **Local-planning:** read the plan file from disk.
 
-"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact — the full AC/DoD/Non-goals matrix per `detectIssueRefinementArtifact` — is a zero-iteration `grill_clean`: do not rewrite the body.
+"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact — the authoritative AC→DoD mapping matrix plus an explicit Non-goals section per `detectIssueRefinementArtifact` (#1951) — is a zero-iteration `grill_clean`: do not rewrite the body. A body carrying only AC/DoD checklists and no mapping matrix is NOT refined (`missing_ac_dod_matrix`) and MUST be grilled to synthesize the matrix — a matrix-missing issue can never emit `grill-clean`.
 
 ## Step 1b — Surface external resources
 
@@ -121,7 +121,7 @@ Do not silently guess an `inferred` answer when no evidence can be cited — fla
 
 ## Step 4 — Write back (synthesize sections; raw Q&A to tmp only)
 
-Synthesize the answers into the body as sharpened `## Acceptance criteria`, `## Definition of done`, and `## Non-goals` sections. Per canonical heading, use **replace-section** semantics:
+Synthesize the answers into the body as the authoritative **`## AC / DoD matrix`** (a two-column table mapping each acceptance-criterion outcome to its required completion evidence) plus a `## Non-goals` section (#1951, "matrix on the issue, checklist on the PR"). The matrix is the authoritative issue artifact; do NOT synthesize duplicate interactive `## Acceptance criteria` / `## Definition of done` checklists on the issue merely to satisfy detection — those list-form checkboxes belong on the PR body (derived via `derivePrChecklistsFromIssueMatrix`), never inside table cells. Each matrix row MUST map a concrete criterion to concrete completion evidence; a tautological/identifier-only row (`AC1 → D1`) is invalid and `detectIssueRefinementArtifact` rejects it as `malformed_ac_dod_matrix`. Per canonical heading, use **replace-section** semantics:
 
 - **Find** the existing section: the range from that `##`-level heading through the next `##`-level heading (exclusive) or end of file.
 - **Replace** that range in place with the synthesized content; if the section is absent, **append** it.
@@ -141,7 +141,7 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 - Any contradiction between now-stale prose and the locked AC/DoD/approach: resolve in favor of the locked form; delete the stale prose.
 - Any bare `#<number>` used as a defect/item enumeration rather than a genuine issue/PR reference (`GRILL-SUBLOOP-NO-BARE-HASH`): rewrite as `defect N` / `item N` / backticks. GitHub auto-links a bare `#<number>` to an unrelated issue/PR in this repo — reserve `#<number>` only for a real issue/PR cross-reference.
 
-The rewritten description carries ONLY normative locked content: context, the decided approach, `## Acceptance criteria`, `## Definition of done`, `## Non-goals`, and a linked refinement doc reference if present. Write it back with:
+The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
 
 ```
 dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
@@ -167,7 +167,7 @@ Never `gh issue comment` directly, and never fold this content back into the iss
 
 Three distinct artifacts for tracker-first (two for PR-body/local-planning, which have no separate results-comment surface in this contract):
 
-1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, `## Acceptance criteria`, `## Definition of done`, and `## Non-goals`. No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
+1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, and `## Non-goals` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
 2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. For an interactive run the preamble reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`). Same `#<number>` hygiene rule applies.
 
@@ -215,7 +215,7 @@ When `CONTEXT.md` is absent from the repo root, skip the context-source check si
 
 ## Idempotency guarantee
 
-Running `/loop-grill` twice on the same target must not accumulate duplicate sections: the per-heading replace-section logic replaces the synthesized `## Acceptance criteria` / `## Definition of done` / `## Non-goals` sections in place. An already-refined target is a zero-iteration `grill_clean` and its body is left unchanged. The raw Q&A transcript is written to a fresh timestamped tmp file per run; the body never carries it.
+Running `/loop-grill` twice on the same target must not accumulate duplicate sections: the per-heading replace-section logic replaces the synthesized `## AC / DoD matrix` / `## Non-goals` sections (and any human-readable `## Acceptance criteria` / `## Definition of done` prose) in place. An already-refined target is a zero-iteration `grill_clean` and its body is left unchanged. The raw Q&A transcript is written to a fresh timestamped tmp file per run; the body never carries it.
 
 ## Non-goals
 

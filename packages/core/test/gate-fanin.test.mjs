@@ -706,8 +706,8 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
 describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool membership)", () => {
   test("passes when every mandatory angle is recorded and every angle is in the pool", () => {
     const result = checkFanoutAngleCoverage(
-      [{ angle: "pr-checklist-matrix" }, { angle: "yagni" }],
-      { mandatoryAngles: ["pr-checklist-matrix"], pool: ["yagni", "pr-checklist-matrix", "dry"] },
+      [{ angle: "pr-checklist" }, { angle: "yagni" }],
+      { mandatoryAngles: ["pr-checklist"], pool: ["yagni", "pr-checklist", "dry"] },
     );
     assert.deepEqual(result, { missingMandatory: [], foreignAngles: [] });
   });
@@ -715,9 +715,9 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
   test("reports every mandatory angle absent from the recorded angles", () => {
     const result = checkFanoutAngleCoverage(
       [{ angle: "yagni" }],
-      { mandatoryAngles: ["pr-checklist-matrix", "acceptance-criteria", "yagni"] },
+      { mandatoryAngles: ["pr-checklist", "acceptance-criteria", "yagni"] },
     );
-    assert.deepEqual(result.missingMandatory, ["pr-checklist-matrix", "acceptance-criteria"]);
+    assert.deepEqual(result.missingMandatory, ["pr-checklist", "acceptance-criteria"]);
   });
 
   test("reports recorded angles that are outside the configured pool (ad-hoc labels)", () => {
@@ -737,8 +737,8 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
 
   test("delta-suffixed angles (<angle>-delta-at-...) count toward their base angle for BOTH checks", () => {
     const result = checkFanoutAngleCoverage(
-      [{ angle: "pr-checklist-matrix-delta-at-current-head" }],
-      { mandatoryAngles: ["pr-checklist-matrix"], pool: ["pr-checklist-matrix"] },
+      [{ angle: "pr-checklist-delta-at-current-head" }],
+      { mandatoryAngles: ["pr-checklist"], pool: ["pr-checklist"] },
     );
     assert.deepEqual(result, { missingMandatory: [], foreignAngles: [] });
   });
@@ -748,9 +748,9 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
     assert.deepEqual(checkFanoutAngleCoverage([null, { angle: "" }, "nope"], { mandatoryAngles: [] }).foreignAngles, []);
   });
 
-  test("fan-in synthetic angle (pr-checklist-matrix) is never foreign, even when absent from the pool", () => {
+  test("fan-in synthetic angle (pr-checklist) is never foreign, even when absent from the pool", () => {
     const result = checkFanoutAngleCoverage(
-      [{ angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }],
+      [{ angle: "pr-checklist" }, { angle: "made-up-angle" }],
       { mandatoryAngles: [], pool: ["dry", "kiss"] },
     );
     assert.deepEqual(result.foreignAngles, ["made-up-angle"]);
@@ -758,7 +758,7 @@ describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool memb
 
   test("delta-suffixed fan-in synthetic angle is never foreign when the pool omits its base", () => {
     const result = checkFanoutAngleCoverage(
-      [{ angle: "pr-checklist-matrix-delta-at-current-head" }],
+      [{ angle: "pr-checklist-delta-at-current-head" }],
       { mandatoryAngles: [], pool: ["dry", "kiss"] },
     );
     assert.deepEqual(result.foreignAngles, []);

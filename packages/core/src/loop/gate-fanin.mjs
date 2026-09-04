@@ -696,7 +696,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
 
 /**
  * Base angle name for a delta-suffixed re-review entry (`<angle>-delta-at-...`,
- * e.g. `pr-checklist-matrix-delta-at-current-head`): a re-review scoped to only
+ * e.g. `pr-checklist-delta-at-current-head`): a re-review scoped to only
  * the current head's delta still counts toward its base angle for both
  * mandatory-angle coverage and pool-membership checks.
  *
@@ -742,12 +742,12 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
 
 /**
  * Angles the fan-in itself mandates and may synthesize (consolidate-fanin's
- * `--pr-checklist-matrix clean` upsert) without them appearing in any gate's
+ * `--pr-checklist clean` upsert) without them appearing in any gate's
  * configured `angles` pool. Always legal in the foreign-angle check above —
  * requiring every consumer repo to also list them per-gate would make the two
  * tools contradict the shared contract they implement.
  */
-export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist-matrix"]);
+export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist"]);
 
 /**
  * Validate a round's RESOLVED angle set — the full angle list the round
@@ -813,7 +813,7 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
 export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
 // Every sanctioned angle name is a short, hand-authored slug (e.g.
-// "contradiction-lens", "pr-checklist-matrix"); nothing legitimate ever
+// "contradiction-lens", "pr-checklist"); nothing legitimate ever
 // approaches this length. Bounding it here, at the trust boundary this
 // function already owns, fails a pathological artifact closed as malformed —
 // the same place every other angle-result defect is caught — instead of

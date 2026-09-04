@@ -29,8 +29,8 @@ describe(".devloops mandatory AC/DoD angle (pre_approval_gate)", () => {
       gate.mandatoryAngles.includes(AC_DOD_ANGLE),
       "preApproval.mandatoryAngles must include acceptance-criteria",
     );
-    // pr-checklist-matrix stays mandatory alongside it.
-    assert.ok(gate.mandatoryAngles.includes("pr-checklist-matrix"));
+    // pr-checklist stays mandatory alongside it.
+    assert.ok(gate.mandatoryAngles.includes("pr-checklist"));
   });
 
   test("survives static resolveGateAngles", async () => {

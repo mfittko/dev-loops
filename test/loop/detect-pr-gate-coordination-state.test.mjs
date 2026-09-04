@@ -1449,7 +1449,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
       { stdout: '[]\n' },
       {
         stdout: JSON.stringify({
-          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n",
+          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- None.\n",
         }) + "\n",
       },
       {
@@ -1978,21 +1978,22 @@ test("loadRefinementArtifact: #1877 allFailed arm still surfaces prBodyUnchecked
   }
 });
 
-test("loadRefinementArtifact: #1877 matrix-miss linked issue (AC-only body) surfaces the detector's finding, not the generic artifact miss — the draft gate is the backstop for the enqueue gate's full-matrix floor", async () => {
+test("loadRefinementArtifact: #1951 matrix-miss linked issue (checklist-only body) surfaces the detector's finding, not the generic artifact miss — the draft gate is the backstop for the enqueue gate's matrix floor", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
-    // AC checklist + Non-goals present, DoD checklist ABSENT: a #1877 matrix
-    // miss (missing_dod_checklist), not a bare no-artifact miss. The mixed
-    // branch must thread the detector's finding through so the draft gate —
-    // the unconditional backstop for the enqueue gate's full-matrix floor
+    // AC + DoD checklists + Non-goals present, mapping MATRIX absent: a #1951
+    // matrix miss (missing_ac_dod_matrix), not a bare no-artifact miss. The
+    // mixed branch must thread the detector's finding through so the draft
+    // gate — the unconditional backstop for the enqueue gate's matrix floor
     // (QUEUE-ENQUEUE-REFINEMENT-GATE) — surfaces the same taxonomy.
-    const acOnlyIssueBody = [
+    const checklistOnlyIssueBody = [
       "## Problem", "", "Fix the thing.", "",
       "## Acceptance criteria", "", "- [ ] AC1", "",
+      "## Definition of done", "", "- [ ] DoD1", "",
       "## Non-goals", "", "- none", "",
     ].join("\n");
     const { env } = await writeGhStubHelper(tmp, [
-      { stdout: JSON.stringify({ body: acOnlyIssueBody }) + "\n" },
+      { stdout: JSON.stringify({ body: checklistOnlyIssueBody }) + "\n" },
     ]);
     const result = await loadRefinementArtifact(
       {
@@ -2007,23 +2008,24 @@ test("loadRefinementArtifact: #1877 matrix-miss linked issue (AC-only body) surf
     assert.equal(result.status, "missing");
     assert.equal(result.linkedIssue, 900);
     assert.equal(result.specSource, "linked_issue");
-    assert.equal(result.finding, "missing_dod_checklist");
-    assert.match(result.reason, /no Definition of done checklist/);
+    assert.equal(result.finding, "missing_ac_dod_matrix");
+    assert.match(result.reason, /mapping matrix/);
     assert.equal(result._onlyEnforcedWhenDraft, true);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
 });
 
-test("loadRefinementArtifact: #1877 matrix-miss linked issue (DoD-only body) surfaces missing_ac_checklist", async () => {
+test("loadRefinementArtifact: #1951 malformed-matrix linked issue surfaces malformed_ac_dod_matrix", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
-    const dodOnlyIssueBody = [
-      "## Definition of done", "", "- [ ] DoD1", "",
+    const malformedMatrixIssueBody = [
+      "## AC / DoD matrix", "",
+      "| AC | DoD |", "|---|---|", "| AC1 | D1 |", "",
       "## Non-goals", "", "- none", "",
     ].join("\n");
     const { env } = await writeGhStubHelper(tmp, [
-      { stdout: JSON.stringify({ body: dodOnlyIssueBody }) + "\n" },
+      { stdout: JSON.stringify({ body: malformedMatrixIssueBody }) + "\n" },
     ]);
     const result = await loadRefinementArtifact(
       {
@@ -2036,8 +2038,7 @@ test("loadRefinementArtifact: #1877 matrix-miss linked issue (DoD-only body) sur
       { env },
     );
     assert.equal(result.status, "missing");
-    assert.equal(result.finding, "missing_ac_checklist");
-    assert.match(result.reason, /no Acceptance criteria checklist/);
+    assert.equal(result.finding, "malformed_ac_dod_matrix");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -2134,7 +2135,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -2195,7 +2196,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],

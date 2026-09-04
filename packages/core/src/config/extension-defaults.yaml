@@ -199,7 +199,7 @@ gates:
       - name: docs-surface
         angles: [docs, link-check, config-drift, contract-surface]
       - name: process
-        angles: [scope, pr-description, gate-evidence, pr-checklist-matrix]
+        angles: [scope, pr-description, gate-evidence, pr-checklist]
       - name: correctness-input
         angles: [correctness, input-validation]
       - name: determinism-state
@@ -259,19 +259,24 @@ gates:
       - name: docs
         persona: docs
         prompt: "Review documentation correctness for the current change. Check that relative markdown links resolve, symlink-backed doc pointers resolve, navigable doc references are actual markdown links rather than bare backtick path mentions, command/script references still exist and use current names, and index/surface references match the current file tree. Also flag stale command references: removed or renamed npm scripts, CLI commands, or tool invocations that no longer match the current codebase. When the repo provides `scripts/docs/validate-links.mjs`, use it for the mechanical link pass; otherwise keep the review scoped to the touched doc surface and current change only."
-      - name: pr-checklist-matrix
+      - name: pr-checklist
         mandatory: true
         persona: review
         prompt: |-
+          Verify the PR carries self-contained list-form Acceptance criteria and Definition of done
+          CHECKLISTS (never a matrix/table on the PR, never checkboxes inside table cells) that are
+          faithfully DERIVED from the linked issue's authoritative AC→DoD mapping matrix (#1951).
           Completeness is enforced deterministically (#1877): the pre_approval_gate fails closed on any
           unchecked `- [ ]` in the PR body's AC/DoD checklist, so this angle's completeness duty is
-          machine-backed. Your remaining duty is TRUTHFULNESS, which the machine cannot check: verify
-          that every checked `- [x]` box in the PR body's Acceptance criteria / Definition of done
-          checklists is actually satisfied by the implementation — cite concrete code/test/behavior
-          evidence; flag a dishonestly-ticked box as a blocking finding. Also verify the checked
-          content mirrors the linked issue's AC/DoD/Non-goals matrix and that declared non-goals are
-          respected (no scope creep). The boundary is explicit: the deterministic block enforces
-          completeness (nothing left unchecked/forgotten); you verify each [x] is real.
+          machine-backed. Your remaining duty is TRUTHFULNESS + DERIVATION FIDELITY, which the machine
+          cannot check: verify that every checked `- [x]` box in the PR body's Acceptance criteria /
+          Definition of done checklists is actually satisfied by the implementation — cite concrete
+          code/test/behavior evidence; flag a dishonestly-ticked box as a blocking finding. Verify the
+          PR checklists faithfully reflect the issue matrix (every matrix row is represented, nothing
+          invented or dropped) and that declared non-goals are respected (no scope creep). Do NOT
+          require a matrix on the PR — the matrix lives on the issue; the PR carries the derived
+          checklists. The boundary is explicit: the deterministic block enforces completeness (nothing
+          left unchecked/forgotten); you verify each [x] is real and faithfully derived.
       - contradiction-lens
       - correctness-final
       - ui-validation

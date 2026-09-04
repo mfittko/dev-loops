@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { formatCliError } from "../_core-helpers.mjs";
+import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import {
   DEFAULT_USAGE_SUFFIX,
   extractSection,
@@ -33,15 +34,13 @@ function hasCheckbox(sectionText) {
   return /^\s*-\s*\[\s\]\s+/imu.test(sectionText);
 }
 
-function hasMatrixTable(sectionText) {
-  if (typeof sectionText !== "string") {
-    return false;
-  }
-  const rows = sectionText
-    .split(/\r?\n/gu)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("|"));
-  return rows.length >= 2;
+// #1951: validate the mapping table's SHAPE, not just the presence of pipe
+// lines — an identifier-only/tautological table (`AC1 → D1`) or an empty
+// header/separator-only table is invalid. Shares `detectAcDodMatrix` with the
+// deterministic refinement detector so the epic verifier and the enqueue/draft
+// gate cannot drift on what counts as a valid matrix.
+function hasValidMatrix(issueBody) {
+  return detectAcDodMatrix(typeof issueBody === "string" ? issueBody : "").valid === true;
 }
 
 export function runRefinementCompletenessChecker(tree) {
@@ -69,8 +68,8 @@ export function runRefinementCompletenessChecker(tree) {
 
     if (!acDodMatrix) {
       errors.push({ code: "missing_ac_dod_matrix", issue: issue.number, message: "Missing ## AC / DoD matrix section." });
-    } else if (!hasMatrixTable(acDodMatrix)) {
-      errors.push({ code: "invalid_ac_dod_matrix", issue: issue.number, message: "AC / DoD matrix section must contain a markdown table." });
+    } else if (!hasValidMatrix(issue.body)) {
+      errors.push({ code: "invalid_ac_dod_matrix", issue: issue.number, message: "AC / DoD matrix section must contain a semantic table mapping each acceptance-criterion outcome to concrete completion evidence (an empty or identifier-only/tautological table is invalid)." });
     }
 
     if (!hasScopeBoundary(issue.body)) {

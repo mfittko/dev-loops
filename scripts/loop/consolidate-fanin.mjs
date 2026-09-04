@@ -68,7 +68,7 @@ import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -129,8 +129,8 @@ Optional:
                                  SUBdirectory of --findings-dir (e.g. <findings-dir>/out/findings.json)
                                  is unaffected — artifact discovery is top-level-only, so it can never
                                  be re-read as an artifact.
-  --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
-                                 { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
+  --pr-checklist clean    When no pr-checklist angle artifact was found, upsert
+                                 { angle: "pr-checklist", verdict: "clean", findings: [] }
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean
                                  head (the "angle" field of each entry in resolve-angle-carry-forward.mjs's
                                  plan.carried) rather than freshly reviewed this round — Phase 2 dispatches
@@ -143,7 +143,7 @@ Optional:
                                  artifact for that angle, if present — matched by base name and
                                  case-insensitively, same rule resolve-angle-carry-forward.mjs uses — always
                                  wins; this never overrides one). Same upsert semantics as
-                                 --pr-checklist-matrix, generalized, plus the two guards below. FAILS CLOSED
+                                 --pr-checklist, generalized, plus the two guards below. FAILS CLOSED
                                  (exit 1) on any named angle whose angleReviewSurface(...).kind !== "kinds"
                                  (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
                                  resolve-angle-carry-forward.mjs's own producer uses for plan.carried
@@ -636,7 +636,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       gate: { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
-      "pr-checklist-matrix": { type: "string" },
+      "pr-checklist": { type: "string" },
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
       "resolved-angles": { type: "string" },
@@ -698,7 +698,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.ledgerOut = ledgerOut;
       continue;
     }
-    if (token.name === "pr-checklist-matrix") {
+    if (token.name === "pr-checklist") {
       options.prChecklistMatrix = requireTokenValue(token, parseError);
       continue;
     }
@@ -972,14 +972,14 @@ function validateArtifactShape(raw, sourceLabel) {
   }
 }
 
-// Resolve the --pr-checklist-matrix upsert value: only the literal "clean"
+// Resolve the --pr-checklist upsert value: only the literal "clean"
 // keyword is accepted (the mandatory-angle convenience). AC1 only requires
 // upserting the mandatory clean entry when nothing covers it; no documented
 // caller ever passes a custom artifact, so that speculative surface is not
 // offered.
 function resolvePrChecklistMatrixUpsert(rawValue) {
   if (rawValue.trim().toLowerCase() !== "clean") {
-    throw new Error('--pr-checklist-matrix accepts only "clean"');
+    throw new Error('--pr-checklist accepts only "clean"');
   }
   return { angle: FANIN_SYNTHETIC_ANGLES[0], verdict: "clean", findings: [] };
 }
@@ -1327,7 +1327,7 @@ export async function consolidateGateFanin(options) {
   }
 
   // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert
-  // its clean entry the same way --pr-checklist-matrix does, so it is not
+  // its clean entry the same way --pr-checklist does, so it is not
   // invisible to findingsJson/checkFanoutAngleCoverage/the posted verdict
   // comment. A REAL artifact for that angle always wins (e.g. Phase 1 resolved
   // it fresh for the first time this head even though a stale plan still named

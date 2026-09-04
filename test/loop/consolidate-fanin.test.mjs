@@ -90,7 +90,7 @@ test("parseConsolidateFaninCliArgs parses required + optional args", () => {
     "--gate", "draft_gate",
     "--out", "/tmp/out.json",
     "--ledger-out", "/tmp/ledger.json",
-    "--pr-checklist-matrix", "clean",
+    "--pr-checklist", "clean",
   ]);
   assert.equal(result.findingsDir, "/tmp/x");
   assert.equal(result.gate, "draft_gate");
@@ -856,10 +856,10 @@ test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact
   );
 });
 
-// pr-checklist-matrix mandatory-angle upsert
+// pr-checklist mandatory-angle upsert
 // ---------------------------------------------------------------------------
 
-test("consolidateGateFanin rejects a --pr-checklist-matrix value other than \"clean\"", async () => {
+test("consolidateGateFanin rejects a --pr-checklist value other than \"clean\"", async () => {
   await withFindingsDir(
     { "dry.json": { angle: "dry", verdict: "clean", findings: [] } },
     async (dir) => {
@@ -871,25 +871,25 @@ test("consolidateGateFanin rejects a --pr-checklist-matrix value other than \"cl
   );
 });
 
-test("consolidateGateFanin upserts a clean pr-checklist-matrix angle when missing", async () => {
+test("consolidateGateFanin upserts a clean pr-checklist angle when missing", async () => {
   await withFindingsDir(
     { "dry.json": { angle: "dry", verdict: "clean", findings: [] } },
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: "clean" });
       assert.deepEqual(
-        result.angles.find((a) => a.angle === "pr-checklist-matrix"),
-        { angle: "pr-checklist-matrix", verdict: "clean", findingCount: 0 },
+        result.angles.find((a) => a.angle === "pr-checklist"),
+        { angle: "pr-checklist", verdict: "clean", findingCount: 0 },
       );
       assert.equal(result.overallVerdict, "clean");
     },
   );
 });
 
-test("consolidateGateFanin does not upsert pr-checklist-matrix when an artifact already covers it", async () => {
+test("consolidateGateFanin does not upsert pr-checklist when an artifact already covers it", async () => {
   await withFindingsDir(
     {
-      "pr-checklist-matrix.json": {
-        angle: "pr-checklist-matrix",
+      "pr-checklist.json": {
+        angle: "pr-checklist",
         verdict: "findings_present",
         findings: [{ severity: "must-fix", summary: "checklist gap" }],
       },
@@ -1252,7 +1252,7 @@ test("consolidateGateFanin refuses gate-evidence and renderer-security for draft
 
 // Same predicate, at pre_approval_gate: pr-description is not in THIS repo's
 // configured preApproval mandatoryAngles (acceptance-criteria/yagni/
-// contradiction-lens/pr-checklist-matrix are), but it is still hardcoded
+// contradiction-lens/pr-checklist are), but it is still hardcoded
 // ALWAYS_INCLUDE and must still be refused.
 test("consolidateGateFanin refuses pr-description for pre_approval_gate even though it is not that gate's configured mandatory angle", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
@@ -1730,7 +1730,7 @@ test("consolidateGateFanin refuses a raw artifact that self-declares carriedFrom
 // REAL mandatory-angle coverage check (checkFanoutAngleCoverage) — including
 // the two shapes that previously failed: an all-clean fan-out and a clean
 // mandatory angle contributing zero flat findings.
-test("e2e: all-clean fan-out with pr-checklist-matrix upsert passes upsert-verdict parsing + coverage", async () => {
+test("e2e: all-clean fan-out with pr-checklist upsert passes upsert-verdict parsing + coverage", async () => {
   await withFindingsDir(
     {
       "scope.json": { angle: "scope", verdict: "clean", findings: [] },
@@ -1741,8 +1741,8 @@ test("e2e: all-clean fan-out with pr-checklist-matrix upsert passes upsert-verdi
       const normalized = normalizeStructuredFindings(result.findingsJson);
       assert.ok(Array.isArray(normalized), "nested shape must normalize (not be rejected as unrenderable)");
       const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
-        mandatoryAngles: ["pr-checklist-matrix"],
-        pool: ["scope", "dry", "pr-checklist-matrix"],
+        mandatoryAngles: ["pr-checklist"],
+        pool: ["scope", "dry", "pr-checklist"],
       });
       assert.deepEqual(missingMandatory, []);
       assert.deepEqual(foreignAngles, []);

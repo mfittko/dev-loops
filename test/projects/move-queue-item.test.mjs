@@ -799,7 +799,7 @@ describe("move-queue-item", () => {
           { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
           {
             env: {},
-            runChild: mockRunChild(moveResponses("## Acceptance criteria\n- [ ] do it\n\n## Definition of done\n- [x] All checks pass\n\n## Non-goals\n- none", true)),
+            runChild: mockRunChild(moveResponses("## AC / DoD matrix\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n- none", true)),
             cwd,
           },
         );

@@ -114,10 +114,10 @@ test("round-trip: write valid provenance -> buildFanoutEnforcement reads it -> p
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        // dry/kiss/pr-checklist-matrix are real preApproval pool angles (shipped
-        // extension defaults); pr-checklist-matrix is also the gate's mandatory
+        // dry/kiss/pr-checklist are real preApproval pool angles (shipped
+        // extension defaults); pr-checklist is also the gate's mandatory
         // angle, so angle-coverage enforcement passes at write time.
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -144,11 +144,11 @@ test("round-trip: a below-floor (distinctReviewers:1) ledger FAILS closed", asyn
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        // A single fresh angle (the mandatory pr-checklist-matrix) reviewed by
+        // A single fresh angle (the mandatory pr-checklist) reviewed by
         // one reviewer satisfies the write-time one-reviewer-per-angle floor
         // (1 fresh angle, 1 reviewer) while distinctReviewers (1) still sits
         // below the >=2 read-time floor this test exercises.
-        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist", reviewer: "review-a" }] }),
       },
       { repoRoot: repoA },
     );
@@ -177,7 +177,7 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -204,7 +204,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "pr-checklist", reviewer: "review-a" }] }),
       },
       { repoRoot: repoB },
     );
@@ -212,7 +212,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -257,13 +257,13 @@ test("selector scaled floor: a hand-crafted 3-fresh-angle/2-reviewer shadow does
       perAngle: [
         { angle: "dry", reviewer: "review-a" },
         { angle: "kiss", reviewer: "review-b" },
-        { angle: "pr-checklist-matrix", reviewer: "review-c" },
+        { angle: "pr-checklist", reviewer: "review-c" },
       ],
     });
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -289,13 +289,13 @@ test("selector pairing: a hand-crafted PADDED shadow (cardinality met, one revie
         { angle: "dry", reviewer: "review-a" },
         { angle: "kiss", reviewer: "review-a" },
         { angle: "dry", reviewer: "review-b" },
-        { angle: "pr-checklist-matrix", reviewer: "review-c" },
+        { angle: "pr-checklist", reviewer: "review-c" },
       ],
     });
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       },
       { repoRoot: repoA },
     );
@@ -323,7 +323,7 @@ const ANGLE_CONFIG = {
   gates: {
     requireFanoutEvidence: true,
     draft: { required: true },
-    preApproval: { required: true, angles: ["dry", { name: "pr-checklist-matrix", mandatory: true }] },
+    preApproval: { required: true, angles: ["dry", { name: "pr-checklist", mandatory: true }] },
   },
 };
 
@@ -349,7 +349,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger missing a mandatory angl
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, false);
     assert.ok(
-      check.failures.some((f) => f.includes("missing mandatory angle(s): pr-checklist-matrix") && f.includes("route to conductor")),
+      check.failures.some((f) => f.includes("missing mandatory angle(s): pr-checklist") && f.includes("route to conductor")),
       JSON.stringify(check.failures),
     );
   } finally {
@@ -369,7 +369,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger naming a FOREIGN angle b
     await writeFile(fullLedgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
       // Mandatory angle covered, but one recorded angle is outside the pool.
-      provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-checklist-matrix", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-checklist", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
     }) + "\n", "utf8");
 
     const enforcement = await buildFanoutEnforcement({
@@ -378,7 +378,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger naming a FOREIGN angle b
       config: ANGLE_CONFIG, cwd: repoB,
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
-    assert.deepEqual(pa.anglePool, ["pr-checklist-matrix", "dry"], "enforcement must carry the resolved pool as anglePool");
+    assert.deepEqual(pa.anglePool, ["pr-checklist", "dry"], "enforcement must carry the resolved pool as anglePool");
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, false);
     assert.ok(
@@ -433,7 +433,7 @@ test("angle-contract shadow: a stale checkout's provenance FAILING the angle con
     await mkdir(path.dirname(goodPath), { recursive: true });
     await writeFile(goodPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
-      provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }] },
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist", reviewer: "review-b" }] },
     }) + "\n", "utf8");
 
     const enforcement = await buildFanoutEnforcement({
@@ -443,7 +443,7 @@ test("angle-contract shadow: a stale checkout's provenance FAILING the angle con
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(
-      pa.provenance.perAngle.some((e) => e.angle === "pr-checklist-matrix"),
+      pa.provenance.perAngle.some((e) => e.angle === "pr-checklist"),
       "must select the angle-contract-passing provenance, not the stale shadow",
     );
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);

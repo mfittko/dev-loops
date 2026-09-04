@@ -37,9 +37,9 @@ function buildBody({ scope, nonGoals = "", includeSections = true, boundary }) {
     nonGoals || "- not needed",
     "",
     "## AC / DoD matrix",
-    "| Item | Type |",
+    "| Criterion outcome | Required completion evidence |",
     "|---|---|",
-    "| ac-1 | dod |",
+    "| the feature works end to end | a focused test proves the feature works |",
     "",
   ].join("\n");
 }
@@ -149,6 +149,32 @@ test("runRefinementCompletenessChecker flags missing checkbox and invalid matrix
   assert.ok(result.errors.some((entry) => entry.code === "invalid_ac_dod_matrix"));
 });
 
+test("#1951 runRefinementCompletenessChecker flags an identifier-only/tautological matrix as invalid", () => {
+  const body = [
+    "## Scope",
+    "- owns root",
+    "This issue owns root. It does NOT own api (#2).",
+    "",
+    "## Acceptance criteria",
+    "- [ ] has acceptance checkbox",
+    "",
+    "## Definition of done",
+    "- [ ] has done checklist",
+    "",
+    "## Non-goals",
+    "- not needed",
+    "",
+    "## AC / DoD matrix",
+    "| AC | DoD |",
+    "|---|---|",
+    "| AC1 | D1 |",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [], body }] });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((entry) => entry.code === "invalid_ac_dod_matrix"));
+});
+
 function buildNoOwnershipBody() {
   return [
     "## Scope",
@@ -164,9 +190,9 @@ function buildNoOwnershipBody() {
     "- not needed",
     "",
     "## AC / DoD matrix",
-    "| Item | Type |",
+    "| Criterion outcome | Required completion evidence |",
     "|---|---|",
-    "| ac-1 | dod |",
+    "| the feature works end to end | a focused test proves the feature works |",
   ].join("\n");
 }
 

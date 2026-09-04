@@ -36,7 +36,7 @@ const ANGLE_CONTRACT_DEVLOOPS = [
   "    angles:",
   "      - dry",
   "      - kiss",
-  "      - name: pr-checklist-matrix",
+  "      - name: pr-checklist",
   "        mandatory: true",
   "",
 ].join("\n");
@@ -1185,7 +1185,7 @@ test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async
         findings: "[]",
         provenance: JSON.stringify({
           distinctReviewers: 2,
-          perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }],
+          perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist", reviewer: "review-b" }],
         }),
         tmpRoot: tmpDir,
       }, { repoRoot });
@@ -1199,10 +1199,10 @@ test("writeGateFindingsLog accepts a one-reviewer-per-fresh-angle ledger", async
 test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer covers its whole declared group (AC7)", async () => {
   // A dedicated fixture (not the shared ANGLE_CONTRACT_DEVLOOPS one, which
   // carries no gates.fanout override and so inherits the shipped default
-  // grouping table — under which "dry" and "pr-checklist-matrix" are NOT
+  // grouping table — under which "dry" and "pr-checklist" are NOT
   // configured together): the write path now cross-checks a claimed `group`
   // against gates.fanout.groups, so the fixture must actually configure
-  // dry + pr-checklist-matrix into the same group for this to be a genuinely
+  // dry + pr-checklist into the same group for this to be a genuinely
   // legitimate grouped-dispatch scenario.
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-angle-contract-grouped-"));
   try {
@@ -1215,12 +1215,12 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
         "    angles:",
         "      - dry",
         "      - kiss",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    groups:",
         "      - name: process",
-        "        angles: [dry, pr-checklist-matrix]",
+        "        angles: [dry, pr-checklist]",
         "",
       ].join("\n"),
       "utf8",
@@ -1238,7 +1238,7 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
           distinctReviewers: 1,
           perAngle: [
             { angle: "dry", reviewer: "review-a", group: "process" },
-            { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist", reviewer: "review-a", group: "process" },
           ],
         }),
         tmpRoot: tmpDir,
@@ -1271,12 +1271,12 @@ test("writeGateFindingsLog accepts a grouped-provenance ledger under --full-labe
         "    angles:",
         "      - dry",
         "      - kiss",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    groups:",
         "      - name: process",
-        "        angles: [dry, pr-checklist-matrix]",
+        "        angles: [dry, pr-checklist]",
         "",
       ].join("\n"),
       "utf8",
@@ -1294,7 +1294,7 @@ test("writeGateFindingsLog accepts a grouped-provenance ledger under --full-labe
           distinctReviewers: 1,
           perAngle: [
             { angle: "dry", reviewer: "review-a", group: "process" },
-            { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist", reviewer: "review-a", group: "process" },
           ],
         }),
         fullLabel: true,
@@ -1320,15 +1320,15 @@ test("writeGateFindingsLog rejects a grouped-dispatch ledger whose declared grou
           headSha: "abc1234500000000000000000000000000000000",
           verdict: "clean",
           findings: "[]",
-          // "dry" and "pr-checklist-matrix" are never grouped together by the
+          // "dry" and "pr-checklist" are never grouped together by the
           // config this fixture inherits (the shipped default "process" group
-          // covers scope/pr-description/gate-evidence/pr-checklist-matrix, not
+          // covers scope/pr-description/gate-evidence/pr-checklist, not
           // "dry") — a self-attested shared "group" label alone must not pass.
           provenance: JSON.stringify({
             distinctReviewers: 1,
             perAngle: [
               { angle: "dry", reviewer: "review-a", group: "process" },
-              { angle: "pr-checklist-matrix", reviewer: "review-a", group: "process" },
+              { angle: "pr-checklist", reviewer: "review-a", group: "process" },
             ],
           }),
           tmpRoot: tmpDir,
@@ -1357,7 +1357,7 @@ test("writeGateFindingsLog accepts a carried-angle ledger that reuses the prior 
         provenance: JSON.stringify({
           distinctReviewers: 1,
           perAngle: [
-            { angle: "pr-checklist-matrix", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
             { angle: "dry", reviewer: "review-a", carriedFromHead: "abc1234" },
           ],
         }),
@@ -1381,10 +1381,10 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       verdict: "clean",
       findings: "[]",
       // Angles must cover the shipped extension-defaults preApproval mandatory
-      // angle (pr-checklist-matrix) and stay within its configured pool — this
+      // angle (pr-checklist) and stay within its configured pool — this
       // test isolates repoRoot from any repo-local .devloops via tmpDir, but
       // the packaged extension defaults still apply regardless of repoRoot.
-      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist-matrix", reviewer: "review-c" }] }),
+      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
       tmpRoot: tmpDir,
     }, { repoRoot: tmpDir });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef000000000000000000000.json");
@@ -1436,7 +1436,7 @@ test("checkProvenanceAngleCoverage rejects a missing mandatory angle (fail-close
   await withAngleContractRepo(async (repoRoot) => {
     await assert.rejects(
       () => checkProvenanceAngleCoverage({ perAngle: [{ angle: "dry" }] }, "pre_approval_gate", { repoRoot }),
-      /missing mandatory angle\(s\) for pre_approval_gate: pr-checklist-matrix/,
+      /missing mandatory angle\(s\) for pre_approval_gate: pr-checklist/,
     );
   });
 });
@@ -1457,7 +1457,7 @@ test("checkProvenanceAngleCoverage rejects an angle outside the configured pool 
   await withAngleContractRepo(async (repoRoot) => {
     await assert.rejects(
       () => checkProvenanceAngleCoverage(
-        { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] },
+        { perAngle: [{ angle: "dry" }, { angle: "pr-checklist" }, { angle: "made-up-angle" }] },
         "pre_approval_gate",
         { repoRoot },
       ),
@@ -1466,13 +1466,13 @@ test("checkProvenanceAngleCoverage rejects an angle outside the configured pool 
   });
 });
 
-test("checkProvenanceAngleCoverage accepts the fan-in synthetic pr-checklist-matrix angle when the gate's pool omits it (#1494)", async () => {
+test("checkProvenanceAngleCoverage accepts the fan-in synthetic pr-checklist angle when the gate's pool omits it (#1494)", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     // draft's configured pool (scope, coverage, pr-description) does not list
-    // pr-checklist-matrix; the fan-in-synthetic exemption must let it through
+    // pr-checklist; the fan-in-synthetic exemption must let it through
     // without a warning.
     const result = await checkProvenanceAngleCoverage(
-      { perAngle: [{ angle: "scope", reviewer: "r1" }, { angle: "pr-description", reviewer: "r2" }, { angle: "pr-checklist-matrix", reviewer: "r3" }] },
+      { perAngle: [{ angle: "scope", reviewer: "r1" }, { angle: "pr-description", reviewer: "r2" }, { angle: "pr-checklist", reviewer: "r3" }] },
       "draft_gate",
       { repoRoot },
     );
@@ -1483,7 +1483,7 @@ test("checkProvenanceAngleCoverage accepts the fan-in synthetic pr-checklist-mat
 test("checkProvenanceAngleCoverage warns (does not fail) on a foreign angle when gates.rejectForeignAngles is false", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     const result = await checkProvenanceAngleCoverage(
-      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }, { angle: "made-up-angle" }] },
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist" }, { angle: "made-up-angle" }] },
       "pre_approval_gate",
       { repoRoot },
     );
@@ -1497,7 +1497,7 @@ test("writeGateFindingsLog surfaces the foreign-angle warning on the result when
     try {
       const result = await writeGateFindingsLog({
         repo: "a/b", pr: 1, gate: "pre_approval_gate", headSha: "abc1234500000000000000000000000000000000", verdict: "clean", findings: "[]",
-        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist-matrix", reviewer: "r2" }, { angle: "made-up-angle", reviewer: "r3" }] }),
+        provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "r1" }, { angle: "pr-checklist", reviewer: "r2" }, { angle: "made-up-angle", reviewer: "r3" }] }),
         tmpRoot,
       }, { repoRoot });
       assert.equal(result.ok, true);
@@ -1511,7 +1511,7 @@ test("writeGateFindingsLog surfaces the foreign-angle warning on the result when
 test("checkProvenanceAngleCoverage: a delta-suffixed angle (<angle>-delta-at-current-head) satisfies its base mandatory angle", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     const result = await checkProvenanceAngleCoverage(
-      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix-delta-at-current-head" }] },
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-delta-at-current-head" }] },
       "pre_approval_gate",
       { repoRoot },
     );
@@ -1528,7 +1528,7 @@ test("checkProvenanceAngleCoverage passes for a fully-covered draft_gate and pre
     );
     assert.equal(draft.warning, null);
     const preApproval = await checkProvenanceAngleCoverage(
-      { perAngle: [{ angle: "dry" }, { angle: "kiss" }, { angle: "pr-checklist-matrix" }] },
+      { perAngle: [{ angle: "dry" }, { angle: "kiss" }, { angle: "pr-checklist" }] },
       "pre_approval_gate",
       { repoRoot },
     );
@@ -1554,7 +1554,7 @@ test("checkProvenanceAngleCoverage: a mandatory angle disabled via enabled:false
       "    angles:",
       "      - dry",
       "      - kiss",
-      "      - name: pr-checklist-matrix",
+      "      - name: pr-checklist",
       "        mandatory: true",
       "      - name: yagni",
       "        mandatory: true",
@@ -1572,7 +1572,7 @@ test("checkProvenanceAngleCoverage: a mandatory angle disabled via enabled:false
       "the override layer must load without schema rejection",
     );
     const result = await checkProvenanceAngleCoverage(
-      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist-matrix" }] },
+      { perAngle: [{ angle: "dry" }, { angle: "pr-checklist" }] },
       "pre_approval_gate",
       { repoRoot },
     );
@@ -1593,10 +1593,10 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
       "    angles:",
       "      - dry",
       // The shipped extension-defaults.yaml also configures preApproval with a
-      // mandatory pr-checklist-matrix angle, merged by name (D3) — disable it
+      // mandatory pr-checklist angle, merged by name (D3) — disable it
       // here so this test's minimal contract (dry + the additive catalog) is
       // the whole mandatory-angle picture.
-      "      - name: pr-checklist-matrix",
+      "      - name: pr-checklist",
       "        enabled: false",
       "    dynamic:",
       "      additive: true",
