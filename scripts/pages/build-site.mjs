@@ -57,6 +57,14 @@ export const DECKS = [
 // Resolve a deck's published filename: distinct outFile when set, else file.
 const deckOut = (deck) => deck.outFile ?? deck.file;
 
+export function assertUniquePublishTargets(targets) {
+  const seen = new Set();
+  for (const target of targets) {
+    if (seen.has(target)) throw new Error(`duplicate Pages output target ${target}`);
+    seen.add(target);
+  }
+}
+
 // The State atlas: a generated page (site/state-atlas.html) rendering every
 // dev-loops state machine as mermaid diagrams straight from the code's tables.
 export const STATE_ATLAS = { file: 'state-atlas.html', label: 'State atlas' };
@@ -132,13 +140,25 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const articlesDir = join(repoRoot, 'docs', 'articles');
   const decksDir = join(repoRoot, 'docs', 'presentations');
 
-  // Guard: out is wiped before assembly. Refuse paths that would nuke the
-  // filesystem root, the repo itself, or an ancestor of the repo.
+  // Guard: out is wiped before assembly. Within the repository, only the
+  // generated site/ directory is a legal target; external output dirs support
+  // previews and tests without putting tracked source at risk.
   const root = resolve(repoRoot);
+  const defaultOut = join(root, 'site');
   const isAncestorOf = (a, b) => b === a || b.startsWith(a + '/');
-  if (out === parsePath(out).root || out === root || isAncestorOf(out, root)) {
+  const isInsideRoot = out.startsWith(root + '/');
+  if (out === parsePath(out).root || out === root || isAncestorOf(out, root) || (isInsideRoot && out !== defaultOut)) {
     throw new Error(`refusing to wipe unsafe output dir ${out}`);
   }
+
+  const files = [
+    'index.html',
+    ...ARTICLES.map((a) => a.file),
+    ...DECKS.map((d) => deckOut(d)),
+    STATE_ATLAS.file,
+    'assets/mermaid.min.js',
+  ];
+  assertUniquePublishTargets(files);
 
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
@@ -172,13 +192,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
 
   return {
     out,
-    files: [
-      'index.html',
-      ...ARTICLES.map((a) => a.file),
-      ...DECKS.map((d) => deckOut(d)),
-      STATE_ATLAS.file,
-      'assets/mermaid.min.js',
-    ],
+    files,
   };
 }
 

@@ -12,7 +12,7 @@ css: ./style.css
 <div class="hero-card">
   <p class="kicker">dev-loops</p>
   <h1>The State Graph Is the Surface</h1>
-  <p class="hero-copy">Software delivery breaks at the handoffs: stale context, invisible waits, and approvals inferred from old evidence. dev-loops makes each handoff an explicit state with one legal next move.</p>
+  <p class="hero-copy">Delivery handoffs can lose context, hide waits, and carry approvals based on stale evidence. dev-loops makes each handoff an explicit state with one legal next move.</p>
   <div class="chip-row pt-5">
     <span class="pill">deterministic state</span>
     <span class="pill">bounded loops</span>
@@ -370,4 +370,4 @@ flowchart LR
 </div>
 </div>
 
-<div class="soft-note">The agent may change. The harness may change. The state graph stays authoritative, and every loop comes back to it.</div>
+<div class="soft-note">The state graph preserves authority across agent and harness changes, and every loop returns to it.</div>

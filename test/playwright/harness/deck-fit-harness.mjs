@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 
 import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./webkit-smoke-harness.mjs";
@@ -44,7 +45,7 @@ export async function settleMobile(page, url) {
   await page.evaluate(() => document.fonts.ready);
 }
 
-// Returns { hOffenders, pageScrollWidth, innerWidth, clipped } measured after settle.
+// Returns viewport overflow and clipping facts measured after layout settles.
 export async function measureFit(page) {
   return page.evaluate(() => {
     const iw = window.innerWidth;
@@ -60,15 +61,21 @@ export async function measureFit(page) {
     // Vertical clip: a section whose content is taller than its box while its
     // own overflow-y is hidden has cut-off content.
     const clipped = [];
+    const oversizedSections = [];
     for (const el of document.querySelectorAll("section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
         clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
       }
+      const height = el.getBoundingClientRect().height;
+      if (height > window.innerHeight + 1) {
+        oversizedSections.push(`<${el.tagName.toLowerCase()} id="${el.id}"> height=${Math.round(height)} viewport=${window.innerHeight}`);
+      }
     }
     return {
       hOffenders,
       clipped,
+      oversizedSections,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -155,11 +162,36 @@ export function assertMobileFit(m) {
   assertDeckFit(m, `${MOBILE.width}px viewport`);
 }
 
+export function assertDesktopFit(m) {
+  assertDeckFit(m, "1280x800 desktop viewport");
+  expect(m.oversizedSections, `sections exceed the desktop viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
+}
+
+export function assertA11yClean(results) {
+  expect(results, "axe results must be available").toBeTruthy();
+  expect(results.violations, "axe accessibility violations").toEqual([]);
+}
+
+export function assertRuntimeClean(report) {
+  expect(report.consoleErrors, `console/page errors:\n${report.consoleErrors.join("\n")}`).toEqual([]);
+  expect(report.failedRequests, `failed requests:\n${report.failedRequests.join("\n")}`).toEqual([]);
+}
+
+function captureRuntimeErrors(page) {
+  const report = { consoleErrors: [], failedRequests: [] };
+  page.on("console", (message) => {
+    if (message.type() === "error") report.consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => report.consoleErrors.push(String(error)));
+  page.on("requestfailed", (request) => report.failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? "failed"}`));
+  return report;
+}
+
 // Registry-driven runner: defines the full per-deck suite from one data entry.
 //   { sliceId, deckPath, sectionIds, mobileCapture: { id, stateName } }
 // `sectionIds` may be plain ids or { id, stateName, capture } entries; entries
 // with capture !== false get a desktop named-state capture.
-export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, desktopFit = false }) {
+export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, desktopFit = false, evidenceAssertions = false }) {
   const states = sectionIds.map((entry) =>
     typeof entry === "string" ? { id: entry, stateName: entry, capture: true } : { capture: true, stateName: entry.id, ...entry });
   const ids = states.map((s) => s.id);
@@ -168,6 +200,7 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
 
   test(`webkit renders the ${sliceId} and captures named states`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
+    const runtimeReport = captureRuntimeErrors(page);
     try {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -175,7 +208,8 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
       await page.evaluate(() => document.fonts.ready);
       await assertSectionIdsAndNoHorizontalScroll(page, ids);
       await assertCspMeta(page);
-      if (desktopFit) assertDeckFit(await measureFit(page), "1280x800 desktop viewport");
+      if (desktopFit) assertDesktopFit(await measureFit(page));
+      if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       for (const { id, stateName, capture } of states) {
         const section = page.locator(`#${id}`);
@@ -195,8 +229,10 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
             route: `#${id}`,
             reviewHint: `Designer-review state for the "${id}" deck section.`,
           },
+          captureConsole: async () => runtimeReport,
         });
       }
+      if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);
     }
@@ -209,16 +245,12 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await page.evaluate(() => {
         const section = document.querySelector("section");
-        if (section) {
-          section.style.height = "800px";
-          section.style.minHeight = "0";
-        }
         const tall = document.createElement("div");
         tall.style.cssText = "height:1600px;width:10px";
         section?.appendChild(tall);
       });
       const m = await measureFit(page);
-      expect(m.clipped.length).toBeGreaterThan(0);
+      expect(() => assertDesktopFit(m)).toThrow(/sections exceed the desktop viewport height/);
     } finally {
       await stopFixtureServer(server);
     }
@@ -226,10 +258,12 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
 
   test(`webkit ${sliceId} fits the mobile viewport (no horizontal scroll, no vertical clip)`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
+    const runtimeReport = captureRuntimeErrors(page);
     try {
       await settleMobile(page, url);
       const m = await measureFit(page);
       assertMobileFit(m);
+      if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
       await section.scrollIntoViewIfNeeded();
@@ -247,7 +281,9 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
           route: `#${mobileCapture.id}`,
           reviewHint: `Mobile (390x844) layout for the ${mobileCapture.id} section — fits the viewport, no scroll/clip.`,
         },
+        captureConsole: async () => runtimeReport,
       });
+      if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);
     }
@@ -264,7 +300,7 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
         document.body.appendChild(wide);
       });
       const m = await measureFit(page);
-      expect(m.hOffenders.length).toBeGreaterThan(0);
+      expect(() => assertMobileFit(m)).toThrow(/elements overflow/);
     } finally {
       await stopFixtureServer(server);
     }

@@ -17,17 +17,17 @@ outro: closer
 
 > **Publication note:** this long-form Markdown source is intentionally not part of the repository's strict article-rendering list. Its tables and Mermaid source are maintained for repository reading; extending the renderer is outside this article's scope.
 
-The vocabulary of agentic software development has moved quickly: prompt engineering, harness engineering, Ralph loops, Karpathy loops, graph engineering. Each term points at a real layer, but treating them as competing schools misses the more useful synthesis.
+The vocabulary of agentic software development has moved quickly: prompt engineering, harness engineering, Ralph loops, Karpathy loops, graph engineering. These terms describe complementary layers of one system.
 
 [The Ralph loop](https://ghuntley.com/ralph/) makes persistence external: run a bounded agent step, preserve durable artifacts, and start another iteration. [Karpathy's AutoResearch](https://github.com/karpathy/autoresearch) adds selection pressure: modify, evaluate against a fixed metric, keep the improvement or discard it, and repeat. Recent [graph-engineering](https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph) discussions make the workflow topology explicit: deterministic paths where policy is known, agentic work where judgment is useful, and cycles where revision is expected.
 
-`dev-loops` fits across all three, but its center of gravity is more specific:
+`dev-loops` spans all three. Its center of gravity is more specific:
 
 > **dev-loops is a graph/loop control surface built around a modeled state graph.**
 
 The graph models the state of the work and the legal moves from that state. The loop repeatedly observes the authoritative world, resolves the current state, selects one legal move, executes it, records the result, and refreshes. The public surface exposes that model as start, continue, inspect, steer, wait, approve, and merge behavior. GitHub supplies the current reference backend for tracked work, review evidence, CI, and terminal merge truth.
 
-This distinction matters. Models, prompts, and chat transcripts are replaceable execution contexts. The durable product is the state model and the policy encoded around it.
+The state model and its encoded policy form the durable product across changes to models, prompts, and chat transcripts.
 
 ## Where dev-loops fits
 
@@ -36,11 +36,11 @@ A useful way to position the repository is by the problem each pattern solves.
 | Pattern | What it contributes | How dev-loops uses or extends it |
 |---|---|---|
 | Ralph loop | Persistence across repeated bounded agent runs | Re-entry is driven by freshly resolved state |
-| Karpathy loop | Measured keep/discard selection | Review/fix convergence and retrospective follow-ups already create improvement loops; the modeled and testable control surface is a strong substrate for a future keep/revert meta-loop over workflow changes |
+| Karpathy loop | Measured keep/discard selection | Review/fix convergence and retrospective follow-ups already create improvement loops; the modeled and testable control surface supplies inputs for a future keep/revert meta-loop over workflow changes |
 | Graph engineering | Explicit paths, branches, cycles, and deterministic control | The graph models the work first, then projects the next actor and action |
 | Evidence backend | Durable identity, evidence, coordination, and terminal facts | GitHub issues, pull requests, reviews, threads, checks, head SHAs, and merge state form the current authoritative evidence plane |
 
-`dev-loops` currently self-corrects in flight and improves through review, retrospectives, follow-up issues, decision records, and tests. A general AutoResearch-style optimizer would add an outer loop that proposes graph or harness changes, evaluates them on a held-out task suite, and keeps or reverts them. The repository is unusually well prepared for that layer because its states, transitions, routing decisions, and traces are explicit and versioned.
+`dev-loops` currently self-corrects in flight and improves through review, retrospectives, follow-up issues, decision records, and tests. A general AutoResearch-style optimizer would add an outer loop that proposes graph or harness changes, evaluates them on a held-out task suite, and keeps or reverts them. Its explicit, versioned states, transitions, routing decisions, and traces provide the inputs for that layer.
 
 ## The graph follows the work
 
@@ -51,7 +51,7 @@ Many agent frameworks begin with an execution graph:
 - node C is a reviewer;
 - an edge decides which agent runs next.
 
-That is useful, but it makes the actors look more fundamental than the work.
+Actor-first graphs emphasize execution roles.
 
 `dev-loops` starts from the other direction. It models facts such as:
 
@@ -160,7 +160,7 @@ That is graph composition: multiple state machines connected through explicit co
 
 ## A loop is repeated state resolution
 
-The word *loop* can make the system sound like an agent that simply keeps trying. The actual pattern is stricter.
+In `dev-loops`, a loop follows a strict state-resolution pattern.
 
 ```text
 until terminal or human stop:
@@ -331,9 +331,9 @@ keep the candidate only when it improves within safety constraints
 otherwise revert
 ```
 
-The evaluator must remain outside the candidate's control. Public benchmark scores alone would be too easy to game; the useful oracle is a private replay suite built from real repository tasks, escaped defects, review findings, and human correction effort.
+The evaluator must remain outside the candidate's control. A private replay suite built from real repository tasks, escaped defects, review findings, and human correction effort provides an oracle that resists gaming.
 
-`dev-loops` is a strong candidate for this mixture because the optimization target is a versioned set of state models, transition tables, configuration, role mappings, gates, and handoff contracts that can be tested and compared.
+The versioned set of state models, transition tables, configuration, role mappings, gates, and handoff contracts gives an evaluated meta-loop a testable optimization target.
 
 ## What the graph/loop surface buys
 

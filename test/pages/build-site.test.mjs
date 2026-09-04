@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -40,8 +40,6 @@ test('build-site: index is the intro article, all resources published, nav links
       await readFile(join(process.cwd(), 'docs', 'presentations', stateGraphDeck.file), 'utf8'),
       'Pages copies the CSP-safe state-graph deck byte-for-byte',
     );
-    assert.equal(new Set(DECKS.map(deckOut)).size, DECKS.length, 'published deck names do not collide');
-
     const index = await readFile(join(out, 'index.html'), 'utf8');
     // The landing page is the intro article (its content), not the old deck index.
     assert.ok(index.includes('Introducing dev-loops'), 'index is the intro article');
@@ -167,4 +165,23 @@ test('build-site refuses to wipe repoRoot itself', async () => {
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('build-site refuses repository-internal output directories without deleting them', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-internal-out-'));
+  const docsDir = join(repoRoot, 'docs');
+  const sentinel = join(docsDir, 'sentinel.txt');
+  try {
+    await mkdir(docsDir);
+    await writeFile(sentinel, 'preserve me', 'utf8');
+    await assert.rejects(() => buildSite({ repoRoot, outDir: docsDir }), /refusing to wipe unsafe output dir/);
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('Pages output targets reject cross-family collisions', () => {
+  assert.doesNotThrow(() => assertUniquePublishTargets(['index.html', 'deck.html', 'assets/runtime.js']));
+  assert.throws(() => assertUniquePublishTargets(['index.html', 'deck.html', 'index.html']), /duplicate Pages output target index\.html/);
 });
