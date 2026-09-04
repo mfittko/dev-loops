@@ -66,6 +66,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/close-gate-findings.mjs", "standalone — gate fan-in close step, invoked by gate procedure subagents, not code/CI wired"],
   ["scripts/github/compose-reviewer-prompt.mjs", "standalone — sanctioned reviewer-prompt composer for the gate fan-out (issue #1852), agent/orchestrator-invoked per dispatch unit"],
   ["scripts/github/create-label.mjs", "standalone — operator tool for one-off label creation"],
+  ["scripts/github/reconcile-gate-evidence-status.mjs", "standalone — merge-readiness gate-evidence status reconcile (issue #1935), agent-invoked after the post-drive audit to re-fire a stuck required status"],
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
   ["scripts/github/resolve-angle-carry-forward.mjs", "standalone — gate angle carry-forward step, agent-invoked"],
   ["scripts/github/withdraw-copilot-review-request.mjs", "standalone — Copilot review withdrawal step, agent-invoked"],
