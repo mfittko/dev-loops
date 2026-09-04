@@ -319,6 +319,39 @@ test("stripNonAssertionMarkdown: removes inline spans, fences, and block quotes"
   assert.match(stripNonAssertionMarkdown("approve release v1.0.0 `noise`"), /approve release/i);
 });
 
+test("stripNonAssertionMarkdown: tilde fences, unterminated fences, and indented code blocks are all stripped (#1941 review)", () => {
+  // `~~~` (tilde) fenced block — the `~{3,}` alternation.
+  assert.doesNotMatch(stripNonAssertionMarkdown("~~~\napprove release v1.0.0\n~~~"), /approve release/i);
+  // Unterminated fence to EOF (opening fence, no close).
+  assert.doesNotMatch(stripNonAssertionMarkdown("```\napprove release v1.0.0"), /approve release/i);
+  // Indented code block: 4-space and tab lead both render as code on GitHub.
+  assert.doesNotMatch(stripNonAssertionMarkdown("    approve release v1.0.0"), /approve release/i);
+  assert.doesNotMatch(stripNonAssertionMarkdown("\tapprove release v1.0.0"), /approve release/i);
+});
+
+test("resolveApprovalState: an indented-code-block quote does NOT count (#1941 review — 4th code form)", () => {
+  for (const body of ["    approve release v1.0.0", "\tapprove release v1.0.0", "~~~\napprove release v1.0.0\n~~~"]) {
+    const d = resolveApprovalState({
+      version: "1.0.0",
+      operator: "op",
+      releaseRef: RELEASE_REF,
+      comments: [{ author: "op", body, createdAt: AFTER }],
+    });
+    assert.equal(d.approved, false, `indented/tilde code quote must not approve: ${JSON.stringify(body)}`);
+  }
+});
+
+test("resolveApprovalState: a comment created at the EXACT release-commit instant is refused (strict post-date boundary, #1941 review)", () => {
+  const d = resolveApprovalState({
+    version: "1.0.0",
+    operator: "op",
+    releaseRef: RELEASE_REF,
+    comments: [{ author: "op", body: "approve release v1.0.0", createdAt: RELEASE_REF }], // created == release commit instant
+  });
+  assert.equal(d.approved, false);
+  assert.match(d.refusal, /stale|predate/i);
+});
+
 // ---------------------------------------------------------------------------
 // verifyReleaseApproval (gh-facing shell, injected runChild + injected git)
 // ---------------------------------------------------------------------------

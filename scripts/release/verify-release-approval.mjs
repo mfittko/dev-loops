@@ -121,6 +121,12 @@ export function stripNonAssertionMarkdown(body) {
   // multi-backtick spans; leftover stray backticks are then blanked.
   s = s.replace(/(`+)[^`]*?\1/g, " ");
   s = s.replace(/`+/g, " ");
+  // Indented code blocks (#1941 review): a line led by 4+ spaces or a tab
+  // renders as a code block on GitHub, so a phrase quoted that way is code, not
+  // a top-level assertion. Blanking such a line is fail-closed-safe: a genuine
+  // one-line "approve release v<version>" is never indented, so this can only
+  // ever refuse a quoted occurrence, never a real approval.
+  s = s.replace(/^(?: {4,}|\t+).*$/gm, " ");
   // Block-quote lines (`>` at line start, optional leading whitespace).
   s = s.replace(/^[ \t]*>.*$/gm, " ");
   return s;
