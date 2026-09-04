@@ -48,13 +48,14 @@ because "the user said yes," not because it is running from a worktree.
 - ALL file mutations in the repo (write, edit, delete)
 - ALL git operations (branch, commit, push)
 - ALL PR lifecycle (create, draft, review, merge)
-- Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`
-  sub-delegates are LOCAL EDITS ONLY: no commit — they edit files and report changed files back;
-  the dispatching `dev-loop` session owns the commit after consolidating results. That
-  sub-delegate's own `SubagentStop` event would otherwise see the same dirty worktree it was told
-  not to commit and deadlock on `LOCAL-COMMIT-BEFORE-EXIT`, so the dispatcher sets
-  `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` on that dispatch to exempt it from the
-  `subagent-stop-uncommitted-guard` hook; an ordinary dispatch without the marker stays enforced.
+- Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`/`fixer`
+  sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for tracker-backed
+  sessions they also push. There is no "edit here, commit there" split: an editing sub-delegate is
+  never told not to commit, and a `dev-loop` session that wants a single consolidated commit
+  performs the edits itself rather than delegating the edit and keeping the commit. The removed
+  `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption deadlocked an editing subagent under a
+  task-scoped no-commit instruction on the Claude harness (#1936); the
+  `subagent-stop-uncommitted-guard` hook stays fully enforced for every editing role.
   See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
 
 ## Model tier at dispatch (Pi)

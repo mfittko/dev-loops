@@ -537,21 +537,16 @@ test("decideSubagentStopGuard blocks when pendingCommitAuthorization is false (n
   assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
 });
 
-test("decideSubagentStopGuard exempts an explicit orchestrator-owned-commit dispatch (#1786)", () => {
-  // A "LOCAL EDITS ONLY: no commit" delegate (developer/quality/docs) leaves the worktree dirty
-  // on purpose — the dispatching orchestrator owns the commit. The marker exempts the stop.
-  const d = decideSubagentStopGuard({
-    cwd: WT,
-    porcelain: " M src/x.mjs\n?? y",
-    orchestratorOwnsCommit: true,
-  });
-  assert.equal(d.decision, "allow");
-});
-
-test("decideSubagentStopGuard still blocks a dirty worktree without the orchestrator-owned-commit marker (#1786)", () => {
-  // Mutation anchor: without the explicit marker, an ordinary dispatch's commit-before-exit
-  // obligation MUST stay enforced — the exemption must not silently regress to a blanket allow.
-  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", orchestratorOwnsCommit: false });
+// #1936: the #1786 `orchestratorOwnsCommit` env-var exemption was REMOVED. The "edit here,
+// commit there" split it enabled hard-deadlocked an editing subagent under a task-scoped
+// no-commit instruction: the guard demanded a commit the session then denied, then re-blocked
+// the exit. Editing sub-delegates now commit their own work, so the guard stays the enforcer.
+test("decideSubagentStopGuard ignores a removed orchestratorOwnsCommit flag — no env-var escape (#1936)", () => {
+  // Passing the (now-unused) flag must NOT exempt: a dirty editing dispatch still blocks, so the
+  // only resolution is to commit its own work — never a denied-commit deadlock loop. This is the
+  // mutation anchor for the removed exemption: reintroducing an `orchestratorOwnsCommit` allow
+  // branch would flip this to "allow" and re-open the deadlock seam.
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", orchestratorOwnsCommit: true });
   assert.equal(d.decision, "block");
   assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
 });
@@ -575,13 +570,17 @@ for (const role of ["judge", "review"]) {
   });
 }
 
-// Non-goal anchor (#1925): editing roles and the orchestrator stay enforced — the exemption must
-// not regress into a blanket agentType-based allow.
+// Non-goal anchor (#1925) + deadlock-resolution pin (#1936): editing roles and the orchestrator
+// stay enforced (the read-only exemption must not regress into a blanket agentType-based allow),
+// AND the block resolves without a denied-commit deadlock because the actionable escape is to
+// commit the role's OWN work — never a task-scoped no-commit instruction the session then denies.
 for (const role of ["developer", "fixer", "docs", "quality"]) {
-  test(`decideSubagentStopGuard still blocks an editing "${role}" role with a dirty worktree (#1925 non-goal)`, () => {
+  test(`decideSubagentStopGuard blocks an editing "${role}" role with a dirty worktree and points it at self-commit (#1925 non-goal, #1936)`, () => {
     const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: role });
     assert.equal(d.decision, "block");
     assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    // The resolution is deadlock-free: commit your own work (no orchestrator-owned-commit split).
+    assert.match(d.reason, /Commit your work before stopping/);
   });
 }
 
