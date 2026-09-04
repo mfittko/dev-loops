@@ -447,11 +447,13 @@ test("renderGateReviewCommentBody (single surface): the round marker is rendered
   const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
   const withSurface = renderGateReviewCommentBody({ ...base, round: 2, nonLocatableFindings: [] });
   assert.equal(withSurface.split("\n")[1], buildReviewHeaderMarker({ gate: "draft_gate", headSha: HEAD_SHA, round: 2 }));
-  // The grouped findings table (#1942) is the single carrier of finding text
-  // now — there is no separate "Body-filed findings" block to assert on; an
-  // empty finding surface (no findings this round) renders no table at all.
+  // The body-only bulleted list (#1942, never a table) is the single carrier
+  // of non-locatable finding text now — there is no separate "Body-filed
+  // findings" block to assert on; an empty finding surface (no findings this
+  // round) renders no list at all.
   assert.doesNotMatch(withSurface, /Body-filed findings/);
   assert.doesNotMatch(withSurface, /\| Finding \| Angles \|/);
+  assert.doesNotMatch(withSurface, /Body-only findings/);
   assert.doesNotMatch(renderGateReviewCommentBody(base), /dev-loops:gate-findings-review/);
 });
 

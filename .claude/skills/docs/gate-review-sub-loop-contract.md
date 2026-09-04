@@ -1775,22 +1775,24 @@ resolved-in SHA (for findings resolved in a later pass).
 `GATE-EXEC-FINDING-THREADS`: A gate round has exactly ONE visible surface: the PR review of type
 COMMENT that `upsert-checkpoint-verdict.mjs` posts. Pass that round's ledger to it via
 `--findings-ledger <path>` — the same durable log `write-gate-findings-log.mjs` just wrote — and
-the verdict body and the round's findings land together on that one review. A locatable finding
-(an in-diff `file:line`) becomes an inline comment on that review; EVERY finding — locatable or
-not — also has its own text (summary plus file:line when known) rendered as a row of the body's
-grouped, findings-first, severity-ordered `Finding | Angles` table
-(`GATE-COMMENT-SINGLE-SURFACE`, #1942), so a locatable finding's inline comment is ADDITIVE, never
-a substitute for its table row. A finding's own free text can never be mistaken for a genuine gate
-verdict field by the line-start `gate:`/`head sha:`/`verdict:`/`summary:` structured field parser:
-each table cell runs through the same sanitizer the rest of the structured render uses
-(neutralizing markdown/HTML forgery, collapsing any embedded newline to a space, and escaping a
-literal `|` so it can never split a row), so no cell content can ever reach column 0 of its own
-logical line. A non-locatable ("body-filed") finding additionally stamps one INVISIBLE
-fingerprint+disposition marker (below) on the review body — this marker, never the finding's
-visible text, is what cross-round suppression and deferral tracking read back; the per-angle
-breakdown does NOT degrade to an `angle → verdict (+ finding count)` one-liner just because a
-round also carries `--findings-ledger` — the same grouped table renders identically whether or not
-this round has inline comments.
+the verdict body and the round's findings land together on that one review, split into TWO TRACKS
+by locatability (`GATE-COMMENT-SINGLE-SURFACE`, #1942): a **locatable** finding (an in-diff
+`file:line`) becomes an inline comment on that review, and its full text lives ENTIRELY there —
+the body never restates or per-row references it, only a single aggregate `**Inline findings:**`
+line (count, severity breakdown, touched angle names) pointing at the inline comments. A
+**non-locatable** ("body-filed") finding has no inline carrier, so it renders in full as its own
+plain bulleted list item in the body (never a table row) — summary, `file:line` blob-linked when
+known, and its angle in trailing brackets. A finding's full text therefore lives in EXACTLY ONE
+reader-reachable carrier, never both and never neither. A finding's own free text can never be
+mistaken for a genuine gate verdict field by the line-start `gate:`/`head sha:`/`verdict:`/
+`summary:` structured field parser: each body-list item runs through the same sanitizer the rest
+of the structured render uses (neutralizing markdown/HTML forgery and collapsing any embedded
+newline to a space), so no finding's text can ever reach column 0 of its own logical line. A
+non-locatable finding additionally stamps one INVISIBLE fingerprint+disposition marker (below) on
+the review body — this marker, never the finding's visible text, is what cross-round suppression
+and deferral tracking read back; the per-angle breakdown does NOT degrade to an
+`angle → verdict (+ finding count)` one-liner just because a round also carries
+`--findings-ledger`.
 
 A finding anchored to unchanged code has no in-diff `file:line` and is therefore always
 body-filed, tracked through the disposition ledger and its fingerprint rather than a review

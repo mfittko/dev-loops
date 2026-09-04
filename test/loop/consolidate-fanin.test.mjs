@@ -2053,17 +2053,18 @@ test("a comfortably under-budget round stays raw/unmarked and renders", async ()
   });
 });
 
-// Near-boundary UNDER-budget companion to the false-negative fixture above: 31
-// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line)
-// renders at 1954 chars — just 46 chars of headroom, since one more (32)
-// is exactly what tips it to 2016 and throws (measured against the real
-// renderer; see fitsRenderBudget). A round that really does fit this close to
-// the bound must still stay raw/unmarked (commentBudgetExceeded absent) and
-// render as-is — unconditionally, not only "if the marker path wasn't taken"
-// — so a reversion that starts marking everything, or an over-conservative
-// estimate, fails this half of the pair.
+// Near-boundary UNDER-budget companion to the false-negative fixture above: 26
+// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line,
+// consolidateFanin's own derived "accepted-for-fix" disposition) renders at
+// 1943 chars — just 57 chars of headroom, since one more (27) is exactly what
+// tips it to 2012 and throws (measured against the real renderer; see
+// fitsRenderBudget). A round that really does fit this close to the bound
+// must still stay raw/unmarked (commentBudgetExceeded absent) and render
+// as-is — unconditionally, not only "if the marker path wasn't taken" — so a
+// reversion that starts marking everything, or an over-conservative estimate,
+// fails this half of the pair.
 test("a near-boundary under-budget round (one finding short of the false-negative fixture's throw) stays raw/unmarked and renders", async () => {
-  const FINDINGS_PER_ANGLE = 31;
+  const FINDINGS_PER_ANGLE = 26;
   const files = { "angle-a.json": {
     angle: "angle-a",
     verdict: "findings_present",
