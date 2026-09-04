@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { ghJson, ghGraphql } from "../src/github/gh.mjs";
+import { ghJson, ghGraphql, resolveOwner } from "../src/github/gh.mjs";
 
 function stubRunChild(result) {
   return async () => result;
@@ -150,9 +150,74 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
     });
   });
 
+  describe("resolveOwner (#1949 org-owned board fallback)", () => {
+    function isUserQuery(args) {
+      return args.some((arg) => typeof arg === "string" && arg.includes("user(login"));
+    }
+    function isOrgQuery(args) {
+      return args.some((arg) => typeof arg === "string" && arg.includes("organization(login"));
+    }
+
+    test("a user login resolves to { id, kind: 'user' } without an org round-trip", async () => {
+      const calls = [];
+      const runChild = async (cmd, args, env) => {
+        calls.push(args);
+        if (isUserQuery(args)) {
+          return { code: 0, stdout: '{"data":{"user":{"id":"U_1"}}}', stderr: "" };
+        }
+        if (isOrgQuery(args)) {
+          return { code: 0, stdout: '{"data":{"organization":{"id":"O_1"}}}', stderr: "" };
+        }
+        throw new Error("unexpected query");
+      };
+      const owner = await resolveOwner("octocat", {}, runChild);
+      assert.deepEqual(owner, { id: "U_1", kind: "user" });
+      assert.equal(calls.filter(isOrgQuery).length, 0);
+    });
+
+    test("an org login whose user probe throws GH_API_ERROR falls back to the org probe", async () => {
+      const runChild = async (cmd, args, env) => {
+        if (isUserQuery(args)) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "Could not resolve to a User with the login of 'sofatutor'.",
+          };
+        }
+        if (isOrgQuery(args)) {
+          return { code: 0, stdout: '{"data":{"organization":{"id":"O_1"}}}', stderr: "" };
+        }
+        throw new Error("unexpected query");
+      };
+      const owner = await resolveOwner("sofatutor", {}, runChild);
+      assert.deepEqual(owner, { id: "O_1", kind: "org" });
+    });
+
+    test("an unknown owner (both probes fail) throws NO_USER_ID with the pinned message", async () => {
+      const runChild = async (cmd, args, env) => {
+        if (isUserQuery(args)) {
+          return { code: 1, stdout: "", stderr: "Could not resolve to a User with the login of 'nope'." };
+        }
+        if (isOrgQuery(args)) {
+          return { code: 1, stdout: "", stderr: "Could not resolve to an Organization with the login of 'nope'." };
+        }
+        throw new Error("unexpected query");
+      };
+      await assert.rejects(
+        () => resolveOwner("nope", {}, runChild),
+        (error) => {
+          assert.equal(error.message, 'Could not resolve owner ID for "nope"');
+          assert.equal(error.code, "NO_USER_ID");
+          return true;
+        },
+      );
+    });
+  });
+
   test("resolves from the @dev-loops/core/github/gh export map entry", async () => {
     const mod = await import("@dev-loops/core/github/gh");
     assert.equal(typeof mod.ghJson, "function");
     assert.equal(typeof mod.ghGraphql, "function");
+    assert.equal(typeof mod.resolveOwner, "function");
   });
 });

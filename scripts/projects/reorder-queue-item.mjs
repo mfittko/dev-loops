@@ -4,7 +4,7 @@ import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard, parseItemRef } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { ghGraphql } from "@dev-loops/core/github/gh";
+import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage:
   dev-loops queue reorder --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> [--after <number|node-id>]
@@ -156,18 +156,6 @@ function validateRepo(repo) {
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
 
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
-
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
   "  user(login:$login) {",
@@ -225,22 +213,6 @@ const UPDATE_ITEM_POSITION = [
   "}"
 ].join("\n");
 
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Paginated project listing ────────────────────────────────────────────
 
