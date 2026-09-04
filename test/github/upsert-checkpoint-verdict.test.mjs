@@ -11,7 +11,9 @@ import {
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
+  renderAngleVerdictDigest,
   renderGateReviewCommentBody,
+  renderStructuredFindings,
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -5116,6 +5118,92 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     assert.equal(out.action, "created");
     assert.equal(out.executionMode, "fanout_fanin");
   }, { prefix: "dev-loops-upsert-findings-json-" });
+});
+
+test("renderGroupedFindingsTable: both exported renderers produce the identical grouped table (#1942 'both renderers' AC)", () => {
+  const sections = [
+    { angle: "coverage", verdict: "clean", findings: [], unparseable: [] },
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "off-by-one", file: "a.mjs", line: 7 }], unparseable: [] },
+  ];
+  const viaStructured = renderStructuredFindings(sections);
+  const viaDigest = renderAngleVerdictDigest(sections);
+  assert.equal(viaDigest, viaStructured, "renderAngleVerdictDigest must render the same grouped table as renderStructuredFindings");
+  assert.match(viaStructured, /\| 🔴 off-by-one _`a\.mjs:7`_ \| correctness \|/);
+  assert.match(viaStructured, /\*\*Clean \(1\):\*\* coverage/);
+});
+
+test("renderGroupedFindingsTable: emoji legend pins every severity marker (#1942)", () => {
+  const sections = [{
+    angle: "correctness",
+    verdict: "findings_present",
+    findings: [
+      { severity: "high", summary: "h" },
+      { severity: "question", summary: "q" },
+      { severity: "medium", summary: "m" },
+      { severity: "low", summary: "l" },
+      { severity: "nit", summary: "n" },
+    ],
+    unparseable: [],
+  }];
+  const body = renderStructuredFindings(sections);
+  // Row order follows SEVERITY_ORDER (high, question, medium, low, nit); each
+  // finding carries its own severity emoji.
+  assert.match(body, /\| 🔴 h \| correctness \|/);
+  assert.match(body, /\| 🔵 q \| correctness \|/);
+  assert.match(body, /\| 🟠 m \| correctness \|/);
+  assert.match(body, /\| 🟡 l \| correctness \|/);
+  assert.match(body, /\| ⚪ n \| correctness \|/);
+});
+
+test("renderGroupedFindingsTable: all-findings round emits no Clean line; all-clean round emits no table header (#1942)", () => {
+  const allFindings = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "boom" }], unparseable: [] },
+  ]);
+  assert.match(allFindings, /\| Finding \| Angles \|/);
+  assert.doesNotMatch(allFindings, /\*\*Clean \(/, "no clean angles -> no Clean roster line");
+
+  const allClean = renderStructuredFindings([
+    { angle: "coverage", verdict: "clean", findings: [], unparseable: [] },
+    { angle: "pr-description", verdict: "clean", findings: [], unparseable: [] },
+  ]);
+  assert.doesNotMatch(allClean, /\| Finding \| Angles \|/, "no findings-bearing angles -> no table header");
+  assert.match(allClean, /\*\*Clean \(2\):\*\* coverage, pr-description/);
+});
+
+test("renderGroupedFindingsTable: escapeTableCell escapes a pipe in a finding summary so the two-column row is not broken (#1942)", () => {
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "a | b split" }], unparseable: [] },
+  ]);
+  // The literal `|` in the summary must be escaped (\|), never emit a raw `|`
+  // that GFM would read as an extra column boundary.
+  assert.match(body, /\| 🔴 a \\\| b split \| correctness \|/);
+});
+
+test("renderGroupedFindingsTable: a markdown-injection angle is neutralized in both the Angles cell and the Clean line (#1942 renderer-security)", () => {
+  // A live link/image needs the OPENING bracket; sanitizeStructuredInline
+  // entity-encodes it (`[` -> `&#91;`, `![` -> `!&#91;`) so an untrusted angle
+  // cannot inject a clickable link or an auto-loaded (IP-leaking) remote image
+  // onto the single-surface verdict body.
+  const link = "[evil](http://x)";
+  const image = "![img](http://x)";
+  const findingsBearing = renderStructuredFindings([
+    { angle: link, verdict: "findings_present", findings: [{ severity: "high", summary: "s" }], unparseable: [] },
+  ]);
+  assert.doesNotMatch(findingsBearing, /\[evil\]\(http:\/\/x\)/, "Angles cell must not render a live markdown link from an untrusted angle");
+  assert.match(findingsBearing, /&#91;evil\]\(http:\/\/x\)/, "the link's opening bracket must be entity-encoded");
+  const clean = renderStructuredFindings([
+    { angle: image, verdict: "clean", findings: [], unparseable: [] },
+  ]);
+  assert.doesNotMatch(clean, /!\[img\]\(http:\/\/x\)/, "Clean roster must not render a live auto-loaded image from an untrusted angle");
+  assert.match(clean, /!&#91;img\]\(http:\/\/x\)/, "the image's opening bracket must be entity-encoded");
+});
+
+test("renderGroupedFindingsTable: an unparseable-finding row escapes a pipe-bearing severity so the row is not broken (#1942 #1526)", () => {
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [], unparseable: [{ severity: "a|b" }] },
+  ]);
+  assert.match(body, /finding could not be interpreted/);
+  assert.doesNotMatch(body, /severity: `a\|b`/, "a raw pipe in the unparseable severity cell must be escaped");
 });
 
 test("upsert-checkpoint-verdict --findings-json structured verdict renders the gateEvidenceNote on its own labeled line (parity with free-text)", async () => {

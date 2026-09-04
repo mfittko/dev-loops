@@ -388,7 +388,10 @@ const MIN_FINDING_SUMMARY_CAP = 16;
 function fitFindingsToRenderBudget(findingsJson) {
   let cap = MAX_FINDING_TEXT_LENGTH;
   while (!fitsRenderBudget(findingsJson) && cap > MIN_FINDING_SUMMARY_CAP) {
-    cap = Math.floor(cap / 2);
+    // Clamp to the floor so halving (…31→15) can never overshoot below
+    // MIN_FINDING_SUMMARY_CAP; the documented floor is the actual minimum
+    // truncation length, not one below it.
+    cap = Math.max(MIN_FINDING_SUMMARY_CAP, Math.floor(cap / 2));
     for (const a of findingsJson) {
       for (const f of a.findings) {
         f.summary = truncateFindingText(f.summary, cap);

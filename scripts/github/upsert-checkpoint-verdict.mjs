@@ -1173,14 +1173,15 @@ function renderGroupedFindingsTable(angles) {
   if (findingsBearing.length > 0) {
     lines.push("| Finding | Angles |", "|---|---|");
     for (const angle of findingsBearing) {
-      // severity/verdict/disposition are enum labels, never prose — rendered
-      // inside a backtick code span (like the angle label already is) rather
-      // than bare, so a reviewer-supplied value crafted to look like markdown
-      // link/image syntax cannot break out of its literal `[...]`/`_..._`
-      // position: sanitizeStructuredCodeSpan strips any backtick from the
-      // value first, so the span it is wrapped in below can never be
-      // prematurely closed by the value's own content.
-      const angleLabel = escapeTableCell(sanitizeStructuredCodeSpan(angle.angle));
+      // The angle is rendered BARE in the Angles cell (no code span), so it
+      // goes through sanitizeStructuredInline — which entity-encodes markdown
+      // link/image syntax — not sanitizeStructuredCodeSpan (backtick-strip
+      // only, safe only inside a code span). Rendered bare, a crafted
+      // angle like `x](http://evil)` or `![i](u)` would otherwise become a
+      // live link/image on the verdict body; sanitizeStructuredInline
+      // neutralizes it. escapeTableCell then escapes any `|` so it can't
+      // break the GFM row.
+      const angleLabel = escapeTableCell(sanitizeStructuredInline(angle.angle));
       for (const finding of angle.findings) {
         lines.push(`| ${renderFindingCell(finding)} | ${angleLabel} |`);
       }
@@ -1191,13 +1192,14 @@ function renderGroupedFindingsTable(angles) {
       // finding that is simply not blocking.
       for (const u of angle.unparseable ?? []) {
         const sev = sanitizeStructuredCodeSpan(u.severity) || "none";
-        lines.push(`| ⚪ finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped) | ${angleLabel} |`);
+        const unparseableCell = escapeTableCell(`⚪ finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped)`);
+        lines.push(`| ${unparseableCell} | ${angleLabel} |`);
       }
     }
   }
   if (clean.length > 0) {
     if (findingsBearing.length > 0) lines.push("");
-    const names = clean.map((angle) => sanitizeStructuredCodeSpan(angle.angle)).join(", ");
+    const names = clean.map((angle) => sanitizeStructuredInline(angle.angle)).join(", ");
     lines.push(`**Clean (${clean.length}):** ${escapeTableCell(names)}`);
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
