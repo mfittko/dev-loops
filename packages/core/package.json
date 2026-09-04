@@ -101,7 +101,7 @@
     "bin/**/*.mjs"
   ],
   "scripts": {
-    "test": "bun test ./test/*.test.mjs"
+    "test": "bun test --only-failures ./test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public",

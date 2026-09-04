@@ -60,6 +60,12 @@ describe("Bun 1.4.1 toolchain authority", () => {
     assert.deepEqual(core.publishConfig, { access: "public", provenance: true });
     assert.equal(root.scripts.verify, "bun scripts/verify.mjs");
     assert.match(root.scripts["test:pack"], /^bun test /);
+    const bunTestScripts = [...Object.entries(root.scripts), ["packages/core#test", core.scripts.test]].filter(([, script]) =>
+      script.includes("bun test"),
+    );
+    for (const [name, script] of bunTestScripts) {
+      assert.match(script, /\bbun test --only-failures\b/, `${name} suppresses passing-test output`);
+    }
     for (const script of Object.values(root.scripts).filter((value) => value.includes("playwright"))) {
       assert.match(script, /node \.\/node_modules\/@playwright\/test\/cli\.js/);
     }
