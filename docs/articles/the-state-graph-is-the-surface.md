@@ -15,6 +15,8 @@ outro: closer
 
 > Start with [Introducing dev-loops](./introducing-dev-loops.md) for the product overview, [the deep dive](./dev-loops-deep-dive.md) for the operational mechanics, and [How dev-loops Decided Itself Into Shape](./how-dev-loops-decided-itself.md) for the decision history. This article places the same system in the wider loop- and graph-engineering landscape.
 
+> **Publication note:** this long-form Markdown source is intentionally not part of the repository's strict article-rendering list. Its tables and Mermaid source are maintained for repository reading; extending the renderer is outside this article's scope.
+
 The vocabulary of agentic software development has moved quickly: prompt engineering, harness engineering, Ralph loops, Karpathy loops, graph engineering. Each term points at a real layer, but treating them as competing schools misses the more useful synthesis.
 
 [The Ralph loop](https://ghuntley.com/ralph/) makes persistence external: run a bounded agent step, preserve durable artifacts, and start another iteration. [Karpathy's AutoResearch](https://github.com/karpathy/autoresearch) adds selection pressure: modify, evaluate against a fixed metric, keep the improvement or discard it, and repeat. Recent [graph-engineering](https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph) discussions make the workflow topology explicit: deterministic paths where policy is known, agentic work where judgment is useful, and cycles where revision is expected.
@@ -92,7 +94,7 @@ The public state contract already exposes five dimensions:
 | `target` | What artifact is this run actually about? |
 | `ownership` | Which durable owner or strategy family is responsible? |
 | `nextActor` | Who is expected to make the immediate next move? |
-| `status` | Is the work active, waiting, blocked, approval-ready, merge-ready, or done? |
+| `status` | What lifecycle condition is active, including waits, blocks, approvals, merge readiness, and retrospective work? |
 | `authorization` | Is the next mutation `authorized`, `needs_confirmation`, or `not_authorized`? |
 
 From those dimensions the system can project:
@@ -239,8 +241,6 @@ The resulting state machine places model judgment inside bounded transitions.
 
 ## The same control model works in greenfield and brownfield repositories
 
-The tool and skill set has already been used successfully in both greenfield and brownfield contexts because the graph models each change's lifecycle.
-
 The state graph models the lifecycle of a **change**. Repository age changes the facts and verification burden supplied to that graph.
 
 | Greenfield context | Brownfield context |
@@ -261,7 +261,7 @@ The context and evidence bundle vary while the control model remains stable:
 - stop at ambiguity or authorization boundaries;
 - record terminal truth in the backend.
 
-A brownfield repository requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both. The deferred second-repository pilot remains a separate, reproducible portability proof; it is one planned validation layer alongside the existing operational use across greenfield and brownfield work.
+A brownfield repository requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both contexts. The deferred second-repository pilot remains the separate, reproducible portability proof.
 
 ## Self-correction today, self-improvement as the next layer
 

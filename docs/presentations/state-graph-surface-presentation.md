@@ -90,26 +90,6 @@ flowchart LR
 
 ---
 
-<p class="kicker">Architecture</p>
-
-## Five Planes, One Repeating Traversal
-
-```mermaid {scale: 0.67}
-flowchart LR
-  B[Fact plane<br/>issue · PR · review · CI · repo] --> M[Model plane<br/>normalize · interpret · state]
-  M --> C[Control plane<br/>route · gate · authorize · stop]
-  C --> X[Execution plane<br/>agent · tool · human]
-  X --> B
-  B --> L[Learning plane<br/>traces · retrospectives · decisions · tests]
-  L --> M
-```
-
-<div class="glass-card mt-5">
-<p class="section-lead">The execution context can disappear. Backend evidence, state models, and contracts remain sufficient to reconstruct the next move.</p>
-</div>
-
----
-
 <p class="kicker">The public surface</p>
 
 ## The Surface Is Compiled from Modeled State
@@ -121,7 +101,7 @@ flowchart LR
   <li><strong>target</strong> — which artifact is active?</li>
   <li><strong>ownership</strong> — which durable owner or strategy family is responsible?</li>
   <li><strong>nextActor</strong> — who must act now?</li>
-  <li><strong>status</strong> — active, waiting, blocked, approval-ready, merge-ready, done?</li>
+  <li><strong>status</strong> — which lifecycle condition is active, including waits, approval, merge, or retrospective work?</li>
   <li><strong>authorization</strong> — <code>authorized</code>, <code>needs_confirmation</code>, or <code>not_authorized</code>?</li>
 </ul>
 </div>
@@ -311,9 +291,9 @@ flowchart LR
 </div>
 
 <div class="metric-card mt-5">
-<p class="hero-copy"><strong>The toolset has already been used successfully in both contexts.</strong> Codebase age changes context and verification burden while the state-backed control model remains stable.</p>
+<p class="hero-copy"><strong>The same change lifecycle carries both contexts.</strong> Codebase age changes the context and verification burden supplied to the state-backed control model.</p>
 </div>
-<div class="soft-note">The deferred Phase 7 second-repo pilot is a formal, reproducible portability proof; it is separate from operational evidence across greenfield and brownfield work.</div>
+<div class="soft-note">The deferred Phase 7 second-repo pilot remains the separate, reproducible portability proof.</div>
 
 ---
 
