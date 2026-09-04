@@ -2053,17 +2053,18 @@ test("a comfortably under-budget round stays raw/unmarked and renders", async ()
   });
 });
 
-// Near-boundary UNDER-budget companion to the false-negative fixture above: 31
-// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line)
-// renders at 1954 chars — just 46 chars of headroom, since one more (32)
-// is exactly what tips it to 2016 and throws (measured against the real
-// renderer; see fitsRenderBudget). A round that really does fit this close to
-// the bound must still stay raw/unmarked (commentBudgetExceeded absent) and
-// render as-is — unconditionally, not only "if the marker path wasn't taken"
-// — so a reversion that starts marking everything, or an over-conservative
-// estimate, fails this half of the pair.
+// Near-boundary UNDER-budget companion to the false-negative fixture above: 26
+// of the SAME shape (must-fix, 3-char summary, "src/a.mjs", 3-digit line,
+// consolidateFanin's own derived "accepted-for-fix" disposition) renders at
+// 1943 chars — just 57 chars of headroom, since one more (27) is exactly what
+// tips it to 2012 and throws (measured against the real renderer; see
+// fitsRenderBudget). A round that really does fit this close to the bound
+// must still stay raw/unmarked (commentBudgetExceeded absent) and render
+// as-is — unconditionally, not only "if the marker path wasn't taken" — so a
+// reversion that starts marking everything, or an over-conservative estimate,
+// fails this half of the pair.
 test("a near-boundary under-budget round (one finding short of the false-negative fixture's throw) stays raw/unmarked and renders", async () => {
-  const FINDINGS_PER_ANGLE = 31;
+  const FINDINGS_PER_ANGLE = 26;
   const files = { "angle-a.json": {
     angle: "angle-a",
     verdict: "findings_present",
@@ -2083,22 +2084,17 @@ test("a near-boundary under-budget round (one finding short of the false-negativ
 });
 
 // Regression for the fan-in disposition ledger vs. gate-comment render budget
-// split: a round too large to render even at minimum summary length must
-// still write a COMPLETE --ledger-out and succeed (ok: true, no throw — the
-// CLI's exit code is derived from result.ok, so this also proves exit 0); each
-// angle's findings in --out are replaced with one budget-marker finding, but
-// the REAL angle set and each angle's REAL verdict survive — a mandatory
-// angle (e.g. draft_gate's "pr-description") must still be present and no
-// foreign angle name is introduced, or upsert-checkpoint-verdict.mjs's
-// fanout_fanin mandatory-angle/pool validation rejects the whole verdict
-// (the exact failure this split exists to remove). One angle carries MIXED
-// severities so the highest-wins marker severity/disposition derivation is
-// actually pinned (a single-severity fixture leaves it unverified). Proven
-// against the REAL normalizeStructuredFindings/checkFanoutAngleCoverage/
-// renderGateReviewCommentBody functions upsert-checkpoint-verdict.mjs itself
-// uses, not a re-implementation. Reverting the fix (throwing, collapsing to
-// one foreign section, or dropping "disposition") fails this test.
-test("a fan-in too large to render at minimum summary length still writes a complete ledger and exits 0, preserving the real angle set/verdicts/renderability", async () => {
+// split: a round too large to render even at minimum summary length (#1942:
+// there is no marker tier left to fall back to, so this is now the absolute
+// structural floor) must still write a COMPLETE --ledger-out and succeed
+// (ok: true, no throw — the CLI's exit code is derived from result.ok, so
+// this also proves exit 0). --out is WITHHELD wholesale (never a per-angle
+// budget-marker collapse) — a mandatory angle (e.g. draft_gate's
+// "pr-description") is unaffected on "angles"/"findings"/the ledger, which
+// stay complete regardless of what happens to --out. Proven against the REAL
+// normalizeStructuredFindings/renderGateReviewCommentBody functions
+// upsert-checkpoint-verdict.mjs itself uses, not a re-implementation.
+test("a fan-in too large to render at minimum summary length withholds --out (never a per-angle marker) while the ledger/exit-0 contract holds", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const angleNames = ["scope", "coverage", "correctness", "ci-guard", "contract-surface", "link-check", "config-drift", "gate-evidence"];
   const MIXED_ANGLE = "scope"; // 28 worth-fixing-now + 1 must-fix + 1 defer
@@ -2121,10 +2117,8 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     const outPath = path.join(dir, "out", "findings.json");
     const ledgerPath = path.join(dir, "out", "ledger.json");
     // No --gate: keep consolidateFanin's own default blockCleanOnFindingSeverities
-    // (["must-fix"]) so the disposition assertions below (worth-fixing-now →
-    // deferred, must-fix → accepted-for-fix) are not entangled with this
-    // worktree's own repo config. Mandatory-angle/pool coverage is proven
-    // separately below via a direct checkFanoutAngleCoverage call.
+    // (["must-fix"]) so the disposition assertions below are not entangled
+    // with this worktree's own repo config.
     const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
 
     // Succeeds (no throw) with the fail-closed signal replaced by an
@@ -2147,52 +2141,15 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     assert.ok(pinnedLedgerEntry, "the ledger must carry the exact, un-shrunk original summary text");
     assert.equal(pinnedLedgerEntry.angle, MIXED_ANGLE);
 
-    // --out keeps the REAL angle set (mandatory "pr-description" included,
-    // no foreign angle) and each angle's REAL verdict — only the findings
-    // are collapsed to one budget-marker finding per angle, which still
-    // carries a severity-derived "disposition" like every other findingsJson
-    // finding.
-    const writtenOut = JSON.parse(await readFile(outPath, "utf8"));
-    assert.deepEqual(writtenOut, result.findingsJson);
-    assert.equal(writtenOut.length, angleNames.length + 1);
-    const byAngle = new Map(writtenOut.map((a) => [a.angle, a]));
-    assert.ok(byAngle.has("pr-description"));
-    assert.deepEqual(byAngle.get("pr-description"), { angle: "pr-description", verdict: "clean", findings: [] });
-    for (const angle of angleNames) {
-      const section = byAngle.get(angle);
-      assert.ok(section, `expected angle "${angle}" to survive budget marking`);
-      assert.equal(section.verdict, "findings_present"); // real verdict, not collapsed
-      assert.equal(section.findings.length, 1);
-      const marker = section.findings[0].summary;
-      assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
-      assert.match(marker, /— in the disposition ledger/);
-      if (angle === MIXED_ANGLE) {
-        // Highest-severity-wins: high beats medium/low, and
-        // the marker's own disposition matches that severity's derivation
-        // (accepted-for-fix — the default blockCleanOnFindingSeverities is
-        // ["high"]). Legacy-spelled input ("must-fix"/"worth-fixing-now"/
-        // "nice-to-have") normalizes to the canonical output vocabulary.
-        assert.match(marker, /high: 1/);
-        assert.match(marker, /medium: 28/);
-        assert.match(marker, /low: 1/);
-        assert.equal(section.findings[0].severity, "high");
-        assert.equal(section.findings[0].disposition, "accepted-for-fix");
-      } else {
-        assert.match(marker, /high: 0/);
-        assert.match(marker, new RegExp(`medium: ${FINDINGS_PER_ANGLE}`));
-        assert.match(marker, /low: 0/);
-        assert.equal(section.findings[0].severity, "medium");
-        assert.equal(section.findings[0].disposition, "deferred");
-      }
-    }
+    // --out is WITHHELD wholesale — no per-angle budget-marker collapse, no
+    // file written at all (#1942).
+    assert.deepEqual(result.findingsJson, []);
+    assert.equal(result.out, undefined);
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
 
-    // result.angles is the compact per-angle envelope surfaced on stdout
-    // (never marker-collapsed) — it must keep reporting each angle's REAL
-    // pre-marking findingCount even though --out/--ledger-out's own
-    // findingsJson has collapsed every angle to one marker finding. A
-    // regression that derived `angles` from the marked findingsJson instead
-    // of the raw pre-marking artifacts would silently report findingCount: 1
-    // for every angle here.
+    // result.angles is the compact per-angle envelope surfaced on stdout,
+    // unaffected by --out's withholding — it still reports each angle's REAL
+    // findingCount (including the mandatory "pr-description" angle).
     const anglesByName = new Map(result.angles.map((a) => [a.angle, a]));
     assert.deepEqual(anglesByName.get("pr-description"), { angle: "pr-description", verdict: "clean", findingCount: 0 });
     for (const angle of angleNames) {
@@ -2202,19 +2159,11 @@ test("a fan-in too large to render at minimum summary length still writes a comp
       );
     }
 
-    // Run the REAL upsert-checkpoint-verdict.mjs validation/render functions
-    // (not a re-implementation): the marked shape must still normalize,
-    // cover a fanout_fanin gate's mandatory angles/pool with no foreign
-    // angle, AND actually render without the renderer's own 2000-char
-    // structured-block bound rejecting it.
+    // The withheld (empty) shape still normalizes/renders trivially (falls
+    // back to the free-text findings-summary path — see normalizeStructuredFindings's
+    // own empty-array short circuit).
     const normalized = normalizeStructuredFindings(result.findingsJson);
-    assert.ok(Array.isArray(normalized), "budget-marked findingsJson must still normalize");
-    const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {
-      mandatoryAngles: ["pr-description"],
-      pool: [...angleNames, "pr-description"],
-    });
-    assert.deepEqual(missingMandatory, []);
-    assert.deepEqual(foreignAngles, []);
+    assert.equal(normalized, null);
     assertRendersWithoutThrowing(result.findingsJson);
 
     // The test name and this PR's AC both claim "exits 0" — pin that as an
@@ -2239,361 +2188,65 @@ test("a fan-in too large to render at minimum summary length still writes a comp
   });
 });
 
-// Real-findings-preferred-over-marker regression: an angle with real findings
-// that ALREADY fit alongside the rest of the (marked) round must keep them
-// as-is, never a marker — a marker is a compression and must never replace
-// real content with something rendered BIGGER. Reproduces the reported case:
-// a single must-fix finding (file+line) renders far smaller than the verbose
-// marker that would otherwise replace it (134 vs 183 chars), while a sibling
-// "style" angle with 300 defer findings is what actually forces the round
-// over budget and must itself still degrade to a marker.
-test("a narrow angle keeps its real finding instead of a longer marker when a wide sibling angle forces the round over budget", async () => {
-  const files = {
-    "correctness.json": {
-      angle: "correctness",
-      verdict: "findings_present",
-      findings: [{ severity: "must-fix", summary: "null deref at foo.mjs:12 when x is undefined", file: "foo.mjs", line: 12 }],
-    },
-    "style.json": {
-      angle: "style",
-      verdict: "findings_present",
-      findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "nice-to-have",
-        summary: `naming nit ${j} ${"z".repeat(150)}`,
-        file: `src/f${j}.mjs`,
-        line: j + 1,
-      })),
-    },
-  };
+// #1942 regression: a moderately over-budget round (fits only after
+// hard-truncating every summary) must keep each finding's own REAL text,
+// shortened — never a synthetic "N omitted — in ledger"/"N finding(s) omitted
+// from this comment (...) — in the disposition ledger" marker sentence, at
+// any severity. Calibrated to fit (no commentBudgetExceeded) purely by
+// fitFindingsToRenderBudget's own shrink loop, never buildBudgetMarkedFindingsJson's
+// withheld floor — proving the "shortens text" tier is reachable on its own,
+// distinct from the "withholds the whole round" tier proven below.
+test("a moderately over-budget round shortens every finding's real summary instead of degrading to a marker", async () => {
+  const FINDINGS_PER_ANGLE = 15;
+  const ANGLE_COUNT = 1;
+  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE, severity: "must-fix" });
+  // Pad each summary well past MAX_FINDING_TEXT_LENGTH's shrink floor so the
+  // round only fits after real truncation, not as a no-op.
+  files["angle0.json"].findings = files["angle0.json"].findings.map((f, j) => ({
+    ...f,
+    summary: `finding 0-${j} ${"w".repeat(1000)}`,
+  }));
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
     assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true); // the wide "style" angle alone forces this
-
-    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
-    // "correctness" keeps its REAL finding (severity + file + line), not a marker.
-    const correctnessFinding = byAngle.get("correctness").findings[0];
-    assert.equal(correctnessFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
-    assert.equal(correctnessFinding.file, "foo.mjs");
-    assert.equal(correctnessFinding.line, 12);
-    // Full, UN-shrunk text — not just a startsWith prefix, which a
-    // whole-round-shrunk-to-the-31-char-floor stub would also satisfy (both
-    // start with the same first 25 chars). The pre-shrink snapshot must be
-    // offered as the tier-1 (real) candidate first, not the already-crushed array
-    // fitFindingsToRenderBudget mutated in place while chasing the whole
-    // round's budget.
-    assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
-    assert.ok(!correctnessFinding.summary.endsWith(" …"), "a narrow angle's real finding must not be shrunk when it already fits the whole round");
-    assert.ok(!/omitted.*ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
-
-    // "style" (the actual cause of the overflow) IS collapsed to a marker.
-    const styleFinding = byAngle.get("style").findings[0];
-    assert.match(styleFinding.summary, /^300 finding\(s\) omitted from this comment/);
-    // All 300 findings are "nice-to-have" (normalizes to "low") — the
-    // breakdown must count them there, in SEVERITY_ORDER, not leave a
-    // zeroed/mis-tallied parenthesized section.
-    assert.ok(
-      styleFinding.summary.includes("(high: 0, question: 0, medium: 0, low: 300, nit: 0)"),
-      `expected the severity breakdown to tally all 300 findings under "low", got: ${styleFinding.summary}`,
-    );
-    assertRendersWithoutThrowing(result.findingsJson);
-  });
-});
-
-// Seed-comparison regression: buildBudgetMarkedFindingsJson's INITIAL seed
-// (before the upgrade loop even runs) picks whichever of {an angle's own real
-// findings, its bare marker} renders cheaper in isolation — not "bare
-// always wins". A single-finding angle with no file/line and a summary at or
-// under the shrink floor renders its real form (62 chars, measured) SHORTER
-// than its own bare "N omitted — in ledger" marker (22 chars at N=30, measured):
-// angleRenderCost(real) <= angleRenderCost(bareMarker) is true, so this angle
-// is seeded with its real findings directly and is then EXCLUDED from
-// upgradeOrder (it never enters the per-severity upgrade walk the sibling
-// "narrow angle" test above exercises) — a distinct code path from that test,
-// which seeds bare first and only reaches real findings via the upgrade loop.
-// Replacing the seed comparison with a plain `bareMarkers[i]` (always bare)
-// passes every OTHER test in this file but flips this angle to a marker and
-// fails here.
-test("a narrow angle whose real findings render cheaper than its own bare marker is seeded real, not marker-collapsed", async () => {
-  const files = {
-    "narrow.json": {
-      angle: "narrow",
-      verdict: "findings_present",
-      findings: [{ severity: "must-fix", summary: "x" }],
-    },
-    "wide.json": {
-      angle: "wide",
-      verdict: "findings_present",
-      findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "nice-to-have",
-        summary: `naming nit ${j} ${"z".repeat(150)}`,
-        file: `src/f${j}.mjs`,
-        line: j + 1,
-      })),
-    },
-  };
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true); // the wide angle alone forces this
-
-    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
-    const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
-    assert.equal(narrowFinding.summary, "x", "the narrow angle's real (un-shrunk, un-marked) summary must survive");
-    assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "the narrow angle must not be marker-collapsed even though it never entered the upgrade loop");
-    assertRendersWithoutThrowing(result.findingsJson);
-  });
-});
-
-// Middle-candidate regression: the upgrade loop tries an angle's real findings
-// as TWO distinct candidates before falling back to a marker — the pre-shrink
-// ORIGINAL first, then the already whole-round-shrunk form (findingsJson[i],
-// capped at fitFindingsToRenderBudget's 31-char floor) — and only THEN the
-// verbose/bare marker. An angle whose original text is too long to fit
-// alongside the rest of the round, but whose shrunk form does fit, must land
-// on that shrunk form (truncated real text, " …" suffix), never skip straight
-// to an "omitted" marker. Deleting the middle candidate (findingsJson[i]) from
-// the upgrade loop's candidate array, or reordering it after the marker,
-// passes every OTHER test in this file but flips this angle straight to a
-// marker and fails here.
-test("an angle whose original text is too long but whose whole-round-shrunk form fits keeps the truncated real text, not a marker", async () => {
-  const originalSummary = `this narrow angle carries a fairly long original finding summary text that will not fit ${"w".repeat(1900)}`;
-  const files = {
-    "narrow.json": {
-      angle: "narrow",
-      verdict: "findings_present",
-      findings: [{ severity: "worth-fixing-now", summary: originalSummary }],
-    },
-    "wide.json": {
-      angle: "wide",
-      verdict: "findings_present",
-      findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "nice-to-have",
-        summary: `naming nit ${j} ${"z".repeat(150)}`,
-        file: `src/f${j}.mjs`,
-        line: j + 1,
-      })),
-    },
-  };
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true);
-
-    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
-    const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "medium"); // "worth-fixing-now" input normalizes to canonical "medium"
-    assert.ok(narrowFinding.summary.length < originalSummary.length, "the original, un-shrunk summary must not have survived (too long to fit)");
-    assert.ok(originalSummary.startsWith(narrowFinding.summary.replace(/ …$/, "")), "the emitted summary must be a truncated PREFIX of the original real text");
-    assert.ok(narrowFinding.summary.endsWith(" …"), "a truncated-real candidate ends with the plain ellipsis suffix, distinguishing it from an omitted-count marker");
-    assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "must be the truncated real text, not an omitted-count marker");
-    assertRendersWithoutThrowing(result.findingsJson);
-  });
-});
-
-// Per-angle degradation regression: the verbose-vs-bare choice is decided
-// PER ANGLE, not once for the whole round — a round with enough angles that
-// NOT ALL of them can afford the verbose breakdown must still give the ones
-// that fit the full sentence, rather than dropping to bare everywhere the
-// instant any single angle can't afford it (that would leave most of the
-// budget unused and the documented breakdown effectively unreachable). Every
-// marker is either the WHOLE verbose sentence or the WHOLE bare one — never a
-// half-truncated fragment of either. These thresholds are measured against
-// the real renderer (see fitsRenderBudget) — retune if the marker/renderer
-// text changes.
-test("a fan-in with enough angles that not all can afford the verbose marker keeps it on the ones that fit and uses bare only where it doesn't", async () => {
-  const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 14;
-  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true);
-    assert.equal(result.findingsJson.length, ANGLE_COUNT); // real angle set preserved
-
-    let verboseCount = 0;
-    let bareCount = 0;
-    for (const section of result.findingsJson) {
-      assert.equal(section.verdict, "findings_present");
-      assert.equal(section.findings.length, 1);
-      const summary = section.findings[0].summary;
-      if (summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`) {
-        bareCount += 1;
-      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("— in the disposition ledger")) {
-        // Every finding here is "worth-fixing-now" (normalizes to "medium") —
-        // the parenthesized breakdown must tally all of them there.
-        assert.ok(
-          summary.includes(`(high: 0, question: 0, medium: ${FINDINGS_PER_ANGLE}, low: 0, nit: 0)`),
-          `expected the severity breakdown to tally all ${FINDINGS_PER_ANGLE} findings under "medium", got: ${summary}`,
-        );
-        verboseCount += 1;
-      } else {
-        assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);
-      }
-      assert.equal(section.findings[0].disposition, "deferred");
+    // Fits without ever reaching the withheld floor.
+    assert.equal(result.commentBudgetExceeded, undefined);
+    assert.equal(result.findingsJson.length, ANGLE_COUNT);
+    for (const finding of result.findingsJson[0].findings) {
+      // Shorter than the original (real shrink happened)...
+      assert.ok(finding.summary.length < 1011, `expected a shrunk summary, got length ${finding.summary.length}`);
+      // ...but still a genuine PREFIX of the real text, never a marker sentence.
+      assert.ok(/^finding 0-\d+ w+( …)?$/.test(finding.summary), `expected a truncated-real summary, got: ${finding.summary}`);
+      assert.ok(!/omitted.*ledger/.test(finding.summary), "must not be marker-collapsed");
     }
-    // BOTH forms present — proves the choice is per angle, not per round.
-    assert.ok(verboseCount > 0, "expected at least one angle to keep the verbose breakdown");
-    assert.ok(bareCount > 0, "expected at least one angle to degrade to bare");
-
-    // The ledger is still complete regardless of how far any marker degraded.
-    assert.equal(result.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
     assertRendersWithoutThrowing(result.findingsJson);
   });
 });
 
-// All-bare tier regression: enough angles that NONE can afford the verbose
-// marker (not even one), so every angle degrades to the bare form — proves
-// tier 3 (bare) still functions on its own, independent of the per-angle mix
-// above.
-test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
-  const FINDINGS_PER_ANGLE = 30;
-  // #1592: the canonical severity spellings (e.g. "medium") are shorter than
-  // the pre-rename ones (e.g. "worth-fixing-now"), so a per-angle count
-  // calibrated to the OLD word lengths could tip a single angle's verbose
-  // marker back under the render budget. 23 (rather than 20) angles keeps
-  // this fixture calibrated to the ALL-BARE tier under the new spellings —
-  // still over budget for even a single verbose marker, but not yet over
-  // budget for the withheld tier (see the sibling test right below this one).
-  const ANGLE_COUNT = 23;
-  const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true);
-    assert.equal(result.findingsJson.length, ANGLE_COUNT); // real angle set preserved
-    for (const section of result.findingsJson) {
-      assert.equal(section.verdict, "findings_present");
-      assert.equal(section.findings.length, 1);
-      // Exactly the bare sentence — never a truncated fragment of the
-      // verbose one (no " …", no cut-off mid-word).
-      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — in ledger`);
-      assert.equal(section.findings[0].disposition, "deferred");
-    }
-    // The ledger is still complete regardless of how far the marker degraded.
-    assert.equal(result.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
-    assertRendersWithoutThrowing(result.findingsJson);
-  });
-});
-
-// Budget-allocation-by-severity regression: when not every angle can afford
-// the verbose marker, the scarce budget must go to the must-fix-carrying
-// angle first, regardless of filename/artifact-index order. All 13 "nice-to-have"
-// angles sort alphabetically BEFORE the one must-fix-carrying angle
-// ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
-// reverted behavior) would spend the verbose budget on defer-only angles and
-// leave the must-fix angle bare. Reverting the severity-first ordering back
-// to plain index order fails this test. Both severities are LEGACY spellings
-// ("must-fix"/"nice-to-have") — this also pins angleWorstSeverityRank
-// ranking correctly on a legacy-spelled artifact (consolidateFanin
-// normalizes on the way in, so this exercises the same end-to-end path a
-// live pre-rename reviewer artifact would take).
-test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
-  const FINDINGS_PER_ANGLE = 30;
-  const DEFER_ANGLE_COUNT = 13;
-  const files = {};
-  for (let i = 0; i < DEFER_ANGLE_COUNT; i++) {
-    files[`d${String(i).padStart(2, "0")}.json`] = {
-      angle: `defer-angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "nice-to-have",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
+// #1942 regression: the exact "N omitted — in ledger" bare-marker sentence,
+// and its verbose "N finding(s) omitted from this comment (...) — in the
+// disposition ledger" sibling, must never appear ANYWHERE in a rendered
+// candidate, at any round size — this is what buildAngleMarker used to emit
+// and buildBudgetMarkedFindingsJson has since removed entirely.
+test("no rendered findingsJson ever contains the retired omitted-count marker sentence, at any round size", async () => {
+  for (const [angleCount, findingsPerAngle] of [[1, 15], [3, 10], [14, 30], [25, 30]]) {
+    const files = wideAngleFiles({ angleCount, findingsPerAngle });
+    await withFindingsDir(files, async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+      const rendered = JSON.stringify(result.findingsJson);
+      assert.ok(!/omitted — in ledger/.test(rendered), `angleCount=${angleCount} findingsPerAngle=${findingsPerAngle}: ${rendered}`);
+      assert.ok(!/omitted from this comment/.test(rendered), `angleCount=${angleCount} findingsPerAngle=${findingsPerAngle}: ${rendered}`);
+    });
   }
-  files["z-mustfix.json"] = {
-    angle: "mustfix-angle",
-    verdict: "findings_present",
-    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-      severity: "must-fix",
-      summary: `finding mustfix-${j} ${"z".repeat(150)}`,
-      file: "src/fmustfix.mjs",
-      line: j + 1,
-    })),
-  };
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true);
-
-    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
-    const mustFixSummary = byAngle.get("mustfix-angle").findings[0].summary;
-    assert.match(
-      mustFixSummary,
-      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
-      "the must-fix-carrying angle must keep the verbose breakdown",
-    );
-
-    // Sanity: this fixture really does force at least one angle to bare —
-    // otherwise the test would pass even with the old, unfixed ordering.
-    const bareCount = [...byAngle.values()].filter(
-      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
-    ).length;
-    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
-  });
-});
-
-// #1592: SEVERITY_ORDER ranks "question" ahead of "medium" (both defer/
-// answer eventually, but a question keeps gate-close blocked the same way a
-// defect does) — angleWorstSeverityRank must give the scarce verbose-marker
-// budget to a question-carrying angle before a medium-only one, mirroring the
-// must-fix-vs-defer-only case above.
-test("the question-carrying angle wins the scarce verbose-marker budget over medium-only angles", async () => {
-  const FINDINGS_PER_ANGLE = 30;
-  const MEDIUM_ANGLE_COUNT = 13;
-  const files = {};
-  for (let i = 0; i < MEDIUM_ANGLE_COUNT; i++) {
-    files[`d${String(i).padStart(2, "0")}.json`] = {
-      angle: `medium-angle-${i}`,
-      verdict: "findings_present",
-      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "medium",
-        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
-        file: `src/f${i}.mjs`,
-        line: j + 1,
-      })),
-    };
-  }
-  files["z-question.json"] = {
-    angle: "question-angle",
-    verdict: "findings_present",
-    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-      severity: "question",
-      summary: `finding question-${j} ${"z".repeat(150)}`,
-      file: "src/fquestion.mjs",
-      line: j + 1,
-    })),
-  };
-  await withFindingsDir(files, async (dir) => {
-    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
-    assert.equal(result.ok, true);
-    assert.equal(result.commentBudgetExceeded, true);
-
-    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
-    const questionSummary = byAngle.get("question-angle").findings[0].summary;
-    assert.match(
-      questionSummary,
-      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
-      "the question-carrying angle must keep the verbose breakdown",
-    );
-
-    const bareCount = [...byAngle.values()].filter(
-      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
-    ).length;
-    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
-  });
 });
 
 // Structural-floor regression: a round with far more real angles than the
-// default fan-out cap, wide enough that even ONE bare "N omitted" line per
-// angle cannot fit the render budget — no per-angle shape can, no matter how
-// short the marker text gets. --out must be withheld (never an ok:true shape
+// default fan-out cap, wide enough that even the whole round hard-truncated
+// to the 16-char summary floor still cannot fit the render budget — there is
+// no smaller per-angle shape left to try (#1942 removed the marker ladder
+// that used to offer one). --out must be withheld (never an ok:true shape
 // the real renderer would reject), while the ledger stays complete.
-test("a fan-in with far more angles than even bare markers can fit withholds --out instead of emitting an unrenderable shape", async () => {
+test("a fan-in with far more angles than the render budget can hold even hard-truncated withholds --out instead of emitting an unrenderable shape", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const ANGLE_COUNT = 25;
   const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
@@ -2691,9 +2344,13 @@ test("a withheld-tier round still writes a complete ledger when --out is an exis
   });
 });
 
-test("a marker-tier round still writes a complete ledger when --out's parent directory is blocked by a regular file (mkdir EEXIST)", async () => {
-  const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 14;
+// A comfortably under-budget round (never withheld, never even hard-truncated)
+// still reaches the normal mkdir/writeFile --out path, so its own I/O failure
+// modes (EEXIST here) are exercised independently of the withheld-tier rm()
+// path above.
+test("an under-budget round still writes a complete ledger when --out's parent directory is blocked by a regular file (mkdir EEXIST)", async () => {
+  const FINDINGS_PER_ANGLE = 1;
+  const ANGLE_COUNT = 1;
   const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const blockingFile = path.join(dir, "blocking-file");

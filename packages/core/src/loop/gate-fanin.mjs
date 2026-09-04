@@ -287,8 +287,8 @@ export function severityRank(severity) {
 /**
  * A zero-initialized severity→count map, one key per SEVERITY_ORDER entry, in
  * SEVERITY_ORDER's order. The shared starting point every severity tally in
- * this codebase (consolidateFanin's own `bySeverity`, consolidate-fanin.mjs's
- * `buildAngleMarker`, reconcile-draft-gate.mjs's no-findings placeholder) used
+ * this codebase (consolidateFanin's own `bySeverity`,
+ * reconcile-draft-gate.mjs's no-findings placeholder) used
  * to hand-roll separately via `Object.fromEntries(SEVERITY_ORDER.map((s) =>
  * [s, 0]))` — one copy here means a severity added to SEVERITY_ORDER is
  * zero-initialized everywhere at once.
@@ -305,10 +305,9 @@ export function zeroSeverityCounts() {
  * finding whose normalized severity is not a recognized SEVERITY_ORDER member
  * is silently excluded from the tally rather than inflating an unknown key —
  * every routed call site here counts already-validated findings in practice
- * (consolidateFanin validates every result's severity before this runs;
- * buildAngleMarker tallies consolidateFanin's own output), so this guard is a
- * defensive floor against future drift, not an escape hatch for accepting
- * unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
+ * (consolidateFanin validates every result's severity before this runs), so
+ * this guard is a defensive floor against future drift, not an escape hatch
+ * for accepting unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
  * a nullish `findings` argument throws (not iterable), and a nullish
  * individual entry throws reading `.severity` — no routed caller passes
  * either shape, so a caller that does gets a loud failure instead of a
