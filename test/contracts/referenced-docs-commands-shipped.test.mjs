@@ -515,6 +515,14 @@ test("extractHeadingAnchorIds resolves setext headings and ignores frontmatter /
   assert.ok(!ids.has("frontmatter-key"), "leading YAML frontmatter must not forge heading anchors");
   assert.ok(!ids.has("user-invocable-false"), "a frontmatter-closing `---` must not read the key line above it as a setext heading");
   assert.ok(!ids.has("some-paragraph"), "a `---` after a blank line is a thematic break, not a setext underline");
+
+  // The exclusion guard: an underline sitting directly under an ATX heading (or
+  // another underline) must NOT re-consume that line as setext text. `# Title`
+  // then `===` yields exactly one `title` anchor — never a deduped
+  // `title` + `title-1` from double-counting the same heading.
+  const atxThenUnderline = extractHeadingAnchorIds("# Title\n===\n");
+  assert.ok(atxThenUnderline.has("title"), "the ATX heading itself still produces its anchor");
+  assert.ok(!atxThenUnderline.has("title-1"), "an ATX heading followed by an underline is not double-counted as a setext heading");
 });
 
 test("findDanglingAnchorReferences accepts a valid anchor into a setext heading in another file (#1920)", () => {
