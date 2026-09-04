@@ -127,13 +127,18 @@ async function defaultHealthcheck(url) {
   }
 }
 
-async function defaultLaunchManagedServer({ repoRoot, repo, host, port }) {
+export function buildManagedServerInvocation({ repo, host, port }) {
   const args = [VIEWER_SCRIPT_PATH, '--host', host, '--port', String(port)];
   if (repo !== null) {
     args.push('--repo', repo);
   }
+  return { command: 'node', args };
+}
+
+async function defaultLaunchManagedServer({ repoRoot, repo, host, port }) {
+  const { command, args } = buildManagedServerInvocation({ repo, host, port });
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(command, args, {
       cwd: repoRoot,
       detached: true,
       stdio: 'ignore',

@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import {
   INSPECT_RUN_VIEWER_MANAGED_RECORD_PATH,
+  buildManagedServerInvocation,
   buildOpenBrowserInvocation,
   createInspectRunViewerLifecycleManager,
 } from '../../scripts/loop/inspect-run-viewer/managed-instance.mjs';
@@ -14,6 +15,25 @@ import {
   isInspectRunViewerRelevantPath,
   runCli as runInspectRunViewerCiChangesCli,
 } from '../../scripts/loop/inspect-run-viewer-ci-changes.mjs';
+
+test('managed viewer launches with the Node product runtime even when its caller is Bun', () => {
+  assert.deepEqual(
+    buildManagedServerInvocation({ repo: 'mfittko/dev-loops', host: '127.0.0.1', port: 4311 }),
+    {
+      command: 'node',
+      args: [
+        path.resolve('scripts/loop/inspect-run-viewer.mjs'),
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '4311',
+        '--repo',
+        'mfittko/dev-loops',
+      ],
+    },
+  );
+});
+
 function createManager(overrides = {}) {
   const listenersByPort = new Map();
   const processes = new Map();
