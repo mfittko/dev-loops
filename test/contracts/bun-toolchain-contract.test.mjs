@@ -50,4 +50,37 @@ describe("Bun 1.4.1 toolchain authority", () => {
       assert.match(script, /node \.\/node_modules\/@playwright\/test\/cli\.js/);
     }
   });
+
+  test("pins Bun in automation while preserving Node 24 and npm publication boundaries", async () => {
+    const paths = [
+      ".github/workflows/ci.yml",
+      ".github/workflows/gate-evidence.yml",
+      ".github/workflows/pages.yml",
+      ".github/workflows/wiki.yml",
+      ".github/workflows/npm-publish.yml",
+      ".github/actions/playwright-webkit/action.yml",
+    ];
+    const entries = await Promise.all(paths.map(async (file) => [file, await readFile(path.join(repoRoot, file), "utf8")]));
+    for (const [file, source] of entries) {
+      assert.match(source, /actions\/setup-node@v5[\s\S]*node-version:\s*24/i, `${file} keeps Node 24`);
+      assert.match(source, /oven-sh\/setup-bun@v2[\s\S]*bun-version:\s*1\.4\.1/i, `${file} pins Bun`);
+      assert.match(source, /bun install --frozen-lockfile/i, `${file} uses the frozen Bun lock`);
+      assert.doesNotMatch(source, /\bnpm ci\b/i, `${file} has no ordinary npm install`);
+    }
+
+    const publish = Object.fromEntries(entries)[".github/workflows/npm-publish.yml"];
+    for (const boundary of [/npm pack --dry-run -w packages\/core/, /npm pack --dry-run\s*$/m, /npm view /, /npm publish -w packages\/core --provenance/, /npm publish --provenance/]) {
+      assert.match(publish, boundary);
+    }
+
+    const action = Object.fromEntries(entries)[".github/actions/playwright-webkit/action.yml"];
+    assert.match(action, /hashFiles\('bun\.lock'\)/);
+    assert.match(action, /node \.\/node_modules\/@playwright\/test\/cli\.js install --with-deps webkit/);
+
+    const dockerfile = await readFile(path.join(repoRoot, "Dockerfile"), "utf8");
+    assert.match(dockerfile, /^FROM node:24-/m);
+    assert.match(dockerfile, /ARG BUN_VERSION=1\.4\.1/);
+    assert.match(dockerfile, /npm install -g "bun@\$\{BUN_VERSION\}"/);
+    assert.match(dockerfile, /RUN bun install --frozen-lockfile/);
+  });
 });

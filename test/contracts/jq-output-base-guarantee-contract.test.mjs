@@ -103,6 +103,14 @@ const EXCLUDED = new Map([
     "pages/render-article.mjs",
     "Derived-artifact generator (npm run articles:render): emits HTML files; JSON.stringify appears only inside thrown error messages, and stdout is a one-line human status — nothing for a caller to filter with --jq.",
   ],
+  [
+    "benchmarks/run-package-manager.mjs",
+    "Benchmark harness writes raw evidence to its required --output file and emits no JSON result on stdout; the analyzer is the read surface.",
+  ],
+  [
+    "benchmarks/analyze-package-manager.mjs",
+    "Standalone reproducibility analyzer for benchmark evidence, not a dev-loop operator-facing command or loop-consumed read tool.",
+  ],
 ]);
 
 async function walk(dir) {

@@ -31,10 +31,14 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Bootstrap wiki (scan + plan + compile)
         env:
@@ -54,11 +58,11 @@ jobs:
           LLMWIKI_LLM_API_KEY: ${{ secrets.LLMWIKI_LLM_API_KEY || '' }}
           LLMWIKI_LLM_SYSTEM_PROMPT: ${{ vars.LLMWIKI_LLM_SYSTEM_PROMPT }}
           LLMWIKI_LLM_SYSTEM_PROMPT_FILE: ${{ vars.LLMWIKI_LLM_SYSTEM_PROMPT_FILE }}
-        run: npm run repo-wiki:bootstrap
+        run: bun run repo-wiki:bootstrap
 
       - name: Lint
         continue-on-error: true
-        run: npm run repo-wiki:lint
+        run: bun run repo-wiki:lint
 
       - name: Upload compiled wiki
         if: always()
@@ -72,7 +76,7 @@ jobs:
         env:
           LLMWIKI_PUBLISH_REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
         run: |
-          npm run repo-wiki -- publish --target github-wiki || {
+          bun run repo-wiki -- publish --target github-wiki || {
             echo '::error::Wiki publish failed. If the Wiki feature is disabled, enable it in Settings → General → Features → Wikis.'
             echo "Wiki publish failed — if the Wiki feature is disabled, enable it in Settings → General → Features → Wikis" >> "$GITHUB_STEP_SUMMARY"
             exit 1

@@ -90,9 +90,15 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up Bun
+        if: steps.pr.outputs.draft == 'false'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
       - name: Install workspace dependencies
         if: steps.pr.outputs.draft == 'false'
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
       # gitignored, worktree-local tmp/ file that only the machine that ran the

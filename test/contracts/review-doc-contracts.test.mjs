@@ -270,7 +270,7 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*needs:[\s\S]*- changes/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer/i);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
@@ -295,7 +295,7 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
-  assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
+  assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('bun\.lock'\)\s*\}\}/i);
 });
 
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
@@ -352,7 +352,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   // preserved. Assert every suite is a matrix leg and the gate fails closed.
   assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
   assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
-  assert.match(ciWorkflow, /verify-suite:[\s\S]*npm run \$\{\{\s*matrix\.suite\s*\}\}/i);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*bun run \$\{\{\s*matrix\.suite\s*\}\}/i);
 
   // Scope leg-membership to the verify-suite job's matrix list (up to the next
   // job header) so a suite name appearing elsewhere can't satisfy the check.

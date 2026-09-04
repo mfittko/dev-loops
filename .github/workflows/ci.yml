@@ -25,8 +25,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
       - name: Install workspace dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Determine whether inspect-run viewer smoke is required
         id: inspect-run-viewer-scope
@@ -103,8 +108,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
       - name: Install workspace dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # Pinned version + sha256 must match scripts/github/lint-workflows.mjs's
       # ACTIONLINT_VERSION / ACTIONLINT_LINUX_AMD64_SHA256 (a test asserts it).
@@ -138,7 +148,7 @@ jobs:
           git fetch origin "+refs/heads/${GITHUB_BASE_REF:-main}:refs/remotes/origin/${GITHUB_BASE_REF:-main}"
 
       - name: Run ${{ matrix.suite }}
-        run: npm run ${{ matrix.suite }}
+        run: bun run ${{ matrix.suite }}
 
   verify:
     needs: [verify-suite]
@@ -163,7 +173,7 @@ jobs:
         uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
-        run: npm run test:playwright:viewer
+        run: bun run test:playwright:viewer
 
   deck-smoke:
     needs:
@@ -180,9 +190,9 @@ jobs:
 
       - name: Run presentation deck fit smoke (WebKit)
         run: |
-          npm run test:playwright:intro-deck
-          npm run test:playwright:deep-dive
-          npm run test:playwright:how-decided-deck
+          bun run test:playwright:intro-deck
+          bun run test:playwright:deep-dive
+          bun run test:playwright:how-decided-deck
 
   article-smoke:
     needs:
@@ -199,6 +209,6 @@ jobs:
 
       - name: Run article fit smoke (WebKit)
         run: |
-          npm run test:playwright:intro-article
-          npm run test:playwright:deep-dive-article
-          npm run test:playwright:how-decided-article
+          bun run test:playwright:intro-article
+          bun run test:playwright:deep-dive-article
+          bun run test:playwright:how-decided-article

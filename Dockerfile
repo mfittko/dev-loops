@@ -8,6 +8,7 @@ ARG PI_VERSION=0.79.0
 ARG PI_SUBAGENTS_VERSION=0.28.0
 ARG PI_TELEGRAM_VERSION=0.3.5
 ARG PI_INTERCOM_VERSION=0.6.0
+ARG BUN_VERSION=1.4.1
 ARG GH_CLI_VERSION=2.63.2
 ARG GIT_VERSION=1:2.39.5-0+deb12u2
 
@@ -30,6 +31,9 @@ RUN npm install -g --ignore-scripts \
     "pi-telegram@${PI_TELEGRAM_VERSION}" \
     "pi-intercom@${PI_INTERCOM_VERSION}"
 
+# Bun is the pinned dependency/test toolchain; Node 24 remains the runtime.
+RUN npm install -g "bun@${BUN_VERSION}"
+
 # Install GitHub CLI (pinned version, architecture-aware, checksum-verified)
 # Only x86_64/amd64 and aarch64/arm64 are supported.
 RUN ARCH=$(uname -m) \
@@ -51,7 +55,7 @@ WORKDIR /workspace
 COPY . .
 
 # Install workspace dependencies (postinstall creates dev-loops symlink)
-RUN npm ci
+RUN bun install --frozen-lockfile
 
 # Append workspace node_modules/.bin last so global tools take precedence
 ENV PATH="${PATH}:/workspace/node_modules/.bin"
