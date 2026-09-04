@@ -1178,7 +1178,11 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // producer other than consolidateFanin could otherwise abuse to forge a
   // markdown link/image (renderer-security regression).
   const safeSeverity = finding.severity ? sanitizeStructuredInline(finding.severity) : "";
-  const sevPart = safeSeverity ? ` ${safeSeverity} — ` : " ";
+  // Build the leading severity marker from whichever of emoji/word is present
+  // and join with a single space, so a finding with no emoji (unknown severity)
+  // or no severity at all never renders a double space or a dangling " — ".
+  const marker = [emoji, safeSeverity].filter(Boolean).join(" ");
+  const markerPrefix = marker ? `${marker} — ` : "";
   const summary = sanitizeStructuredInline(finding.summary);
   const location = renderBodyOnlyFindingLocation(finding, ctx);
   const dispositionSuffix = finding.disposition
@@ -1189,7 +1193,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
     ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
-  return `- ${emoji}${sevPart}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
+  return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
 }
 // An unparseable entry (#1526) is never dropped: it renders its own
 // "could not be interpreted" bullet, distinguishable from a normal finding.

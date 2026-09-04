@@ -2949,6 +2949,23 @@ test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding fil
   assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
 });
 
+test("renderStructuredFindings renders no double-space and no dangling em-dash when a finding has no severity (#1964 copilot)", () => {
+  // A finding with a missing/empty severity has no emoji and no severity word;
+  // the bullet must be `- <summary>` with a single space, never `-  <summary>`
+  // (double space) or a leading ` — `.
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "", summary: "no-severity finding" }], unparseable: [] },
+  ]);
+  assert.match(body, /^- no-severity finding _\(correctness\)_$/m);
+  assert.doesNotMatch(body, /^- {2}/m, "no double space after the bullet");
+  // An unknown (non-legend) severity keeps its word but has no emoji, still one space.
+  const unknown = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "spicy", summary: "odd" }], unparseable: [] },
+  ]);
+  assert.match(unknown, /^- spicy — odd _\(correctness\)_$/m);
+  assert.doesNotMatch(unknown, /^- {2}/m, "no double space for an unknown-severity finding");
+});
+
 test("renderGateReviewCommentBody aggregate **Inline findings:** line breaks severities down in SEVERITY_ORDER and dedups touched angles (#1942)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
