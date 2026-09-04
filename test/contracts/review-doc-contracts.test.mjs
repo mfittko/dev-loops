@@ -293,6 +293,7 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /actions\/setup-node@v5/i);
   assert.match(playwrightWebkitAction, /node-version:\s*24/i);
   assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
+  assert.match(playwrightWebkitAction, /steps\.playwright-webkit-cache\.outputs\.cache-hit\s*!=\s*'true'/i);
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('bun\.lock'\)\s*\}\}/i);
@@ -386,8 +387,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   for (const shard of ["1/2", "2/2"]) {
     assert.match(verifySuiteSection, new RegExp(`shard: ${shard.replace("/", "\\/")}`));
   }
-  assert.match(verifySuiteSection, /--timings \.cache\/bun-test-timings\/\$\{\{\s*matrix\.shard_key\s*\}\}\.json/);
-  assert.match(verifySuiteSection, /--update-timings[\s\\]*--shard=\$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
   // leg SKIPS the gate under the default `if: success()`), depend on the whole
