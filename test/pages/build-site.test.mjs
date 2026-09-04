@@ -33,6 +33,15 @@ test('build-site: index is the intro article, all resources published, nav links
       await stat(join(out, deckOut(d))); // throws if missing
     }
 
+    const stateGraphDeck = DECKS.find((d) => d.file === 'state-graph-surface.html');
+    assert.ok(stateGraphDeck, 'state-graph deck is registered for Pages publication');
+    assert.equal(
+      await readFile(join(out, deckOut(stateGraphDeck)), 'utf8'),
+      await readFile(join(process.cwd(), 'docs', 'presentations', stateGraphDeck.file), 'utf8'),
+      'Pages copies the CSP-safe state-graph deck byte-for-byte',
+    );
+    assert.equal(new Set(DECKS.map(deckOut)).size, DECKS.length, 'published deck names do not collide');
+
     const index = await readFile(join(out, 'index.html'), 'utf8');
     // The landing page is the intro article (its content), not the old deck index.
     assert.ok(index.includes('Introducing dev-loops'), 'index is the intro article');

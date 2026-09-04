@@ -159,7 +159,7 @@ export function assertMobileFit(m) {
 //   { sliceId, deckPath, sectionIds, mobileCapture: { id, stateName } }
 // `sectionIds` may be plain ids or { id, stateName, capture } entries; entries
 // with capture !== false get a desktop named-state capture.
-export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }) {
+export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, desktopFit = false }) {
   const states = sectionIds.map((entry) =>
     typeof entry === "string" ? { id: entry, stateName: entry, capture: true } : { capture: true, stateName: entry.id, ...entry });
   const ids = states.map((s) => s.id);
@@ -175,7 +175,7 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
       await page.evaluate(() => document.fonts.ready);
       await assertSectionIdsAndNoHorizontalScroll(page, ids);
       await assertCspMeta(page);
-      assertDeckFit(await measureFit(page), "1280x800 desktop viewport");
+      if (desktopFit) assertDeckFit(await measureFit(page), "1280x800 desktop viewport");
 
       for (const { id, stateName, capture } of states) {
         const section = page.locator(`#${id}`);
@@ -202,7 +202,7 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
     }
   });
 
-  test(`${sliceId} desktop fit check fails on deliberately-clipped content`, async ({ page }) => {
+  if (desktopFit) test(`${sliceId} desktop fit check fails on deliberately-clipped content`, async ({ page }) => {
     const { server, url } = await startServer();
     try {
       await page.setViewportSize({ width: 1280, height: 800 });

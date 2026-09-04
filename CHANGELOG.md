@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Publishable state-graph presentation with reproducible browser evidence.** Adds the self-contained, CSP-safe “The State Graph Is the Surface” deck and registers it with the shared desktop/mobile Playwright fit, accessibility, console, and screenshot harness so rendered-artifact gate evidence is produced automatically.
+- **Publishable state-graph presentation with reproducible browser evidence.** Adds the self-contained, CSP-safe “The State Graph Is the Surface” deck, publishes it through the GitHub Pages build and navigation, and registers it with the shared desktop/mobile Playwright fit, accessibility, console, and screenshot harness so rendered-artifact gate evidence is produced automatically.
 
 ### Fixed
 

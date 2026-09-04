@@ -36,9 +36,10 @@ node scripts/pages/build-site.mjs          # writes ./site/ (gitignored)
 npx http-server site                       # or: python3 -m http.server -d site
 ```
 
-`scripts/pages/build-site.mjs` copies the deck HTML into `site/` and generates
-`site/index.html` (the intro article) with a nav linking the deep-dive article
-and the decks. `site/` is assembled, never hand-maintained, and is gitignored —
+`scripts/pages/build-site.mjs` copies the deck HTML—including
+`state-graph-surface.html`—into `site/` and generates `site/index.html` (the
+intro article) with a nav linking the deep-dive article and the decks. `site/`
+is assembled, never hand-maintained, and is gitignored —
 only the script and workflow are committed.
 
 ## GitHub Pages deploy

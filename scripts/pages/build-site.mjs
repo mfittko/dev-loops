@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Assembles the GitHub Pages publishable dir deterministically. The landing
 // page (index.html) is the "Introducing dev-loops" article; the deep-dive
-// article and the deep-dive deck are published alongside it and reached through
+// article and the presentation decks are published alongside it and reached through
 // a shared navigation bar injected into the article pages. The HTML files under
 // docs/ are the inputs here; site/ is assembled, never hand-maintained. Articles
 // listed in render-article.mjs's RENDERED_ARTICLES are themselves derived from
@@ -44,6 +44,13 @@ export const DECKS = [
     subtitle: 'Coordination delay and the waiting between actions',
     description: 'How explicit handoffs on a state graph and measuring the wait between actions cut delivery delay.',
     navLabel: 'Deep dive (deck)',
+  },
+  {
+    file: 'state-graph-surface.html',
+    title: 'The State Graph Is the Surface',
+    subtitle: 'Authoritative state, bounded loops, and human authority',
+    description: 'How dev-loops turns lifecycle state and evidence into one governed control surface.',
+    navLabel: 'State graph (deck)',
   },
 ];
 
