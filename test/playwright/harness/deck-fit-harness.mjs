@@ -302,6 +302,25 @@ export const DECK_REGISTRY = {
       { id: "close", stateName: "Close", capture: true },
     ],
   },
+  "state-graph-surface-deck": {
+    sliceId: "state-graph-surface-deck",
+    deck: "state-graph-surface.html",
+    mobileCapture: { id: "delivery", stateName: "Delivery progression" },
+    sectionIds: [
+      { id: "hero", stateName: "Hero", capture: true },
+      { id: "landscape", stateName: "Landscape", capture: false },
+      { id: "reframe", stateName: "Reframe", capture: true },
+      { id: "public-contract", stateName: "Public contract", capture: false },
+      { id: "composition", stateName: "Composition", capture: false },
+      { id: "delivery", stateName: "Delivery progression", capture: true },
+      { id: "cycle", stateName: "Cycle", capture: false },
+      { id: "backend", stateName: "Backend boundary", capture: true },
+      { id: "responsibility", stateName: "Responsibility", capture: false },
+      { id: "applicability", stateName: "Applicability", capture: true },
+      { id: "learning", stateName: "Learning", capture: false },
+      { id: "close", stateName: "Close", capture: true },
+    ],
+  },
 };
 
 // Resolve a registry entry with a clear message so a mistyped/removed key fails

@@ -1,7 +1,7 @@
 ---
 title: "The State Graph Is the Surface"
 subtitle: "How dev-loops combines deterministic state machines, bounded agentic loops, and GitHub-backed evidence into one control plane for software delivery."
-heroLede: "dev-loops does not ask an agent to remember the workflow. It models the workflow, derives the next legal move from authoritative state, and lets an agent, tool, or human execute one bounded transition at a time."
+heroLede: "dev-loops models the workflow, derives the next legal move from authoritative state, and lets an agent, tool, or human execute one bounded transition at a time."
 tags:
   - AI
   - Software Engineering
@@ -25,7 +25,7 @@ The vocabulary of agentic software development has moved quickly: prompt enginee
 
 The graph models the state of the work and the legal moves from that state. The loop repeatedly observes the authoritative world, resolves the current state, selects one legal move, executes it, records the result, and refreshes. The public surface exposes that model as start, continue, inspect, steer, wait, approve, and merge behavior. GitHub supplies the current reference backend for tracked work, review evidence, CI, and terminal merge truth.
 
-This distinction matters. The workflow does not live in a model's memory, a long prompt, or a chat transcript. Those are replaceable execution contexts. The durable product is the state model and the policy encoded around it.
+This distinction matters. Models, prompts, and chat transcripts are replaceable execution contexts. The durable product is the state model and the policy encoded around it.
 
 ## Where dev-loops fits
 
@@ -33,14 +33,14 @@ A useful way to position the repository is by the problem each pattern solves.
 
 | Pattern | What it contributes | How dev-loops uses or extends it |
 |---|---|---|
-| Ralph loop | Persistence across repeated bounded agent runs | Re-entry is driven by freshly resolved state rather than by conversational continuity |
+| Ralph loop | Persistence across repeated bounded agent runs | Re-entry is driven by freshly resolved state |
 | Karpathy loop | Measured keep/discard selection | Review/fix convergence and retrospective follow-ups already create improvement loops; the modeled and testable control surface is a strong substrate for a future keep/revert meta-loop over workflow changes |
-| Graph engineering | Explicit paths, branches, cycles, and deterministic control | The graph is state-first: it models the work, then projects the next actor and action, instead of starting from a static diagram of agents |
-| Tracker/review backend | Durable identity, evidence, coordination, and terminal facts | GitHub issues, pull requests, reviews, threads, checks, head SHAs, and merge state form the current authoritative evidence plane |
+| Graph engineering | Explicit paths, branches, cycles, and deterministic control | The graph models the work first, then projects the next actor and action |
+| Evidence backend | Durable identity, evidence, coordination, and terminal facts | GitHub issues, pull requests, reviews, threads, checks, head SHAs, and merge state form the current authoritative evidence plane |
 
-The important qualification is that `dev-loops` is **not yet a general AutoResearch-style optimizer for its own orchestration**. It already self-corrects in flight and improves through review, retrospectives, follow-up issues, decision records, and tests. A fully automatic outer loop that proposes graph or harness changes, evaluates them on a held-out task suite, and keeps or reverts them would be an additional layer. The repository is unusually well prepared for that layer because its states, transitions, routing decisions, and traces are explicit and versioned.
+`dev-loops` currently self-corrects in flight and improves through review, retrospectives, follow-up issues, decision records, and tests. A general AutoResearch-style optimizer would add an outer loop that proposes graph or harness changes, evaluates them on a held-out task suite, and keeps or reverts them. The repository is unusually well prepared for that layer because its states, transitions, routing decisions, and traces are explicit and versioned.
 
-## The reframe: from a graph of agents to a graph of work
+## The graph follows the work
 
 Many agent frameworks begin with an execution graph:
 
@@ -65,7 +65,7 @@ That is useful, but it makes the actors look more fundamental than the work.
 
 Pure interpreters map those facts to one current state, the allowed transitions, and a recommended next action. Routing then chooses the appropriate loop family, tool, agent role, wait behavior, or human handoff.
 
-The actor is therefore a projection of the state, not the source of the workflow.
+The current state determines which actor can make the next move.
 
 ```mermaid
 flowchart LR
@@ -77,13 +77,13 @@ flowchart LR
   E --> F
 ```
 
-*Diagram 1 — The state-backed control loop. Execution is always followed by a refresh from authoritative facts; no actor gets to carry stale state forward as truth.*
+*Diagram 1 — The state-backed control loop. Execution is always followed by a refresh from authoritative facts.*
 
-This is why the public `dev-loop` façade matters. A user expresses intent once. The surface resolves the target and current state, then routes to internal strategies without exposing them as competing user choices. The same state can be executed by a Claude Code plugin, a Pi extension, the CLI, a specialized agent, or a person without changing the workflow contract.
+This is why the public `dev-loop` façade matters. A user expresses intent once. The surface resolves the target and current state, then routes to an internal strategy. The same state can be executed by a Claude Code plugin, a Pi extension, the CLI, a specialized agent, or a person under one workflow contract.
 
 ## The surface is a projection of modeled state
 
-A control surface is more than a command list. It is the visible projection of what the model knows and permits.
+A control surface is the visible projection of what the model knows and permits.
 
 The public state contract already exposes five dimensions:
 
@@ -108,7 +108,7 @@ From those dimensions the system can project:
 
 This is the central reframe:
 
-> **The user-facing graph/loop surface is generated from modeled state. It is not a second workflow layered on top of the state machine.**
+> **The user-facing graph/loop surface is generated from modeled state.**
 
 Status, continuation, automation, steering, safe pauses, and human approval all become different views or transitions over the same underlying model.
 
@@ -140,18 +140,21 @@ stateDiagram-v2
   FeedbackResolution --> PreApprovalGate
   PreApprovalGate --> Implementation
   PreApprovalGate --> FeedbackResolution
-  PreApprovalGate --> Merge
+  PreApprovalGate --> HumanApproval
+  HumanApproval --> Implementation
+  HumanApproval --> MergeAuthorization
+  MergeAuthorization --> Merge
 ```
 
-*Diagram 2 — The lifecycle is a cyclic state graph, not a one-way checklist. Failed gates and new evidence legitimately route the change back into implementation or feedback resolution.*
+*Diagram 2 — The delivery progression is cyclic. Failed gates and new evidence route the change back into implementation or feedback resolution; clean evidence still stops for human approval and explicit merge authorization.*
 
 ### 3. Family-local inner graphs
 
 The Copilot and reviewer machines model finer states such as waiting for review, unresolved feedback, reply-and-resolve work, waiting for CI, review invalidation, convergence, and blocked conditions. UI review and other specialized loops add their own bounded subgraphs.
 
-The conductor does not flatten those machines into one enormous prompt. It consumes their interpreted state and decides which family owns the next step. Each layer has a narrow authority boundary.
+The conductor consumes the interpreted state of each machine and decides which family owns the next step. Each layer has a narrow authority boundary.
 
-That is graph composition: not one giant diagram, but multiple state machines connected through explicit contracts.
+That is graph composition: multiple state machines connected through explicit contracts.
 
 ## A loop is repeated state resolution
 
@@ -179,7 +182,7 @@ This is Ralph-like persistence with a stronger state discipline. The conversatio
 
 ## GitHub is the reference evidence backend
 
-GitHub is not merely where the resulting code is pushed. In the current implementation it plays several backend roles at once.
+In the current implementation, GitHub plays several backend roles at once.
 
 ### Tracker
 
@@ -187,19 +190,19 @@ Issues identify work, carry the initial specification, record assignment, and li
 
 ### Review system
 
-Pull-request reviews, pending reviews, comments, threads, replies, and resolution state make feedback observable. A comment is not just prose; it can be interpreted as an unresolved obligation, a resolved finding, a gate verdict, or a handoff.
+Pull-request reviews, pending reviews, comments, threads, replies, and resolution state make feedback observable. Comments can be interpreted as unresolved obligations, resolved findings, gate verdicts, or handoffs.
 
 ### Verification ledger
 
-Checks provide external evidence for CI state. Gate evidence can be pinned to the current head SHA so an older clean result cannot silently authorize a newer revision.
+Checks provide external evidence for CI state. Gate evidence is pinned to the current head SHA, so every revision needs current evidence.
 
 ### Terminal truth
 
-A merged pull request is a platform fact the agent cannot invent. That makes “done means merged” enforceable.
+A merged pull request is a platform fact. That makes “done means merged” enforceable.
 
 ### Recovery substrate
 
-A fresh run can inspect the issue, pull request, reviews, checks, current head, and durable comments to reconstruct what happened without replaying the original conversation.
+A fresh run can inspect the issue, pull request, reviews, checks, current head, and durable comments to reconstruct what happened.
 
 ```mermaid
 flowchart TD
@@ -208,18 +211,20 @@ flowchart TD
   P --> C[Checks<br/>verification evidence]
   R --> G[Gate decision]
   C --> G
-  G --> M[Merge signal<br/>terminal truth]
+  G --> H[Human approval]
+  H --> A[Merge authorization]
+  A --> M[Merge signal<br/>terminal truth]
   M --> X[Retrospective + follow-up issues]
   X --> T
 ```
 
-*Diagram 3 — GitHub acts as a tracker, review backend, evidence ledger, and terminal source of truth. The conceptual boundary is a tracker/review backend; GitHub is the current reference implementation.*
+*Diagram 3 — GitHub backs the built-in tracker, the PR review and evidence plane, and terminal merge truth.*
 
-The repository already contains a `Tracker` provider seam, with GitHub as the built-in default. The broader architectural point is that the state model consumes observable facts and emits routing decisions. A future backend can fit when it can supply equivalent identity, lifecycle, review, verification, and authorization signals without weakening the fail-closed guarantees.
+The repository contains a `Tracker` provider seam for issues and the board/queue, with GitHub as the built-in default. Pull requests, review threads, CI, and Copilot remain GitHub-coupled in v1. A future tracker provider can plug into the stable issue-and-board interface; a non-GitHub PR host would require a separate seam.
 
 ## Deterministic policy around probabilistic workers
 
-The system works because it does not ask deterministic code to perform judgment, and it does not ask a probabilistic model to enforce policy that can be encoded exactly.
+The system assigns exact policy to deterministic code and contextual judgment to agents.
 
 | Deterministic state and policy | Agentic work | Human authority |
 |---|---|---|
@@ -230,13 +235,13 @@ The system works because it does not ask deterministic code to perform judgment,
 | Verify head-pinned evidence | Fix the narrowest valid issue | Remain accountable for what ships |
 | Fail closed to wait, stop, or reconcile | Summarize findings and propose follow-ups | Change the governing rules |
 
-The result is neither a deterministic workflow that cannot adapt nor an unconstrained swarm that decides its own rules. It is a state machine that places model judgment inside bounded transitions.
+The resulting state machine places model judgment inside bounded transitions.
 
 ## The same control model works in greenfield and brownfield repositories
 
-The tool and skill set has already been used successfully in both greenfield and brownfield contexts. That is not an exception to the design; it follows from what the graph models.
+The tool and skill set has already been used successfully in both greenfield and brownfield contexts because the graph models each change's lifecycle.
 
-The state graph models the lifecycle of a **change**, not the age of the codebase.
+The state graph models the lifecycle of a **change**. Repository age changes the facts and verification burden supplied to that graph.
 
 | Greenfield context | Brownfield context |
 |---|---|
@@ -246,7 +251,7 @@ The state graph models the lifecycle of a **change**, not the age of the codebas
 | Scope often has fewer hidden dependencies | Context compilation and repository search are more important |
 | Rollback may be simple | Rollout, data safety, and public-contract preservation may need stronger gates |
 
-What changes is the context and the evidence bundle. What does **not** change is the control model:
+The context and evidence bundle vary while the control model remains stable:
 
 - resolve authoritative state;
 - select one legal move;
@@ -256,7 +261,7 @@ What changes is the context and the evidence bundle. What does **not** change is
 - stop at ambiguity or authorization boundaries;
 - record terminal truth in the backend.
 
-A brownfield repository does not require a different philosophy. It requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both.
+A brownfield repository requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both. The deferred second-repository pilot remains a separate, reproducible portability proof; it is one planned validation layer alongside the existing operational use across greenfield and brownfield work.
 
 ## Self-correction today, self-improvement as the next layer
 
@@ -295,7 +300,9 @@ flowchart LR
     S[State] --> A[Bounded action]
     A --> V[Verification / review]
     V -->|finding or failure| S
-    V -->|clean + authorized| M[Merge]
+    V -->|clean| H[Human approval]
+    H --> Z[Merge authorization]
+    Z --> M[Merge]
   end
 
   subgraph Learning[Learning loop — future changes]
@@ -326,7 +333,7 @@ otherwise revert
 
 The evaluator must remain outside the candidate's control. Public benchmark scores alone would be too easy to game; the useful oracle is a private replay suite built from real repository tasks, escaped defects, review findings, and human correction effort.
 
-`dev-loops` is a strong candidate for this mixture because the optimization target is not an opaque prompt. It is a versioned set of state models, transition tables, configuration, role mappings, gates, and handoff contracts that can be tested and compared.
+`dev-loops` is a strong candidate for this mixture because the optimization target is a versioned set of state models, transition tables, configuration, role mappings, gates, and handoff contracts that can be tested and compared.
 
 ## What the graph/loop surface buys
 
@@ -334,11 +341,11 @@ Once the state graph is treated as the primary product, several existing capabil
 
 ### Harness independence
 
-Claude Code, Pi, and the CLI are adapters over shared routing and state logic. Models and harnesses can change without redefining the workflow.
+Claude Code, Pi, and the CLI are adapters over shared routing and state logic. Models and harnesses can change while the workflow stays stable.
 
 ### Safe resumption
 
-A run can stop and later reconstruct state from authoritative facts. Long conversational memory is optional rather than load-bearing.
+A run can stop and later reconstruct state from authoritative facts.
 
 ### Explainability
 
@@ -350,33 +357,22 @@ A constraint or stop request can be applied at the next safe boundary because th
 
 ### Testability
 
-A closed set of states and transitions can be unit-tested. Routing regressions become code failures instead of subtle changes in model behavior.
+A closed set of states and transitions can be unit-tested. Routing regressions become visible code failures.
 
 ### Replaceable workers
 
-An agent, deterministic tool, or human can execute a transition as long as it consumes and produces the expected contract. Capability can improve without moving policy back into the worker.
+An agent, deterministic tool, or human can execute a transition as long as it consumes and produces the expected contract. Capability can improve while policy stays in the state machine.
 
-## What dev-loops is not
+## Product boundary
 
-The reframe also clarifies the boundaries.
-
-`dev-loops` is not:
-
-- merely a shell loop that repeatedly invokes a coding model;
-- a static DAG in which every node is a named agent;
-- a multi-agent swarm whose conversation is the source of truth;
-- a prompt that asks the model to remember gate order;
-- a generic workflow DSL for every business process;
-- already a fully automatic self-modifying graph optimizer.
-
-It is a focused software-delivery control surface whose loops are traversals of explicit, testable state machines over a tracker and review backend.
+`dev-loops` is a focused software-delivery control surface. Its loops traverse explicit, testable state machines over a tracker, repository state, pull-request evidence, and human authorization. General business-process orchestration and automatic self-modification sit outside the current product boundary.
 
 ## The resulting stack
 
 The architecture can be summarized in six lines:
 
 ```text
-GitHub                = durable work, review, and evidence backend
+GitHub                = built-in tracker + PR review/evidence backend
 State interpreters    = projection from facts to current state
 State-machine graphs  = legal lifecycle and recovery policy
 Router / surface      = next actor, next action, wait, stop, approval
@@ -387,7 +383,5 @@ Agents/tools/humans   = replaceable executors inside bounded transitions
 The learning layer sits across the stack: review outcomes, retrospectives, decision records, tests, and eventually an evaluated keep/revert loop for changes to the graph itself.
 
 That is how `dev-loops` fits into the current agentic-development landscape. Ralph contributes persistence. Karpathy contributes measured selection. Graph engineering contributes explicit topology and control. `dev-loops` brings them together around the modeled state of a real software change, backed by a tracker and review system that preserves evidence between actors and between sessions.
-
-The most important sentence is therefore not “the agent keeps going.” It is:
 
 > **The state graph stays authoritative, and every loop comes back to it.**

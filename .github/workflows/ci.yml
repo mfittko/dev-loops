@@ -61,7 +61,7 @@ jobs:
           CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           # Triggers include the harness/specs/configs that drive the smoke so a
           # change to the assertions themselves re-runs the affected family.
-          if echo "$CHANGED" | grep -Eq '^docs/presentations/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-deck\.spec|deep-dive-deck\.spec)\.mjs$|^playwright\.config\.mjs$'; then
+          if echo "$CHANGED" | grep -Eq '^docs/presentations/.*\.html$|^test/playwright/(harness/deck-fit-harness|harness/webkit-smoke-harness|intro-deck\.spec|deep-dive-deck\.spec|state-graph-surface-deck\.spec)\.mjs$|^playwright\.config\.mjs$'; then
             echo 'presentations=true' >> "$GITHUB_OUTPUT"
           else
             echo 'presentations=false' >> "$GITHUB_OUTPUT"
@@ -183,6 +183,7 @@ jobs:
           npm run test:playwright:intro-deck
           npm run test:playwright:deep-dive
           npm run test:playwright:how-decided-deck
+          npm run test:playwright:state-graph-surface-deck
 
   article-smoke:
     needs:

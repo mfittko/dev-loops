@@ -12,7 +12,7 @@ css: ./style.css
 <div class="hero-card">
   <p class="kicker">dev-loops</p>
   <h1>The State Graph Is the Surface</h1>
-  <p class="hero-copy">The workflow does not live in an agent's memory. dev-loops models the state of the work, derives one legal next move, and lets an agent, tool, or human execute that transition.</p>
+  <p class="hero-copy">dev-loops models the state of the work, derives one legal next move, and lets an agent, tool, or human execute that transition.</p>
   <div class="chip-row pt-5">
     <span class="pill">deterministic state</span>
     <span class="pill">bounded loops</span>
@@ -62,7 +62,7 @@ css: ./style.css
 
 <p class="kicker">The reframe</p>
 
-## Not a Graph of Agents — a Graph of Work
+## The Graph Follows the Work
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -138,7 +138,7 @@ flowchart LR
 </div>
 
 <div class="metric-card mt-5">
-<p class="hero-copy">Start, continue, inspect, steer, wait, approve, and merge are views and transitions over the same model — not parallel workflows.</p>
+<p class="hero-copy">Start, continue, inspect, steer, wait, approve, and merge are views and transitions over the same model.</p>
 </div>
 
 ---
@@ -180,7 +180,7 @@ flowchart LR
 </div>
 </div>
 
-<div class="soft-note">The conductor composes state machines through contracts instead of flattening them into one giant prompt.</div>
+<div class="soft-note">The conductor composes state machines through explicit contracts.</div>
 
 ---
 
@@ -203,7 +203,7 @@ flowchart LR
   <li><strong>One bounded move</strong>, then control returns to the resolver.</li>
   <li>The refresh catches new reviews, CI changes, head changes, steering, merges, and closures.</li>
   <li>No worker carries stale assumptions forward as truth.</li>
-  <li>Fresh sessions resume from facts, not conversational memory.</li>
+  <li>Fresh sessions resume from authoritative facts.</li>
 </ul>
 </div>
 </div>
@@ -237,7 +237,7 @@ flowchart LR
 <p class="card-label">Terminal truth + recovery</p>
 <ul class="mini-list">
   <li>merged and closed are observable</li>
-  <li>done cannot be fabricated</li>
+  <li>merged and closed are platform facts</li>
   <li>fresh runs can reconstruct state</li>
   <li>durable comments preserve decisions</li>
 </ul>
@@ -311,7 +311,7 @@ flowchart LR
 </div>
 
 <div class="metric-card mt-5">
-<p class="hero-copy"><strong>The toolset has already been used successfully in both contexts.</strong> Codebase age changes context and verification burden — not the state-backed control model.</p>
+<p class="hero-copy"><strong>The toolset has already been used successfully in both contexts.</strong> Codebase age changes context and verification burden while the state-backed control model remains stable.</p>
 </div>
 <div class="soft-note">The deferred Phase 7 second-repo pilot is a formal, reproducible portability proof; it is separate from operational evidence across greenfield and brownfield work.</div>
 
@@ -330,7 +330,9 @@ flowchart LR
   S[State] --> A[Act]
   A --> V[Verify]
   V -->|finding| S
-  V -->|clean| M[Merge]
+  V -->|clean| H[Human approval]
+  H --> Z[Merge authorization]
+  Z --> M[Merge]
 ```
 
 <p class="soft-note">Converges the current change through review, fix, retry, wait, and fail-closed recovery.</p>

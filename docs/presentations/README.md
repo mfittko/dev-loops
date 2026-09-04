@@ -13,6 +13,7 @@ only headline changes back to any `.md` that exists.
 | --- | --- | --- |
 | Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | The concept, the data behind it, and how to run the loop on your own project. |
 | dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
+| The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
 
 The self-contained `.html` files inline all CSS and diagrams (no Slidev runtime,
 no CDN, no remote resources) and ship a strict `Content-Security-Policy`, so they
