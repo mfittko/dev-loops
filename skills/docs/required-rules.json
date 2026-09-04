@@ -410,6 +410,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "LOCAL-DELEGATE-SELF-COMMIT",
+      "enforcement": "agent",
+      "enforcementNote": "No edit-here/commit-there split is agent discipline; the mechanical dirty-exit block is owned by the runtime rule LOCAL-COMMIT-BEFORE-EXIT (#1936)."
+    },
+    {
       "id": "LOCAL-DELEGATION-TABLE",
       "enforcement": "agent",
       "enforcementNote": "Role dispatch is orchestration behavior, not mechanically checkable."
