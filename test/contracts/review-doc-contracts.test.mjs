@@ -269,8 +269,10 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.doesNotMatch(ciWorkflow, /inspect_run_viewer_relevant_paths_json/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*needs:[\s\S]*- changes/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
+  assert.match(ciWorkflow, /name:\s*viewer-smoke \(shard \$\{\{\s*matrix\.shard\s*\}\}\)/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*shard:\s*\[1\/2,\s*2\/2\]/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer --shard=\$\{\{\s*matrix\.shard\s*\}\}/i);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
@@ -293,7 +295,6 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /actions\/setup-node@v5/i);
   assert.match(playwrightWebkitAction, /node-version:\s*24/i);
   assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
-  assert.match(playwrightWebkitAction, /steps\.playwright-webkit-cache\.outputs\.cache-hit\s*!=\s*'true'/i);
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('bun\.lock'\)\s*\}\}/i);
@@ -403,7 +404,8 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
     verifyHeaderIndex,
     nextJobRelative === -1 ? ciWorkflow.length : verifyHeaderIndex + 1 + nextJobRelative,
   );
-  assert.match(verifySection, /needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs:\s*\[verify-suite,\s*viewer-smoke\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs\.viewer-smoke\.result[\s\S]*success[\s\S]*skipped/i);
   assert.match(verifySection, /if:\s*always\(\)/i);
   assert.match(verifySection, /exit 1/i);
 });

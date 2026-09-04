@@ -159,19 +159,26 @@ jobs:
         run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
 
   verify:
-    needs: [verify-suite]
+    needs: [verify-suite, viewer-smoke]
     if: always()
     runs-on: ubuntu-latest
 
     steps:
       - name: Require all verify-suite legs to pass
-        run: '[ "${{ needs.verify-suite.result }}" = "success" ] || exit 1'
+        run: |
+          [ "${{ needs.verify-suite.result }}" = "success" ] || exit 1
+          [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
 
   viewer-smoke:
+    name: viewer-smoke (shard ${{ matrix.shard }})
     needs:
       - changes
     if: needs.changes.outputs.inspect_run_viewer == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/2, 2/2]
 
     steps:
       - name: Check out repository
@@ -181,7 +188,7 @@ jobs:
         uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
-        run: bun run test:playwright:viewer
+        run: bun run test:playwright:viewer --shard=${{ matrix.shard }}
 
   deck-smoke:
     needs:

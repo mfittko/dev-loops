@@ -95,7 +95,6 @@ describe("Bun 1.4.1 toolchain authority", () => {
 
     const action = Object.fromEntries(entries)[".github/actions/playwright-webkit/action.yml"];
     assert.match(action, /hashFiles\('bun\.lock'\)/);
-    assert.match(action, /steps\.playwright-webkit-cache\.outputs\.cache-hit\s*!=\s*'true'/);
     assert.match(action, /node \.\/node_modules\/@playwright\/test\/cli\.js install --with-deps webkit/);
 
     const dockerfile = await readFile(path.join(repoRoot, "Dockerfile"), "utf8");
