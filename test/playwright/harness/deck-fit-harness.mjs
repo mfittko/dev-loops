@@ -109,15 +109,22 @@ export async function measureArticleFit(page) {
       }
     }
     const clipped = [];
-    for (const el of document.querySelectorAll("section")) {
+    const oversizedSections = [];
+    for (const el of document.querySelectorAll("article, section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
         clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
       }
+      const height = el.getBoundingClientRect().height;
+      if (height > window.innerHeight + 1) {
+        oversizedSections.push(`<${el.tagName.toLowerCase()} id="${el.id}"> height=${Math.round(height)} viewport=${window.innerHeight}`);
+      }
     }
     return {
+      layoutMode: "continuous-document",
       hOffenders,
       clipped,
+      oversizedSections,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -161,6 +168,12 @@ export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
 export function assertMobileFit(m) {
   assertDeckFit(m, `${MOBILE.width}px viewport`);
   expect(m.oversizedSections, `sections exceed the mobile viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
+}
+
+export function assertArticleFit(m) {
+  expect(m.layoutMode, "article measurements must identify continuous-document flow").toBe("continuous-document");
+  expect(m.oversizedSections, "article measurements must report tall sections explicitly").toEqual(expect.any(Array));
+  assertDeckFit(m, `${MOBILE.width}px viewport`);
 }
 
 export function assertDesktopFit(m) {
@@ -494,9 +507,7 @@ export function defineArticleSuite({ sliceId, articlePath }) {
     try {
       await settleMobile(page, url);
       const m = await measureArticleFit(page);
-      // Articles are continuous documents, so vertical growth is expected; the
-      // shared deck-only strict height assertion must not reject long pages.
-      assertDeckFit(m, `${MOBILE.width}px viewport`);
+      assertArticleFit(m);
       await captureNamedUiState({
         page,
         testInfo,
@@ -528,7 +539,25 @@ export function defineArticleSuite({ sliceId, articlePath }) {
         document.body.appendChild(wide);
       });
       const m = await measureArticleFit(page);
-      expect(m.hOffenders.length).toBeGreaterThan(0);
+      expect(() => assertArticleFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  // Cross-family contract: articles report tall sections but intentionally
+  // permit them because the document scrolls continuously instead of paging.
+  test(`${sliceId} article fit permits a deliberately-tall section`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const article = document.querySelector("article");
+        article.style.minHeight = `${window.innerHeight + 200}px`;
+      });
+      const m = await measureArticleFit(page);
+      expect(m.oversizedSections.length).toBeGreaterThan(0);
+      assertArticleFit(m);
     } finally {
       await stopFixtureServer(server);
     }
