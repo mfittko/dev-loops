@@ -25,7 +25,7 @@ css: ./style.css
 
 <p class="kicker">Where it fits</p>
 
-## Three Ideas, One Control Surface
+## Three Ideas Converge
 
 <div class="grid grid-cols-3 gap-5 items-stretch">
 <div class="glass-card">
@@ -92,7 +92,7 @@ flowchart LR
 
 <p class="kicker">The public surface</p>
 
-## The Surface Is Compiled from Modeled State
+## Five Dimensions Compile the Surface
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -125,7 +125,7 @@ flowchart LR
 
 <p class="kicker">Composition</p>
 
-## One Public Surface, Nested State Graphs
+## One Surface, Nested Graphs
 
 <div class="grid grid-cols-3 gap-5 items-stretch">
 <div class="glass-card">
@@ -164,9 +164,25 @@ flowchart LR
 
 ---
 
+<p class="kicker">Delivery progression</p>
+
+## Clean Evidence Still Meets Human Authority
+
+```mermaid {scale: 0.58}
+flowchart LR
+  I[Intake] --> R[Refine] --> X[Implement] --> D[Draft gate]
+  D --> F[Feedback] --> P[Pre-approval]
+  P --> H[Human approval] --> A[Merge authorization] --> M[Merge]
+  F --> X
+```
+
+<div class="soft-note">Findings return the change to another bounded cycle. A clean gate never grants merge authority by itself.</div>
+
+---
+
 <p class="kicker">Loop semantics</p>
 
-## A Loop Is Repeated State Resolution
+## Observe. Resolve. Act Once. Refresh.
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -192,7 +208,7 @@ flowchart LR
 
 <p class="kicker">Backend</p>
 
-## GitHub Is the Current Evidence Plane
+## One Tracker Seam; One GitHub-Coupled PR Plane
 
 <div class="grid grid-cols-3 gap-5 items-stretch">
 <div class="glass-card">
@@ -230,7 +246,7 @@ flowchart LR
 
 <p class="kicker">Division of responsibility</p>
 
-## Determinism Sets Boundaries; Agency Does Work
+## Policy, Judgment, and Authority Each Have a Home
 
 <div class="grid grid-cols-3 gap-5 items-stretch">
 <div class="glass-card">
@@ -269,7 +285,7 @@ flowchart LR
 
 <p class="kicker">Applicability</p>
 
-## Same Control Model: Greenfield and Brownfield
+## The Change Lifecycle Spans Greenfield and Brownfield
 
 <div class="grid grid-cols-2 gap-5 items-stretch">
 <div class="glass-card">
@@ -293,13 +309,13 @@ flowchart LR
 <div class="metric-card mt-5">
 <p class="hero-copy"><strong>The same change lifecycle carries both contexts.</strong> Codebase age changes the context and verification burden supplied to the state-backed control model.</p>
 </div>
-<div class="soft-note">The deferred Phase 7 second-repo pilot remains the separate, reproducible portability proof.</div>
+<div class="soft-note">Repeated second-repository pilot runs provide portability evidence beyond this bootstrap repository.</div>
 
 ---
 
 <p class="kicker">Learning</p>
 
-## Two Loops Improve Different Things
+## Two Loops Improve Different Horizons
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -334,35 +350,9 @@ flowchart LR
 
 ---
 
-<p class="kicker">Next layer</p>
-
-## A Karpathy-Style Meta-Loop over the Surface
-
-<div class="grid grid-cols-2 gap-5 items-start">
-<div class="glass-card">
-<ul class="tight-list">
-  <li>Propose a change to routing, prompts, models, context, gates, or topology.</li>
-  <li>Replay current and candidate graph versions on held-out real tasks.</li>
-  <li>Measure correctness, review burden, latency, cost, and policy violations.</li>
-  <li>Keep the candidate only when it improves inside fixed safety constraints.</li>
-</ul>
-</div>
-<div class="glass-card">
-<p class="card-label">Why dev-loops is a strong substrate</p>
-<ul class="tight-list">
-  <li>The optimization target is versioned and inspectable.</li>
-  <li>States, transitions, gates, and traces are already testable.</li>
-  <li>The evaluator can remain outside the candidate's control.</li>
-  <li>Every accepted graph change can pass through the same PR evidence pipeline.</li>
-</ul>
-</div>
-</div>
-
----
-
 <p class="kicker">Takeaway</p>
 
-## The State Graph Is the Product
+## The State Graph Stays Authoritative
 
 <div class="grid grid-cols-2 gap-5 items-start">
 <div class="glass-card">
@@ -381,30 +371,3 @@ flowchart LR
 </div>
 
 <div class="soft-note">The agent may change. The harness may change. The state graph stays authoritative, and every loop comes back to it.</div>
-
----
-
-<p class="kicker">References</p>
-
-## Sources and Repository Contracts
-
-<div class="grid grid-cols-2 gap-5 items-start">
-<div class="glass-card">
-<p class="card-label">External framing</p>
-<ul class="tight-list">
-  <li><a href="https://ghuntley.com/ralph/">Geoffrey Huntley — Ralph</a></li>
-  <li><a href="https://github.com/karpathy/autoresearch">Andrej Karpathy — AutoResearch</a></li>
-  <li><a href="https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph">LangChain — Three Years of Graph Engineering</a></li>
-</ul>
-</div>
-<div class="glass-card">
-<p class="card-label">dev-loops contracts</p>
-<ul class="tight-list">
-  <li><code>packages/core/src/loop/lifecycle-state.mjs</code></li>
-  <li><code>skills/docs/public-dev-loop-contract.md</code></li>
-  <li><code>skills/docs/pr-lifecycle-contract.md</code></li>
-  <li><code>skills/docs/conductor-routing-contract.md</code></li>
-  <li><code>skills/docs/tracker-seam-contract.md</code></li>
-</ul>
-</div>
-</div>

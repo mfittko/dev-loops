@@ -48,6 +48,7 @@ Start here for repository documentation.
 - [Applied Dev Loops Presentation](./presentations/applied-dev-loops-presentation.md)
 - [Process Observability Presentation](./presentations/process-observability-presentation.md)
 - [The State Graph Is the Surface (deck)](./presentations/state-graph-surface.html) — the graph/loop reframe in a self-contained presentation
+- [The State Graph Is the Surface (Slidev companion)](./presentations/state-graph-surface-presentation.md) — headline-level source companion to the publishable HTML deck
 - [How dev-loops Decided Itself Into Shape (deck)](./presentations/how-dev-loops-decided-itself.html) — the evolution/history narrated through the decision log
 - `docs/presentations/style.css`
 

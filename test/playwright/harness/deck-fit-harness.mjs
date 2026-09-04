@@ -143,12 +143,16 @@ export async function assertCspMeta(page) {
 
 // Assert the mobile (390px) layout fits: per-element right edge, defensive
 // page scrollWidth, and per-section vertical-clip.
-export function assertMobileFit(m) {
-  expect(m.hOffenders, `elements overflow the ${MOBILE.width}px viewport (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
+export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
+  expect(m.hOffenders, `elements overflow the ${viewportLabel} (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
   // Defensive secondary: body{overflow-x:hidden} clips page-level growth, so this
   // line rarely fires on its own — the per-element check above is the real catch.
   expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
   expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
+}
+
+export function assertMobileFit(m) {
+  assertDeckFit(m, `${MOBILE.width}px viewport`);
 }
 
 // Registry-driven runner: defines the full per-deck suite from one data entry.
@@ -165,9 +169,13 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
   test(`webkit renders the ${sliceId} and captures named states`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
     try {
+      await page.setViewportSize({ width: 1280, height: 800 });
       await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.waitForLoadState("networkidle");
+      await page.evaluate(() => document.fonts.ready);
       await assertSectionIdsAndNoHorizontalScroll(page, ids);
       await assertCspMeta(page);
+      assertDeckFit(await measureFit(page), "1280x800 desktop viewport");
 
       for (const { id, stateName, capture } of states) {
         const section = page.locator(`#${id}`);
@@ -189,6 +197,28 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
           },
         });
       }
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} desktop fit check fails on deliberately-clipped content`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => {
+        const section = document.querySelector("section");
+        if (section) {
+          section.style.height = "800px";
+          section.style.minHeight = "0";
+        }
+        const tall = document.createElement("div");
+        tall.style.cssText = "height:1600px;width:10px";
+        section?.appendChild(tall);
+      });
+      const m = await measureFit(page);
+      expect(m.clipped.length).toBeGreaterThan(0);
     } finally {
       await stopFixtureServer(server);
     }

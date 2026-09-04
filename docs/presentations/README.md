@@ -15,6 +15,8 @@ only headline changes back to any `.md` that exists.
 | dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
 
+Headline companion: [`state-graph-surface-presentation.md`](state-graph-surface-presentation.md).
+
 The self-contained `.html` files inline all CSS and diagrams (no Slidev runtime,
 no CDN, no remote resources) and ship a strict `Content-Security-Policy`, so they
 open directly in a browser and publish as static files.
