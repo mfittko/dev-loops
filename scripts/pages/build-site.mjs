@@ -8,7 +8,7 @@
 // their markdown twin (edit the .md, then `npm run articles:render`); the rest
 // are hand-maintained sources.
 // Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
-import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildStateAtlasHtml } from './build-state-atlas.mjs';
@@ -248,25 +248,32 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   assertSafeOutputRelationship(root, out, { relative, sep, parse: parsePath, isAbsolute: (value) => resolve(value) === value, join });
 
   // Establish that repoRoot identifies a repository before granting its site/
-  // directory privileged output status. A mistyped root must fail without
-  // deleting an unrelated, nonempty site/ directory.
+  // directory privileged output status. Load every required source before any
+  // destructive output preparation so an incomplete or mistyped root fails
+  // without deleting an unrelated, nonempty site/ directory.
   const repoUrl = await resolveRepoUrl(root);
+  const mermaidSrc = join(root, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
+  const [landingHtml, articleHtml, deckBytes, mermaidBytes] = await Promise.all([
+    readFile(join(articlesDir, LANDING.file), 'utf8'),
+    Promise.all(ARTICLES.map((article) => readFile(join(articlesDir, article.file), 'utf8'))),
+    Promise.all(DECKS.map((deck) => readFile(join(decksDir, deck.file)))),
+    readFile(mermaidSrc),
+  ]);
 
   await prepareOutputDirectory(root, out);
 
   // Landing page: the intro article, navigable, published as index.html.
-  const landingHtml = await readFile(join(articlesDir, LANDING.file), 'utf8');
   await writeFile(join(out, 'index.html'), injectNav(landingHtml, repoUrl), 'utf8');
 
   // Deep-dive article: published with the same nav so the set is navigable.
-  for (const article of ARTICLES) {
-    const html = await readFile(join(articlesDir, article.file), 'utf8');
+  for (const [index, article] of ARTICLES.entries()) {
+    const html = articleHtml[index];
     await writeFile(join(out, article.file), injectNav(html, repoUrl), 'utf8');
   }
 
   // Decks: self-contained slide renders, copied as-is (no nav injection).
-  for (const deck of DECKS) {
-    await cp(join(decksDir, deck.file), join(out, deckOut(deck)));
+  for (const [index, deck] of DECKS.entries()) {
+    await writeFile(join(out, deckOut(deck)), deckBytes[index]);
   }
 
   // State atlas: generated from the core state tables at build time, then given
@@ -275,9 +282,8 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
 
   // Vendored mermaid runtime the atlas page references (Pages has no CSP, so we
   // load it as an external asset rather than inlining ~3MB into the page).
-  const mermaidSrc = join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
   await mkdir(join(out, 'assets'), { recursive: true });
-  await cp(mermaidSrc, join(out, 'assets', 'mermaid.min.js'));
+  await writeFile(join(out, 'assets', 'mermaid.min.js'), mermaidBytes);
 
   return {
     out,
