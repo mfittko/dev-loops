@@ -96,13 +96,11 @@ jobs:
           - suite: test:docs
             fetch_depth: 0
           - suite: test:scripts
-            shard: 1/4
+            shard: 1/2
+            shard_key: 1-of-2
           - suite: test:scripts
-            shard: 2/4
-          - suite: test:scripts
-            shard: 3/4
-          - suite: test:scripts
-            shard: 4/4
+            shard: 2/2
+            shard_key: 2-of-2
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -121,6 +119,15 @@ jobs:
 
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
+
+      # GitHub scopes pull-request caches to the PR merge ref, so these timing
+      # files can improve repeated measurements without being visible to main.
+      - name: Restore PR Bun test timings
+        if: github.event_name == 'pull_request' && matrix.suite == 'test:scripts'
+        uses: actions/cache@v4
+        with:
+          path: .cache/bun-test-timings/${{ matrix.shard_key }}.json
+          key: bun-test-timings-${{ runner.os }}-bun-1.4.1-pr-${{ github.event.pull_request.number }}-${{ hashFiles('bun.lock', 'test/**/*.test.mjs') }}-${{ matrix.shard_key }}
 
       # Pinned version + sha256 must match scripts/github/lint-workflows.mjs's
       # ACTIONLINT_VERSION / ACTIONLINT_LINUX_AMD64_SHA256 (a test asserts it).
@@ -159,7 +166,12 @@ jobs:
 
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
-        run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
+        run: |
+          mkdir -p .cache/bun-test-timings
+          bun run ${{ matrix.suite }} \
+            --timings .cache/bun-test-timings/${{ matrix.shard_key }}.json \
+            --update-timings \
+            --shard=${{ matrix.shard }}
 
   verify:
     needs: [verify-suite]
