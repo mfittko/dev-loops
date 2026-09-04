@@ -2949,6 +2949,28 @@ test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding fil
   assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
 });
 
+test("renderGateReviewCommentBody aggregate **Inline findings:** line breaks severities down in SEVERITY_ORDER and dedups touched angles (#1942)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    // Multi-severity, and angle "a" repeats — the line must count 3, break down
+    // high before low (SEVERITY_ORDER), and list each angle once in first-seen order.
+    locatableFindings: [
+      { severity: "high", angle: "a", summary: "s1" },
+      { severity: "low", angle: "a", summary: "s2" },
+      { severity: "low", angle: "b", summary: "s3" },
+    ],
+    nonLocatableFindings: [],
+  });
+  assert.match(body, /^\*\*Inline findings:\*\* 3 \(🔴 1 high · 🟡 2 low\) — on the diff, see Files changed\. Angles: a, b\.$/m);
+});
+
 test("renderGateReviewCommentBody does not crash the verdict post on a lone surrogate in a body-only finding path (#1942 fail-closed)", () => {
   // A lone surrogate makes encodeURI throw URIError; toWellFormed() must
   // neutralize it so one malformed path never crashes the whole gate post.
