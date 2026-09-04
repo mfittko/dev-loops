@@ -22,6 +22,19 @@ describe("Bun 1.4.1 toolchain authority", () => {
     await assert.rejects(access(path.join(repoRoot, "package-lock.json")));
   });
 
+  test("preserves npm-compatible peer resolution while disabling runtime auto-install", async () => {
+    const bunfig = await readFile(path.join(repoRoot, "bunfig.toml"), "utf8");
+    assert.match(bunfig, /^\[install\]$/m);
+    assert.match(bunfig, /^auto\s*=\s*"disable"$/m);
+    assert.doesNotMatch(bunfig, /^peer\s*=/m, "Bun's default peer installation must match plain npm ci");
+
+    const lock = parseBunLock(await readFile(path.join(repoRoot, "bun.lock"), "utf8"));
+    assert.equal(lock.workspaces[""].peerDependencies["@earendil-works/pi-coding-agent"], "^0.84.0");
+    assert.deepEqual(new Set(lock.workspaces[""].optionalPeers), new Set(["@axe-core/playwright", "@playwright/test"]));
+    assert.ok(lock.packages["@earendil-works/pi-coding-agent"], "required root peer remains in the install graph");
+    assert.ok(lock.packages["@earendil-works/pi-tui"], "required root peer remains in the install graph");
+  });
+
   test("locks workspace linkage, bins, peer/optional metadata, and omits obsolete runners", async () => {
     const [root, core, lock] = await Promise.all([
       readJson("package.json"),

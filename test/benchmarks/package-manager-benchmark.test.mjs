@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 import { analyzeBenchmark } from "../../scripts/benchmarks/analyze-package-manager.mjs";
-import { buildPairOrders, MEASURED_REPETITIONS } from "../../scripts/benchmarks/run-package-manager.mjs";
+import { buildPairOrders, dependencyInventory, materializeGitRepository, MEASURED_REPETITIONS } from "../../scripts/benchmarks/run-package-manager.mjs";
 
 const run = (tool, measured, durationMs, exitCode = 0) => ({ tool, measured, durationMs, exitCode });
 const phase = (tool, duration) => ({ warmups: [run(tool, false, duration)], measured: Array.from({ length: 7 }, () => run(tool, true, duration)) });
@@ -24,6 +28,43 @@ test("pair order alternates within one invocation and supports reversed session 
   assert.equal(MEASURED_REPETITIONS, 7);
   assert.deepEqual(buildPairOrders("npm").slice(0, 3), [["npm", "bun"], ["bun", "npm"], ["npm", "bun"]]);
   assert.deepEqual(buildPairOrders("bun").slice(0, 2), [["bun", "npm"], ["npm", "bun"]]);
+});
+
+test("benchmark copies are deterministic standalone main-branch git repositories with origin/main", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-git-"));
+  const project = path.join(root, "project");
+  try {
+    await mkdir(project);
+    await writeFile(path.join(project, "package.json"), '{"name":"fixture"}\n');
+    await materializeGitRepository(project);
+    const git = (...args) => spawnSync("git", ["-C", project, ...args], { encoding: "utf8" });
+    assert.equal(git("rev-parse", "--is-inside-work-tree").stdout.trim(), "true");
+    assert.equal(git("branch", "--show-current").stdout.trim(), "main");
+    assert.equal(git("rev-parse", "HEAD").stdout.trim(), git("rev-parse", "origin/main").stdout.trim());
+    assert.equal(git("config", "--get", "remote.origin.url").stdout.trim(), "https://github.com/mfittko/dev-loops.git");
+    assert.equal(git("show", "-s", "--format=%an|%ae|%aI", "HEAD").stdout.trim(), "dev-loops benchmark|benchmark@dev-loops.invalid|2000-01-01T00:00:00Z");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dependency inventory canonicalizes npm nested and Bun hoisted layouts", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-inventory-"));
+  const npmRoot = path.join(root, "npm");
+  const bunRoot = path.join(root, "bun");
+  const packageJson = (name) => JSON.stringify({ name, version: "1.0.0" });
+  try {
+    await mkdir(path.join(npmRoot, "node_modules", "a", "node_modules", "b"), { recursive: true });
+    await mkdir(path.join(bunRoot, "node_modules", "a"), { recursive: true });
+    await mkdir(path.join(bunRoot, "node_modules", "b"), { recursive: true });
+    await writeFile(path.join(npmRoot, "node_modules", "a", "package.json"), packageJson("a"));
+    await writeFile(path.join(npmRoot, "node_modules", "a", "node_modules", "b", "package.json"), packageJson("b"));
+    await writeFile(path.join(bunRoot, "node_modules", "a", "package.json"), packageJson("a"));
+    await writeFile(path.join(bunRoot, "node_modules", "b", "package.json"), packageJson("b"));
+    assert.deepEqual(await dependencyInventory(npmRoot), await dependencyInventory(bunRoot));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("analyzer requires two independent sessions and uses seven-sample install medians", () => {

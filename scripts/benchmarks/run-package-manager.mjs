@@ -29,14 +29,22 @@ export function buildPairOrders(startTool) {
   });
 }
 
-async function dependencyInventory(root) {
-  const packages = [];
+export async function dependencyInventory(root) {
+  const packages = new Set();
   async function walk(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.name === ".bin") continue;
       const target = path.join(directory, entry.name);
       if (entry.isDirectory() && entry.name.startsWith("@")) await walk(target);
-      else if (entry.isDirectory()) try { const pkg = JSON.parse(await readFile(path.join(target, "package.json"), "utf8")); packages.push(`${pkg.name}@${pkg.version}`); } catch {}
+      else if (entry.isDirectory()) {
+        try {
+          const pkg = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
+          packages.add(`${pkg.name}@${pkg.version}`);
+          await walk(path.join(target, "node_modules"));
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+      }
     }
   }
   try { await walk(path.join(root, "node_modules")); } catch (error) { if (error?.code !== "ENOENT") throw error; }
@@ -47,7 +55,7 @@ async function dependencyInventory(root) {
     const target = path.join(root, location);
     try { const stat = await lstat(target); workspaceLinks.push({ location, kind: stat.isSymbolicLink() ? "symlink" : "directory", target: stat.isSymbolicLink() ? await readlink(target) : null }); } catch (error) { if (error?.code !== "ENOENT") throw error; }
   }
-  return { packages: packages.sort(), bins: bins.sort(), workspaceLinks };
+  return { packages: [...packages].sort(), bins: bins.sort(), workspaceLinks };
 }
 
 async function copySource(source, destination) {
@@ -57,6 +65,26 @@ async function copySource(source, destination) {
     const first = relative.split(path.sep)[0];
     return !["node_modules", ".git", "tmp"].includes(first) && !/^docs\/benchmarks\/bun-1\.4\.1\/(?:session-.*\.raw\.json|verdict\.md)$/u.test(relative);
   } });
+}
+
+export function materializeGitRepository(root) {
+  const identity = {
+    GIT_AUTHOR_NAME: "dev-loops benchmark",
+    GIT_AUTHOR_EMAIL: "benchmark@dev-loops.invalid",
+    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+    GIT_COMMITTER_NAME: "dev-loops benchmark",
+    GIT_COMMITTER_EMAIL: "benchmark@dev-loops.invalid",
+    GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+  };
+  const run = (args, env = process.env) => {
+    const result = spawnSync("git", ["-C", root, ...args], { env, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
+  };
+  run(["init", "--initial-branch=main"]);
+  run(["add", "--all"]);
+  run(["commit", "--no-gpg-sign", "-m", "benchmark source snapshot"], { ...process.env, ...identity });
+  run(["remote", "add", "origin", "https://github.com/mfittko/dev-loops.git"]);
+  run(["update-ref", "refs/remotes/origin/main", "HEAD"]);
 }
 
 async function sourceFingerprint(root) {
@@ -83,6 +111,7 @@ async function main() {
   try {
     const roots = { npm: path.join(tempRoot, "npm-project"), bun: path.join(tempRoot, "bun-project") };
     await Promise.all([copySource(args["npm-source"], roots.npm), copySource(args["bun-source"], roots.bun)]);
+    for (const root of Object.values(roots)) materializeGitRepository(root);
     const caches = { npm: path.join(tempRoot, "npm-cache"), bun: path.join(tempRoot, "bun-cache") };
     const envs = { npm: { ...process.env, npm_config_cache: caches.npm }, bun: { ...process.env, BUN_INSTALL_CACHE_DIR: caches.bun } };
     const commands = { npm: { install: ["ci"], verify: ["run", "verify"] }, bun: { install: ["install", "--frozen-lockfile"], verify: ["run", "verify"] } };

@@ -51,10 +51,10 @@ test("extension README documents the supported command, install, and verificatio
     /agents\/\*\.agent\.md/i,
     /~\/\.agents/i,
     /single public workflow entry/i,
-    /npm run verify/i,
-    /npm run test:extension/i,
-    /npm run test:dev-loop/i,
-    /npm run test:playwright:viewer/i,
+    /bun run verify/i,
+    /bun run test:extension/i,
+    /bun run test:dev-loop/i,
+    /bun run test:playwright:viewer/i,
   ]) {
     assert.match(readme, runtimePattern);
   }
