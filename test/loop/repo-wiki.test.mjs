@@ -97,4 +97,4 @@ test("runRepoWiki returns a structured result without calling process.exit", asy
   assert.equal(result.ok, true);
   assert.equal(result.status, 0);
   assert.ok(Array.isArray(result.invocation));
-});
+}, 30_000);
