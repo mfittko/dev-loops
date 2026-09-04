@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.1 - 2026-09-04
+
+First npm-published stable release. Identical in content to 1.0.0 (see below) — no code changes; a version bump only. `dev-loops@1.0.0` was published then unpublished during an earlier reverted release cut, and npm permanently tombstones an unpublished version number, so the first stable that can ship to the npm `latest` dist-tag is `1.0.1`. `@dev-loops/core` is bumped to `1.0.1` in lockstep.
+
 ## 1.0.0 - 2026-09-04
 
 First stable release. Freezes the rc.7 runtime surface and lands the deterministic contract-enforcement hardening (PR-description, CHANGELOG, docs-reference, Non-goals, ADR-tripwire, records-floor, commit-message, fresh-context retro, and stable-release approval gates) plus the release lockfile-lockstep guard. No new runtime features beyond rc.7; the hardening adds gate/tooling checks only.
