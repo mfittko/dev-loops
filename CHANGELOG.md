@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0 - 2026-09-04
+
+First stable release. Freezes the rc.7 runtime surface and lands the deterministic contract-enforcement hardening (PR-description, CHANGELOG, docs-reference, Non-goals, ADR-tripwire, records-floor, commit-message, fresh-context retro, and stable-release approval gates) plus the release lockfile-lockstep guard. No new runtime features beyond rc.7; the hardening adds gate/tooling checks only.
+
 ### Changed (breaking — legacy config fallback and `queue.board` alias removed, #1701)
 
 Removed at the v1.0.0 cut per ADR 0017 (`docs/decisions/0017-devloops-root-config-layered-precedence.md`):
