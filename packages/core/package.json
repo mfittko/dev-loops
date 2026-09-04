@@ -101,7 +101,7 @@
     "bin/**/*.mjs"
   ],
   "scripts": {
-    "test": "node --test ./test/*.test.mjs"
+    "test": "bun test ./test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public",

@@ -19,7 +19,7 @@
  * resolved against the repo (deterministic 1-hop import/require graph).
  *
  * Size guards (record, do not silently drop):
- *   - skip lockfiles (package-lock.json / *-lock.yaml), generated trees
+ *   - skip lockfiles (bun.lock / package-lock.json / *-lock.yaml), generated trees
  *     (.claude/, dist/, lib/, node_modules/, coverage/), binary, and minified
  *     files (*.min.*) — recorded in `stripped` with a reason.
  *   - cap per-file bytes (default ~48KB) and truncate the long tail —
@@ -66,7 +66,7 @@ export function classifyStripReason(relPath) {
   const posix = String(relPath).replace(/\\/g, "/");
   const base = posix.split("/").pop() ?? posix;
 
-  if (base === "package-lock.json" || base === "npm-shrinkwrap.json" || /-lock\.ya?ml$/.test(base) || base === "yarn.lock" || base === "pnpm-lock.yaml") {
+  if (base === "bun.lock" || base === "package-lock.json" || base === "npm-shrinkwrap.json" || /-lock\.ya?ml$/.test(base) || base === "yarn.lock" || base === "pnpm-lock.yaml") {
     return "lockfile";
   }
   for (const prefix of GENERATED_DIR_PREFIXES) {

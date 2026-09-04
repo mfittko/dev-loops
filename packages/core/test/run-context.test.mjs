@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import { afterAll as after, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";

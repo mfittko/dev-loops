@@ -15,7 +15,7 @@
  * only ever run what the repo's own package.json already declares runnable.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -281,8 +281,8 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     headSha,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
-    // Stamp dependency state relative to package-lock.json (#1627): a worktree
-    // whose installed deps (node_modules/.package-lock.json) do not match the
+    // Stamp dependency state relative to the authoritative lockfile (#1627): a worktree
+    // whose installed deps do not match the lockfile
     // lockfile is validated against stale deps, so the artifact records the
     // delta instead of blessing it. Non-blocking (does not flip allPassed) — it
     // is a trust signal for consumers of the artifact, not a hard gate failure.
@@ -322,6 +322,17 @@ async function findAncestorInstalledLock(startDir) {
   }
 }
 
+async function findAncestorNodeModules(startDir) {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const info = await stat(path.join(dir, "node_modules")).catch(() => null);
+    if (info?.isDirectory()) return { info, root: dir };
+    const parent = path.dirname(dir);
+    if (parent === dir) return { info: null, root: null };
+    dir = parent;
+  }
+}
+
 /**
  * Compare the repo's package-lock.json against the installed lock snapshot
  * (node_modules/.package-lock.json) (#1627). A mismatch means the validation
@@ -355,6 +366,19 @@ async function findAncestorInstalledLock(startDir) {
  * @returns {Promise<{status: string, detail: string}>}
  */
 async function resolveDepState(repoRoot) {
+  const bunLockPath = path.join(repoRoot, "bun.lock");
+  const bunLockInfo = await stat(bunLockPath).catch(() => null);
+  if (bunLockInfo) {
+    const { info: installedInfo, root: depRoot } = await findAncestorNodeModules(repoRoot);
+    if (!installedInfo) {
+      return { status: "stale", detail: "node_modules absent in repoRoot or any ancestor — installed deps not materialized (bun install --frozen-lockfile not run)" };
+    }
+    const depRootNote = depRoot === repoRoot ? "" : ` (resolved from ancestor ${depRoot})`;
+    if (installedInfo.mtimeMs < bunLockInfo.mtimeMs) {
+      return { status: "stale", detail: `installed deps predate bun.lock${depRootNote} — rerun bun install --frozen-lockfile` };
+    }
+    return { status: "synced", detail: `installed deps are current with bun.lock${depRootNote}` };
+  }
   const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
   if (lockRaw === null) {
     return { status: "n-a", detail: "no package-lock.json at repo root" };

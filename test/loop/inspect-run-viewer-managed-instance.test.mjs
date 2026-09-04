@@ -1,4 +1,4 @@
-import test from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -690,7 +690,8 @@ test('defaultHealthcheck fetches without AbortSignal (Node v24 compatibility)', 
 test('isInspectRunViewerRelevantPath matches the bounded inspect-run viewer smoke surface', () => {
   assert.equal(isInspectRunViewerRelevantPath('.github/workflows/ci.yml'), true);
   assert.equal(isInspectRunViewerRelevantPath('package.json'), true);
-  assert.equal(isInspectRunViewerRelevantPath('package-lock.json'), true);
+  assert.equal(isInspectRunViewerRelevantPath('bun.lock'), true);
+  assert.equal(isInspectRunViewerRelevantPath('package-lock.json'), false);
   assert.equal(isInspectRunViewerRelevantPath('scripts/loop/inspect-run-viewer/rendering.mjs'), true);
   assert.equal(isInspectRunViewerRelevantPath('scripts/loop/inspect-run-viewer-ci-changes.mjs'), true);
   assert.equal(isInspectRunViewerRelevantPath('test/playwright/harness/webkit-smoke-harness.mjs'), true);

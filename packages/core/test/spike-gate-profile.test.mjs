@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import { resolveGateConfig, loadDevLoopConfig } from "../src/config/config.mjs";
 

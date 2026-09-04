@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { extractChangelogSection } from "../../scripts/release/extract-changelog-section.mjs";
 
@@ -75,7 +75,7 @@ test("CLI prints the section and exits 0 for a present version", async () => {
     const clPath = path.join(dir, "CHANGELOG.md");
     await writeFile(clPath, CHANGELOG, "utf8");
     const result = spawnSync(
-      process.execPath,
+      (Bun.which("node") ?? "node"),
       [scriptPath, "--version", "v0.5.0", "--changelog", clPath],
       { encoding: "utf8" },
     );
@@ -93,7 +93,7 @@ test("CLI exits 1 (fail closed) for an absent version", async () => {
     const clPath = path.join(dir, "CHANGELOG.md");
     await writeFile(clPath, CHANGELOG, "utf8");
     const result = spawnSync(
-      process.execPath,
+      (Bun.which("node") ?? "node"),
       [scriptPath, "--version", "9.9.9", "--changelog", clPath],
       { encoding: "utf8" },
     );
@@ -106,14 +106,14 @@ test("CLI exits 1 (fail closed) for an absent version", async () => {
 });
 
 test("CLI exits 2 when --version is missing", () => {
-  const result = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
+  const result = spawnSync((Bun.which("node") ?? "node"), [scriptPath], { encoding: "utf8" });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--version is required/);
 });
 
 test("CLI exits 2 when a flag is missing its value", () => {
   const result = spawnSync(
-    process.execPath,
+    (Bun.which("node") ?? "node"),
     [scriptPath, "--version", "0.5.0", "--changelog"],
     { encoding: "utf8" },
   );

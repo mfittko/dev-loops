@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import { afterAll as after, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

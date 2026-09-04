@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   buildParseError,
@@ -16,7 +16,7 @@ const scriptPath = path.resolve("skills/dev-loop/scripts/post-gate-verdict-fallb
 
 function runNode(args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
+    const child = spawn((Bun.which("node") ?? "node"), [scriptPath, ...args], {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });

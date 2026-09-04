@@ -1,24 +1,17 @@
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
+import { VERIFY_SUITES } from "../../scripts/verify.mjs";
 
 // Guards against the CI verify-suite matrix drifting from the test:* scripts
 // that compose `npm run verify`. Adding a gating suite to package.json without
 // wiring the matrix (or vice-versa) is fail-open: the aggregate verify gate
 // stays green while the new suite never runs. This asserts the two sets match.
 
-const suiteTokens = (text) =>
-  new Set((text.match(/test:[\w:-]+/g) || []));
-
 test("verify-suite matrix suites equal the test:* suites composing npm run verify", async () => {
-  const [pkgRaw, ciWorkflow] = await Promise.all([
-    readRepo("package.json"),
-    readRepo(".github/workflows/ci.yml"),
-  ]);
+  const ciWorkflow = await readRepo(".github/workflows/ci.yml");
 
   // Source of truth: the run-p args of the `verify` script (the aggregate CI
   // gate). run-p flags never start with `test:`, so token-matching is exact.
-  const verifyScript = JSON.parse(pkgRaw).scripts?.verify;
-  assert.ok(verifyScript, "package.json must define a `verify` script");
-  const verifySuites = suiteTokens(verifyScript);
+  const verifySuites = new Set(VERIFY_SUITES);
 
   // Scope to the verify-suite job's own section (header to the next top-level
   // job header) so a suite name elsewhere in the workflow can't satisfy this.

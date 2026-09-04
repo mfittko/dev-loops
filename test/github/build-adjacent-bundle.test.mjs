@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   buildAdjacentBundle,
@@ -30,6 +30,7 @@ function fileByPath(bundle, p) {
 // ---------------------------------------------------------------------------
 
 test("classifyStripReason flags lockfiles, generated trees, binary, minified", () => {
+  assert.equal(classifyStripReason("bun.lock"), "lockfile");
   assert.equal(classifyStripReason("package-lock.json"), "lockfile");
   assert.equal(classifyStripReason("pnpm-lock.yaml"), "lockfile");
   assert.equal(classifyStripReason(".claude/agents/review.md"), "generated");

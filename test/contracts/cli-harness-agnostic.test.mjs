@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";

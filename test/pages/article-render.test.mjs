@@ -7,7 +7,7 @@
 // Playwright fit harness rely on.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "bun:test";
 import { RENDERED_ARTICLES, renderArticleHtml } from "../../scripts/pages/render-article.mjs";
 
 const articlesUrl = new URL("../../docs/articles/", import.meta.url);

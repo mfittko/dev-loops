@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { describe, test } from "bun:test";
 
 import { RemediationItemSchema } from "../src/debt/debt-finding.mjs";
 import { clusterSignalsEnriched } from "../src/debt/cluster.mjs";

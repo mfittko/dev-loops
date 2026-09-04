@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { parseCiWatchCliArgs, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import {
   loadDevLoopConfig,

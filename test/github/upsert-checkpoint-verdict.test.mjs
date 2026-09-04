@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test, { after, before } from "node:test";
+import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
@@ -1471,6 +1471,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /request Copilot review before any/i);
   }, { prefix: "dev-loops-upsert-gate-review-illegal-preapproval-" });
+});
 
 test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft", async () => {
   await withTempDir(async (tempDir) => {
@@ -1515,7 +1516,6 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /draft_gate.*is now the legal gate boundary/i);
   }, { prefix: "dev-loops-upsert-gate-review-draft-preapproval-" });
-});
 });
 
 test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-approval evidence", async () => {

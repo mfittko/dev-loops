@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 
 import {
   resolveLinkedIssuesFromPr,
@@ -82,9 +82,9 @@ test("resolveLinkedIssuesFromPr: duplicates collapsed, first-appearance order pr
   );
 });
 
-test("loadRefinementArtifact: umbrella draft PR where 2 of 3 issues have ACs → present", async (t) => {
+test("loadRefinementArtifact: umbrella draft PR where 2 of 3 issues have ACs → present", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "umbrella-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {
     1052: UNREFINED_BODY,
     1019: REFINED_BODY,
@@ -104,9 +104,9 @@ test("loadRefinementArtifact: umbrella draft PR where 2 of 3 issues have ACs →
   assert.equal(result._onlyEnforcedWhenDraft, true);
 });
 
-test("loadRefinementArtifact: umbrella draft PR where NONE have ACs → missing", async (t) => {
+test("loadRefinementArtifact: umbrella draft PR where NONE have ACs → missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "umbrella-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {
     1052: UNREFINED_BODY,
     1019: UNREFINED_BODY,
@@ -123,9 +123,9 @@ test("loadRefinementArtifact: umbrella draft PR where NONE have ACs → missing"
   assert.equal(result._onlyEnforcedWhenDraft, true);
 });
 
-test("loadRefinementArtifact: umbrella draft PR where some fetches fail and no fetched issue is refined → missing", async (t) => {
+test("loadRefinementArtifact: umbrella draft PR where some fetches fail and no fetched issue is refined → missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "umbrella-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   // 1052 omitted → fetch fails (body null); 1019/1050 fetch but are unrefined.
   // allFailed is false (not every fetch failed), so this exercises the mixed
   // partial-failure branch, not the allFailed branch.
@@ -145,9 +145,9 @@ test("loadRefinementArtifact: umbrella draft PR where some fetches fail and no f
   assert.equal(result._onlyEnforcedWhenDraft, true);
 });
 
-test("loadRefinementArtifact: single-issue draft PR unchanged — present when refined", async (t) => {
+test("loadRefinementArtifact: single-issue draft PR unchanged — present when refined", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "single-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, { 42: REFINED_BODY });
   const prData = { closingIssuesReferences: [{ number: 42 }] };
   const result = await loadRefinementArtifact(
@@ -161,9 +161,9 @@ test("loadRefinementArtifact: single-issue draft PR unchanged — present when r
   assert.match(result.reason, /Acceptance criteria checklist item/);
 });
 
-test("loadRefinementArtifact: single-issue draft PR unchanged — missing when unrefined", async (t) => {
+test("loadRefinementArtifact: single-issue draft PR unchanged — missing when unrefined", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "single-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, { 42: UNREFINED_BODY });
   const prData = { closingIssuesReferences: [{ number: 42 }] };
   const result = await loadRefinementArtifact(
@@ -189,9 +189,9 @@ test("loadRefinementArtifact: no linked issue on draft PR → missing (unchanged
 // issue's AC data is now fetched so the pre_approval_gate unticked-AC
 // precondition has the spec-of-record to read. The refinement check itself
 // stays informational only — it does not block a ready PR on a missing artifact.
-test("loadRefinementArtifact: non-draft open PR stays informational (unknown) but fetches the spec-of-record AC data (#1621)", async (t) => {
+test("loadRefinementArtifact: non-draft open PR stays informational (unknown) but fetches the spec-of-record AC data (#1621)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ready-ac-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {
     1052: UNREFINED_BODY,
     1019: REFINED_BODY,
@@ -220,9 +220,9 @@ test("loadRefinementArtifact: non-draft open PR stays informational (unknown) bu
   assert.match(result.reason, /informational only/);
 });
 
-test("loadRefinementArtifact: non-draft open PR with a fetch failure stays unknown with unavailable AC data (#1621)", async (t) => {
+test("loadRefinementArtifact: non-draft open PR with a fetch failure stays unknown with unavailable AC data (#1621)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "ready-ac-fail-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   const { ghCommand, env } = await writeIssueBodyGhStub(tempDir, {});
   const result = await loadRefinementArtifact(
     {

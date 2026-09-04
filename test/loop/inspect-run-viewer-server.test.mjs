@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { get } from "node:http";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { createInspectRunViewerServer } from "../../scripts/loop/inspect-run-viewer.mjs";
 import { makeSnapshot, requestOnce } from "./inspect-run-viewer-test-helpers.mjs";

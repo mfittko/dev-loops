@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { describe, it } from "node:test";
+import { describe, it, test } from "bun:test";
 import { initGitFixture, runNode, runIdFreeEnv } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/detect-agent-stall.mjs");

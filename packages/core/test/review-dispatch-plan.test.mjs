@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import {
   CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
@@ -927,7 +927,7 @@ describe("matchesDiffExcludeGlob / classifyDiffFileExclusion — diff-inline exc
   });
 
   test("classifyDiffFileExclusion: DEFAULT_DIFF_EXCLUDE_GLOBS covers common lockfiles + generated trees", () => {
-    for (const p of ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "packages/core/package-lock.json"]) {
+    for (const p of ["bun.lock", "packages/app/bun.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "packages/core/package-lock.json"]) {
       assert.equal(classifyDiffFileExclusion(p), "default", p);
     }
     for (const p of ["dist/index.js", "node_modules/x/index.js", ".claude/agents/foo.md"]) {

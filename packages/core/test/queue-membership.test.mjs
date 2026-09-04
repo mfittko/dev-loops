@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { reconcileBoardMembership } from "../src/loop/queue-membership.mjs";
 import { createEntry } from "../src/loop/queue-state.mjs";

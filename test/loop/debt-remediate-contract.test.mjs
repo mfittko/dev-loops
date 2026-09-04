@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "debt-remediate.mjs");
@@ -47,7 +47,7 @@ function buildSignal(overrides = {}) {
 }
 
 function runCli(args) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
+  return spawnSync((Bun.which("node") ?? "node"), [cliPath, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
   });

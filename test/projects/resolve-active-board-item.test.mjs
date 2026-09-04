@@ -1,4 +1,4 @@
-import { after, describe, it } from "node:test";
+import { afterAll as after, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -757,7 +757,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     await withTempCwd("tracker:\n  board:\n    number: 7\n", async (cwd) => {
       const binDir = nodePath.join(cwd, "stub-bin");
       mkdirSync(binDir, { recursive: true });
-      const shim = `#!${process.execPath}
+      const shim = `#!${(Bun.which("node") ?? "node")}
 const argv = process.argv.slice(2);
 const q = argv.find((a) => a.startsWith("query=")) ?? "";
 const data = (d) => { process.stdout.write(JSON.stringify({ data: d })); process.exit(0); };

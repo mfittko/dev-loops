@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";

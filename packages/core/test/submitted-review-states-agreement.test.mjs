@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 
 import { SUBMITTED_REVIEW_STATES, summarizeCopilotReviews } from "../src/github/copilot-helpers.mjs";
 import { summarizeCopilotLoopIterations } from "../src/loop/copilot-loop-iterations.mjs";
@@ -9,11 +9,11 @@ import { normalizeReviewerSnapshot } from "../src/loop/reviewer-loop-state.mjs";
 // (copilot-helpers). The two importing loop modules and copilot-helpers' own
 // summarizer must all consume THAT set: a state added to it becomes observable
 // at each, which a drifted private copy would not show.
-test("the canonical SUBMITTED_REVIEW_STATES drives the three core call sites", (t) => {
+test("the canonical SUBMITTED_REVIEW_STATES drives the three core call sites", () => {
   assert.deepEqual([...SUBMITTED_REVIEW_STATES].sort(), ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
   SUBMITTED_REVIEW_STATES.add("AGREEMENT_PROBE");
-  t.after(() => SUBMITTED_REVIEW_STATES.delete("AGREEMENT_PROBE"));
+  onTestFinished(() => SUBMITTED_REVIEW_STATES.delete("AGREEMENT_PROBE"));
 
   // reviewer-loop-state: the probe state normalizes instead of nulling out.
   const snapshot = normalizeReviewerSnapshot({

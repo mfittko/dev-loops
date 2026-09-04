@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import { runPostMergeActions } from "@dev-loops/core/loop/run-post-merge-actions";
 

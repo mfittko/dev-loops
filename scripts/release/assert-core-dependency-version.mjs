@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Release-time guard: fail closed when the published `dev-loops` package's
- * `@dev-loops/core` dependency OR the committed `package-lock.json` version
+ * `@dev-loops/core` dependency OR the committed `bun.lock` version
  * fields are out of lockstep with the version being released — comparing the
  * full version token (major.minor.patch + prerelease), not just major.minor.
  *
@@ -10,10 +10,9 @@
  *    to the same full version (including prerelease token) as the release.
  *    The old major.minor-only comparison let rc.6 vs rc.7 pass (`1.0 == 1.0`),
  *    the root cause of #1033's original shape and the #1886 prerelease drift.
- * 2. `package-lock.json` must be in full lockstep: root version, root package
- *    entry version, the `packages/core` workspace entry version, and the
- *    `@dev-loops/core` dependency spec must all resolve to the same full
- *    version as the release. rc.7 shipped a lockfile still pinned to rc.6
+ * 2. `bun.lock` must be in full lockstep: the `packages/core` workspace entry
+ *    version and the root `@dev-loops/core` dependency spec must both resolve
+ *    to the same full version as the release. rc.7 shipped a lockfile still pinned to rc.6
  *    through every green gate because no guard read the lockfile at all.
  *
  * Runs in release.yml BEFORE the GitHub Release is created, so a mismatched
@@ -27,7 +26,7 @@
  *
  * --release-version defaults to the manifest `version`. Pass the tag-derived
  * version in release.yml so a manifest that forgot its own bump is also caught.
- * --manifest defaults to package.json, --lockfile to package-lock.json.
+ * --manifest defaults to package.json, --lockfile to bun.lock.
  * Exits 0 on lockstep, 1 on mismatch, 2 on usage/parse errors.
  */
 import { realpathSync } from "node:fs";
@@ -117,7 +116,7 @@ export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {
 }
 
 /**
- * Assert every `package-lock.json` version field is in full lockstep (same
+ * Assert every release-sensitive `bun.lock` version field is in full lockstep (same
  * full version, including the prerelease token) with the release version.
  * Covers the four fields rc.7 left stale: root version, root package entry
  * version, the `packages/core` workspace entry version, and the
@@ -125,17 +124,15 @@ export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {
  * @param {{releaseVersion: string, lockfile: object}} input
  * @returns {{releaseVersion: string, expectedVersion: string, checked: string[]}}
  */
-export function assertPackageLockInLockstep({ releaseVersion, lockfile } = {}) {
+export function assertBunLockInLockstep({ releaseVersion, lockfile } = {}) {
   if (!releaseVersion) throw new Error("releaseVersion is required");
   if (!lockfile || typeof lockfile !== "object") {
-    throw new Error("a parsed package-lock.json object is required");
+    throw new Error("a parsed bun.lock object is required");
   }
   const expectedVersion = extractFullVersion(releaseVersion);
-  const root = lockfile.packages?.[""] ?? {};
-  const workspace = lockfile.packages?.[CORE_WORKSPACE_KEY];
+  const root = lockfile.workspaces?.[""] ?? {};
+  const workspace = lockfile.workspaces?.[CORE_WORKSPACE_KEY];
   const checks = [
-    ["root version", lockfile.version],
-    ["root package entry version", root.version],
     ["workspace entry version", workspace?.version],
     [`${CORE_DEP} dependency spec`, root.dependencies?.[CORE_DEP]],
   ];
@@ -156,19 +153,22 @@ export function assertPackageLockInLockstep({ releaseVersion, lockfile } = {}) {
   }
   if (failures.length > 0) {
     throw new Error(
-      `package-lock.json is out of lockstep with the release version:\n  ${failures.join("\n  ")}`,
+      `bun.lock is out of lockstep with the release version:\n  ${failures.join("\n  ")}`,
     );
   }
   return {
     releaseVersion,
     expectedVersion,
     checked: [
-      "root version",
-      "root package entry version",
       "workspace entry version",
       `${CORE_DEP} dependency spec`,
     ],
   };
+}
+
+/** Parse Bun's text lockfile (JSONC with trailing commas) without dependencies. */
+export function parseBunLock(raw) {
+  return JSON.parse(String(raw).replace(/,\s*([}\]])/gu, "$1"));
 }
 
 /**
@@ -195,7 +195,7 @@ function usageError(message) {
 }
 
 function parseArgs(argv) {
-  const out = { manifest: "package.json", lockfile: "package-lock.json", releaseVersion: null };
+  const out = { manifest: "package.json", lockfile: "bun.lock", releaseVersion: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--release-version" || arg === "--manifest" || arg === "--lockfile") {
@@ -239,14 +239,15 @@ async function main(argv) {
   // out-of-lockstep = exit 1.
   let lockfile;
   try {
-    lockfile = JSON.parse(await readFile(lockfilePath, "utf8"));
+    const rawLockfile = await readFile(lockfilePath, "utf8");
+    lockfile = parseBunLock(rawLockfile);
   } catch (err) {
     throw usageError(`cannot read or parse lockfile "${lockfilePath}": ${err.message}`);
   }
-  const lockResult = assertPackageLockInLockstep({ releaseVersion: version, lockfile });
+  const lockResult = assertBunLockInLockstep({ releaseVersion: version, lockfile });
   process.stdout.write(
     ciSafe(
-      `package-lock.json version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).`,
+      `bun.lock version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).`,
     ) + "\n",
   );
 }

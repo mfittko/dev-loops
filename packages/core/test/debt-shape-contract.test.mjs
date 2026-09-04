@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { describe, test } from "bun:test";
 
 import { shapeFinding, shapeFindings, ITEM_THRESHOLD, DEFER_THRESHOLD, WATCH_THRESHOLD, EPIC_SIGNAL_COUNT_THRESHOLD } from "../src/debt/shape.mjs";
 const uuid = (n) => '00000000-0000-4000-a000-' + String(n).padStart(12, '0');

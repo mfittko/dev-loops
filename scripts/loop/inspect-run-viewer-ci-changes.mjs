@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 export const INSPECT_RUN_VIEWER_RELEVANT_EXACT_PATHS = Object.freeze([
   ".github/workflows/ci.yml",
   "package.json",
-  "package-lock.json",
+  "bun.lock",
   "playwright.config.mjs",
   "scripts/loop/_inspect-run-viewer-adapter.mjs",
   "scripts/loop/inspect-run-viewer.mjs",

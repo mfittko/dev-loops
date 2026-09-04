@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { glob, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
+import { VERIFY_SUITES } from "../../scripts/verify.mjs";
 
 // Every test/**/*.test.mjs must be matched by a suite that `npm run verify`
 // actually reaches, or it silently drops out of enforcement — a red test
@@ -16,7 +17,7 @@ const repoRootPath = fileURLToPath(new URL("../../", import.meta.url));
 
 async function coveredTestFiles() {
   const pkg = JSON.parse(await readFile(path.join(repoRootPath, "package.json"), "utf8"));
-  const queue = ["verify"];
+  const queue = [...VERIFY_SUITES];
   const visited = new Set();
   const covered = new Set();
   while (queue.length > 0) {

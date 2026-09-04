@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";

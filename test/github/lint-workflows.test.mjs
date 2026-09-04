@@ -3,9 +3,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { ACTIONLINT_LINUX_AMD64_SHA256, ACTIONLINT_VERSION, runActionlint } from "../../scripts/github/lint-workflows.mjs";
+
+const ACTIONLINT_AVAILABLE = runActionlint(["-version"]).error?.code !== "ENOENT";
 
 const FIXTURE_PATH = "test/fixtures/workflows/invalid-on-trigger.yml";
 const FIXTURE_ABS_PATH = fileURLToPath(new URL(`../../${FIXTURE_PATH}`, import.meta.url));
@@ -18,13 +20,7 @@ const CI_YML_PATH = fileURLToPath(new URL("../../.github/workflows/ci.yml", impo
 // can't see. Skips cleanly when actionlint isn't installed — the missing-
 // binary path is a local-tooling gap, never a stand-in for a real lint pass;
 // CI always has the pinned binary, so the enforcement itself never no-ops.
-test("actionlint flags the deliberately-invalid on: trigger fixture", (t) => {
-  const probe = runActionlint(["-version"]);
-  if (probe.error?.code === "ENOENT") {
-    t.skip("actionlint not installed locally — enforced in CI");
-    return;
-  }
-
+test.skipIf(!ACTIONLINT_AVAILABLE)("actionlint flags the deliberately-invalid on: trigger fixture", () => {
   const result = runActionlint([FIXTURE_PATH]);
 
   assert.notEqual(result.status, 0, "actionlint should fail on the invalid on: trigger fixture");
@@ -44,7 +40,7 @@ test("main() exits 0 with an install-hint warning when actionlint is absent from
   // git both ENOENT (resolveRepoRoot falls back to cwd, which is fine).
   const emptyDir = mkdtempSync(path.join(tmpdir(), "lint-workflows-nopath-"));
   try {
-    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [SCRIPT_PATH], {
       encoding: "utf8",
       env: { PATH: emptyDir },
     });
@@ -56,13 +52,7 @@ test("main() exits 0 with an install-hint warning when actionlint is absent from
   }
 });
 
-test("main() exits non-zero when actionlint runs against the invalid-on-trigger fixture", (t) => {
-  const probe = runActionlint(["-version"]);
-  if (probe.error?.code === "ENOENT") {
-    t.skip("actionlint not installed locally — enforced in CI");
-    return;
-  }
-
+test.skipIf(!ACTIONLINT_AVAILABLE)("main() exits non-zero when actionlint runs against the invalid-on-trigger fixture", () => {
   // main() lints whatever .github/workflows/ actionlint auto-detects from cwd
   // (no file args), so give it a throwaway repo root whose only workflow is
   // the deliberately-broken fixture.
@@ -72,7 +62,7 @@ test("main() exits non-zero when actionlint runs against the invalid-on-trigger 
     mkdirSync(workflowsDir, { recursive: true });
     copyFileSync(FIXTURE_ABS_PATH, path.join(workflowsDir, "invalid.yml"));
 
-    const result = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: tmpRoot, encoding: "utf8" });
+    const result = spawnSync((Bun.which("node") ?? "node"), [SCRIPT_PATH], { cwd: tmpRoot, encoding: "utf8" });
 
     assert.notEqual(result.status, 0);
   } finally {

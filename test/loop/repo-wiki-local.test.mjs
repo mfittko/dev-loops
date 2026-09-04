@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   REPO_WIKI_GIT_URL,

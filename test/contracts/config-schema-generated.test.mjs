@@ -6,7 +6,7 @@
 // repo must actually parse under the validator the schema was extracted from.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "bun:test";
 import { parse as parseYaml } from "yaml";
 import { FileConfigSchema } from "@dev-loops/core/config";
 import { generateConfigJsonSchema, renderConfigJsonSchema } from "../../scripts/generate-config-schema.mjs";

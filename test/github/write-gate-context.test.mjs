@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";

@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { describe, test } from "bun:test";
 
 import { runNode } from "../_helpers.mjs";
 
@@ -190,32 +190,32 @@ test("every EXCLUDED entry is still a real, currently-discovered file (no stale 
 
 // --- Behavioral spot-check: real subprocess invocations, no gh/network needed ---
 
-test("sync-item-status.mjs (the originally observed gap): --jq/--silent/invalid-filter map to the documented exit codes", async (t) => {
+describe("sync-item-status.mjs (the originally observed gap): --jq/--silent/invalid-filter map to the documented exit codes", () => {
   const scriptPath = path.join(scriptsRoot, "projects/sync-item-status.mjs");
   const argv = ["--repo", "owner/repo", "--item", "5", "--to-column", "Done"];
   // No .devloops in repoRoot's cwd for this invocation -> syncBoardStatus
   // fail-opens to a skipped result (best-effort contract), independent of gh.
 
-  await t.test("--help documents the shared flags (closes the observed gap)", async () => {
+  test("--help documents the shared flags (closes the observed gap)", async () => {
     const { code, stdout } = await runNode(scriptPath, ["--help"]);
     assert.equal(code, 0);
     assert.match(stdout, /--jq <filter>/);
     assert.match(stdout, /--silent, -s/);
   });
 
-  await t.test("--jq filters the result and exits 0", async () => {
+  test("--jq filters the result and exits 0", async () => {
     const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", ".ok"]);
     assert.equal(code, 0, stderr);
     assert.equal(stdout.trim(), "true");
   });
 
-  await t.test("--silent suppresses stdout and maps to exit code only", async () => {
+  test("--silent suppresses stdout and maps to exit code only", async () => {
     const { code, stdout } = await runNode(scriptPath, [...argv, "--silent"]);
     assert.equal(code, 0);
     assert.equal(stdout, "");
   });
 
-  await t.test("an invalid --jq filter fails closed: stderr + exit 2", async () => {
+  test("an invalid --jq filter fails closed: stderr + exit 2", async () => {
     const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", "bogus!!"]);
     assert.equal(code, 2);
     assert.equal(stdout, "");

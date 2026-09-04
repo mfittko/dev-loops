@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { initGitFixture, runNode as runNodeHelper } from "../_helpers.mjs";
 import { buildRetrospectiveCheckpointPayload, resolveCheckpointRepoRoot } from "../../scripts/loop/checkpoint-contract.mjs";

@@ -157,7 +157,7 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
       fs.rmSync(tmpDir, { force: true, recursive: true });
       throw err;
     }
-    fs.rmSync(projectAgentsDir, { force: true });
+    fs.unlinkSync(projectAgentsDir);
     fs.renameSync(tmpDir, projectAgentsDir);
   } else {
     // Real directory: refresh packaged-agent files in place (same overwrite
@@ -183,7 +183,7 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
  */
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
-  targetRoot = path.join(os.homedir(), ".agents"),
+  targetRoot = path.join(process.env.HOME || os.homedir(), ".agents"),
   projectRoot,
 }: {
   sourceRoot?: string;

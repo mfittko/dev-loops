@@ -119,30 +119,30 @@ function readOrNull(file) {
 }
 
 /**
- * npm-scoped dependency-lock delta: compare the worktree's package-lock.json to
+ * Bun-scoped dependency-lock delta: compare the worktree's bun.lock to
  * the primary checkout's. Differing (or one-sided) content means the branch
  * changed dependencies and needs an install; identical means deps are shared.
  */
 function detectDepDelta({ repoRoot, worktreePath }) {
-  const main = readOrNull(path.join(repoRoot, "package-lock.json"));
-  const branch = readOrNull(path.join(worktreePath, "package-lock.json"));
+  const main = readOrNull(path.join(repoRoot, "bun.lock"));
+  const branch = readOrNull(path.join(worktreePath, "bun.lock"));
   if (main === null && branch === null) {
-    return Promise.resolve({ changed: false, detail: "no package-lock.json in either checkout" });
+    return Promise.resolve({ changed: false, detail: "no bun.lock in either checkout" });
   }
   if (main === branch) {
-    return Promise.resolve({ changed: false, detail: "package-lock.json identical" });
+    return Promise.resolve({ changed: false, detail: "bun.lock identical" });
   }
-  return Promise.resolve({ changed: true, detail: "package-lock.json differs" });
+  return Promise.resolve({ changed: true, detail: "bun.lock differs" });
 }
 
 /**
  * Ensure the worktree owns its node_modules before installing. linkOnInit can
- * symlink node_modules into the primary checkout; running `npm install` through
+ * symlink node_modules into the primary checkout; running `bun install` through
  * that symlink would write into the primary's real node_modules — mutating
  * shared deps. Replace a symlinked node_modules with a real (empty) directory so
  * the install is isolated to the worktree, leaving the primary untouched.
  *
- * Note: materializing to an empty dir makes `npm install` reinstall the full
+ * Note: materializing to an empty dir makes `bun install` reinstall the full
  * tree (not just the lock delta). If that install cost matters, copy the
  * primary's real node_modules into the worktree first for an incremental
  * reconcile.
@@ -155,7 +155,7 @@ export function ensureOwnNodeModules(worktreePath) {
   try {
     st = lstatSync(nm);
   } catch {
-    return false; // absent — npm install creates a real dir
+    return false; // absent — bun install creates a real dir
   }
   if (!st.isSymbolicLink()) return false;
   rmSync(nm); // unlinks only the symlink; the primary's real dir is untouched
@@ -163,14 +163,14 @@ export function ensureOwnNodeModules(worktreePath) {
   return true;
 }
 
-/** npm install in the worktree, after ensuring it owns its node_modules. */
+/** Frozen Bun install in the worktree, after ensuring it owns its node_modules. */
 function installDeps({ worktreePath }) {
   try {
     const materialized = ensureOwnNodeModules(worktreePath);
-    execFileSync("npm", ["install"], { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return Promise.resolve({ ok: true, detail: materialized ? "npm install (materialized own node_modules)" : "npm install" });
+    execFileSync(process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"], { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return Promise.resolve({ ok: true, detail: materialized ? "bun install --frozen-lockfile (materialized own node_modules)" : "bun install --frozen-lockfile" });
   } catch (err) {
-    return Promise.resolve({ ok: false, detail: (err.stderr ?? err.message ?? "npm install failed").toString().trim() });
+    return Promise.resolve({ ok: false, detail: (err.stderr ?? err.message ?? "bun install failed").toString().trim() });
   }
 }
 

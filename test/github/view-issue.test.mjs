@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { parseViewIssueCliArgs, viewIssue, runCli } from "../../scripts/github/view-issue.mjs";
 import { captureStream, makeGhStub } from "../_helpers.mjs";

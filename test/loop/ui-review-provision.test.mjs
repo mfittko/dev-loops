@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import { afterAll as after, test } from "bun:test";
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -115,7 +115,7 @@ function baseSeams(root, overrides = {}) {
       ensureWorktree: async () => ({ path: root, created: true, reused: false }),
       assertNotPrimary: () => ({ ok: true, mainWorktreePath: "/some/main" }),
       detectDepDelta: async () => ({ changed: false, detail: "identical" }),
-      installDeps: async () => ({ ok: true, detail: "npm install" }),
+      installDeps: async () => ({ ok: true, detail: "bun install --frozen-lockfile" }),
       resolveRunRecipe: async (wt) => resolveUiReviewRunRecipe((await loadDevLoopConfig({ repoRoot: wt })).config),
       inspectMigrations: async () => ({ pending: [], destructive: [], detail: "none" }),
       applyMigrations: async () => ({ ok: true, applied: 0, detail: "n/a" }),
@@ -381,8 +381,8 @@ test("dependency-lock delta triggers a scoped install (logged)", async () => {
   const root = makeFixture(RECIPE_YAML);
   let installed = false;
   const { seams, logs } = baseSeams(root, {
-    detectDepDelta: async () => ({ changed: true, detail: "package-lock.json differs" }),
-    installDeps: async () => { installed = true; return { ok: true, detail: "npm install" }; },
+    detectDepDelta: async () => ({ changed: true, detail: "bun.lock differs" }),
+    installDeps: async () => { installed = true; return { ok: true, detail: "bun install --frozen-lockfile" }; },
     probe: async () => true,
   });
 

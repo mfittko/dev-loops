@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 const RUNTIME_ROOTS = ["scripts", "lib", "cli", "extension"];
 // The boundary is about module resolution: runtime surfaces must import via

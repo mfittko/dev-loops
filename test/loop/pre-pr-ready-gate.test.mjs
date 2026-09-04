@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import { initSizeBudgetFixtureRepo, repeatedLinesContent, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 import { parsePrePrReadyGateCliArgs } from "../../scripts/loop/pre-pr-ready-gate.mjs";
@@ -138,9 +138,9 @@ function makeDraftGateComment(commentSha = HEAD_SHA_SHORT, extraFields = true) {
 
 // --- Gate integration tests ---
 
-test("gate passes: draft PR with clean draft_gate comment for current head", async (t) => {
+test("gate passes: draft PR with clean draft_gate comment for current head", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -158,9 +158,9 @@ test("gate passes: draft PR with clean draft_gate comment for current head", asy
   assert.equal(parsed.sizeBudget.outcome, "pass");
 });
 
-test("gate passes: clean draft verdict lives only in the review stream (single-surface round)", async (t) => {
+test("gate passes: clean draft verdict lives only in the review stream (single-surface round)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -187,9 +187,9 @@ test("gate passes: clean draft verdict lives only in the review stream (single-s
   assert.equal(parsed.draftGateSatisfied, true);
 });
 
-test("gate passes off a legacy issue-comment verdict when the reviews fetch fails (fail-open)", async (t) => {
+test("gate passes off a legacy issue-comment verdict when the reviews fetch fails (fail-open)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -205,9 +205,9 @@ test("gate passes off a legacy issue-comment verdict when the reviews fetch fail
   assert.equal(JSON.parse(result.stdout).draftGateSatisfied, true);
 });
 
-test("gate blocks: draft PR without draft_gate evidence", async (t) => {
+test("gate blocks: draft PR without draft_gate evidence", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
@@ -224,9 +224,9 @@ test("gate blocks: draft PR without draft_gate evidence", async (t) => {
   assert.match(stderrParsed.error, /No visible clean draft_gate/);
 });
 
-test("gate blocks: draft PR with draft_gate for different head SHA", async (t) => {
+test("gate blocks: draft PR with draft_gate for different head SHA", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
@@ -242,9 +242,9 @@ test("gate blocks: draft PR with draft_gate for different head SHA", async (t) =
   assert.equal(stderrParsed.draftGateSatisfied, false);
 });
 
-test("gate passes: non-draft PR with visible clean draft_gate (relaxed, any head)", async (t) => {
+test("gate passes: non-draft PR with visible clean draft_gate (relaxed, any head)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   // Even though the draft_gate comment has a different head SHA,
   // the PR is no longer draft so any visible clean draft_gate is sufficient
@@ -263,9 +263,9 @@ test("gate passes: non-draft PR with visible clean draft_gate (relaxed, any head
   assert.equal(parsed.draftGateSatisfied, true);
 });
 
-test("gate blocks: non-draft PR without any clean draft_gate", async (t) => {
+test("gate blocks: non-draft PR without any clean draft_gate", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: JSON.stringify(buildPrStateResponse({ isDraft: false })) },
@@ -281,9 +281,9 @@ test("gate blocks: non-draft PR without any clean draft_gate", async (t) => {
   assert.equal(stderrParsed.draftGateSatisfied, false);
 });
 
-test("gate handles GraphQL API errors gracefully", async (t) => {
+test("gate handles GraphQL API errors gracefully", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: "", code: 1, stderr: "GraphQL API error" },
@@ -298,9 +298,9 @@ test("gate handles GraphQL API errors gracefully", async (t) => {
   assert.equal(stderrParsed.ok, false);
 });
 
-test("gate handles comment fetch errors gracefully", async (t) => {
+test("gate handles comment fetch errors gracefully", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-test-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
@@ -337,9 +337,9 @@ function reviewThreadsResponse(nodes) {
   return `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } })}\n`;
 }
 
-test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice-to-have thread CANNOT reach ready-for-review (the bug this issue fixes)", async (t) => {
+test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice-to-have thread CANNOT reach ready-for-review (the bug this issue fixes)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-1584-repro-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   // Clean draft_gate verdict for the current head — BUT a nice-to-have thread
   // is still open (the disposition pass did not run / the fixer did not triage).
@@ -368,9 +368,9 @@ test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice
   assert.match(stderrParsed.error, /close-gate-findings/);
 });
 
-test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pass defers them — a clean verdict + 0 unresolved threads (fixer triaged/deferred) DOES reach ready-for-review", async (t) => {
+test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pass defers them — a clean verdict + 0 unresolved threads (fixer triaged/deferred) DOES reach ready-for-review", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-1585-clean-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   // The fixer triaged the nice-to-have (fixed or deferred) and the disposition
   // pass closed the thread — 0 unresolved gate-authored threads remain. The
@@ -404,9 +404,9 @@ test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pa
 // grant one, so these scenarios never need to exercise a waiver.
 // ---------------------------------------------------------------------------
 
-test("size budget: escalate outcome still passes the gate (no waiver surface needed) and records the signal", async (t) => {
+test("size budget: escalate outcome still passes the gate (no waiver surface needed) and records the signal", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-escalate-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 2\n",
@@ -426,9 +426,9 @@ test("size budget: escalate outcome still passes the gate (no waiver surface nee
   assert.equal(parsed.sizeBudget.outcome, "escalate");
 });
 
-test("size budget: a block outcome (default.waiverLoc, no waiver possible on this path) refuses the raw gh pr ready path", async (t) => {
+test("size budget: a block outcome (default.waiverLoc, no waiver possible on this path) refuses the raw gh pr ready path", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-block-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
@@ -449,9 +449,9 @@ test("size budget: a block outcome (default.waiverLoc, no waiver possible on thi
   assert.match(stderrParsed.error, /waiverLoc/);
 });
 
-test("size budget: an unwaivable block (absoluteHardLoc) refuses the raw gh pr ready path", async (t) => {
+test("size budget: an unwaivable block (absoluteHardLoc) refuses the raw gh pr ready path", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-unwaivable-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     devloopsYaml: "version: 1\ngates:\n  size:\n    absoluteHardLoc: 2\n",
@@ -472,9 +472,9 @@ test("size budget: an unwaivable block (absoluteHardLoc) refuses the raw gh pr r
   assert.match(stderrParsed.error, /no waiver possible/i);
 });
 
-test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async (t) => {
+test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-nobaseref-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { env } = await writeGhStub(tmpDir, [
     { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) }, // baseRefName omitted
@@ -490,9 +490,9 @@ test("size budget: fails closed when the PR has no resolvable baseRefName (guard
   assert.match(stderrParsed.error, /Could not resolve PR #42 base branch/i);
 });
 
-test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async (t) => {
+test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-badbase-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -533,9 +533,9 @@ Ship the feature.
 - [ ] npm run verify is green
 `;
 
-test("prBodySpec: a tracker-backed PR whose body fails the PR-description contract blocks the raw gh pr ready path (fail closed, AC1)", async (t) => {
+test("prBodySpec: a tracker-backed PR whose body fails the PR-description contract blocks the raw gh pr ready path (fail closed, AC1)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-block-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -564,9 +564,9 @@ test("prBodySpec: a tracker-backed PR whose body fails the PR-description contra
   assert.equal(stderrParsed.prBodySpec.ok, false);
 });
 
-test("prBodySpec: a tracker-backed PR with a fully compliant body passes the raw gh pr ready path (green path, AC6)", async (t) => {
+test("prBodySpec: a tracker-backed PR with a fully compliant body passes the raw gh pr ready path (green path, AC6)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-pass-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -591,9 +591,9 @@ test("prBodySpec: a tracker-backed PR with a fully compliant body passes the raw
   assert.equal(parsed.prBodySpec.ok, true);
 });
 
-test("prBodySpec: an issue-less PR (no closing issue reference) skips this check entirely (regression guard — lightweight path unchanged)", async (t) => {
+test("prBodySpec: an issue-less PR (no closing issue reference) skips this check entirely (regression guard — lightweight path unchanged)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-prbody-skip-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir);
   const { env } = await writeGhStub(tmpDir, [
@@ -610,9 +610,9 @@ test("prBodySpec: an issue-less PR (no closing issue reference) skips this check
   assert.equal(parsed.prBodySpec, null);
 });
 
-test("ADR tripwire: contract-doc touch without ADR or waiver blocks the raw gh pr ready path (#1867)", async (t) => {
+test("ADR tripwire: contract-doc touch without ADR or waiver blocks the raw gh pr ready path (#1867)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-block-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     headFiles: [{ path: "skills/docs/new-contract.md", content: "# New contract\n\nSome prose.\n" }],
@@ -633,9 +633,9 @@ test("ADR tripwire: contract-doc touch without ADR or waiver blocks the raw gh p
   assert.ok(stderrParsed.adrTripwire.triggers.some((tr) => tr.type === "contract-doc"));
 });
 
-test("ADR tripwire: an added docs/decisions record satisfies a contract-doc touch on the raw path (#1867)", async (t) => {
+test("ADR tripwire: an added docs/decisions record satisfies a contract-doc touch on the raw path (#1867)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-pass-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     headFiles: [
@@ -658,9 +658,9 @@ test("ADR tripwire: an added docs/decisions record satisfies a contract-doc touc
   assert.equal(parsed.adrTripwire.satisfiedBy, "adr");
 });
 
-test("ADR tripwire: a body-derived waiver satisfies a gate-config touch on the raw path (#1867)", async (t) => {
+test("ADR tripwire: a body-derived waiver satisfies a gate-config touch on the raw path (#1867)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-adr-waiver-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     headFiles: [{ path: "packages/core/src/config/extension-defaults.yaml", content: "version: 1\n" }],
@@ -679,9 +679,9 @@ test("ADR tripwire: a body-derived waiver satisfies a gate-config touch on the r
   assert.equal(parsed.adrTripwire.satisfiedBy, "waiver");
 });
 
-test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async (t) => {
+test("size budget: non-empty config errors[] block the raw gh pr ready path fail-closed", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-size-configerr-"));
-  t.after(() => rm(tmpDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
 
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
     devloopsYaml: "gates:\n  size: [\n", // malformed — invalid YAML/JSON

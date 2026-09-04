@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   ALLOW_MARKER,
@@ -134,6 +134,42 @@ test("detector 2 (high-entropy): a long random-looking literal (no known prefix)
 test("detector 2 (high-entropy): a plain long English sentence does NOT block (no digits)", () => {
   const findings = scanLineText('const message = "this is a perfectly ordinary long sentence in the diff";');
   assert.deepEqual(findings, []);
+});
+
+test("detector 2 (high-entropy): a registry integrity-shaped value still blocks outside generated lock metadata", () => {
+  const digest = `sha512-${join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3")}==`;
+  assert.equal(scanLineText(`const value = "${digest}";`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+});
+
+test("scanDiffText ignores only Bun's generated terminal registry integrity field", () => {
+  const digest = `sha512-${join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3")}==`;
+  const bunLockDiff = [
+    "diff --git a/bun.lock b/bun.lock",
+    "--- /dev/null",
+    "+++ b/bun.lock",
+    "@@ -0,0 +1 @@",
+    `+    \"pkg\": [\"pkg@1.0.0\", \"\", {}, \"${digest}\"],`,
+  ].join("\n");
+  assert.deepEqual(scanDiffText(bunLockDiff), { ok: true, findings: [] });
+
+  const sourceDiff = bunLockDiff.replaceAll("bun.lock", "src/config.mjs");
+  assert.equal(scanDiffText(sourceDiff).findings[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+});
+
+test("scanDiffText treats Bun's generated clipboard platform package names as metadata only in bun.lock", () => {
+  const packageName = join("@mariozechner/clipboard-", "linux-x64-gnu");
+  const lockDiff = [
+    "diff --git a/bun.lock b/bun.lock",
+    "--- /dev/null",
+    "+++ b/bun.lock",
+    "@@ -0,0 +1 @@",
+    `+    \"${packageName}\": [\"${packageName}@0.3.9\", \"\", { \"os\": \"linux\" }, \"\"],`,
+  ].join("\n");
+  assert.deepEqual(scanDiffText(lockDiff), { ok: true, findings: [] });
+
+  const unrelatedValue = join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3");
+  const unrelatedDiff = lockDiff.replace(packageName, unrelatedValue);
+  assert.equal(scanDiffText(unrelatedDiff).findings[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
 });
 
 // ---------------------------------------------------------------------------

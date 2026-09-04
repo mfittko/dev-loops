@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { parseSeverities } from "../../scripts/loop/resolve-gate-dispatch.mjs";
 
@@ -28,7 +28,7 @@ test("parseSeverities returns undefined for null/undefined", () => {
 // inline. A bad --base ref makes the git diff inside detectScope fail offline.
 test("scope.ok===false routes to full_fanout, never inline", () => {
   const out = execFileSync(
-    process.execPath,
+    (Bun.which("node") ?? "node"),
     [SCRIPT, "--gate", "draft", "--base", "nonexistent-ref-xyz-please"],
     { cwd: REPO_ROOT, encoding: "utf8" }
   );

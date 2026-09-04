@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test, { describe, it } from "node:test";
+import { describe, it, test } from "bun:test";
 import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";

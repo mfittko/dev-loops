@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import {

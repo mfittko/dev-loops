@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import { afterAll as after, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -904,7 +904,7 @@ test("ensure: a real node process resolves @dev-loops/core to the worktree's OWN
       "const mod = await import(resolved);",
       "console.log(JSON.stringify({ resolved, marker: mod.marker }));",
     ].join("\n");
-    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    const out = execFileSync((Bun.which("node") ?? "node"), ["--input-type=module", "-e", script], {
       cwd: res.path,
       encoding: "utf8",
     });

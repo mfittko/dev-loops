@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -132,7 +132,7 @@ test("editIssue: --body-file - reads stdin and passes it inline as --body (never
       ");\n" +
       "process.stdout.write(JSON.stringify(calls[0]));\n",
   );
-  const res = spawnSync(process.execPath, [driver], { input: "Body from stdin\n", encoding: "utf8" });
+  const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "Body from stdin\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
   assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "Body from stdin\n"]);
@@ -323,7 +323,7 @@ test("editIssue: --enforce-grill with --body-file - forwards stdin inline (no fd
       ");\n" +
       "process.stdout.write(JSON.stringify(calls[0]));\n",
   );
-  const res = spawnSync(process.execPath, [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
+  const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
   assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "## Acceptance criteria\n\n- [ ] ac\n"]);
@@ -343,7 +343,7 @@ test("editIssue: --enforce-grill with empty stdin fails closed (blank --body-fil
       "  process.stdout.write(\"NO_THROW\");\n" +
       "} catch (e) { process.stdout.write(\"THREW:\" + e.message); }\n",
   );
-  const res = spawnSync(process.execPath, [driver], { input: "   \n", encoding: "utf8" });
+  const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "   \n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /^THREW:--body-file - is empty/);
 });

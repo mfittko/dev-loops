@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 const infoScriptPath = path.resolve("scripts/loop/info.mjs");

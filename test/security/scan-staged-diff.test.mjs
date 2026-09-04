@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { parseScanStagedDiffCliArgs, runCli } from "../../scripts/security/scan-staged-diff.mjs";
 import { runNode } from "../_helpers.mjs";

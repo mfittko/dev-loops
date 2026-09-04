@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { describe } from "node:test";
+import { onTestFinished, describe, test } from "bun:test";
 
 import { runNode } from "../_helpers.mjs";
 import {
@@ -78,7 +78,7 @@ describe("validate-spike-file CLI", () => {
   test.before(async () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "validate-spike-file-"));
   });
-  test.after(async () => {
+  tesonTestFinished(async () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 

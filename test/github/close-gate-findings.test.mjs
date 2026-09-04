@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { runNode, writeGhStub } from "../_helpers.mjs";
 
@@ -1275,7 +1275,7 @@ test("close-gate-findings.mjs: --jq filters the result and exits 0", async () =>
     const { code, stdout, stderr } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--jq", ".round"], {
       env: { ...env, PATH: env.PATH },
       cwd: repoRoot,
-      execPath: process.execPath,
+      execPath: (Bun.which("node") ?? "node"),
     });
     assert.equal(code, 0, stderr);
     assert.equal(stdout.trim(), "1");

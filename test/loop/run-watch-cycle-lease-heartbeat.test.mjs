@@ -1,4 +1,4 @@
-import test from "node:test";
+import { jest, onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
 
 import { runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
@@ -78,11 +78,12 @@ test("runWatchCycle heartbeats the runner-coordination lease around the workflow
 test(
   "runWatchCycle fires the periodic mid-watch heartbeat while the workflow-run watch is in-flight",
   { timeout: 5000 },
-  async (t) => {
+  async () => {
     // Deterministic clock: the mid-watch interval is the load-bearing mechanism
     // that keeps the claim fresh during a full-length (~30 min) watch. Mock
     // timers let us advance past the interval without any real waiting.
-    t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+    jest.useFakeTimers();
+    onTestFinished(() => jest.useRealTimers());
 
     // Shrink the stale window so the interval is floor(20/2) = 10ms.
     const env = { ...process.env, DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "20" };
@@ -121,9 +122,9 @@ test(
     // Advance well past several 10ms intervals. The workflow watch is still
     // pending, so the on-return heartbeat has NOT fired yet: every call beyond
     // the on-entry one is interval-driven.
-    t.mock.timers.tick(50);
+    jest.advanceTimersByTime(50);
     await flushMicrotasks();
-    t.mock.timers.tick(50);
+    jest.advanceTimersByTime(50);
     await flushMicrotasks();
 
     const duringWatch = ownershipCalls;

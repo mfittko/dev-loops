@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const githubScriptsRoot = path.join(repoRoot, "scripts/github");

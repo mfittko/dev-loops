@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   autoDetectSnapshot,
@@ -1379,7 +1379,7 @@ test.skip("detect-copilot-loop-state: durable reload — steering applied after 
 
   function runSteerNode(args) {
     return new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [steerScriptPath, ...args], {
+      const child = spawn((Bun.which("node") ?? "node"), [steerScriptPath, ...args], {
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";

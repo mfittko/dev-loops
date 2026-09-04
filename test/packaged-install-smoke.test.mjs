@@ -9,9 +9,9 @@
 // bug; this test builds the actual packed artifacts with `npm pack`, installs
 // them in a throwaway directory (no monorepo context at all), and exercises
 // every export-map entry + the two affected CLIs against that installed tree.
-import { test } from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,8 +26,12 @@ const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 // skip rather than fail so the suite stays green on a bad connection while
 // still catching genuine install breakage (bad tarball, missing dep, etc).
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
+const NPM_REGISTRY_AVAILABLE = spawnSync("npm", ["view", "yaml", "version"], {
+  encoding: "utf8",
+  timeout: 15_000,
+}).status === 0;
 
-test("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async (t) => {
+test.skipIf(!NPM_REGISTRY_AVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));
   try {
     // 1. Pack both packages into the temp dir. `npm pack` prints the packed
@@ -50,10 +54,7 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       execFileSync("npm", ["install", "--loglevel=error", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir });
     } catch (err) {
       const detail = `${err.stderr?.toString() ?? ""}${err.stdout?.toString() ?? ""}${err.message ?? ""}`;
-      if (NETWORK_FAILURE_RE.test(detail)) {
-        t.skip(`npm registry unreachable — skipping packaged-install smoke: ${detail.split("\n")[0]}`);
-        return;
-      }
+      if (NETWORK_FAILURE_RE.test(detail)) throw new Error(`npm registry became unreachable during packaged-install smoke: ${detail.split("\n")[0]}`);
       throw err;
     }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   buildDevLoopHandoffEnvelope,
@@ -848,8 +848,8 @@ test("backward-compat: envelope is frozen (top-level)", () => {
     defaultOptions
   );
 
-  assert.throws(() => { env.acceptance = null; }, /Cannot assign to read only property/);
-  assert.throws(() => { env.stopRules = []; }, /Cannot assign to read only property/);
+  assert.throws(() => { env.acceptance = null; }, /Cannot assign to read only property|Attempted to assign to readonly property/);
+  assert.throws(() => { env.stopRules = []; }, /Cannot assign to read only property|Attempted to assign to readonly property/);
 });
 
 // ===========================================================================

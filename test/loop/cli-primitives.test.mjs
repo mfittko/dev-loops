@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { buildParseError, formatCliError } from "../../scripts/_core-helpers.mjs";
 import {
@@ -175,7 +175,7 @@ test("parsePrNumber validates positive integer with custom error", () => {
 
 test("runChild captures stdout and stderr", async () => {
   const result = await runChild(
-    process.execPath,
+    (Bun.which("node") ?? "node"),
     ["-e", "process.stdout.write('ok'); process.stderr.write('warn');"],
     process.env,
   );
@@ -187,7 +187,7 @@ test("runChild captures stdout and stderr", async () => {
 
 test("runCommand resolves stdout/stderr with cwd and env", async () => {
   const result = await runCommand(
-    process.execPath,
+    (Bun.which("node") ?? "node"),
     [
       "-e",
       "process.stdout.write(process.cwd()); process.stderr.write(process.env.TEST_TOKEN);",
@@ -201,7 +201,7 @@ test("runCommand resolves stdout/stderr with cwd and env", async () => {
 
 test("runCommand rejects with stderr detail on non-zero exit", async () => {
   await assert.rejects(
-    () => runCommand(process.execPath, ["-e", "process.stderr.write('boom'); process.exit(4);"]),
+    () => runCommand((Bun.which("node") ?? "node"), ["-e", "process.stderr.write('boom'); process.exit(4);"]),
     /boom/,
   );
 });

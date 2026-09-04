@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -12,7 +12,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const PI_IMPORT_RE = /\b(?:from|import)\s+['"]@earendil-works\/pi-[^'"]+['"]|\bimport\(\s*['"]@earendil-works\/pi-/;
 
 function runNode(scriptRel, args) {
-  return spawnSync(process.execPath, [path.join(repoRoot, scriptRel), ...args], { cwd: repoRoot, encoding: "utf8" });
+  return spawnSync((Bun.which("node") ?? "node"), [path.join(repoRoot, scriptRel), ...args], { cwd: repoRoot, encoding: "utf8" });
 }
 
 test("headless-info-smoke runs the offline read-only status path and exits 0 (no GitHub auth, Pi-free)", () => {
@@ -21,7 +21,7 @@ test("headless-info-smoke runs the offline read-only status path and exits 0 (no
   const env = { ...process.env };
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
-  const res = spawnSync(process.execPath, [path.join(repoRoot, "scripts/claude/headless-info-smoke.mjs")], {
+  const res = spawnSync((Bun.which("node") ?? "node"), [path.join(repoRoot, "scripts/claude/headless-info-smoke.mjs")], {
     cwd: repoRoot,
     encoding: "utf8",
     env,
