@@ -20,12 +20,13 @@ function runHook(script, payload, env = {}) {
   // the cli-harness-agnostic contract confines those literals to the adapter boundary.
   const childEnv = { ...process.env };
   for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
-  // Strip the SubagentStop exemption signal so non-exempt tests are deterministic regardless of
-  // host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently exempt the dirty case). The
-  // exempt test explicitly sets it to "1" below, which overrides this. #1619 review finding.
-  // (The #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed in #1936.)
+  // Strip the one SubagentStop exemption signal the hook still reads so non-exempt tests are
+  // deterministic regardless of host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently
+  // exempt the dirty case). The exempt test explicitly sets it to "1" below, which overrides this.
+  // #1619 review finding. The #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed in
+  // #1936, so the hook no longer reads that var — a leaked host value is inert and needs no strip;
+  // the #1936 "no escape" tests still set it explicitly to prove it grants no exemption.
   delete childEnv["DEVLOOPS_COMMIT_AUTH_PENDING"];
-  delete childEnv["DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT"];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
