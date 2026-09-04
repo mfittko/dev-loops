@@ -39,6 +39,31 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const DETECT_EVIDENCE_SCRIPT = new URL("./detect-checkpoint-evidence.mjs", import.meta.url).pathname;
 
+/**
+ * Parse the first JSON object from a captured stream. The detector emits one
+ * JSON result object, but the not-satisfied path may prefix it with plain
+ * `WARNING:` lines, so try the whole trimmed payload first and fall back to the
+ * last JSON-object-shaped line. Returns null when nothing parses.
+ */
+function parseFirstJson(text) {
+  if (typeof text !== "string" || text.trim().length === 0) return null;
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    // fall through to a line scan
+  }
+  for (const line of text.split("\n").reverse()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // keep scanning
+    }
+  }
+  return null;
+}
+
 const USAGE = `Usage: reconcile-gate-evidence-status.mjs --repo <owner/name> --pr <number> [--dry-run]
 Self-heal a stuck server-side \`gate-evidence\` required status (issue #1935).
 Reads the authoritative gate evidence the way the CI check does and the
@@ -108,11 +133,14 @@ async function defaultDetectEvidence({ repo, pr }, { runChild, nodeBin = process
     "--skip-fanout-ledger-check",
   ]);
   // The detector exits non-zero when evidence is not satisfied; that is a
-  // normal signal here, not an error. Parse stdout for the JSON result.
-  let parsed = null;
-  try {
-    parsed = JSON.parse(res.stdout);
-  } catch {
+  // normal signal here, not an error. On the SATISFIED path it emits the JSON
+  // result to stdout; on the NOT-satisfied path it writes the JSON (still
+  // carrying evidenceState/currentHeadSha) to STDERR and leaves stdout empty.
+  // Read whichever stream carries the JSON — same as the gate-evidence
+  // workflow, which parses both — so the genuinely-not-satisfied case yields a
+  // clean fail-closed `action: none` instead of throwing (issue #1935 AC #3).
+  const parsed = parseFirstJson(res.stdout) ?? parseFirstJson(res.stderr);
+  if (!parsed) {
     throw new Error(`detect-checkpoint-evidence returned unparseable output (exit ${res.code}): ${res.stderr || res.stdout}`.trim());
   }
   const evidenceState = typeof parsed?.evidenceState === "string" ? parsed.evidenceState : null;
