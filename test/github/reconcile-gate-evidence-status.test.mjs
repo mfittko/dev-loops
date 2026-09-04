@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { reconcileGateEvidenceStatus } from "../../scripts/github/reconcile-gate-evidence-status.mjs";
+import { parseReconcileCliArgs, reconcileGateEvidenceStatus } from "../../scripts/github/reconcile-gate-evidence-status.mjs";
+
+test("parseReconcileCliArgs: an invalid --repo is a usage error (exit 1 envelope), not the invalid-jq exit", () => {
+  // Copilot review: parseRepoSlug throws a plain Error; it must be re-wrapped in
+  // the usage envelope so main() exits 1 (usage), not 2 (reserved for --jq).
+  assert.throws(
+    () => parseReconcileCliArgs(["--repo", "not-a-valid-slug", "--pr", "1"]),
+    (err) => err && typeof err.usage === "string" && /Invalid --repo/.test(err.message),
+  );
+});
 
 const HEAD = "d5642cf";
 const RUN_URL = "https://github.com/o/r/actions/runs/701";

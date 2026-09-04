@@ -26,6 +26,7 @@
  * bypass the trusted server-side detector); it only re-triggers the CI run.
  */
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -37,7 +38,7 @@ import {
 } from "@dev-loops/core/loop/gate-evidence-reconcile";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const DETECT_EVIDENCE_SCRIPT = new URL("./detect-checkpoint-evidence.mjs", import.meta.url).pathname;
+const DETECT_EVIDENCE_SCRIPT = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
 
 /**
  * Parse the first JSON object from a captured stream. The detector emits one
@@ -106,7 +107,13 @@ export function parseReconcileCliArgs(argv) {
   if (values.help) return { help: true };
   if (!values.repo) throw parseError("Missing required argument: --repo <owner/name>");
   const repo = values.repo.trim();
-  parseRepoSlug(repo);
+  // An invalid --repo is a usage error (exit 1), not the invalid-jq exit (2):
+  // parseRepoSlug throws a plain Error, so re-wrap it in the usage envelope.
+  try {
+    parseRepoSlug(repo);
+  } catch (err) {
+    throw parseError(`Invalid --repo: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const pr = parsePrNumber(values.pr, parseError);
   const out = { repo, pr, dryRun: values["dry-run"] === true };
   for (const token of tokens) {
