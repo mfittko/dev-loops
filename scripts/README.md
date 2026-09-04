@@ -19,6 +19,22 @@ For the script surfaces documented here:
 
 ## Scripts
 
+Contributor automation uses the exactly pinned Bun 1.4.1 toolchain: install with
+`bun install --frozen-lockfile`, run the complete suite with `bun run verify`,
+and run focused script suites with `bun run test:scripts`. Published consumers
+still run on Node `>=24`; npm/npx commands in this document are intentional when
+they exercise the consumer CLI, Playwright installer compatibility, or npm
+registry/pack/publish/dist-tag/provenance behavior.
+
+### `scripts/benchmarks/run-package-manager.mjs` and `analyze-package-manager.mjs`
+
+These scripts capture and evaluate the Bun 1.4.1 migration benchmark. The
+runner requires separate npm-baseline and Bun-candidate source trees plus an
+output JSON path; the analyzer consumes that raw JSON and exits non-zero unless
+dependency inventories, install thresholds, and both verification sessions
+pass. The exact protocol, evidence paths, and no-go rules are documented in
+[Bun 1.4.1 benchmark protocol](../docs/benchmarks/bun-1.4.1/).
+
 ### `scripts/docs/validate-links.mjs`
 
 Validate repo-owned markdown relative links for the shipped docs / skills / agent surface.
@@ -1004,7 +1020,7 @@ Local WebKit/Playwright smoke path:
 1. Install the Safari/WebKit browser runtime once:
    - `npx playwright install webkit`
 2. Run the viewer smoke suite:
-   - `npm run test:playwright:viewer`
+   - `bun run test:playwright:viewer`
 3. Review screenshots/traces under `test-results/` and the HTML report under `playwright-report/ui-smoke/inspect-run-viewer/`
 4. Optionally hit `/favicon.ico` or an unsupported path to confirm those paths stay deterministic and do not perform snapshot rendering
 5. For deterministic/local test mode, pass `--copilot-input` and `--reviewer-input` fixtures to viewer; these are forwarded to `inspect-run`

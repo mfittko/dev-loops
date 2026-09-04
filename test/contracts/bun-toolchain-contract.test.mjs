@@ -6,6 +6,7 @@ import { parseBunLock } from "../../scripts/release/assert-core-dependency-versi
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const readJson = async (relativePath) => JSON.parse(await readFile(path.join(repoRoot, relativePath), "utf8"));
+const readRepo = async (relativePath) => readFile(path.join(repoRoot, relativePath), "utf8");
 
 describe("Bun 1.4.1 toolchain authority", () => {
   test("pins Bun exactly while keeping both published Node engines at >=24", async () => {
@@ -82,5 +83,39 @@ describe("Bun 1.4.1 toolchain authority", () => {
     assert.match(dockerfile, /ARG BUN_VERSION=1\.4\.1/);
     assert.match(dockerfile, /npm install -g "bun@\$\{BUN_VERSION\}"/);
     assert.match(dockerfile, /RUN bun install --frozen-lockfile/);
+  });
+
+  test("documents the contributor, consumer-runtime, and publication boundaries", async () => {
+    const [readme, agents, extension, scripts, copilot, validation, release, adr, benchmark] = await Promise.all([
+      readRepo("README.md"),
+      readRepo("AGENTS.md"),
+      readRepo("extension/README.md"),
+      readRepo("scripts/README.md"),
+      readRepo(".github/copilot-instructions.md"),
+      readRepo("skills/docs/validation-policy.md"),
+      readRepo("skills/docs/release-runbook.md"),
+      readRepo("docs/decisions/0059-bun-development-toolchain.md"),
+      readRepo(path.join("docs", "benchmarks", "bun-1.4.1", "README.md")),
+    ]);
+
+    for (const [file, source] of [
+      ["README.md", readme],
+      ["AGENTS.md", agents],
+      ["extension/README.md", extension],
+      ["scripts/README.md", scripts],
+      [".github/copilot-instructions.md", copilot],
+      ["skills/docs/validation-policy.md", validation],
+    ]) {
+      assert.match(source, /bun run verify/i, `${file} names the canonical Bun verification command`);
+    }
+    assert.match(readme, /Bun 1\.4\.1/);
+    assert.match(readme, /Node `>=24`/);
+    assert.match(readme, /npm[\s\S]{0,200}(pack|publish|dist-tag|provenance)/i);
+    assert.match(release, /bun install --frozen-lockfile/);
+    assert.match(release, /npm publish --provenance/);
+    assert.match(adr, /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
+    assert.match(benchmark, /two independent sessions/i);
+    assert.match(benchmark, /evidence status:\s*not yet captured/i);
+    assert.match(benchmark, /must not/i);
   });
 });

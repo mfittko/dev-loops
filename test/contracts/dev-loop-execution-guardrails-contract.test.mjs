@@ -33,7 +33,7 @@ test("dev-loop SKILL enforces bounded-timeout test runs (#1650)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /timeout 90 node --test <file>/,
+    /timeout 90 bun test <file>/,
     "the dev-loop SKILL should mandate a hard timeout on test runs",
   );
   assert.match(

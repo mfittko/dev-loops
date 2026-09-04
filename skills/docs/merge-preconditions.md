@@ -30,7 +30,7 @@ node scripts/loop/resolve-pr-conflicts.mjs [--base <branch>] [--push]
 
 It merges `origin/<base>` into the PR branch and resolves **only the safe additive
 case** — a `CHANGELOG.md` conflict where both sides only ADD list/section entries
-(keep BOTH sides, in order) — then runs `npm run test:docs` and (with `--push`)
+(keep BOTH sides, in order) — then runs `bun run test:docs` and (with `--push`)
 pushes. **Any other conflicted path, or a non-additive CHANGELOG edit, FAILS
 CLOSED** naming the conflicted paths (no silent stall, no guessing — resolve those
 by hand). This encodes the exact additive-CHANGELOG resolution the loop has been

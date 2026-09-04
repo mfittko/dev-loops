@@ -5,7 +5,7 @@ Canonical owner for validation requirements across all workflow families.
 ## Default validation
 
 <!-- rule: VALIDATE-VERIFY-BEFORE-GATE -->
-`VALIDATE-VERIFY-BEFORE-GATE`: `npm run verify` is the default repo-level local validation path and MUST pass before PR creation, gate entry, and merge; at minimum this means `npm test && npm run test:dev-loop`.
+`VALIDATE-VERIFY-BEFORE-GATE`: `bun run verify` is the default repo-level local validation path and MUST pass before PR creation, gate entry, and merge. This repository pins Bun 1.4.1 exactly for dependency installation, scripts, and unit tests; the orchestrator attempts every configured suite, keeps output attributable, and exits non-zero if any suite fails. Node `>=24` packaged-consumer checks and npm registry/pack/publish/provenance checks remain required where their boundary is under test.
 
 ## Gate-specific requirements
 

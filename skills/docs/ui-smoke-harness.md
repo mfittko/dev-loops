@@ -89,7 +89,7 @@ The current proving example is the inspect-run viewer smoke suite:
 - fixture input: `test/playwright/fixtures/inspect-run-viewer-fixture.mjs`
 - spec: `test/playwright/inspect-run-viewer.spec.mjs`
 - config: `playwright.config.mjs` (project `inspect-run-viewer`)
-- command: `npm run test:playwright:viewer`
+- command: `bun run test:playwright:viewer` (the package script deliberately launches Playwright with Node)
 
 The example intentionally covers a small explicit set of viewer states rather than broad end-to-end workflows.
 

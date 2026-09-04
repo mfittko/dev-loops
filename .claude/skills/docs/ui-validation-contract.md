@@ -71,7 +71,7 @@ End to end for one real artifact — `docs/presentations/introducing-dev-loops.h
    runs both deck fit specs (path-conditioned on `docs/presentations/**` and the
    deck specs/harness/configs) and is named to match `UI_E2E_CHECK_NAMES`. Its
    `SUCCESS` is the signal the gate reads. Locally the same suite runs via
-   `npm run test:playwright:intro-deck`.
+   `bun run test:playwright:intro-deck`; that package script deliberately launches Playwright with Node.
 
 The article path is identical with `ARTICLE_REGISTRY["intro-article"]`
 (`docs/articles/introducing-dev-loops.html`), `defineArticleSuite`, and the

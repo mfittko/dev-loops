@@ -1,7 +1,7 @@
 # Copilot instructions — dev-loops
 
 Single entrypoint: `dev-loop`. Prefer GitHub-first path. KISS, SRP, YAGNI.
-Work test-first, ≥90% coverage. `npm run verify` for full validation.
+Work test-first, ≥90% coverage. `bun run verify` for full validation. Use the repository-pinned Bun 1.4.1 for contributor installs, scripts, and unit tests; preserve Node `>=24` consumer execution and npm registry/publication commands.
 
 ## PR body rules
 
