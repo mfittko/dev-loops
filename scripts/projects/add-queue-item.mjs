@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveProjectSelector, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { decideEnqueueRefinementGate, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { runPickupRefinementGate } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -15,8 +16,8 @@ Add an existing issue or PR to a GitHub Projects V2 board.
 Options:
   --repo <owner/name>         Required. Repository containing the issue/PR.
   --project <number|id>       Project number (integer) or node ID. When omitted,
-                              resolved from .devloops queue.board.number /
-                              queue.board.title.
+                              resolved from the .devloops tracker.board
+                              number / title.
   --item <number>             Required. Issue or PR number to add.
   --column <name>             Initial Status column (default: "Backlog").
   --status <name>             Back-compat alias for --column.
@@ -26,10 +27,12 @@ Options:
                               for --column <that column>; cannot be combined with
                               a conflicting --column/--status.
   --auto                      Headless mode. When an issue targets the pickup
-                              (next_up) column without a refinement artifact
-                              (Acceptance criteria/DoD/linked doc), divert it
-                              to the non-pickup park column instead of failing.
-                              Without --auto, the same case throws
+                              (next_up) column without the full refinement
+                              matrix (Acceptance criteria checklist + DoD
+                              checklist + explicit Non-goals, or a linked
+                              refinement doc), divert it to the non-pickup
+                              park column instead of failing. Without --auto,
+                              the same case throws
                               MISSING_REFINEMENT_ARTIFACT.
   --help, -h                  Show this help.
 
@@ -173,45 +176,7 @@ function validateRepo(repo) {
   return repo;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild, { allowErrors = false } = {}) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (!allowErrors && payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -312,23 +277,6 @@ const GET_PROJECT_ITEMS_BY_CONTENT = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Paginated project listing ────────────────────────────────────────────
 
@@ -542,25 +490,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   let effectiveTargetOption = targetOption;
   let effectiveTargetStatus = targetStatus;
   if (issueNumber !== null && targetStatus === nextUpColumn) {
-    const bodyResult = await child(
-      "gh",
-      ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-      env,
-    );
-    if (bodyResult.code !== 0) {
-      const detail = bodyResult.stderr.trim() || `exit code ${bodyResult.code}`;
-      throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-    }
-    const bodyPayload = parseJsonText(bodyResult.stdout, { label: "gh issue view" });
-    const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
-    const artifact = detectIssueRefinementArtifact({ body, issueNumber });
-    const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: !!args.auto });
-    if (decision.action === "block") {
-      throw Object.assign(new Error(decision.reason), {
-        code: "MISSING_REFINEMENT_ARTIFACT",
-        missing: decision.missing,
-      });
-    }
+    const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: !!args.auto, repoRoot: cwd });
     if (decision.action === "divert") {
       const parkedColumn = nonSuccessBoardColumn(cwd);
       if (parkedColumn === nextUpColumn) {

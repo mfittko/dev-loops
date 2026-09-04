@@ -1,6 +1,13 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
+import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+} from "./issue-refinement-artifact.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -8,6 +15,7 @@ export const PR_CHECKPOINT = Object.freeze({
   FEEDBACK_RESOLUTION: "feedback_resolution",
   CONFLICT_RESOLUTION: "conflict_resolution",
   UI_E2E_SCOPING: "ui_e2e_scoping",
+  DESIGNER_REVIEW_SCOPING: "designer_review_scoping",
   PRE_APPROVAL_GATE_WINDOW: "pre_approval_gate_window",
   FINAL_APPROVAL_READY: "final_approval_ready",
   PRE_APPROVAL_GATE_NEEDED: "pre_approval_gate_needed",
@@ -61,6 +69,7 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   REPORT_BLOCKED: "report_blocked",
   REPORT_DONE: "report_done",
   RUN_UI_E2E_SUITE: "run_ui_e2e_suite",
+  RECORD_DESIGNER_REVIEW: "record_designer_review",
 });
 
 function normalizeGateComment(summary = null) {
@@ -77,14 +86,10 @@ function normalizeGateComment(summary = null) {
 
   return {
     visible: summary.visible === true,
-    headSha: typeof summary.headSha === "string" && summary.headSha.trim().length > 0 ? summary.headSha.trim() : null,
+    headSha: trimmedOrNull(summary.headSha),
     verdict: typeof summary.verdict === "string" && summary.verdict.trim().length > 0 ? summary.verdict.trim().toLowerCase() : null,
-    findingsSummary: typeof summary.findingsSummary === "string" && summary.findingsSummary.trim().length > 0
-      ? summary.findingsSummary.trim()
-      : null,
-    nextAction: typeof summary.nextAction === "string" && summary.nextAction.trim().length > 0
-      ? summary.nextAction.trim()
-      : null,
+    findingsSummary: trimmedOrNull(summary.findingsSummary),
+    nextAction: trimmedOrNull(summary.nextAction),
     contractComplete: summary.contractComplete === true,
   };
 }
@@ -241,15 +246,35 @@ function normalizeRefinementArtifactStatus(value) {
 // their own validation-failure reason from the detector; that reason must
 // replace the "linked issue" wording, which does not apply when the PR is the
 // spec-of-record and no linked issue was ever expected.
+// #1877 full-matrix vocabulary for the draft-gate blocked reason: which
+// matrix arm is missing per finding — the SAME finding taxonomy the enqueue
+// gate's guidance (decideEnqueueRefinementGate) and the detector
+// (detectIssueRefinementArtifact) use, so the draft gate (the unconditional
+// backstop for that floor) cannot drift from it. An AC-only or DoD-only
+// linked issue is a matrix miss, not "no artifact" — the guidance must name
+// the actually-missing arm so the fix is not misdirected.
+const REFINEMENT_MISSING_ARM_BY_FINDING = Object.freeze({
+  [MISSING_DOD_CHECKLIST_FINDING]: "a Definition of done checklist (mapped to the acceptance criteria)",
+  [MISSING_AC_CHECKLIST_FINDING]: "an Acceptance criteria checklist (for the DoD items to map to)",
+  [MISSING_EXPLICIT_NON_GOALS_FINDING]: "an explicit Non-goals section",
+});
+
 function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) {
   const specSource = refinementArtifact?.specSource;
   if (specSource != null && specSource !== REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE && typeof refinementArtifact?.reason === "string" && refinementArtifact.reason.length > 0) {
     return `The draft gate cannot complete: ${refinementArtifact.reason} finding=${REFINEMENT_ARTIFACT_FINDING}`;
   }
-  if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
-    return `Linked issue #${linkedIssue} has no refinement artifact (Acceptance criteria / DoD / linked refinement doc). Run refinement first, add ACs/DoD to the issue, then re-open the draft PR. finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  const finding = typeof refinementArtifact?.finding === "string" && refinementArtifact.finding.length > 0
+    ? refinementArtifact.finding
+    : REFINEMENT_ARTIFACT_FINDING;
+  const missingArm = REFINEMENT_MISSING_ARM_BY_FINDING[finding];
+  if (missingArm !== undefined) {
+    return `Linked issue #${linkedIssue} has an incomplete refinement matrix — it is missing ${missingArm}. Add it to the issue body to complete the full AC/DoD/Non-goals matrix, then re-open the draft PR. finding=${finding}`;
   }
-  return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (Acceptance criteria / DoD / linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  if (linkedIssue !== null && Number.isInteger(linkedIssue)) {
+    return `Linked issue #${linkedIssue} has no refinement artifact (no Acceptance criteria checklist, DoD checklist, or resolvable linked refinement doc). Refine the issue to the full AC/DoD/Non-goals matrix — or link a refinement doc (tmp/refinement/*.md), a complete artifact on its own — then re-open the draft PR. finding=${REFINEMENT_ARTIFACT_FINDING}`;
+  }
+  return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (no Acceptance criteria checklist, DoD checklist, or resolvable linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
 }
 
 // #1472: describes the CI state a round-cap-reached fallback branch actually
@@ -676,15 +701,21 @@ export function evaluatePrGateCoordination(input = {}) {
 }
 
 function evaluatePrGateCoordinationCore(input = {}) {
-  const currentHeadSha = typeof input.currentHeadSha === "string" && input.currentHeadSha.trim().length > 0
-    ? input.currentHeadSha.trim()
-    : null;
+  const currentHeadSha = trimmedOrNull(input.currentHeadSha);
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
   const loopDisposition = typeof input.loopDisposition === "string" ? input.loopDisposition.trim().toLowerCase() : null;
   const prDraft = input.prDraft === true;
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
+  // Operator-authorized post-convergence suppression (#1441): set only when the
+  // caller has verified an explicit prior withdrawal (withdraw-copilot-review-
+  // request.mjs) recorded a suppression marker for this EXACT head, proving the
+  // delta since Copilot's last submitted review is a pure doc/prose bump. Never
+  // derived here from other snapshot facts — this evaluator trusts the caller's
+  // verification rather than re-deriving it, so it cannot become an automatic
+  // loosening of the round-below-cap precondition.
+  const postConvergenceReviewSuppressed = input.postConvergenceReviewSuppressed === true;
   // maxCopilotRounds: 0 disables the external Copilot review gate entirely
   // (for repos without Copilot / local-harness-only review). It reuses the
   // existing internal_only routing — skip the Copilot cycle, go straight to
@@ -722,6 +753,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // e2e suite passed for this head. Inclusion is path-triggered, never annotated.
   const changedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : [];
   const uiE2ePassed = input.uiE2ePassed === true ? true : (input.uiE2ePassed === false ? false : null);
+  // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half). See
+  // the designer-review scoping block below. Evidence reuses the loop's
+  // existing outcome + artifact-bundle record; exempt when a light/spike
+  // relaxed-gate carve-out applies.
+  const designerReviewEvidence = input.designerReviewEvidence ?? null;
+  const designerReviewExempt = input.designerReviewExempt === true;
   const refinementArtifact = input.refinementArtifact && typeof input.refinementArtifact === "object"
     ? input.refinementArtifact
     : null;
@@ -903,6 +940,48 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE,
       reason: uiE2eScoping.reason,
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
+    });
+  }
+
+  // Designer/vision recorded-evidence precondition (#1443, ADR 0041 UI half).
+  // Path-triggered + fail-closed, modeled on the UI e2e scoping block above: if
+  // the PR's changed files touch a rendered artifact (docs/articles|presentations
+  // HTML), it MUST carry recorded designer/vision review evidence (the loop's
+  // existing outcome + artifact bundle) and the recorded outcome MUST be
+  // `ui_review_satisfied`. A rendered-artifact change with missing or unsatisfied
+  // recorded evidence blocks here, naming the artifact. Light/spike relaxed-gate
+  // carve-outs exempt the requirement. Non-UI changes pass through untouched.
+  const uiDesignerScoping = evaluateUiDesignerReviewScoping(changedFiles, {
+    designerReviewEvidence,
+    designerReviewExempt,
+  });
+  if (uiDesignerScoping.required && !uiDesignerScoping.satisfied) {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      gateBoundary: PR_CHECKPOINT.DESIGNER_REVIEW_SCOPING,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW,
+      reason: uiDesignerScoping.reason,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
@@ -1305,7 +1384,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
       ? buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi })
       : null;
 
-    if (!sameHeadCleanConverged && (!roundCapReached || roundCapNewCycleRequired)) {
+    // reviewMode "internal_only" (which also folds in maxCopilotRounds:0 via
+    // copilotReviewDisabled) suppresses Copilot: the handoff routes such a PR
+    // straight to pre_approval_gate, so this branch must not force a re-request
+    // for a missing Copilot convergence point that will never exist. The
+    // sibling PR_READY_NO_FEEDBACK branch already honors internal_only; this
+    // reconciles READY_TO_REREQUEST_REVIEW with it (issue 1771). Non-suppressed
+    // external-review PRs keep reviewMode null and hit the guard unchanged.
+    if (!sameHeadCleanConverged && !postConvergenceReviewSuppressed && reviewMode !== "internal_only" && (!roundCapReached || roundCapNewCycleRequired)) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
       pushUnique(forbiddenActions, postDraftForbidden);
       return buildResult({
@@ -1323,7 +1409,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         nextAction: PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
         reason: roundCapNewCycleRequired
           ? "The previous Copilot cycle converged at the round cap, but significant post-convergence changes landed on a newer head; start a new Copilot review cycle and re-request review before `pre_approval_gate`."
-          : "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden.",
+          : "The review loop is between passes, but the current head does not yet have a clean settled Copilot convergence point, so `pre_approval_gate` is still forbidden. If a Copilot round just landed at this head, it may not be visible to the evaluator yet; re-check after a short propagation wait before treating this as a needed re-request.",
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -1413,9 +1499,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
       nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
       reason: roundCapReached
         ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary.`
-        : (ciStatus === "crediblyGreen"
-          ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
-          : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary."),
+        : (postConvergenceReviewSuppressed && !sameHeadCleanConverged
+          ? "An operator explicitly withdrew a stranded Copilot review request for this exact head, whose delta since Copilot's last submitted review is a provable pure doc/prose bump; the prior converged Copilot review still stands, so `pre_approval_gate` is now the next legal boundary."
+          : (ciStatus === "crediblyGreen"
+            ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
+            : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary.")),
       mergeStateStatus,
       conflictFiles,
       gateEvidenceNote: roundCapReached ? roundExhaustionGateEvidenceNote : null,

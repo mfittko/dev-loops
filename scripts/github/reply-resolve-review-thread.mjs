@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
+import { parsePositiveInteger, parseAllowedRefsCsv } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
+import { formatCliError } from "../_core-helpers.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
 
@@ -23,6 +24,11 @@ Required:
   --comment-id <n>         GraphQL databaseId of the comment to reply to
   --thread-id <id>         GraphQL node ID of the review thread
   --body-file <path>       Path to file containing the reply body text
+
+Optional:
+  --allowed-refs <csv>     Explicit allowlist of issue/PR ids a deliberate cross-ref
+                           may cite in this reply body (no-ids rule opens this door
+                           only for an explicit, deliberate reference)
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -41,6 +47,7 @@ function parseCliArgs(argv) {
         "comment-id": { type: "string" },
         "thread-id": { type: "string" },
         "body-file": { type: "string" },
+        "allowed-refs": { type: "string" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
@@ -72,6 +79,7 @@ function parseCliArgs(argv) {
     commentId,
     threadId: values["thread-id"],
     bodyFile: values["body-file"],
+    allowedRefs: values["allowed-refs"] ? parseAllowedRefsCsv(values["allowed-refs"], "--allowed-refs", parseError) : [],
     jq: values.jq,
     silent: values.silent === true,
   };
@@ -84,13 +92,20 @@ async function run(argv) {
     return 0;
   }
 
-  const { repo: repoSlug, pr, commentId, threadId, bodyFile } = parsed;
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never reply/resolve the thread then fail
+  // (BASE-JQ-OUTPUT-GUARANTEE would otherwise catch it after the fact ->
+  // ok:false on a call that already succeeded -> a caller retry double-applies).
+  const jqSyntaxError = preflightJqFilter(parsed.jq, { stderr: process.stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
+
+  const { repo: repoSlug, pr, commentId, threadId, bodyFile, allowedRefs } = parsed;
   const rawBody = await readFile(bodyFile, "utf8");
   if (rawBody.trim().length === 0) throw new Error("--body-file must contain non-empty text");
   validateResolutionMessage(rawBody);
 
   const result = await replyAndMaybeResolve(
-    { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true },
+    { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true, allowedRefs },
     { env: process.env, ghCommand: "gh" },
   );
 
@@ -104,8 +119,7 @@ if (isDirectCliRun(import.meta.url)) {
   run(process.argv.slice(2)).then(
     (code) => { process.exitCode = typeof code === "number" ? code : 0; },
     (error) => {
-      const usage = error instanceof Error && typeof error.usage === "string" ? error.usage : undefined;
-      process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), ...(usage && { usage }) })}\n`);
+      process.stderr.write(`${formatCliError(error)}\n`);
       process.exitCode = 1;
     },
   );

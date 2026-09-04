@@ -8,10 +8,14 @@
  * Only retries on usage/flag errors — NOT on network/auth/data errors.
  *
  * Detection contract:
- *   A usage/flag error is stderr JSON with { ok: false, usage: "..." }
- *   OR stderr text matching known argument-error patterns.
+ *   A usage/flag error is stderr JSON with either the legacy
+ *   { ok: false, usage: "..." } shape or the current short-error envelope
+ *   { ok: false, hint: "..." } (formatCliError's `usage` presence check
+ *   renders as `hint`, never the full usage text — see
+ *   packages/core/src/github/review-threads.mjs's formatCliError), OR stderr
+ *   text matching known argument-error patterns.
  *
- * Non-retryable: runtime errors ({ ok: false } without usage field),
+ * Non-retryable: runtime errors ({ ok: false } with neither usage nor hint),
  *   network errors, auth errors, data errors, signal exits.
  *
  * Issue: #483
@@ -36,11 +40,15 @@ export function isUsageError(stderr) {
 
   const trimmed = stderr.trim();
 
-  // Try JSON parse first: { ok: false, usage: "..." }
+  // Try JSON parse first: legacy { ok: false, usage: "..." }, or the current
+  // short-error envelope { ok: false, hint: "..." } (formatCliError never
+  // emits `usage` text anymore — a non-empty `hint` is its replacement
+  // presence signal that a usage string exists, fetchable via --help).
   try {
     const parsed = JSON.parse(trimmed);
-    if (parsed && parsed.ok === false && typeof parsed.usage === 'string' && parsed.usage.length > 0) {
-      return true;
+    if (parsed && parsed.ok === false) {
+      if (typeof parsed.usage === 'string' && parsed.usage.length > 0) return true;
+      if (typeof parsed.hint === 'string' && parsed.hint.length > 0) return true;
     }
   } catch {
     // Not JSON — fall through to pattern matching

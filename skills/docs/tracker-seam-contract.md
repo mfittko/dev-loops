@@ -57,7 +57,7 @@ Exported from `@dev-loops/core/tracker`.
 # .devloops
 tracker:
   provider: github              # registry key; default. External: provider + plugin (see below)
-  board:                        # supersedes the deprecated queue.board
+  board:                        # GitHub Projects board identifier
     title: "My Queue"
 queue:
   statusColumns:                 # the github provider's logical-column -> Status mapping
@@ -69,8 +69,9 @@ strategy: tracker-first          # renamed from "github-first" (still accepted, 
 ```
 
 - `tracker.provider` defaults to `"github"` when unset.
-- `tracker.board` supersedes `queue.board` (deprecated, still accepted with a
-  load-time warning — see `resolveTrackerBoard` in
+- `tracker.board` is the canonical (and only) board config key. The former
+  `queue`-section board alias was removed at the v1.0.0 cut (ADR 0017) — it no
+  longer resolves a board (see `resolveTrackerBoard` in
   `packages/core/src/config/config.mjs`).
 - **No `tracker.fieldMappings` key.** The github provider's logical-column ->
   Status mapping is the existing, already-load-bearing `queue.statusColumns`

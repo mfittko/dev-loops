@@ -20,6 +20,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
 
@@ -95,7 +96,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "watch", {
 register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "pre-approval", {
   criteria: [
     { id: "full-gate-chain", must: "Complete pre-approval gate chain with all configured review angles.", severity: "required" },
-    { id: "clean-verdict", must: "Pre-approval gate must return clean verdict (no must-fix or worth-fixing-now findings).", severity: "required" },
+    { id: "clean-verdict", must: "Pre-approval gate must return clean verdict (no findings at a severity in the gate's configured blockCleanOnFindingSeverities, high by default).", severity: "required" },
     { id: "unresolved-threads", must: "All review threads must be resolved before pre-approval gate runs.", severity: "required" },
     { id: "ci-green", must: "CI must be green on the current head SHA.", severity: "required" },
   ],
@@ -122,6 +123,21 @@ register(INTERNAL_DEV_LOOP_STRATEGY.FINAL_APPROVAL, "default", {
 register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "default", {
   criteria: [
     { id: "phase-ac", must: "All phase acceptance criteria from the active phase doc are satisfied.", severity: "required" },
+    { id: "verify-green", must: "`npm run verify` passes with no failures.", severity: "required" },
+  ],
+  evidence: ["commands-run", "validation-output", "changed-files"],
+  maxFinalizationTurns: 6,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
+});
+
+// local_implementation · spike run (SPIKE-RELAXED-GATE-PROFILE, #1628): a
+// spike-mode spin resolves the relaxed `spike` gate profile instead of the
+// default local-implementation gate. Kept as its own acceptance key so the
+// generic default can stay approach-agnostic.
+register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "spike", {
+  criteria: [
+    { id: "spike-recorded", must: "The spike exploration and its recommendation are recorded (spike file + summary).", severity: "required" },
     { id: "verify-green", must: "`npm run verify` passes with no failures.", severity: "required" },
   ],
   evidence: ["commands-run", "validation-output", "changed-files"],
@@ -207,16 +223,8 @@ function normalizePositiveInt(v) {
   return v;
 }
 
-function normalizeString(v) {
-  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
-}
-
-function normalizeStringOrNull(v) {
-  return v === null || v === undefined ? null : normalizeString(v);
-}
-
 function requireString(v, label) {
-  const s = normalizeString(v);
+  const s = trimmedOrNull(v);
   if (s === null) throw new Error(`handoff-envelope: ${label} is required and must be a non-empty string`);
   return s;
 }
@@ -249,12 +257,12 @@ function deriveTarget(bundle, repo) {
     target.pr = pr;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_BRANCH) {
-    const branch = normalizeString(artifact.branch);
+    const branch = trimmedOrNull(artifact.branch);
     if (!branch) throw new Error("handoff-envelope: local_branch target must include a non-empty branch name");
     target.branch = branch;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
-    const phase = normalizeString(artifact.phase);
+    const phase = trimmedOrNull(artifact.phase);
     const validIssue = Number.isInteger(artifact.issue) && artifact.issue > 0;
     if (!phase && !validIssue) {
       throw new Error("handoff-envelope: local_phase target must include a non-empty phase or a valid positive issue number");
@@ -325,8 +333,8 @@ export const CANONICAL_SPEC_SOURCE = Object.freeze({
  * validateHandoffEnvelope would then reject.
  */
 function deriveSpecSource(bundle, resolverOutput) {
-  const raw = normalizeStringOrNull(resolverOutput?.canonicalSpecSource)
-    ?? normalizeStringOrNull(bundle?.canonicalSpecSource);
+  const raw = trimmedOrNull(resolverOutput?.canonicalSpecSource)
+    ?? trimmedOrNull(bundle?.canonicalSpecSource);
   return raw === CANONICAL_SPEC_SOURCE.PHASE_DOC || raw === CANONICAL_SPEC_SOURCE.PR_BODY ? raw : null;
 }
 
@@ -444,7 +452,7 @@ export const WORKTREE_NAMESPACE = "tmp/worktrees/dev-loops";
  * @returns {string} Absolute path `<repoRoot>/tmp/worktrees/dev-loops/<kind>-<number>`
  */
 export function resolveWorktreePath({ repoRoot, kind, number } = {}) {
-  const root = normalizeString(repoRoot);
+  const root = trimmedOrNull(repoRoot);
   if (!root) throw new Error("resolveWorktreePath: repoRoot is required and must be a non-empty string");
   const k = typeof kind === "string" ? kind.trim().toLowerCase() : "";
   if (k !== DEV_LOOP_TARGET_KIND.ISSUE && k !== DEV_LOOP_TARGET_KIND.PR) {
@@ -471,11 +479,11 @@ function buildWorktreeSlug(artifact, kind) {
     return `pr-${artifact.pr}`;
   }
   if (kind === DEV_LOOP_TARGET_KIND.LOCAL_BRANCH) {
-    const branch = normalizeString(artifact.branch);
+    const branch = trimmedOrNull(artifact.branch);
     return branch ? flattenSlugSegment(branch) : null;
   }
   if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
-    const phase = normalizeString(artifact.phase);
+    const phase = trimmedOrNull(artifact.phase);
     const issue = Number.isInteger(artifact.issue) && artifact.issue > 0 ? artifact.issue : null;
     if (phase && issue) return `phase-${issue}-${flattenSlugSegment(phase)}`;
     if (phase) return `phase-${flattenSlugSegment(phase)}`;
@@ -493,11 +501,11 @@ function normalizeGateState(gateState) {
   const gs = gateState ?? {};
 
   return {
-    currentHeadSha: normalizeStringOrNull(gs.currentHeadSha) ?? null,
-    ciStatus: normalizeStringOrNull(gs.ciStatus) ?? null,
+    currentHeadSha: trimmedOrNull(gs.currentHeadSha) ?? null,
+    ciStatus: trimmedOrNull(gs.ciStatus) ?? null,
     unresolvedThreadCount: normalizePositiveInt(gs.unresolvedThreadCount) ?? 0,
     copilotRoundCount: normalizePositiveInt(gs.copilotRoundCount) ?? 0,
-    currentSubGate: normalizeString(gs.currentSubGate) ?? undefined,
+    currentSubGate: trimmedOrNull(gs.currentSubGate) ?? undefined,
   };
 }
 
@@ -545,6 +553,11 @@ function resolveSubGate(strategy, gateState) {
   return "default";
 }
 
+/** True when the resolver output identifies a spike-mode run (#1628). */
+function isSpikeRun(resolverOutput) {
+  return Boolean(resolverOutput && resolverOutput.spikeIntakeState);
+}
+
 
 // ---------------------------------------------------------------------------
 // Deep freeze helper
@@ -580,7 +593,14 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   if (!repo) throw new Error("handoff-envelope: repo slug is required (owner/name)");
 
   const gs = normalizeGateState(gateState);
-  const subGate = resolveSubGate(strategy, gs);
+  // SPIKE-RELAXED-GATE-PROFILE (#1628): a spike-mode spin (startup resolver
+  // result carrying `spikeIntakeState`) resolves the relaxed `spike` gate
+  // profile instead of the default local-implementation gate. The spike
+  // marker lives at the TOP level of the resolver output (the bundle does not
+  // carry it), so it is read off `resolverOutput` directly.
+  const subGate = (strategy === INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION && isSpikeRun(resolverOutput))
+    ? "spike"
+    : resolveSubGate(strategy, gs);
   // Normalize each source independently, then fall back on the normalized result
   // (not the raw value): a present-but-invalid gateState value must NOT shadow a
   // valid options.retrospectiveFindings fallback (issue #1077 review finding).

@@ -5,6 +5,7 @@ export {
   parseJsonText,
   classifyReviewThreadsSignal,
   parseReviewThreads,
+  parseUnresolvedThreadBodies,
   readInput,
 } from "@dev-loops/core/github/review-threads";
 
@@ -17,10 +18,13 @@ export {
   containsBareCopilotSummon,
   extractReviewCommitSha,
   isCopilotLogin,
+  isGateMachineArtifactBody,
   normalizeTimestamp,
+  normalizeVerdictSurface,
   parseGateReviewCommentBody,
   parseGateReviewCommentMarkerBody,
   resolveDraftGateRoundResetMs,
+  resolveCopilotReviewPresence,
   sanitizeCopilotSummonTokens,
   summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,

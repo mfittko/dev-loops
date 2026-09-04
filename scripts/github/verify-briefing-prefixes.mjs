@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
+import { CHECKPOINT_SENTINEL_PREFIX as SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 const USAGE = `Usage: verify-briefing-prefixes.mjs --head-sha <sha> [--help]
 Fan-in enforcement for GATE-EXEC-BRIEFING-PREFIX (skills/docs/gate-review-sub-loop-contract.md):
@@ -17,7 +18,7 @@ and offline: reads only the sentinel and record files already on disk under tmp/
 keyed by the given head SHA.
 
 Required:
-  --head-sha <sha>  The FULL 40-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
+  --head-sha <sha>  The FULL 40- or 64-char reviewed head SHA (git rev-parse HEAD); sentinels are read from
                      tmp/checkpoint-context-sentinel-<scope>-<headSha>.json.
 
 Output (stdout, JSON):
@@ -58,14 +59,15 @@ ONE identical prefix hash — two DIFFERENT hashes for the same gate fails close
 as a within-gate byte-identity violation, even when each hash individually
 matches a known record. When no records are present the check falls back to
 the conservative flat rule (all sentinels must share one hash).
-Never manually clear sentinels.`.trim();
+Never manually clear sentinels — after a legitimate context rebuild at the same
+head, retire-gate-round.mjs is the sanctioned path that moves them aside.`.trim();
 
-// Full 40-char SHA required: sentinel filenames embed the full `git rev-parse
+// Full 40- or 64-char SHA required: sentinel filenames embed the full `git rev-parse
 // HEAD` value, so a short prefix would glob zero sentinels and read as a
 // vacuous pass — fail closed on anything shorter instead.
-const HEAD_SHA_RE = /^[0-9a-f]{40}$/i;
+const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 const parseError = buildParseError(USAGE);
 
 function resolveFlagValue(argv, flag) {
@@ -201,7 +203,7 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
   let best = null;
   let bestLen = -1;
   for (const gate of gateNames) {
-    const prefix = gate.replace(/_/g, "-");
+    const prefix = gateScopePrefix(gate).slice(0, -1);
     if ((s === prefix || s.startsWith(`${prefix}-`)) && prefix.length > bestLen) {
       best = gate;
       bestLen = prefix.length;
@@ -232,12 +234,27 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * back to the conservative flat check: all sentinels must share one hash.
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
+ * When `expectedDispatchUnits` is > 0 (derived by the caller from the round's
+ * persisted request-plan artifact, #1868 — the pending-angle floor), a round
+ * with ZERO sentinels FAILS CLOSED (the GATE-EXEC-BRIEFING-PREFIX
+ * records-floor): a coordinator round whose plan recorded pending angles must
+ * record evidence — zero sentinels can no longer
+ * pass vacuously. With `expectedDispatchUnits === 0` (no plan, or a plan
+ * expecting no units) the zero-sentinel case stays a trivial pass.
+ *
  * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
  * @param {Map<string, Set<string>>|null} [gateRecords] — sha256 -> set of gates
+ * @param {number} [expectedDispatchUnits] — plan-derived floor count the caller passes (pending angles for the records-floor caller; 0 = no floor)
  * @returns {{ verified: boolean, reason?: string, missing?: string[], mismatched?: Array<{scope:string, prefixHash:string}>, prefixHash?: string, gates?: Array<{gate:string, prefixHash:string, reviewerCount:number}> }}
  */
-export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
+export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expectedDispatchUnits = 0) {
   if (sentinels.length === 0) {
+    if (Number(expectedDispatchUnits) > 0) {
+      return {
+        verified: false,
+        reason: `GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted request plan records ${expectedDispatchUnits} pending angle(s) but the round recorded ZERO reviewer sentinels — a coordinator round whose plan recorded pending angles cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs), then re-verify.`,
+      };
+    }
     return { verified: true, reason: "no sentinels found for this round" };
   }
   const missing = sentinels.filter((s) => s.prefixHash === null).map((s) => s.scope);
@@ -334,6 +351,43 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null) {
   return { verified: true, gates };
 }
 
+/**
+ * Programmatic entry: read this round's reviewer sentinels and per-gate
+ * briefing-prefix records for the given head SHA and return the verdict
+ * `evaluateBriefingPrefixes` produces, WITHOUT any CLI/exit-code/emit
+ * concerns. Used by `consolidate-fanin.mjs` (Phase 3 fan-in) so the rule's
+ * own cited proof is mechanically invoked at consolidation time (#1618) —
+ * the verifier had zero callers before this. Returns:
+ *   { verified: boolean, reviewerCount: number, headSha, reason?, missing?, mismatched?, prefixHash?, gates? }
+ * A head with no sentinels at all returns `{ verified: true, reviewerCount: 0, ... }`
+ * (AC4: offline/inline/test paths where the fresh-context guard was never
+ * invoked stay byte-identical — the count reconciliation in consolidate-fanin
+ * treats `reviewerCount === 0` as "skip", never a failure) — UNLESS the caller
+ * derives a positive expected dispatch-unit count from the round's persisted
+ * request-plan artifact (#1868 records-floor), in which case zero sentinels
+ * returns `verified: false` with a records-floor reason.
+ * @param {string} tmpRoot
+ * @param {string} headSha — already lowercased/trimmed by the caller
+ * @param {number} [expectedDispatchUnits] — plan-derived floor count the caller passes (pending angles for the records-floor caller; 0 = no floor)
+ * @returns {Promise<object>}
+ */
+export async function verifyBriefingPrefixesForHead(tmpRoot, headSha, expectedDispatchUnits = 0) {
+  const sentinels = await readRoundSentinels(tmpRoot, headSha);
+  const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
+  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords, expectedDispatchUnits);
+  return {
+    verified: verdict.verified,
+    headSha,
+    reviewerCount: sentinels.length,
+    ...(Number(expectedDispatchUnits) > 0 ? { expectedDispatchUnits } : {}),
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
+    ...(verdict.missing ? { missing: verdict.missing } : {}),
+    ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
+    ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
+    ...(verdict.gates ? { gates: verdict.gates } : {}),
+  };
+}
+
 export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(process.cwd(), "tmp") } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
@@ -342,7 +396,7 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const headShaArg = resolveFlagValue(argv, "--head-sha");
   if (headShaArg === null || headShaArg === "" || !HEAD_SHA_RE.test(headShaArg)) {
     process.stderr.write(`${formatCliError(
-      parseError(`--head-sha is required and must be the FULL 40-character hex head SHA (short prefixes would match zero sentinels and pass vacuously)${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
+      parseError(`--head-sha is required and must be the FULL 40- or 64-character hex head SHA (short prefixes would match zero sentinels and pass vacuously)${headShaArg ? ` (got ${JSON.stringify(headShaArg)})` : ""}.`)
     )}\n`);
     return 2;
   }
@@ -355,20 +409,8 @@ export async function main(argv = process.argv.slice(2), { tmpRoot = path.join(p
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
 
-  const sentinels = await readRoundSentinels(tmpRoot, headSha);
-  const gateRecords = await readGateBriefingRecords(tmpRoot, headSha);
-  const verdict = evaluateBriefingPrefixes(sentinels, gateRecords);
-  const payload = {
-    ok: true,
-    verified: verdict.verified,
-    headSha,
-    reviewerCount: sentinels.length,
-    ...(verdict.reason ? { reason: verdict.reason } : {}),
-    ...(verdict.missing ? { missing: verdict.missing } : {}),
-    ...(verdict.mismatched ? { mismatched: verdict.mismatched } : {}),
-    ...(verdict.prefixHash ? { prefixHash: verdict.prefixHash } : {}),
-    ...(verdict.gates ? { gates: verdict.gates } : {}),
-  };
+  const verdict = await verifyBriefingPrefixesForHead(tmpRoot, headSha);
+  const payload = { ok: true, ...verdict };
   return emitResult(payload, { jq, silent, ok: verdict.verified });
 }
 

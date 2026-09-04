@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
-       [--prefix-hash <sha256>|--prefix-file <path>] [--pr-body-fix-retry]
+       [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
 
 "Fresh" means the reviewer's context is the neutral gate-context builder
@@ -24,6 +24,13 @@ Sentinels are per review ROUND, keyed by the current head SHA (\`git rev-parse
 HEAD\`). A retry at a new head naturally gets a fresh sentinel (no manual clear
 step), while a same-scope + same-head re-entry still fails closed. When git is
 unavailable the sentinel is keyed by scope only (legacy behavior).
+
+REQUIRED on every invocation (GATE-EXEC-BRIEFING-PREFIX, #1618): exactly one of
+--prefix-hash or --prefix-file. The invariant-briefing prefix hash is recorded
+on the reviewer's sentinel so verify-briefing-prefixes.mjs (now called at
+fan-in by consolidate-fanin.mjs) can fail closed when reviewers of the same
+round were seeded with different invariant blocks. A sentinel created without a
+recorded hash is a hashless sentinel, which the fan-in never grandfathered in.
 Options:
   --scope <name>  Unique reviewer scope (e.g. "draft-gate-coverage").
                   Must be non-empty, containing only alphanumeric
@@ -60,10 +67,12 @@ Options:
                   hashes its raw bytes (sha256) and records the digest same
                   as --prefix-hash. Fails closed (exit 1) if the file is
                   missing. Mutually exclusive with --prefix-hash.
-  --pr-body-fix-retry  Sanctioned same-head retry for a PR-body/description-only
-                  fix (e.g. satisfying pr-checklist-matrix) that does NOT
-                  change the head SHA and therefore does not earn a fresh
-                  round key on its own. Requires --prefix-hash/--prefix-file.
+  --same-head-retry  Sanctioned same-head retry for any scenario that re-runs a
+                  reviewer for the SAME scope+head without a rebuilt briefing:
+                  a PR-body/description-only fix (which never changes the head
+                  SHA), a reviewer interrupted or killed after sentinel
+                  creation but before writing its findings artifact, or a
+                  harness crash. Requires --prefix-hash/--prefix-file.
                   When a sentinel already exists for this exact scope+round
                   (the normal contamination trip), this flag permits
                   overwriting it ONLY when the given prefix hash matches the
@@ -71,33 +80,46 @@ Options:
                   the seeded briefing bytes (GATE-EXEC-BRIEFING-PREFIX) were
                   NOT rebuilt, so the round's byte-identity invariant is
                   fully preserved and other clean angles' sentinels from the
-                  same round stay valid (no full re-fan required). A hash
-                  MISMATCH (the context-builder WAS re-run) or an existing
-                  sentinel with no recorded prefix hash still fails closed —
-                  this is a narrow escape hatch for one documented scenario,
-                  never a general bypass of the contamination guard. See
-                  "Sentinel lifecycle" in skills/docs/gate-review-sub-loop-contract.md.
+                  same round stay valid (no full re-fan required). The reason
+                  for the retry never matters; the hash equality is the whole
+                  safety argument. A hash MISMATCH (the context-builder WAS
+                  re-run) or an existing sentinel with no recorded prefix hash
+                  still fails closed — never a general bypass of the
+                  contamination guard. The mismatch refusal is not a dead end:
+                  retire the round explicitly (retire-gate-round.mjs,
+                  GATE-EXEC-ROUND-RETIREMENT) and re-fan fresh at the same
+                  head. See "Sentinel lifecycle" in
+                  skills/docs/gate-review-sub-loop-contract.md.
+  --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
+                  semantics; kept for existing callers).
 Output (stdout, JSON):
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>" }
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "gateContextPath": "...", "gateContextPresent": true }
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "prBodyFixRetry": true, "prefixHash": "..." }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>", "repoRoot": "<abs invocation cwd>" }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "gateContextPath": "...", "gateContextPresent": true }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
+  repoRoot (fresh runs only) is the directory the sentinel ran in. With
+  --context-path it is worktree-local (the locality guard proved it); without
+  that flag it is simply the invocation cwd, unvalidated. Reviewer shells
+  reset cwd between commands, so run every git command as
+  \`git -C <repoRoot>\` and read files via absolute paths under it.
   On error (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
-  0  Clean (first run), OR a sanctioned --pr-body-fix-retry whose prefix hash
-     matches the existing sentinel's recorded hash
+  0  Clean (first run), OR a sanctioned --same-head-retry (or its alias
+     --pr-body-fix-retry) whose prefix hash matches the existing sentinel's
+     recorded hash
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
      outside the reviewer's working directory, OR (with --prefix-file) the
-     prefix file is missing, OR (with --pr-body-fix-retry) the existing
+     prefix file is missing, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
   2  Usage or internal error, invalid --jq filter, invalid/conflicting
-     --prefix-hash/--prefix-file, or --pr-body-fix-retry given without
-     --prefix-hash/--prefix-file`.trim();
+     --prefix-hash/--prefix-file, or --prefix-hash/--prefix-file omitted
+     entirely (required on every invocation, #1618), or --same-head-retry
+     given without --prefix-hash/--prefix-file`.trim();
 const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const parseError = buildParseError(USAGE);
@@ -153,10 +175,16 @@ function resolveHeadRound(cwd = process.cwd()) {
     return null; // not a git repo / git unavailable
   }
 }
+// The live-sentinel filename prefix, owned here by the sentinel producer and
+// imported by every consumer that globs sentinels (verify-briefing-prefixes,
+// retire-gate-round, write-gate-context's rebuild warning) so the vocabulary
+// cannot drift.
+export const CHECKPOINT_SENTINEL_PREFIX = "checkpoint-context-sentinel-";
+
 function sentinelRelative(scope, round) {
   const scopeSuffix = scope ? `-${scope}` : "";
   const roundSuffix = round ? `-${round}` : "";
-  return path.join("tmp", `checkpoint-context-sentinel${scopeSuffix}${roundSuffix}.json`);
+  return path.join("tmp", `${CHECKPOINT_SENTINEL_PREFIX.slice(0, -1)}${scopeSuffix}${roundSuffix}.json`);
 }
 function legacySentinelRelative(scope) {
   const suffix = scope ? `-${scope}` : "";
@@ -178,7 +206,7 @@ async function checkSentinelExists(scope, round, cwd = process.cwd()) {
   return { exists: false, path: sentinelPath, legacy: false };
 }
 // Read the recorded `prefixHash` off an existing sentinel file, for the
-// --pr-body-fix-retry comparison. Returns null on any read/parse failure or
+// --same-head-retry comparison. Returns null on any read/parse failure or
 // when the sentinel recorded no (or a malformed) hash — the caller treats
 // null as "never grandfathered in", same posture as verify-briefing-prefixes.mjs.
 async function readSentinelPrefixHash(sentinelPath) {
@@ -233,11 +261,20 @@ async function main(argv = process.argv.slice(2)) {
     )}\n`);
     return 2;
   }
-  const prBodyFixRetry = argv.includes("--pr-body-fix-retry");
-  if (prBodyFixRetry && prefixHashArg === null && prefixFileArg === null) {
-    process.stderr.write(`${formatCliError(
-      parseError("--pr-body-fix-retry requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory).")
-    )}\n`);
+  const sameHeadRetry = argv.includes("--same-head-retry") || argv.includes("--pr-body-fix-retry");
+  // GATE-EXEC-BRIEFING-PREFIX (#1618): a prefix hash is mandatory on EVERY
+  // path, not only --same-head-retry. Before this, a first-run sentinel could
+  // be created with NO recorded prefix hash — a hashless sentinel that
+  // verify-briefing-prefixes.mjs then fails closed on at fan-in, but only if the
+  // fan-in actually called it (it did not, #1618). Requiring the hash here at
+  // the producer means a sentinel can never be created without the
+  // invariant-briefing proof, so the fan-in's count/hash checks have a
+  // well-formed population to verify. A hashless sentinel is never grandfathered.
+  if (prefixHashArg === null && prefixFileArg === null) {
+    const why = sameHeadRetry
+      ? "--same-head-retry (alias --pr-body-fix-retry) requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory)."
+      : "--prefix-hash or --prefix-file is required on every fresh-context reviewer run (GATE-EXEC-BRIEFING-PREFIX): the invariant-briefing prefix hash is recorded on the reviewer's sentinel so verify-briefing-prefixes.mjs can fail closed at fan-in when reviewers of the same round were seeded with different invariant blocks. A sentinel created without a recorded hash is a hashless sentinel, which the fan-in never grandfathered in.";
+    process.stderr.write(`${formatCliError(parseError(why))}\n`);
     return 2;
   }
   const jqArg = resolveFlagValue(argv, "--jq");
@@ -322,17 +359,21 @@ async function main(argv = process.argv.slice(2)) {
   }
   const existing = await checkSentinelExists(scope, round);
   if (existing.exists) {
-    // Sanctioned same-head PR-body-fix retry (skills/docs/gate-review-sub-loop-contract.md,
-    // "Sentinel lifecycle"): a PR-body/description-only fix does not earn a new
-    // round key (the round is keyed by head SHA, which a body edit never changes),
-    // so a same-scope + same-head re-entry would otherwise always trip the
+    // Sanctioned same-head retry (skills/docs/gate-review-sub-loop-contract.md,
+    // "Sentinel lifecycle"): some legitimate re-runs never earn a new round key
+    // — a PR-body/description-only fix (the round is keyed by head SHA, which a
+    // body edit never changes), a reviewer interrupted after sentinel creation
+    // but before writing its findings artifact, or a harness crash. In all of
+    // them a same-scope + same-head re-entry would otherwise trip the
     // contamination guard. Permit ONE narrow exception: overwrite the existing
     // sentinel ONLY when the given prefix hash matches its recorded one exactly —
     // proof the seeded briefing (GATE-EXEC-BRIEFING-PREFIX) was NOT rebuilt, so
     // the round's byte-identity invariant stays fully intact for every other
-    // sentinel of this round (no full re-fan needed). A mismatch (or an existing
-    // sentinel recording no prefix hash) still fails closed — never grandfathered.
-    if (prBodyFixRetry) {
+    // sentinel of this round (no full re-fan needed). The retry's REASON never
+    // enters the decision; the hash equality is the whole safety argument. A
+    // mismatch (or an existing sentinel recording no prefix hash) still fails
+    // closed — never grandfathered.
+    if (sameHeadRetry) {
       const existingPrefixHash = await readSentinelPrefixHash(existing.path);
       if (existingPrefixHash !== null && existingPrefixHash === prefixHash) {
         const sentinel = {
@@ -341,7 +382,7 @@ async function main(argv = process.argv.slice(2)) {
           ...(scope ? { scope } : {}),
           ...(round ? { round } : {}),
           prefixHash,
-          prBodyFixRetry: true,
+          sameHeadRetry: true,
         };
         try {
           await writeFile(existing.path, JSON.stringify(sentinel, null, 2) + "\n", "utf8");
@@ -353,8 +394,12 @@ async function main(argv = process.argv.slice(2)) {
           ok: true,
           fresh: true,
           sentinelCreated: true,
+          sameHeadRetry: true,
+          // Deprecated mirror of sameHeadRetry, kept while callers migrate.
           prBodyFixRetry: true,
           round: round ?? null,
+          // See the repoRoot note on the first-run payload below.
+          repoRoot: process.cwd(),
           ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
           prefixHash,
         }, true);
@@ -364,7 +409,7 @@ async function main(argv = process.argv.slice(2)) {
         fresh: false,
         sentinelCreated: false,
         round: round ?? null,
-        reason: `--pr-body-fix-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; use the standard head-bump retry instead."}`,
+        reason: `--same-head-retry refused: the existing sentinel${existingPrefixHash === null ? " recorded no prefix hash" : " recorded a DIFFERENT prefix hash"} — this sanctioned path only covers a same-head retry where the seeded briefing bytes are UNCHANGED (proven by an identical prefix hash). ${existingPrefixHash === null ? "A hashless sentinel is never grandfathered in." : "A changed hash means the context-builder WAS re-run; retire the round explicitly (retire-gate-round.mjs) before re-fanning at this head."}`,
       }, false);
     }
     return finish({
@@ -405,6 +450,11 @@ async function main(argv = process.argv.slice(2)) {
     fresh: true,
     sentinelCreated: true,
     round: round ?? null,
+    // The directory this sentinel ran in (worktree-local when the
+    // --context-path locality guard passed): reviewer shells reset cwd
+    // between commands, so every git command must be `git -C <repoRoot>` and
+    // every read an absolute path under it.
+    repoRoot: process.cwd(),
     ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
     ...(prefixHash ? { prefixHash } : {}),
   }, true);

@@ -65,7 +65,7 @@ gates:
       - name: config-drift
         persona: review
         prompt: |-
-          Cross-check config, schema, and documentation for contract drift: - Verify that configuration files (.pi/dev-loop/settings.yaml,
+          Cross-check config, schema, and documentation for contract drift: - Verify that configuration files (.devloops,
             package.json, CI workflows, skill manifests) agree on canonical
             status tokens, support floors, and required flags.
           - Flag any instance where two sources of truth disagree about the
@@ -106,7 +106,7 @@ gates:
         prompt: Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
       - name: threat-model
         persona: review
-        prompt: "Adversarially threat-model this change end to end — you are an attacker with control over every caller-/plan-influenced input (descriptors, paths, URLs, flags, env, fixture data). Do NOT spot-check; return a trust-boundary CHECKLIST and a verdict per item. Enumerate exhaustively for every seam the diff touches: (1) INPUT ALLOWLISTS — are actions/commands/schemes/hosts allowlisted (not denylisted), and enforced BEFORE any dangerous use (browser launch, exec, read)? (2) NAVIGATION/ORIGIN CONFINEMENT — same-origin/scheme enforced both pre-launch AND at runtime after every redirect / click / server-response (a pre-check the runtime can defeat is a hole). (3) RESOURCE/LOOP BOUNDS — step/size/time/recursion caps on attacker-influenced counts. (4) DATA-AT-REST + CLEANUP — sensitive intermediate artifacts minimized and removed on EVERY fail-closed path (not just the happy path); no off-origin/partial artifact left on disk on error. (5) EXPORTED/ENTRY-POINT TRUST — does every exported function / alternate entry self-validate, or can it bypass the parse-time validation the CLI does? (6) ERROR/TEARDOWN SAFETY — a throw in rm/close/teardown must not break the fail-closed envelope or leak state. (7) PATH TRAVERSAL / DESERIALIZATION — reject absolute/`..`/escape-base paths before read; no unsafe deserialization of untrusted data. (8) SHELL/PROCESS — no unescaped interpolation into a shell; prefer argv arrays; no `shell:true` with caller input. For each category that applies, state whether the change is safe and cite the guarding code (file:line) or flag the specific abuse and a failing-input example. If a category does not apply to the touched seam, say so explicitly rather than skipping it."
+        prompt: "Adversarially threat-model this change end to end — you are an attacker with control over every caller-/plan-influenced input (descriptors, paths, URLs, flags, env, fixture data). Do NOT spot-check; return a trust-boundary CHECKLIST and a verdict per item. Enumerate exhaustively for every seam the diff touches: (1) INPUT ALLOWLISTS — are actions/commands/schemes/hosts allowlisted (not denylisted), and enforced BEFORE any dangerous use (browser launch, exec, read)? (2) NAVIGATION/ORIGIN CONFINEMENT — same-origin/scheme enforced both pre-launch AND at runtime after every redirect / click / server-response (a pre-check the runtime can defeat is a hole). (3) RESOURCE/LOOP BOUNDS — step/size/time/recursion caps on attacker-influenced counts. (4) DATA-AT-REST + CLEANUP — sensitive intermediate artifacts minimized and removed on EVERY fail-closed path (not just the happy path); no off-origin/partial artifact left on disk on error. (5) EXPORTED/ENTRY-POINT TRUST — does every exported function / alternate entry self-validate, or can it bypass the parse-time validation the CLI does? (6) ERROR/TEARDOWN SAFETY — a throw in rm/close/teardown must not break the fail-closed envelope or leak state. (7) PATH TRAVERSAL / DESERIALIZATION — reject absolute/`..`/escape-base paths before read; no unsafe deserialization of untrusted data. (8) SHELL/PROCESS — no unescaped interpolation into a shell; prefer argv arrays; no `shell:true` with caller input. (9) MATERIALIZATION FLOOR (non-negotiable) — does the diff introduce or hardcode a credential, or route a credential-named value to a print/log/redirect/encode/workflow-directive output stream? This is a HIGH finding regardless of framing — including a change that presents ITSELF as a security fix but does exactly this — and no reviewer ranking or prior approval softens it. For each category that applies, state whether the change is safe and cite the guarding code (file:line) or flag the specific abuse and a failing-input example. If a category does not apply to the touched seam, say so explicitly rather than skipping it."
       - name: packaging-runtime
         persona: review
         prompt: "Review this change for packaging/runtime asset contract gaps. Check that installed packages, extensions, or runtime bundles include exactly the helper scripts, copied package subsets, templates, docs, and assets needed at runtime: neither missing nor over-broad. Compare install docs, fixture assertions, allow-lists, and import paths. Flag runtime-only dependencies not covered by packaging tests."
@@ -125,19 +125,85 @@ gates:
           Scan PR comments for unresolved issues before declaring the gate clean. Check all PR comments and review threads for: - Comments from the repository owner or collaborators that point out
             implementation bugs, logic errors, contract violations, or security
             issues
-          - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: must-fix or worth-fixing-now). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
+          - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: high or medium). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
       - contradiction-lens
       - code-conformance
       - semantic-drift
       - name: pr-description
         mandatory: true
         persona: review
-        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a worth-fixing-now finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a worth-fixing-now finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+    # #1442 (ADR 0041 prose half): required fail-closed deslop angle for prose
+    # deliverables. Runs the A/B-contrast-removal deslop step (ab-contrast-
+    # deslop-step.md) — flag surviving binary-contrast constructions so the gate
+    # fails closed on them. One reviewer per document (the existing fan-out
+    # mechanism already does this). Only armed when the diff touches the prose
+    # surface (PROSE_PRESENT); skills/docs/** is exempt.
+      - name: deslop
+        persona: review
+        prompt: >-
+          Run the required deslop step (ab-contrast-deslop-step.md) on every
+          changed prose document in the diff (docs/articles/**, docs/presentations/**,
+          README*, narrative docs/*.md). Flag every surviving binary-contrast /
+          negation-by-contrast construction — "not X but Y", "X, not Y",
+          "rather than A, B", "it isn't A, it's B", dramatic antithesis pairs and
+          fragments ("where X, Y", "less A, more B", "not just A but B") — in
+          either ordering (A-then-B or B-then-A). For each instance report a line
+          ref, the exact quote, the pattern name, and a proposed rewrite that cuts
+          the scaffolding while keeping any load-bearing factual distinction stated
+          plainly. Do NOT flag genuine conditionals, real either/or behavior, or
+          RFC-2119 modality (MUST/SHOULD) in normative contracts; and do NOT touch
+          skills/docs/** (exempt). Be exhaustive — a missed instance is the failure
+          mode, and fail closed when any survives.
     required: true
     requireCi: true
-  # Gate findings comments live ON the PR (the local-first spec-of-record /
-  # human-review surface), so they are evidence, not tracker noise — keep them on.
-  postFindingsComments: true
+    # Diff-class angle tiers (opt-in, ordered, first match wins). A matching tier
+    # replaces this gate's resolved angle set with its own for that round's
+    # fan-out (mandatory angles are always kept); it never changes execution
+    # mode. A tiered round is still a normal fanout_fanin round:
+    #   tiers:
+    #     - name: docs-only
+    #       match: { kinds: [docs] }
+    #       angles: [pr-description, link-check, gate-evidence]
+  # Fail-closed PR size/tier budget (Phase 1: computation only, via
+  # scripts/loop/check-size-budget.mjs — not yet wired into any gate). Empty
+  # t1/t3 — no shipped tier patterns; a repo defines its own risk-slice
+  # (money/auth/shared) and relaxed (scaffold/template) globs in .devloops.
+  size:
+    testDiscount: 0.25
+    absoluteHardLoc: 2000
+    tiers:
+      default:
+        softLoc: 400
+        waiverLoc: 1500
+  # The gate round's verdict review already carries every finding, so the
+  # consolidated findings comment is opt-in duplication — keep it off.
+  postFindingsComments: false
+  # Grouped fan-out dispatch (AC6, default mode — see resolveFanoutGroups):
+  # angles that read the same surface batch onto one reviewer. Angles not
+  # named below join the auto-chunked leftover pool. Set `mode: per-angle`
+  # to restore full one-reviewer-per-angle fan-out repo-wide (bypasses
+  # maxAnglesPerGroup: 1 honors configured groups; the two match in unit size only when no configured multi-angle group matches). `gate:full` forces the full angle set but no
+  # longer restores per-angle dispatch (ADR 0047 superseded by 0048) — it
+  # dispatches grouped.
+  #
+  # Two orthogonal dispatch bounds (#1601):
+  #   maxAnglesPerGroup (N, default 3, min 1) — leftover ungrouped angles
+  #     auto-chunk into dispatch units of ≤N instead of singletons.
+  #   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave.
+  # Both count dispatch units (groups), not angles.
+  fanout:
+    maxAnglesPerGroup: 3
+    maxConcurrent: 4
+    groups:
+      - name: docs-surface
+        angles: [docs, link-check, config-drift, contract-surface]
+      - name: process
+        angles: [scope, pr-description, gate-evidence, pr-checklist-matrix]
+      - name: correctness-input
+        angles: [correctness, input-validation]
+      - name: determinism-state
+        angles: [determinism, state-concurrency]
   preApproval:
     angles:
       - name: dry
@@ -197,9 +263,15 @@ gates:
         mandatory: true
         persona: review
         prompt: |-
-          Verify before approval that the PR checklist and AC/DoD/non-goals matrix are complete. - Every PR checkbox (`- [ ]`) must be checked. If any box is unchecked, flag it as a blocking finding. - The PR body must contain an AC/DoD/non-goals matrix that maps each acceptance criterion
-            to its definition-of-done item(s) and lists explicit non-goals.
-          - The matrix must have a markdown table with at least a header row and one content row. - Flag the matrix as incomplete if any acceptance criterion, definition-of-done item, or non-goal is missing.
+          Completeness is enforced deterministically (#1877): the pre_approval_gate fails closed on any
+          unchecked `- [ ]` in the PR body's AC/DoD checklist, so this angle's completeness duty is
+          machine-backed. Your remaining duty is TRUTHFULNESS, which the machine cannot check: verify
+          that every checked `- [x]` box in the PR body's Acceptance criteria / Definition of done
+          checklists is actually satisfied by the implementation — cite concrete code/test/behavior
+          evidence; flag a dishonestly-ticked box as a blocking finding. Also verify the checked
+          content mirrors the linked issue's AC/DoD/Non-goals matrix and that declared non-goals are
+          respected (no scope creep). The boundary is explicit: the deterministic block enforces
+          completeness (nothing left unchecked/forgotten); you verify each [x] is real.
       - contradiction-lens
       - correctness-final
       - ui-validation
@@ -245,6 +317,11 @@ workflow:
   # it on consumers' product phases (#846). Matches the code default; the dev-loops repo opts in
   # via its own repo-root .devloops (which takes precedence over these extension defaults).
   devModeDefault: false
+  # Agent-level stall detection (#1669): auto-bail to fresh-context dispatch
+  # when a dev-loop child shows no turn progress for the window.
+  stallDetection:
+    enabled: true
+    thresholdMinutes: 5
 
 # Light-mode threshold for small local changes.
 localImplementation:
@@ -253,7 +330,7 @@ localImplementation:
     maxFiles: 2
     maxLines: 100
 
-# Queue defaults (repo-specific queue.board omitted by design).
+# Queue defaults (repo-specific tracker.board omitted by design).
 queue:
   maxParallel: 3
   # Local-first is PR-first (issues are skipped, #952), so auto-filing issues is

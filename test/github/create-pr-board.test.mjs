@@ -3,11 +3,29 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { main, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
+import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
 import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+
+// #1629: linked-PR guard response with NO open linked PR — the happy path a
+// closing-keyword create hits first (detectLinkedIssuePr graphql call) before
+// the `gh pr create` call.
+function graphqlNoLinkedPrPayload() {
+  return `${JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          timelineItems: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+        },
+      },
+    },
+  })}\n`;
+}
 
 // mockRunChild mirrors test/projects/add-queue-item.test.mjs's fixture style: a
 // sequential list of canned gh-graphql responses, bypassing any real subprocess.
@@ -50,6 +68,9 @@ function itemsByContentResponse(items) {
 function resolvePrResponse(id) {
   return { data: { repository: { issueOrPullRequest: { id, __typename: "PullRequest" } } } };
 }
+function resolveIssueResponse(id) {
+  return { data: { repository: { issueOrPullRequest: { id, __typename: "Issue" } } } };
+}
 function addItemResponse(itemId) {
   return { data: { addProjectV2ItemById: { item: { id: itemId } } } };
 }
@@ -67,7 +88,7 @@ async function withTempDir(fn) {
 }
 
 async function writeDevloopsProjectNumber(tempDir, projectNumber) {
-  await writeFile(path.join(tempDir, ".devloops"), `queue:\n  board:\n    number: ${projectNumber}\n`, "utf8");
+  await writeFile(path.join(tempDir, ".devloops"), `tracker:\n  board:\n    number: ${projectNumber}\n`, "utf8");
 }
 
 // --- enqueueIssuelessLightweightPr unit tests (AC1, AC3, AC4) ---
@@ -173,6 +194,77 @@ test("enqueueIssuelessLightweightPr: unparsed PR number is a no-op, never calls 
   });
 });
 
+// --- enqueueBoardItem tests (QUEUE-BOARD-LINKED; generic board add, #1625) ---
+
+test("enqueueBoardItem: adds a new ISSUE item into the requested Backlog column", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const responses = [
+      userPayload(),
+      listUserProjectsResponse([PROJECT]),
+      getFieldsResponse([STATUS_FIELD]),
+      itemsByContentResponse([]),
+      resolveIssueResponse("I_kwDO_10"),
+      addItemResponse("PVTI_new"),
+      updateFieldResponse(),
+    ];
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 10,
+      column: "Backlog",
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild(responses),
+    });
+    assert.deepEqual(board, {
+      enqueued: true,
+      itemId: "PVTI_new",
+      issueNumber: 10,
+      prNumber: null,
+      status: "Backlog",
+      alreadyPresent: false,
+    });
+  });
+});
+
+test("enqueueBoardItem: default column is In Progress (issue-less lightweight-PR back-compat)", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeDevloopsProjectNumber(tempDir, 7);
+    const responses = [
+      userPayload(),
+      listUserProjectsResponse([PROJECT]),
+      getFieldsResponse([STATUS_FIELD]),
+      itemsByContentResponse([]),
+      resolvePrResponse("PR_kwDO_42"),
+      addItemResponse("PVTI_new"),
+      updateFieldResponse(),
+    ];
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 42,
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild(responses),
+    });
+    assert.equal(board.enqueued, true);
+    assert.equal(board.status, "In Progress");
+  });
+});
+
+test("enqueueBoardItem: an unconfigured board is a silent, fail-open no-op", async () => {
+  await withTempDir(async (tempDir) => {
+    const board = await enqueueBoardItem({
+      repo: "owner/repo",
+      itemNumber: 10,
+      column: "Backlog",
+      cwd: tempDir,
+      env: {},
+      runChild: mockRunChild([]),
+    });
+    assert.deepEqual(board, { enqueued: false, reason: "no-board-configured" });
+  });
+});
+
 // --- main() end-to-end: gh pr create over a stubbed gh, board calls mocked in-process ---
 
 test("create-pr --lightweight on an issue-less body enqueues the new PR board item (AC1)", async () => {
@@ -218,7 +310,10 @@ test("create-pr --lightweight on an issue-less body enqueues the new PR board it
 test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-identical: no board call (AC2)", async () => {
   await withTempDir(async (tempDir) => {
     await writeDevloopsProjectNumber(tempDir, 7);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }], { logCalls: true });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/42\n" },
+    ], { logCalls: true });
 
     const result = await runNode(
       ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes #9", "--lightweight"],
@@ -229,7 +324,8 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
-    assert.equal(ghCalls.length, 1); // gh pr create only — no board calls
+    // linked-PR probe + gh pr create — no board calls
+    assert.equal(ghCalls.length, 2);
   });
 });
 

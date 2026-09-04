@@ -543,3 +543,119 @@ test("reply-resolve-review-thread fails closed before mutating when the validati
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("#1731: reply-resolve-review-thread refuses a reply body containing a raw issue/PR id (guard fires before POST)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-guard-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Resolving this thread; the change tracks #1731 for backreference.\n", "utf8");
+
+  try {
+    // Capture the review-threads validation call succeeds, then the guard must
+    // refuse the raw `#1731` in the reply body BEFORE any POST is issued.
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } },
+        ]),
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      { env: gh.env },
+    );
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /comment-id-guard refused to emit review-thread reply body/);
+
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(ghLog.length, 1, "only the validation read ran; no reply POST may be issued");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --allowed-refs", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-allowed-refs-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Resolving; deliberate back-reference to #1731.\n", "utf8");
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
+        assertStdinIncludes: ['"body":"Resolving; deliberate back-reference to #1731.\\n"'],
+        stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_123"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
+       "--body-file", bodyFile, "--allowed-refs", "1731"],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true, repo: "owner/repo", pr: 17, commentId: 123, threadId: "THREAD_123",
+      replyId: 456, replyUrl: "https://github.com/owner/repo/pull/17#discussion_r456", resolved: true,
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BEFORE replying/resolving (no mutation)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-jq-invalid-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Added coverage.\n", "utf8");
+  try {
+    // Zero stubbed gh responses AND no overflow repeat: if the code regresses
+    // to validating --jq only after mutating (the original #1817 footgun),
+    // the first gh call (the review-threads read) exits 97 from the stub and
+    // the script's own error handling reports exit 1 — distinct from the
+    // expected exit 2 below, so a regression here fails loudly.
+    const gh = await writeGhStubHelper(tempDir, [], { logCalls: true, repeatLastOnOverflow: false });
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
+       "--body-file", bodyFile, "--jq", "not!valid"],
+      { env: gh.env },
+    );
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /--jq/);
+    assert.match(result.stderr, /BASE-JQ-OUTPUT-GUARANTEE/);
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim();
+    assert.equal(ghLog, "", "no gh call (review-threads read, reply POST, or resolve) should happen when --jq is syntactically invalid");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs entry", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-allowed-refs-bad-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Resolving this thread.\n", "utf8");
+  try {
+    const gh = await writeGhStub(tempDir, []);
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
+       "--body-file", bodyFile, "--allowed-refs", "1731,abc"],
+      { env: gh.env },
+    );
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /positive integers/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

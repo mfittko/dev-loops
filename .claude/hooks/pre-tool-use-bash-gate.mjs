@@ -25,6 +25,13 @@ import {
   commandContainsGhPrCreate,
   commandContainsRawExternalWrite,
   commandContainsGitStash,
+  commandContainsInlineInterpreter,
+  commandContainsSubIssueAdHocBypass,
+  commandContainsReplyResolveBypass,
+  commandContainsGraphqlResolveReviewThread,
+  commandContainsCopilotRequestBypass,
+  commandContainsCopilotSummonComment,
+  commandContainsDetachedWaitTool,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -43,7 +50,20 @@ const isMerge = typeof command === "string" && commandContainsGhPrMerge(command)
 const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
 const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
 const isStash = typeof command === "string" && commandContainsGitStash(command);
-if (!isReady && !isMerge && !isCreate && !isExternalWrite && !isStash) {
+// The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
+// decideBashGate, so the hook must not short-circuit to allow before deciding them.
+const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
+const isSubIssue = typeof command === "string" && commandContainsSubIssueAdHocBypass(command);
+const isReplyResolve =
+  typeof command === "string" &&
+  (commandContainsReplyResolveBypass(command) || commandContainsGraphqlResolveReviewThread(command));
+const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command);
+const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
+const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+if (
+  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
+  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool
+) {
   emitAllow();
 }
 
@@ -64,9 +84,23 @@ try {
 
 let gatePassed = false;
 let gateError = null;
+let humanMergeOnly = false;
 if (repoSlug === TARGET_REPO_SLUG) {
   // When both verbs appear (compound command), apply the stricter merge gate.
   const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
+  // STOP-HUMAN-MERGE-001 (#1622): resolve the repo's effective `autonomy.humanMergeOnly` via the
+  // repo-root script (the hook bundle is self-contained and cannot import @dev-loops/core); fail
+  // open (false) when the script is unavailable so the loop-level merge safety remains authoritative.
+  if (isMerge && repoRoot) {
+    try {
+      humanMergeOnly = execFileSync("node", [path.join(repoRoot, "scripts/loop/resolve-human-merge-only.mjs")], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      }).trim() === "true";
+    } catch {
+      humanMergeOnly = false;
+    }
+  }
   if (pr !== null && repoRoot) {
     // Each gate script is overridable for deterministic testing (stub instead of the
     // network-touching real guard). `gh pr ready` → draft-gate only; `gh pr merge` → the full
@@ -91,7 +125,7 @@ if (repoSlug === TARGET_REPO_SLUG) {
   }
 }
 
-const decision = decideBashGate({ command, repoSlug, gatePassed, gateError, agentType });
+const decision = decideBashGate({ command, repoSlug, gatePassed, gateError, agentType, humanMergeOnly });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }

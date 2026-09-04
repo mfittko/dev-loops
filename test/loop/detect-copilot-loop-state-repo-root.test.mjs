@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { resolveRepoRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveRefinementConfig } from "@dev-loops/core/config";
+import { initGitFixture } from "../_helpers.mjs";
 
 function git(cwd, args) {
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
@@ -18,9 +19,7 @@ function git(cwd, args) {
 test("maxCopilotRounds resolves from worktree root via resolveRepoRoot, not cwd (#1019)", async () => {
   const repo = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-1019-")));
   try {
-    git(repo, ["init", "-q"]);
-    git(repo, ["config", "user.email", "test@example.com"]);
-    git(repo, ["config", "user.name", "Test"]);
+    initGitFixture(repo, { commit: null });
     // Non-default maxCopilotRounds (built-in default is 5).
     await writeFile(path.join(repo, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 2\n", "utf8");
     git(repo, ["add", "-A"]);

@@ -2,19 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseViewIssueCliArgs, viewIssue, runCli } from "../../scripts/github/view-issue.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh(payload, { code = 0, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return { code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub([{ code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr }], { repeatLastOnOverflow: true });
 }
 
 const ISSUE = {

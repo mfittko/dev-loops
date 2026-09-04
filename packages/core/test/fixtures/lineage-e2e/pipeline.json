@@ -1,0 +1,84 @@
+{
+  "description": "Two-round cache-aware review pipeline fixture (issue #1468 slice 6 e2e): context build -> request plan -> primer -> fan-out -> fan-in -> lineage delta, then compaction.",
+  "gate": "pre_approval_gate",
+  "baseHead": "0000000000000000000000000000000000000000000000000000000000000000",
+  "model": "model-a",
+  "angles": [
+    "correctness",
+    "security"
+  ],
+  "sharedPrefixHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "requestPrefixFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "originalDiff": "diff --git a/src/pipeline.mjs b/src/pipeline.mjs\n-original\n+intro\nindex = start\n",
+  "rounds": [
+    {
+      "round": 1,
+      "head": "1111111111111111111111111111111111111111111111111111111111111111",
+      "fixDiff": "diff --git a/src/pipeline.mjs b/src/pipeline.mjs\n+fix one\nwindow = bounded\n",
+      "angleResults": [
+        {
+          "angle": "correctness",
+          "findings": [
+            {
+              "severity": "high",
+              "summary": "legacy retry leaves an unbounded accumulator",
+              "file": "src/pipeline.mjs",
+              "line": 12
+            }
+          ],
+          "verdict": "findings_present"
+        },
+        {
+          "angle": "security",
+          "findings": [],
+          "verdict": "clean"
+        }
+      ],
+      "validation": {
+        "tests": "npm test",
+        "result": "pass",
+        "head": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "checklist": [
+        {
+          "id": "F1",
+          "severity": "high",
+          "check": "verify fix one bounds the accumulator",
+          "resolved": true,
+          "evidence": "test-assert"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "head": "2222222222222222222222222222222222222222222222222222222222222222",
+      "fixDiff": "diff --git a/src/pipeline.mjs b/src/pipeline.mjs\n+fix two\nwindow read = bounded\n",
+      "angleResults": [
+        {
+          "angle": "correctness",
+          "findings": [],
+          "verdict": "clean"
+        },
+        {
+          "angle": "security",
+          "findings": [],
+          "verdict": "clean"
+        }
+      ],
+      "validation": {
+        "tests": "npm test",
+        "result": "pass",
+        "head": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "checklist": [
+        {
+          "id": "F1",
+          "severity": "high",
+          "check": "verify fix one bounds the accumulator",
+          "resolved": true,
+          "evidence": "test-assert"
+        }
+      ]
+    }
+  ]
+}

@@ -10,10 +10,9 @@ Start here for repository documentation.
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — canonical family-local PR lifecycle contract
 - [Artifact Authority Contract](../skills/docs/artifact-authority-contract.md) — canonical artifact-selection model (tracker-first, local-planning, and PR-body-as-spec) and the local-first plan-file flow
 - [Tracker Seam Contract](../skills/docs/tracker-seam-contract.md) — the `Tracker` provider interface/registry (issue #1408); GitHub is the built-in default, external providers are a post-1.0 drop-in
-- [Local-Planning Flow](../skills/docs/local-planning-flow.md) — operator sequence for the local-first plan-file flow
-- [Local-Planning Worked Example](../skills/docs/local-planning-worked-example.md) — one plan file through every stage of the flow
+- [Local Planning](../skills/docs/local-planning.md) — plan-file contract, operator sequence for the local-first plan-file flow, and a worked example of one plan file through every stage
 - [Spike-mode Contract](../skills/docs/spike-mode-contract.md) — operator sequence for time-boxed exploratory runs: start from a question, reach findings, then discard or graduate into a plan file
-- [Tracker Story PR Contract](../skills/docs/tracker-story-pr-contract.md) — canonical tracker-first story/PR contract
+- [Tracker Story PR Contract](../skills/docs/tracker-first-loop-state.md) — canonical tracker-first story/PR contract
 - [Sub-Issue Tree Contract](../skills/docs/sub-issue-tree-contract.md) — deterministic pattern for epic decomposition with GitHub sub-issue trees
 - [Copilot Loop State Graph](../skills/docs/copilot-loop-state-graph.md)
 - [Reviewer Loop State Graph](../skills/docs/reviewer-loop-state-graph.md)
@@ -55,8 +54,6 @@ Start here for repository documentation.
 ## Canonical-owner pointers
 
 - [Library vs Packages Core Boundary](./lib-vs-packages-core-boundary.md) — ownership boundary between `lib/`, `packages/core/`, and `scripts/_core-helpers.mjs`
-- [Outer Loop State Graph](../skills/docs/outer-loop-state-graph.md) → [Conductor Routing Contract](../skills/docs/conductor-routing-contract.md) (symlink)
-- [Tracker-First Story-to-PR Contract](../skills/docs/tracker-story-pr-contract.md) → [Tracker Story PR Contract](../skills/docs/tracker-story-pr-contract.md) (pointer)
 - [Copilot CI Status Contract](../skills/docs/copilot-ci-status-contract.md) → [Copilot CI Status Contract](../skills/docs/copilot-ci-status-contract.md) (canonical)
 - [README Audit Rubric](./readme-audit-rubric.md) — single owner of README.md's intended semantic properties (on-demand LLM-judge audit)
 
@@ -69,6 +66,5 @@ Start here for repository documentation.
 
 ## Queue mode
 
-- [Projects Queue Contract](../skills/docs/projects-queue-contract.md) — minimal board contract for GitHub Projects V2 queue tooling
-- [Queue Board Setup](../skills/docs/queue-board-setup.md) — one-time GitHub Projects V2 board setup for dev-loop queue
+- [Projects Queue Contract](../skills/docs/projects-queue-contract.md) — board contract, one-time board setup, and day-to-day usage for GitHub Projects V2 queue tooling
 - [Queue Mode SPEC](./specs/queue-mode/SPEC.md) — queue mode specification

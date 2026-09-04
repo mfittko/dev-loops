@@ -66,6 +66,19 @@ test("evaluateBriefingPrefixes: zero sentinels is trivially verified (nothing to
   assert.deepEqual(evaluateBriefingPrefixes([]), { verified: true, reason: "no sentinels found for this round" });
 });
 
+// Records-floor (#1868): when the round's request plan expected dispatch units,
+// zero sentinels is a vacuous pass and must FAIL closed — not verify trivially.
+test("evaluateBriefingPrefixes: zero sentinels with expected dispatch units FAILS closed (records-floor #1868)", () => {
+  const result = evaluateBriefingPrefixes([], null, 2);
+  assert.equal(result.verified, false);
+  assert.ok(/records-floor/i.test(result.reason));
+  assert.ok(result.reason.includes("2"));
+});
+
+test("evaluateBriefingPrefixes: zero sentinels with expectedDispatchUnits 0 stays trivially verified (zero-unit gate, no false-fail)", () => {
+  assert.deepEqual(evaluateBriefingPrefixes([], null, 0), { verified: true, reason: "no sentinels found for this round" });
+});
+
 test("evaluateBriefingPrefixes: a single HASHED sentinel verifies (nothing to mismatch)", () => {
   const one = evaluateBriefingPrefixes([{ scope: "a", prefixHash: "h1" }]);
   assert.equal(one.verified, true);
@@ -262,10 +275,18 @@ test("verify-briefing-prefixes rejects a malformed --head-sha", () => {
 test("verify-briefing-prefixes rejects a SHORT head SHA (would glob zero sentinels and pass vacuously)", () => {
   const result = runChecker(["--head-sha", "abc1234"]);
   assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /FULL 40-character/);
+  assert.match(result.stderr, /FULL 40- or 64-character/);
 });
 
 const FULL_TEST_SHA = "abc1234abc1234abc1234abc1234abc1234abc12";
+const FULL_TEST_SHA_256 = "d4".repeat(32);
+
+test("verify-briefing-prefixes accepts a 64-hex (SHA-256) head SHA (#1652)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const result = runChecker(["--head-sha", FULL_TEST_SHA_256], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
 
 test("verify-briefing-prefixes exits 0 with reviewerCount 0 when no sentinels exist for the head SHA", async () => {
   await withTmpDir(async (tmpDir) => {
@@ -463,10 +484,16 @@ test("integration: a reviewer sentinel with no recorded prefix hash fails closed
 
     const r1 = runContextGuard(["--scope", "scope-safety", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
     assert.equal(r1.status, 0, r1.stderr);
-    // scope-legacy never records a prefix hash (old-style invocation, no
-    // --prefix-hash/--prefix-file) — must NOT be silently grandfathered in.
-    const r2 = runContextGuard(["--scope", "scope-legacy"], { cwd: tmpDir });
-    assert.equal(r2.status, 0, r2.stderr);
+    // scope-legacy never records a prefix hash (a legacy/pre-#1618 sentinel, or
+    // one a caller never seeded with a prefix). #1618 made a prefix hash
+    // mandatory on every CLI run, so a hashless sentinel can no longer be
+    // CREATED via the tool — write it directly to disk to simulate the legacy
+    // case. It must NOT be silently grandfathered in.
+    await writeFile(
+      path.join(tmpDir, "tmp", `checkpoint-context-sentinel-scope-legacy-${headSha}.json`),
+      JSON.stringify({ scope: "scope-legacy", createdAt: "legacy" }) + "\n",
+      "utf8",
+    );
 
     const result = runChecker(["--head-sha", headSha], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);

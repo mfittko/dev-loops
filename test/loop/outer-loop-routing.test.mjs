@@ -276,14 +276,13 @@ test("outer-loop rejects malformed arguments with usage guidance", async () => {
   const err = JSON.parse(missingPr.stderr);
   assert.equal(err.ok, false);
   assert.equal(err.error, "outer-loop requires both --repo <owner/name> and --pr <number>");
-  assert.equal(typeof err.usage, "string");
-  assert(err.usage.length > 0);
+  assert.equal(err.hint, "run with --help for usage");
 
   const noArgs = await runNode([]);
   assert.equal(noArgs.code, 1);
   const noArgsErr = JSON.parse(noArgs.stderr);
   assert.equal(noArgsErr.ok, false);
-  assert.equal(typeof noArgsErr.usage, "string");
+  assert.equal(noArgsErr.hint, "run with --help for usage");
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--unexpected"]);
   assert.equal(unknown.code, 1);

@@ -23,6 +23,7 @@ Artifacts:
 - **Planning artifact:** GitHub issue (title, body, labels, assignees, acceptance criteria)
 - **Execution artifact:** GitHub PR (linked to issue; created during implementation)
 - <!-- rule: ARTIFACT-TRACKER-FIRST-NO-DUP --> **No local duplicate:** A tracker-first session MUST NOT create `docs/phases/phase-<n>.md` for the same session when a GitHub issue is the canonical spec
+- <!-- rule: ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR --> A refined tracker-backed issue body MUST carry the full AC/DoD/Non-goals matrix (#1877): an Acceptance criteria checklist, a Definition of done checklist (each AC mapped to its DoD item(s) — the mapping table itself stays prose on the issue; the PR mirrors the matrix as list-form checkboxes, per the issue's Non-goals: never checkboxes in table cells), and an explicit, non-empty `## Non-goals` section. The deterministic predicate `detectIssueRefinementArtifact` (`@dev-loops/core/loop/issue-refinement-artifact`) enforces the PRESENCE of all three arms fail-closed with three distinct findings — `missing_dod_checklist` (AC checklist without DoD checklist, #1877), `missing_ac_checklist` (DoD checklist without AC checklist, #1877), and `missing_explicit_non_goals` (#1866, the same Non-goals requirement the loop-grill synthesis writes and the lightweight PR-body path validates) — the same completeness-not-truthfulness boundary as the pre-approval unchecked-box block: the AC→DoD mapping itself is authored at refinement (loop-grill) and verified by reviewers, never by the predicate. The matrix requirement extends the epic-only AC/DoD matrix contract (epic-tree-refinement-procedure.md) to all tracker-backed issues at refinement, reconciled with #1866's Non-goals parity. A linked `tmp/refinement/*.md` doc satisfies the artifact check only when it actually resolves (enqueue gate and draft-gate linked-issue path verify the path on disk) and is itself a complete artifact (the doc carries the matrix); the issue-less / PR-body spec path is unchanged.
 
 Key contract:
 - GitHub issue state is authoritative — not local notes or chat context
@@ -36,7 +37,7 @@ Key contract:
 **Persisted markdown plan files are the authoritative artifact store.** Work originates from a local markdown plan file in the repo working tree, and no GitHub issue is required. The plan file stays uncommitted through authoring, refinement, and local review; promotion is the step that commits it (the helper sequence commits it as part of opening the PR). GitHub PRs carry review and merge while the plan file stays the canonical spec.
 
 Artifacts:
-- **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`); its format and required base sections are defined in the [Plan-file Contract](plan-file-contract.md)
+- **Planning artifact:** Persisted markdown plan file (e.g., `docs/phases/phase-<n>.md`); its format and required base sections are defined in the [Plan-file Contract](local-planning.md#plan-file-contract)
 - **Execution artifact:** Local branch and associated GitHub PR (created during implementation)
 - **No GitHub issue:** The plan file replaces the issue as the canonical spec
 
@@ -101,12 +102,12 @@ The effective default for a consumer comes from the config-merge layering in `pa
 
 1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy: local-first`. This is the code-level fallback when no other layer sets the key.
 2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
-3. Repo-local `.pi/dev-loop/defaults.*` (legacy) — applied when present.
-4. Repo `.devloops` at repo root — the per-repo override, highest precedence. When `.devloops` is absent, the legacy `.pi/dev-loop/settings.*` / `overrides.*` apply at this position instead.
+3. Repo-local `.pi/dev-loop/defaults.*` — applied when present.
+4. Repo `.devloops` at repo root — the per-repo override, highest precedence.
 
 With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: tracker-first` in its own `.devloops` (`github-first` is a deprecated accepted alias, normalized with a load-time warning).
 
-Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`). They differ in how they load, per the precedence list above: `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`; `.pi/dev-loop/settings.*` (and the older `overrides.*`) load only when no `.devloops` is present — when `.devloops` exists it is authoritative and those files are ignored (with a deprecation warning).
+One legacy repo-local layer also exists under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`): `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`. The old `.pi/dev-loop/settings.*` / `overrides.*` fallback layers were removed at the v1.0.0 cut (ADR 0017) and no longer load — such files are simply ignored.
 
 ### Explicit non-knobs
 
@@ -118,11 +119,11 @@ Two legacy repo-local layers also exist under `.pi/dev-loop/` (the package no lo
 
 ## Local-first plan-file flow end to end
 
-Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script; the start, refine, and promote stages also expose their pure logic as an `@dev-loops/core` contract, while the validate stage's `validatePlanFile` lives in its helper script (`scripts/refine/validate-plan-file.mjs`). The [Local-Planning Flow](local-planning-flow.md) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning-worked-example.md) shows one plan file evolving through every stage.
+Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script; the start, refine, and promote stages also expose their pure logic as an `@dev-loops/core` contract, while the validate stage's `validatePlanFile` lives in its helper script (`scripts/refine/validate-plan-file.mjs`). The [Local-Planning Flow](local-planning.md#local-planning-flow) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example) shows one plan file evolving through every stage.
 
 ### P1 — Plan-file artifact + config (#949)
 
-The plan file is a phase-doc-format markdown document. It lives under `docs/phases/`, the existing phase-docs directory. Its required base authoring sections — `## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — and the validator `scripts/refine/validate-plan-file.mjs` (`validatePlanFile`, distinct `missing_*` codes per absent or empty section) are defined in the [Plan-file Contract](plan-file-contract.md).
+The plan file is a phase-doc-format markdown document. It lives under `docs/phases/`, the existing phase-docs directory. Its required base authoring sections — `## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — and the validator `scripts/refine/validate-plan-file.mjs` (`validatePlanFile`, distinct `missing_*` codes per absent or empty section) are defined in the [Plan-file Contract](local-planning.md#plan-file-contract).
 
 ### P2 — Intake (#950)
 
@@ -138,11 +139,11 @@ In the CLI, a base-valid plan carrying only one refinement section is reported a
 
 ### P3 — Local refine + review checkpoint (#951)
 
-`scripts/refine/refine-plan-file.mjs` drives the refine step; the pure contract `@dev-loops/core/loop/plan-file-refine-contract` (`packages/core/src/loop/plan-file-refine-contract.mjs`) exports `refinePlanFileInPlace`, which writes the refiner payload back into the single canonical plan file in place — the `Acceptance criteria` and `Definition of done` sections, a `Coverage matrix` section (`COVERAGE_MATRIX_HEADING`), and a `Docs-grill findings` section (`DOCS_GRILL_FINDINGS_HEADING`) — then stops at the `local_human_review` checkpoint (`PLAN_FILE_REFINE_STOP.LOCAL_HUMAN_REVIEW`) with the intake state advanced to `plan_refined_ready_for_promotion`. The module performs no GitHub mutation, no network calls, and no filesystem I/O; the caller reads and writes the plan file. The docs-grill runs as a step within refinement: the CLI classifies each finding with `classifyDocsGrillFinding` (`scripts/loop/docs-grill-contract.mjs`) and the contract records the dispositions. See the [Docs-Grill Step](./docs-grill-step.md).
+`scripts/refine/refine-plan-file.mjs` drives the refine step; the pure contract `@dev-loops/core/loop/plan-file-refine-contract` (`packages/core/src/loop/plan-file-refine-contract.mjs`) exports `refinePlanFileInPlace`, which writes the refiner payload back into the single canonical plan file in place — the `Acceptance criteria` and `Definition of done` sections, a `Size estimate` section (`SIZE_ESTIMATE_HEADING`; see [Size estimate (refinement)](local-planning.md#size-estimate-refinement)), a `Coverage matrix` section (`COVERAGE_MATRIX_HEADING`), and a `Docs-grill findings` section (`DOCS_GRILL_FINDINGS_HEADING`) — then stops at the `local_human_review` checkpoint (`PLAN_FILE_REFINE_STOP.LOCAL_HUMAN_REVIEW`) with the intake state advanced to `plan_refined_ready_for_promotion`. The module performs no GitHub mutation, no network calls, and no filesystem I/O; the caller reads and writes the plan file. The docs-grill runs as a step within refinement: the CLI classifies each finding with `classifyDocsGrillFinding` (`scripts/loop/docs-grill-contract.mjs`) and the contract records the dispositions. See the [Docs-Grill Step](./docs-grill-step.md).
 
 ### P4 — Promotion + authority transfer (#952)
 
-`scripts/refine/promote-plan.mjs` promotes a refined plan; the pure contract `@dev-loops/core/loop/plan-file-promote-contract` (`packages/core/src/loop/plan-file-promote-contract.mjs`) exports `evaluatePromoteEligibility` and `buildPromotionPrBody`. Promotion is PR-first: it commits the plan doc and opens exactly one draft PR via the canonical PR wrapper, and mints no GitHub issue. The plan↔PR link is bidirectional — the PR body carries the committed plan-doc path (the spec-of-record) and the plan front-matter carries `prNumber:` (`PLAN_FILE_PR_FRONT_MATTER_KEY`). Promotion is idempotent: a plan that already carries `prNumber` resolves to `already_promoted` (`PLAN_FILE_PROMOTE_ACTION.ALREADY_PROMOTED`) and opens nothing. The optional `prNumber` front-matter and its parser/serializer are described in the [Plan-file Contract](plan-file-contract.md).
+`scripts/refine/promote-plan.mjs` promotes a refined plan; the pure contract `@dev-loops/core/loop/plan-file-promote-contract` (`packages/core/src/loop/plan-file-promote-contract.mjs`) exports `evaluatePromoteEligibility` and `buildPromotionPrBody`. Promotion is PR-first: it commits the plan doc and opens exactly one draft PR via the canonical PR wrapper, and mints no GitHub issue. The plan↔PR link is bidirectional — the PR body carries the committed plan-doc path (the spec-of-record) and the plan front-matter carries `prNumber:` (`PLAN_FILE_PR_FRONT_MATTER_KEY`). When present, the plan's `Size estimate` section is carried into the PR body verbatim, so an `oversize: justified` note flows into the same PR the fail-closed post-hoc size budget (`scripts/loop/check-size-budget.mjs`) later escalates. Promotion is idempotent: a plan that already carries `prNumber` resolves to `already_promoted` (`PLAN_FILE_PROMOTE_ACTION.ALREADY_PROMOTED`) and opens nothing. The optional `prNumber` front-matter and its parser/serializer are described in the [Plan-file Contract](local-planning.md#plan-file-contract).
 
 ### P5 — Local-first noise profile (#953)
 
@@ -153,7 +154,7 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `strategy` | `local-first` | The shipped default posture (decision #7) |
 | `autonomy.humanMergeOnly` | `true` | Local-first never auto-merges; a human always merges |
 | `queue.maxAutoFiledIssues` | `1` | Local-first is PR-first, so auto-filing issues is near-zero; a low cap keeps tracker noise minimal |
-| `gates.postFindingsComments` | `true` | Gate findings live on the PR (the spec-of-record and human-review surface) as evidence |
+| `gates.postFindingsComments` | `false` | Gate findings already live on the PR as the round's verdict review; a second consolidated comment would only duplicate them |
 
 These values come from the existing config-merge layering, so no new resolver is involved: `BUILT_IN_DEFAULTS` keeps the tracker-first posture (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`), and the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
 
@@ -172,9 +173,7 @@ dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 | Doc | Relationship |
 |---|---|
 | [Public Dev Loop Contract](public-dev-loop-contract.md) | This contract is the canonical entrypoint; artifact authority contract defines the artifact model it assumes |
-| [Plan-file Contract](plan-file-contract.md) | Defines the plan-file format (phase-doc format) and its required base sections for local-planning mode |
-| [Local-Planning Flow](local-planning-flow.md) | Operator sequence for the local-first flow: validate → start → refine → promote, naming the shipped helper scripts |
-| [Local-Planning Worked Example](local-planning-worked-example.md) | One plan file shown through every stage, with the file content evolving |
+| [Local Planning](local-planning.md) | Plan-file format (phase-doc format) and required base sections; operator sequence for the local-first flow (validate → start → refine → promote); and a worked example of one plan file evolving through every stage |
 | [Spike-mode Contract](spike-mode-contract.md) | Time-boxed exploratory runs; a graduated spike emits a plan file that enters this local-planning tier |
 | [Tracker-First Loop State](tracker-first-loop-state.md) | Defines the PR-level state machine for tracker-first PR workflows; that is execution state, separate from artifact authority |
 | [Tracker Seam Contract](tracker-seam-contract.md) | Defines the `Tracker` provider interface/registry (issue #1408) — which provider backs "GitHub issue"; orthogonal to this doc's artifact-authority model |

@@ -9,17 +9,22 @@
  * via the result's "findingsJson" field / --out) accept directly — the orchestrator
  * no longer hand-authors this JSON with inline interpreters. "findingsJson"/--out is
  * the NESTED per-angle shape (one section per source artifact, clean angles included
- * with an empty findings array); "findings"/--ledger-out is the FLAT per-finding shape.
+ * with an empty findings array). The stdout "findings" field is the FLAT per-finding
+ * shape (a bare array); --ledger-out writes that same flat array wrapped as
+ * { overallVerdict, findings } (the consolidator's computed verdict plus the flat
+ * per-finding shape, threaded into the durable ledger by write-gate-findings-log.mjs
+ * so upsert-checkpoint-verdict.mjs can enforce verdict consistency, #1616).
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
  *     angle: string,
  *     verdict: "clean" | "findings_present" | "blocked",
+ *     headSha: string,   // required whenever --head-sha is given (exempt: blocked / declared-carried)
  *     findings: [{ severity, summary, file?, line?, disposition?, recommendation? }]
  *   }
  * `disposition` on an input finding is IGNORED — consolidateFanin() always
  * DERIVES it from severity (accepted-for-fix for a blocking severity,
- * deferred otherwise). It is accepted on the input shape only so a reviewer's
+ * needs-answer for a LOCATABLE question, deferred otherwise). It is accepted on the input shape only so a reviewer's
  * own artifact schema round-trips without a separate strip step. A
  * reviewer-provided `recommendation` IS carried through to both output shapes
  * unchanged (truncated only if it exceeds the length cap below).
@@ -53,25 +58,43 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
-import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
-import { SEVERITY_ORDER, VALID_SEVERITIES, consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
+import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
+import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
+import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
+import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--gate <draft_gate|pre_approval_gate>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--repo-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
 Required:
   --findings-dir <dir>          Directory containing one *.json per-angle findings
-                                 artifact: { angle, verdict, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }.
+                                 artifact: { angle, verdict, headSha, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }
+                                 (headSha required whenever --head-sha is given; exempt for blocked or declared-carried angles).
                                  An input finding's "disposition" (if present) is IGNORED — the
                                  output disposition is always DERIVED from severity (see below).
                                  An input finding's "recommendation" (if present) is carried through.
                                  Two artifacts naming the SAME angle fail closed (ambiguous fan-out).
 Optional:
-  --gate <draft_gate|pre_approval_gate>   Echoed onto the result as "gate"; also loads this
+  --head-sha <sha>              The round's reviewed head (7-64 char hex SHA). When given,
+                                 every artifact read from --findings-dir must carry a
+                                 "headSha" stamp equal to it (trim+lowercase compare) —
+                                 a mismatched stamp OR a missing/malformed stamp FAILS
+                                 CLOSED naming the angle, unless that angle is declared in
+                                 --carried-angles (an explicit, plan-proven carry-forward
+                                 keeps the existing behavior; provenance stays the ledger's
+                                 carriedFromHead, never a second field). Omit for the
+                                 pre-stamp behavior (no head check). This is what makes a
+                                 stale artifact staged from an earlier round distinguishable
+                                 from a fresh verdict at the reviewed head.
+  --gate <draft_gate|pre_approval_gate|review>   Echoed onto the result as "gate"; also loads this
                                  worktree's config and applies gates.<gate>.blockCleanOnFindingSeverities
-                                 to the overall verdict (default when omitted: ["must-fix"]). When given,
+                                 to the overall verdict (default when omitted: ["high"]). When given,
                                  a config that could not be fully loaded/validated FAILS CLOSED (exit 1)
                                  rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
@@ -86,9 +109,16 @@ Optional:
                                  budget at minimum summary length FAILS CLOSED (exit 1) when
                                  --ledger-out was not also given — a degraded round otherwise has no
                                  durable record of its findings anywhere.
-  --ledger-out <path>            Write the flat "findings" shape (below) to this path as JSON — the
-                                 exact --findings-file input write-gate-findings-log.mjs and
-                                 post-gate-findings.mjs accept. Rejected at parse time (exit 1) when
+  --ledger-out <path>            Write the { overallVerdict, findings } wrapper to this path as
+                                 JSON — overallVerdict is this CLI's computed verdict (the same
+                                 value reported on stdout), findings is the flat per-finding shape
+                                 (the exact --findings-file input write-gate-findings-log.mjs and
+                                 post-gate-findings.mjs accept). Embedding overallVerdict here
+                                 lets it flow to the durable ledger (write-gate-findings-log.mjs
+                                 threads it through) and on to upsert-checkpoint-verdict.mjs's
+                                 enforcement (#1616) without an orchestrator hand-off — a value the
+                                 orchestrator re-types as --verdict reproduces the same defect.
+                                 Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
                                  destroy the other. Neither --out nor --ledger-out may resolve to a
                                  DIRECT TOP-LEVEL sibling of --findings-dir's own artifacts (also
@@ -101,22 +131,143 @@ Optional:
                                  be re-read as an artifact.
   --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
                                  { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean
+                                 head (the "angle" field of each entry in resolve-angle-carry-forward.mjs's
+                                 plan.carried) rather than freshly reviewed this round — Phase 2 dispatches
+                                 no artifact for them, so without this flag they are invisible to
+                                 findingsJson/checkFanoutAngleCoverage and the posted verdict comment reads
+                                 as a truncated fan-out instead of a full one. REQUIRES --gate and
+                                 --carry-forward-plan (below) — this CLI never mints a carried entry from a
+                                 bare name alone. For any named angle with no real per-angle artifact,
+                                 upserts { angle, verdict: "clean", findings: [], carriedFromHead } (a real
+                                 artifact for that angle, if present — matched by base name and
+                                 case-insensitively, same rule resolve-angle-carry-forward.mjs uses — always
+                                 wins; this never overrides one). Same upsert semantics as
+                                 --pr-checklist-matrix, generalized, plus the two guards below. FAILS CLOSED
+                                 (exit 1) on any named angle whose angleReviewSurface(...).kind !== "kinds"
+                                 (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
+                                 resolve-angle-carry-forward.mjs's own producer uses for plan.carried
+                                 membership, fed --gate's configured mandatoryAngles as alwaysRerun: this
+                                 refuses a configured MANDATORY angle, a hardcoded ALWAYS_INCLUDE angle
+                                 (gate-evidence/renderer-security/pr-description, unconditionally, regardless
+                                 of config), and an unmapped/unknown angle in one seam — or is absent from
+                                 --carry-forward-plan's own "carried" list — refusing to manufacture
+                                 GitHub-visible "reviewed at this head" evidence for an angle nothing
+                                 actually proved was carried.
+  --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
+                                 "carried" field, or a bare JSON array of carried entries:
+                                 [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model? }] — the
+                                 proof --carried-angles is checked against. Each entry's carriedFromHead must
+                                 be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound;
+                                 normalized trim+lowercase). Required together with --carried-angles (given
+                                 without it, or vice versa, fails closed at parse time).
+  --resolved-angles <json>       JSON array of angle-name strings naming the round's FULL resolved angle
+                                 set (e.g. write-gate-context.mjs's own context artifact "resolvedAngles"
+                                 field) — independent of any single gate's configured MANDATORY
+                                 subset. When given AND the round's computed overall verdict is "clean",
+                                 every named angle must have EITHER a real per-angle artifact in
+                                 --findings-dir OR a proven carry (a name also present in --carried-angles,
+                                 which is only ever populated after its own --carry-forward-plan proof
+                                 check above) — otherwise this FAILS CLOSED (exit 1), naming the missing
+                                 angle(s) and the artifact/proof expected for each. This is the mechanical
+                                 fan-in-side catch for a resolved angle left with no evidence at all — see
+                                 checkResolvedAngleEvidence (@dev-loops/core/loop/gate-fanin) and the Gate
+                                 Review Sub-Loop Contract's Phase 3 backstop paragraph. Optional; omitted
+                                 by default (no caller supplies it yet) — the hash/mandatory-angle checks
+                                 elsewhere in this pass still run either way.
   --repo-root <path>             Root used to resolve this worktree's config (loadDevLoopConfig) when
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
+  --expected-dispatch-units <n>  The number of fresh dispatch units the conductor spawned reviewers for
+                                 this round (groups for grouped dispatch; angle count for per-angle
+                                 dispatch — write-gate-context.mjs's fanout.pendingGroups.length).
+                                 Whether that already excludes carry-forward-carried angles depends on
+                                 whether the Phase 1 artifact was built with write-gate-context.mjs
+                                 --carried-angles: if so, pendingGroups already excludes them and needs
+                                 no further subtraction; if the artifact predates that carry-forward
+                                 (no --carried-angles rebuild), pendingGroups still includes the carried
+                                 angles and the caller must subtract the carry-forward-carried
+                                 dispatch units by hand before passing this flag. Either way, if the
+                                 resulting count is 0, OMIT --expected-dispatch-units entirely rather
+                                 than pass 0 (this parses as a POSITIVE integer and throws on 0).
+                                 The records-floor AUTHORITY for whether units were expected at all is
+                                 NOT this flag but the round's persisted request-plan artifact
+                                 (#1868): when --head-sha is given, the fan-in derives the
+                                 pending-angle floor from every <gate>-<headSha>.dispatch-plan.json
+                                 under tmp/gate-context/** and FAILS CLOSED when the plan records
+                                 pending angles but the round recorded zero reviewer sentinels —
+                                 independent of this flag. This flag, when given, still reconciles the EXACT count.
+                                 When given alongside --head-sha, the fan-in fails closed
+                                 (GATE-EXEC-BRIEFING-PREFIX, #1618) when the reviewer sentinel count
+                                 for the head is SHORT of it — a dispatched reviewer never ran the
+                                 fresh-context guard. Optional; when omitted the count check is skipped
+                                 (the hash checks AC1/AC2 still run). NOT fanout.wavePlan.length (that
+                                 is the WAVE count, typically 1) and NOT the per-angle artifact count,
+                                 which would false-fail every grouped round. Grouped dispatch writes one sentinel per
+                                 GROUP reviewer, so this is the dispatch-UNIT count, NOT the per-angle
+                                 artifact count — comparing against the angle count would false-fail
+                                 every grouped round.
+                                 When --head-sha is given, the fan-in ALSO reads any
+                                 tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json records
+                                 (record-dispatch-prompt-layout.mjs) and FAILS CLOSED (exit 1) when a
+                                 recorded reviewer prompt does not LEAD with the round's
+                                 byte-identical invariant prefix or its byte-identical pointer line
+                                 (GATE-EXEC-BRIEFING-PREFIX layout, #1841/completes #1468) — an
+                                 angle-first prompt fails this mechanically. A round with no such
+                                 records is never newly blocked (progressive/optional capture).
+  --primer-evidence <path>       The recorded primer-dispatch ordering evidence artifact
+                                 (<gate>-<headSha>.primer-evidence.json, Phase 1.5 step 4) as JSON.
+                                 Must be paired with --primer-plan (either flag alone fails closed at
+                                 parse time). When both are given, the fan-in re-validates the
+                                 evidence against the dispatch plan via enforcePrimerEvidence
+                                 (GATE-EXEC-PRIMER-EVIDENCE) and FAILS CLOSED (exit 1) when the
+                                 ordering barrier, request-group coverage, model-group binding,
+                                 request-prefix fingerprint, shared-prefix hash, or plan hash is
+                                 missing or mismatched — the refusal names the failing check.
+  --primer-plan <path>           The dispatch plan (buildReviewDispatchPlan output, carrying its
+                                 requestGroups / planHash / sharedPrefixHash) the evidence was
+                                 derived from, as JSON. Required together with --primer-evidence.
+  --cache-telemetry <path>       The before/after cache-telemetry evidence artifact
+                                 (<gate>-<headSha>.cache-telemetry.json, Phase 1.5 step 5) as JSON.
+                                 When given, the fan-in validates it via enforceCacheTelemetryEvidence
+                                 (GATE-EXEC-CACHE-TELEMETRY) and FAILS CLOSED (exit 1) when the
+                                 artifact is missing, when verified provider reuse is claimed for an
+                                 opaque/unavailable-telemetry harness, when a verified result lacks a
+                                 measured create-then-read sequence, or when the aggregate/token
+                                 report contradicts the recorded events. Absent the flag, the fan-in
+                                 proceeds unchanged (recording telemetry is progressive/optional).
+  --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
+                                 records read by the briefing-prefix verification (default:
+                                 process.cwd()/tmp). Sentinels are read directly from this directory
+                                 (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
 Output (stdout, JSON):
-  { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount" }],
-    "findingsJson": [{ "angle", "verdict", "findings": [...] }], "findings": [...],
-    "severityCounts": { "must-fix", "worth-fixing-now", "defer" },
-    "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true }
+  { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
+    "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
+    "severityCounts": { "high", "medium", "low", "question", "nit" },
+    "overallVerdict": "clean"|"findings_present", "commentBudgetExceeded"?: true,
+    "out"?: "<path>", "ledgerOut"?: "<path>" }
+  "out"/"ledgerOut" echo the --out/--ledger-out path back onto the result ONLY when this call actually
+  wrote a file there — "ledgerOut" whenever --ledger-out was given (that write always completes in
+  full before any later throw in this function), "out" whenever --out was given AND the round did not
+  withhold it (tier 4; see "commentBudgetExceeded" above) — so ONE invocation with --jq, --out, and
+  --ledger-out together (e.g. --jq '.severityCounts') both writes every consumer artifact and reports
+  verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
+  re-extract a different shape or rediscover a path the caller itself just passed in.
+  A "carriedFromHead" field appears ONLY on an entry --carried-angles upserted (the prior head SHA it
+  was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
+  so a consumer can distinguish a carried verdict from a fresh review without reading the ledger's
+  provenance. upsert-checkpoint-verdict.mjs's renderer ignores unrecognized per-angle fields, so this
+  never affects the rendered gate comment.
   "findingsJson" is the nested per-angle shape (one section per source artifact, including clean
   angles with an empty findings array) — pass --out's file straight to
   upsert-checkpoint-verdict.mjs's --findings-json. "findings" is the FLAT per-finding shape — pass
   --ledger-out's file straight to write-gate-findings-log.mjs/post-gate-findings.mjs's
-  --findings-file, and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
+  --findings-file (a { overallVerdict, findings } wrapper object — both tools
+  unwrap it; write-gate-findings-log.mjs threads overallVerdict into the
+  durable ledger, post-gate-findings.mjs ignores it), and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
   true, unbudgeted totals across every finding, independent of any marking applied to "findingsJson"
   below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
-  blocking severity, deferred otherwise) — an input finding's own "disposition" is never honored,
+  blocking severity, needs-answer for a LOCATABLE question, deferred otherwise) — an input finding's own "disposition" is never honored,
   including on a budget-marker finding (below). A reviewer-provided "recommendation" is carried
   through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars,
   or "file" longer than 300 chars, is truncated with a plain " …" suffix (never a "[truncated N
@@ -136,11 +287,28 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error, missing/empty --findings-dir, unparseable artifact, schema
-     violation, duplicate angle name across artifacts, blocked fan-in (a malformed or
-     blocked per-angle artifact), (with --gate) an unloadable/invalid worktree config,
-     or a round still over the render budget at minimum summary length with --ledger-out
-     not given
+  1  Argument error, a malformed --head-sha (not a 7-64 char hex SHA string), a
+     mismatched/missing/malformed artifact "headSha" stamp for a non-blocked,
+     non-carried angle when --head-sha is given,
+     missing/empty --findings-dir, unparseable artifact, a per-angle
+     artifact that self-declares "carriedFromHead", schema violation, duplicate angle
+     name across artifacts, blocked fan-in (a malformed or blocked per-angle artifact),
+     (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
+     angleReviewSurface(...).kind !== "kinds" (a configured mandatory angle, a hardcoded
+     ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
+     --carry-forward-plan's "carried" list, --carried-angles given without
+     --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
+     malformed "carriedFromHead" (not a 7-64 char hex SHA), a round still over the
+     render budget at minimum summary length with --ledger-out not given, or a
+     GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
+     (a sentinel records a divergent/missing prefix hash, the sentinel count
+     is short of --expected-dispatch-units, a recorded reviewer prompt does
+     not lead with the round's byte-identical prefix/pointer line, or the
+     round's persisted request-plan artifact records pending angles but the
+     round recorded zero reviewer sentinels — the #1868 records-floor) — #1618,
+     #1841, #1868, or (with --resolved-angles
+     and a "clean" verdict) a resolved angle with neither a per-angle artifact
+     nor a proven carried-forward entry
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -228,7 +396,7 @@ function fitFindingsToRenderBudget(findingsJson) {
 // synthetic angle name or a missing real one would make the verdict itself
 // unpostable, which is the exact failure this exists to avoid. `verbose`
 // states the omitted count and severity breakdown; the caller (below) picks
-// `false` for a bare "N omitted — see ledger" line, decided PER ANGLE so a
+// `false` for a bare "N omitted — in ledger" line, decided PER ANGLE so a
 // round with a mix of wide and narrow angles keeps the breakdown wherever it
 // actually fits rather than dropping it everywhere the instant any single
 // angle can't afford it. Never partially truncates the marker text itself —
@@ -236,17 +404,20 @@ function fitFindingsToRenderBudget(findingsJson) {
 // always lossless or bare, never a mangled hybrid.
 function buildAngleMarker(a, verbose) {
   if (a.findings.length === 0) return a; // clean angle: nothing omitted
-  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
-  for (const f of a.findings) {
-    if (Object.hasOwn(bySeverity, f.severity)) bySeverity[f.severity] += 1;
-  }
+  // tallySeverities normalizes defensively, same as angleWorstSeverityRank's
+  // sibling normalization below: findingsJson is always consolidateFanin's
+  // own OUTPUT (already normalized) through every call site today, but this
+  // function must not silently drop a differently-spelled severity from the
+  // breakdown/representative selection (or, worse, leak a legacy spelling
+  // into the posted marker text) if that upstream guarantee ever lapses.
+  const bySeverity = tallySeverities(a.findings);
   // Represent the angle by its own highest-severity dropped finding — same
   // severity+disposition pairing consolidateFanin already derived, so the
   // marker's "disposition" still matches every other findingsJson finding's
   // severity-derived disposition (accepted-for-fix for a blocking severity,
-  // deferred otherwise).
+  // needs-answer for a LOCATABLE question, deferred otherwise).
   const representative = SEVERITY_ORDER
-    .map((s) => a.findings.find((f) => f.severity === s))
+    .map((s) => a.findings.find((f) => normalizeSeverity(f.severity) === s))
     .find(Boolean) ?? a.findings[0];
   // Built from SEVERITY_ORDER (not hand-listed severity names) so a severity
   // added there is automatically included in the breakdown instead of being
@@ -254,12 +425,12 @@ function buildAngleMarker(a, verbose) {
   // carries.
   const severityBreakdown = SEVERITY_ORDER.map((s) => `${s}: ${bySeverity[s]}`).join(", ");
   const summary = verbose
-    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — see the disposition ledger`
-    : `${a.findings.length} omitted — see ledger`;
+    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — in the disposition ledger`
+    : `${a.findings.length} omitted — in ledger`;
   return {
     angle: a.angle,
     verdict: a.verdict,
-    findings: [{ severity: representative.severity, summary, disposition: representative.disposition }],
+    findings: [{ severity: normalizeSeverity(representative.severity), summary, disposition: representative.disposition }],
   };
 }
 
@@ -276,15 +447,21 @@ function buildAngleMarker(a, verbose) {
 // never revisited: it already holds its ideal (real, unmarked) shape. Every
 // upgrade is kept only while the WHOLE round still renders. Returns
 // { commentFindingsJson, withheldOut }.
-// The angle's own worst (most blocking) severity among its real findings, as
-// a SEVERITY_ORDER index (0 = must-fix, lower is more severe); a clean angle
-// (no findings) ranks last. Used only to ORDER the greedy upgrade below by
+// The angle's own worst (most urgent) severity among its real findings, as a
+// SEVERITY_ORDER index (0 = high, lower is more urgent); a clean angle (no
+// findings) ranks last. Used only to ORDER the greedy upgrade below by
 // decision value, never to change which findings a marker represents.
 function angleWorstSeverityRank(a) {
   let best = SEVERITY_ORDER.length;
   for (const f of a.findings) {
-    const idx = SEVERITY_ORDER.indexOf(f.severity);
-    if (idx !== -1 && idx < best) best = idx;
+    // severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule
+    // this and upsert-checkpoint-verdict.mjs's rendering both share — it
+    // normalizes first, so an un-normalized legacy-spelled severity (e.g.
+    // "must-fix") ranks by its canonical spelling instead of falling through
+    // to the unknown-severity rank (which would starve the angle of the
+    // scarce verbose-marker budget it should have won).
+    const rank = severityRank(f.severity);
+    if (rank < best) best = rank;
   }
   return best;
 }
@@ -310,7 +487,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   const bareMarkers = findingsJson.map((a) => buildAngleMarker(a, false));
   // The bare marker is USUALLY the cheapest possible per-angle shape, but not
   // always: a narrow angle carrying very few, very short real findings can
-  // render shorter than even the compressed "N omitted — see ledger" line.
+  // render shorter than even the compressed "N omitted — in ledger" line.
   // Seed each angle with whichever of the two costs less in isolation, so the
   // tier-4 feasibility probe below tests the actual cheapest achievable shape
   // instead of assuming bare-everywhere always is the smallest. An angle
@@ -328,7 +505,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
     return { commentFindingsJson: [], withheldOut: true };
   }
   // Upgrade angles to the verbose breakdown in order of blocking severity
-  // (must-fix carriers first), not artifact-index/filename order — the
+  // (high carriers first), not artifact-index/filename order — the
   // scarce comment budget must land on the angles whose omitted findings
   // carry the most decision weight, not on whichever angle happens to sort
   // first alphabetically. Ties break by index, so the order stays
@@ -346,7 +523,7 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
     // mutated that array in place trying to fit the whole round, so by the
     // time we get here every summary is already crushed to the minimum
     // length; offering that as "real" would let a marker-tier round replace
-    // a must-fix angle's readable finding with an unreadable 31-char stub
+    // a high-severity angle's readable finding with an unreadable 31-char stub
     // even when ~1750 chars of budget are unused) — then the shrunk form,
     // then the verbose marker, keeping the first candidate that still lets
     // the WHOLE round render; fall back to bare when none fit.
@@ -365,26 +542,109 @@ function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
   return { commentFindingsJson: marked, withheldOut: false };
 }
 
+// Bound to write-gate-findings-log.mjs's OWN carriedFromHead validation
+// (--provenance.perAngle[].carriedFromHead) so the two provenance surfaces
+// agree on what a head SHA is (note: a prior version accepted any
+// non-empty string here and stamped it verbatim into "angles"/"findingsJson").
+const CARRIED_FROM_HEAD_RE = /^[0-9a-f]{7,64}$/i;
+
+// Normalize a candidate head SHA (flag value or artifact stamp): trim+lowercase,
+// null when not a 7-64 char hex string.
+function normalizeHeadShaValue(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return CARRIED_FROM_HEAD_RE.test(normalized) ? normalized : null;
+}
+
+// Validate + normalize (in place) a "carried" entries array's per-entry shape:
+// a non-empty "angle" and a "carriedFromHead" that is a 7-64 char hex SHA.
+// Shared by BOTH the parse-time path (validateCarryForwardPlanShape, below) and
+// consolidateGateFanin's own re-check of options.carryForwardPlan (coverage:
+// a programmatic caller that bypasses the parser was previously re-checked
+// only for PRESENCE of a carryForwardPlan array, never entry SHAPE, so e.g.
+// `[{ angle: "x" }]` — missing carriedFromHead entirely — minted an unmarked
+// clean row indistinguishable from a fresh review instead of failing closed).
+function validateCarryForwardPlanEntries(carried) {
+  carried.forEach((entry, i) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+        || typeof entry.angle !== "string" || entry.angle.trim().length === 0
+        || typeof entry.carriedFromHead !== "string") {
+      throw new Error(`--carry-forward-plan carried[${i}] must be an object with non-empty string "angle" and "carriedFromHead" fields (resolve-angle-carry-forward.mjs's plan.carried shape)`);
+    }
+    const normalized = entry.carriedFromHead.trim().toLowerCase();
+    if (!CARRIED_FROM_HEAD_RE.test(normalized)) {
+      throw new Error(`--carry-forward-plan carried[${i}].carriedFromHead must be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound), got ${JSON.stringify(entry.carriedFromHead)}`);
+    }
+    entry.carriedFromHead = normalized;
+  });
+  return carried;
+}
+
+// Validate --carry-forward-plan's shape at parse time: an object carrying a
+// "carried" array (resolve-angle-carry-forward.mjs's own result object
+// satisfies this directly — its top-level "carried" field), OR a bare JSON
+// array of carried entries (contract-surface: the shipped Phase 3 procedure,
+// this CLI's own --help, and its error text all documented that shorthand as
+// accepted while the code rejected it outright — normalizing the bare-array
+// case here makes the documented shorthand true, which is less churn than
+// rewriting four doc/error-text sites to instead demand the full wrapper) —
+// so the sanctioned invocation can pass that CLI's stdout, or just its
+// "carried" field, straight through. Every entry must carry a non-empty
+// "angle" and a "carriedFromHead" that is a 7-64 char hex SHA (the two fields
+// --carried-angles's validation and the carriedFromHead stamping below both
+// need) — malformed/missing evidence fails closed HERE rather than silently
+// treating an unmatched name as "not carried" later, or a garbage provenance
+// marker reaching --out.
+// Returns the validated "carried" array (not the whole plan object) — the
+// only part consolidateGateFanin actually consumes.
+function validateCarryForwardPlanShape(raw) {
+  const plan = Array.isArray(raw) ? { carried: raw } : raw;
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    throw new Error('--carry-forward-plan must be a JSON object with a "carried" array, or a bare JSON array of carried entries (resolve-angle-carry-forward.mjs\'s own result, or just its "carried" field)');
+  }
+  if (!Array.isArray(plan.carried)) {
+    throw new Error('--carry-forward-plan must have a "carried" array (resolve-angle-carry-forward.mjs\'s plan.carried)');
+  }
+  return validateCarryForwardPlanEntries(plan.carried);
+}
+
 export function parseConsolidateFaninCliArgs(argv) {
   const options = {
     help: false,
     findingsDir: undefined,
+    headSha: undefined,
     gate: undefined,
     out: undefined,
     ledgerOut: undefined,
     prChecklistMatrix: undefined,
+    carriedAngles: undefined,
+    carryForwardPlan: undefined,
+    resolvedAngles: undefined,
     repoRoot: undefined,
+    expectedDispatchUnits: undefined,
+    primerEvidence: undefined,
+    cacheTelemetry: undefined,
+    primerPlan: undefined,
+    tmpRoot: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       "findings-dir": { type: "string" },
+      "head-sha": { type: "string" },
       gate: { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "pr-checklist-matrix": { type: "string" },
+      "carried-angles": { type: "string" },
+      "carry-forward-plan": { type: "string" },
+      "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
+      "expected-dispatch-units": { type: "string" },
+      "primer-evidence": { type: "string" },
+      "primer-plan": { type: "string" },
+      "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -406,10 +666,18 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.findingsDir = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "head-sha") {
+      const headSha = normalizeHeadShaValue(requireTokenValue(token, parseError));
+      if (headSha === null) {
+        throw parseError("--head-sha must be a 7-64 char hex SHA");
+      }
+      options.headSha = headSha;
+      continue;
+    }
     if (token.name === "gate") {
       const gate = requireTokenValue(token, parseError).trim();
       if (!VALID_GATES.has(gate)) {
-        throw parseError("--gate must be draft_gate or pre_approval_gate");
+        throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       }
       options.gate = gate;
       continue;
@@ -434,6 +702,45 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.prChecklistMatrix = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "carried-angles") {
+      // Parse shared with write-gate-context.mjs's own --carried-angles flag
+      // (issue 1782), so the two CLIs' accepted shape and wording can never
+      // drift.
+      options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "carry-forward-plan") {
+      const raw = requireTokenValue(token, parseError);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw parseError("--carry-forward-plan must be JSON");
+      }
+      try {
+        options.carryForwardPlan = validateCarryForwardPlanShape(parsed);
+      } catch (err) {
+        throw parseError(err instanceof Error ? err.message : String(err));
+      }
+      continue;
+    }
+    if (token.name === "resolved-angles") {
+      const raw = requireTokenValue(token, parseError);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw parseError("--resolved-angles must be a JSON array of angle-name strings");
+      }
+      if (!Array.isArray(parsed)) {
+        throw parseError("--resolved-angles must be a JSON array of non-empty angle-name strings");
+      }
+      options.resolvedAngles = normalizeCarriedAngleElements(
+        parsed,
+        () => parseError("--resolved-angles must be a JSON array of non-empty angle-name strings"),
+      );
+      continue;
+    }
     if (token.name === "repo-root") {
       const repoRoot = requireTokenValue(token, parseError).trim();
       if (repoRoot.length === 0) {
@@ -442,11 +749,76 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.repoRoot = repoRoot;
       continue;
     }
+    if (token.name === "expected-dispatch-units") {
+      const raw = requireTokenValue(token, parseError).trim();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1) {
+        throw parseError(`--expected-dispatch-units must be a positive integer (the number of fresh dispatch units the conductor spawned reviewers for this round), got ${JSON.stringify(raw)}`);
+      }
+      options.expectedDispatchUnits = n;
+      continue;
+    }
+    if (token.name === "tmp-root") {
+      const tmpRoot = requireTokenValue(token, parseError).trim();
+      if (tmpRoot.length === 0) {
+        throw parseError("--tmp-root requires a non-empty path");
+      }
+      options.tmpRoot = tmpRoot;
+      continue;
+    }
+    if (token.name === "primer-evidence") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--primer-evidence requires a non-empty path");
+      }
+      options.primerEvidence = p;
+      continue;
+    }
+    if (token.name === "primer-plan") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--primer-plan requires a non-empty path");
+      }
+      options.primerPlan = p;
+      continue;
+    }
+    if (token.name === "cache-telemetry") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--cache-telemetry requires a non-empty path");
+      }
+      options.cacheTelemetry = p;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
+  }
+  // Primer-evidence enforcement only makes sense when BOTH the recorded
+  // evidence artifact (Phase 1.5 step 4) and the dispatch plan it was derived
+  // from are present — enforcePrimerEvidence needs the plan's request groups
+  // and hashes to check the evidence against. Either alone fails closed here,
+  // so a caller can never half-enable the gate (a plan with no evidence to
+  // check, or evidence with no plan to validate it against).
+  if ((options.primerEvidence === undefined) !== (options.primerPlan === undefined)) {
+    throw parseError("--primer-evidence and --primer-plan must be given together: a primer-evidence artifact cannot be enforced against no plan, and a plan without its recorded evidence would silently skip the gate");
+  }
+  // --carried-angles is proof-carrying, not a bare trust-me list (high-severity
+  // regression: a mandatory angle or a fabricated name could otherwise mint a
+  // clean per-angle entry with no reviewer ever having run). It REQUIRES
+  // --carry-forward-plan (the evidence it is checked against, below) and
+  // --gate (so the gate's configured mandatory angles can be rejected) — fail
+  // closed here, at parse time, rather than deep inside consolidateGateFanin.
+  if (options.carriedAngles !== undefined && options.carryForwardPlan === undefined) {
+    throw parseError("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
+  }
+  if (options.carryForwardPlan !== undefined && options.carriedAngles === undefined) {
+    throw parseError("--carry-forward-plan was given without --carried-angles — nothing to check it against");
+  }
+  if (options.carriedAngles !== undefined && options.gate === undefined) {
+    throw parseError("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried");
   }
   // The withheld tier writes --ledger-out first, then rm()s --out; the
   // under-budget path writes --ledger-out and then overwrites --out. Either
@@ -478,6 +850,83 @@ export function parseConsolidateFaninCliArgs(argv) {
   return options;
 }
 
+// ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the conductor's Phase-1
+// request-plan artifact (`<gate>-<headSha>.dispatch-plan.json` under
+// tmp/gate-context/**, written by write-gate-context.mjs) is the AUTHORITY for
+// whether this round dispatched units — not a caller-passed flag. Read every
+// persisted request plan for the reviewed head and derive the expected
+// dispatch-unit floor: the total number of pending angles across the plans'
+// requestGroups (> 0 means the round dispatched at least one unit, so zero
+// recorded evidence must fail closed).
+// Malformed/unreadable plan JSON fails closed — a corrupt artifact means the
+// enforcement authority cannot be trusted, and silently ignoring it would
+// recreate the vacuous pass it exists to prevent.
+// ---------------------------------------------------------------------------
+const REQUEST_PLAN_SUFFIX = ".dispatch-plan.json";
+
+async function readGateRequestPlansForHead(tmpRoot, headSha) {
+  const root = path.join(tmpRoot, "gate-context");
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true, recursive: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const suffix = `-${headSha}${REQUEST_PLAN_SUFFIX}`;
+  const matches = entries
+    .filter((e) => e.isFile() && e.name.endsWith(suffix) && e.name.length > suffix.length)
+    // readdir order is filesystem-dependent; sort so error messages and the
+    // derived floor stay deterministic across runs.
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const plans = [];
+  for (const e of matches) {
+    const gate = e.name.slice(0, -suffix.length);
+    // Only canonical gate plans are trusted — same posture as the
+    // briefing-prefix record reader in verify-briefing-prefixes.mjs.
+    if (!GATE_NAMES.includes(gate)) continue;
+    const dir = e.parentPath ?? root;
+    const filePath = path.join(dir, e.name);
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(filePath, "utf8"));
+    } catch (err) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" could not be read/parsed (${err instanceof Error ? err.message : String(err)}) — the request plan is the authority for this round's expected dispatch units, so a corrupt plan fails closed rather than passing vacuously`);
+    }
+    plans.push({ gate, filePath, plan: parsed });
+  }
+  return plans;
+}
+
+// Derive the round's records-floor input from its persisted request plans:
+// the total number of PENDING ANGLES across every plan's requestGroups — a
+// pending-angle floor, NOT an exact dispatch-unit count (grouped dispatch
+// covers several angles per unit; --expected-dispatch-units owns the exact
+// unit-count reconciliation).
+// A plan whose groups carry no angles (an all-carried / genuinely zero-unit
+// gate) contributes 0 — the floor only applies when units were expected.
+// A parseable plan whose SHAPE is drifted (non-array requestGroups, or a group
+// with a non-array angles field) FAILS CLOSED (#1868 review finding): the plan
+// is the enforcement authority, so a schema-drifted or hand-edited plan must
+// never silently disable the records-floor — only an empty requestGroups array
+// (a genuinely zero-unit gate) contributes 0.
+function deriveRequestPlanPendingAngleCount(plans) {
+  let total = 0;
+  for (const { filePath, plan } of plans) {
+    if (!Array.isArray(plan?.requestGroups)) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" has a non-array requestGroups field (${JSON.stringify(plan?.requestGroups)}) — the plan is the enforcement authority for this round's expected dispatch units, so a shape-drifted plan fails closed rather than silently disabling the floor`);
+    }
+    for (const g of plan.requestGroups) {
+      if (!Array.isArray(g?.angles)) {
+        throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact "${filePath}" has a requestGroup with a non-array angles field (${JSON.stringify(g?.angles)}) — the plan is the enforcement authority for this round's expected dispatch units, so a shape-drifted plan fails closed rather than silently disabling the floor`);
+      }
+      total += g.angles.length;
+    }
+  }
+  return total;
+}
+
 // Validate the CLI's own fail-closed schema floor: a well-formed object with a
 // non-empty angle, a non-empty verdict, and (when findings is present as an
 // array) only recognized severities. Everything else — verdict enum value,
@@ -486,6 +935,21 @@ export function parseConsolidateFaninCliArgs(argv) {
 // marks blocked then FAILS CLOSED below (exit 1) rather than emitting any
 // findings shape, so this stays a thin floor rather than a second copy of
 // consolidateFanin()'s validation.
+//
+// high (input-validation): "carriedFromHead" is a PRODUCER field this CLI
+// stamps itself, inside the --carried-angles block below, on a synthetic entry
+// IT constructs — never a field a per-angle findings artifact is entitled to
+// self-declare. Without this check, --findings-dir/<any *.json> is the least
+// trusted input in the whole flow (subagent-written, glob-discovered) and a
+// file that simply includes "carriedFromHead" would flow it straight through
+// to "angles"/"findingsJson" at exit 0 even with NO --carried-angles at all —
+// bypassing both the mandatory/ALWAYS_INCLUDE and carry-forward-plan proof
+// guards entirely, and exempting that angle from gate-fanin's
+// one-scoped-reviewer-per-fresh-angle coverage check downstream. Refuse it
+// loudly rather than silently stripping it: a fresh reviewer artifact
+// self-declaring carried provenance is itself evidence something is wrong
+// (a copy-pasted fixture, a compromised/confused reviewer), not a value to
+// quietly discard.
 function validateArtifactShape(raw, sourceLabel) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`${sourceLabel}: artifact must be a JSON object`);
@@ -496,10 +960,13 @@ function validateArtifactShape(raw, sourceLabel) {
   if (typeof raw.verdict !== "string" || raw.verdict.trim().length === 0) {
     throw new Error(`${sourceLabel}: missing "verdict"`);
   }
+  if (raw.carriedFromHead !== undefined) {
+    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles/--carry-forward-plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
+  }
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
-      if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(f.severity.trim())) {
-        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected must-fix|worth-fixing-now|defer)`);
+      if (f && typeof f === "object" && !Array.isArray(f) && typeof f.severity === "string" && !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))) {
+        throw new Error(`${sourceLabel}: findings[${i}] has unknown severity "${f.severity}" (expected ${SEVERITY_ORDER.join("|")})`);
       }
     });
   }
@@ -514,10 +981,22 @@ function resolvePrChecklistMatrixUpsert(rawValue) {
   if (rawValue.trim().toLowerCase() !== "clean") {
     throw new Error('--pr-checklist-matrix accepts only "clean"');
   }
-  return { angle: "pr-checklist-matrix", verdict: "clean", findings: [] };
+  return { angle: FANIN_SYNTHETIC_ANGLES[0], verdict: "clean", findings: [] };
 }
 
 export async function consolidateGateFanin(options) {
+  // Re-normalize/validate headSha here, not only in the CLI parser: a direct
+  // programmatic caller bypasses parseConsolidateFaninCliArgs, and an
+  // un-normalized (uppercase/padded) value would spuriously mismatch a
+  // correctly-stamped artifact — same parser-bypass hardening the
+  // carried-angles proof below already gets.
+  if (options.headSha !== undefined) {
+    const headSha = normalizeHeadShaValue(options.headSha);
+    if (headSha === null) {
+      throw new Error(`--head-sha must be a 7-64 char hex SHA string, got ${JSON.stringify(options.headSha)}`);
+    }
+    options = { ...options, headSha };
+  }
   const dir = options.findingsDir;
   let entries;
   try {
@@ -558,9 +1037,22 @@ export async function consolidateGateFanin(options) {
     throw new Error(`--findings-dir "${dir}" contains a *.json entry "${e.name}" that is ${kind}, not a regular file or a symlink to one`);
   }
   files.sort();
-  if (files.length === 0) {
+  // An all-carried round (Phase 1.2 carries every resolved angle, so Phase 2
+  // dispatches nothing) has a legitimately empty --findings-dir — refuse it
+  // only when --carried-angles ALSO has nothing to fill it with, so this
+  // guard still catches the real mistake (an empty dir with no carry plan at
+  // all) without blocking the feature's own maximum-saving case.
+  if (files.length === 0 && (options.carriedAngles?.length ?? 0) === 0) {
     throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts`);
   }
+
+  // Head-stamp exemption membership: EXACT declared carried names, normalized
+  // trim+lowercase only. Deliberately NOT baseAngleName-collapsed — a
+  // -delta-at-<sha> sibling is an independently reviewed row, and collapsing
+  // would exempt a fresh sibling's stale artifact because its BASE was carried
+  // (fail-open). The carried-upsert path's base-name matching answers a
+  // different question (does a real artifact cover the carried slot).
+  const exemptCarriedKeys = new Set((options.carriedAngles ?? []).map((a) => String(a).trim().toLowerCase()));
 
   const rawArtifacts = [];
   const angleSourceFiles = new Map(); // angle -> file paths that declared it
@@ -580,6 +1072,29 @@ export async function consolidateGateFanin(options) {
     }
     validateArtifactShape(parsed, `"${filePath}"`);
     const angle = parsed.angle.trim();
+    // Head-stamp guard: with --head-sha, an artifact must prove it was written
+    // against THIS round's head. A stale copy staged from an earlier round is
+    // otherwise indistinguishable from a fresh verdict — it would re-raise
+    // already-fixed findings or, worse, vouch clean for code its reviewer never
+    // saw. A declared carried-forward angle is exempt (the plan-proven
+    // --carried-angles declaration is the operator's explicit provenance; the
+    // ledger's carriedFromHead stays the single provenance field), and so is a
+    // "blocked" artifact — a refusing reviewer's shape carries no stamp, and
+    // the blocked-verdict fail-closed path below owns that failure with its
+    // actionable re-run message. A missing or malformed stamp on any other
+    // artifact is UNKNOWN provenance and fails closed the same way as a
+    // mismatch, so omitting the field never bypasses the guard.
+    if (options.headSha !== undefined
+        && parsed.verdict.trim() !== "blocked"
+        && !exemptCarriedKeys.has(angle.toLowerCase())) {
+      const stamp = normalizeHeadShaValue(parsed.headSha);
+      if (stamp === null) {
+        throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);
+      }
+      if (stamp !== options.headSha) {
+        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles/--carry-forward-plan`);
+      }
+    }
     if (!angleSourceFiles.has(angle)) angleSourceFiles.set(angle, []);
     angleSourceFiles.get(angle).push(filePath);
     rawArtifacts.push(parsed);
@@ -598,28 +1113,181 @@ export async function consolidateGateFanin(options) {
     throw new Error(`--findings-dir "${dir}" has duplicate angle name(s) across multiple artifact files (ambiguous fan-out): ${detail}`);
   }
 
+  // GATE-EXEC-BRIEFING-PREFIX (#1618): the fan-in MUST run
+  // verify-briefing-prefixes.mjs before consolidation — before this, the
+  // rule's own cited proof had ZERO callers. A reviewer seeded with a
+  // divergent briefing (the mid-flight-rebuild case the rule exists for) would
+  // otherwise consolidate into a clean verdict with no consumer noticing. The
+  // verifier reads reviewer sentinels for this head and fails closed on:
+  //   - AC1: two or more sentinels recording DISTINCT prefix hashes (a
+  //     seeded-briefing divergence),
+  //   - AC2: any sentinel recording NO prefix hash (the proof was never
+  //     established for that reviewer — never grandfathered),
+  //   - AC3: when the conductor declares --expected-dispatch-units, a sentinel
+  //     count SHORT of the fresh dispatch units it spawned (a dispatched
+  //     reviewer never ran the fresh-context guard). Grouped fan-out writes one
+  //     sentinel per GROUP reviewer, so the expected count is the dispatch-UNIT
+  //     count (groups for grouped dispatch; angle count for per-angle dispatch,
+  //     where resolveFanoutGroups emits one singleton per angle), NOT the
+  //     per-angle artifact count — comparing against the angle count would
+  //     false-fail every grouped round (#1579/#1601 shipped default).
+  // AC4: a head with NO sentinels at all still consolidates — offline/inline/
+  // test paths where the fresh-context guard was never invoked stay
+  // byte-identical (reviewerCount === 0 → skip) — UNLESS the round's persisted
+  // request-plan artifact (#1868 records-floor) proves units were dispatched:
+  // then zero sentinels FAILS CLOSED (see the dedicated floor check below).
+  // Only runs when --head-sha is given (the same boundary the artifact head-stamp guard uses).
+  if (options.headSha !== undefined) {
+    const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
+    // Records-floor authority (#1868): derive the pending-angle floor
+    // from the persisted request-plan artifact(s) for this head — not from a
+    // caller-passed flag. --expected-dispatch-units (when also given) still
+    // reconciles the EXACT count; the plan derives whether units were expected
+    // at all (as a pending-angle floor, not an exact unit count).
+    const requestPlans = await readGateRequestPlansForHead(tmpRoot, options.headSha);
+    const requestPlanPendingAngles = deriveRequestPlanPendingAngleCount(requestPlans);
+    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, options.headSha, requestPlanPendingAngles);
+    // Records-floor (#1868): a round whose request plan expected dispatch units
+    // but recorded ZERO reviewer sentinels FAILS CLOSED — the vacuous pass the
+    // pending-angle floor exists to prevent (an angle-first or entirely-unrecorded
+    // agent-composed dispatch is no longer invisible to the gate).
+    if (requestPlanPendingAngles > 0 && prefixVerdict.reviewerCount === 0) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the persisted request-plan artifact(s) for head ${options.headSha} (${requestPlans.map((p) => p.filePath).join(", ")}) pends ${requestPlanPendingAngles} pending angle(s), but the round recorded ZERO reviewer sentinels — a coordinator round whose plan recorded pending angles cannot pass vacuously. Re-run the fan-out with evidence capture (verify-fresh-review-context.mjs / record-dispatch-prompt-layout.mjs), then re-consolidate.`);
+    }
+    if (prefixVerdict.reviewerCount > 0 && !prefixVerdict.verified) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX verification failed for head ${options.headSha} (${prefixVerdict.reviewerCount} reviewer sentinel(s)): ${prefixVerdict.reason} — the fan-in refuses to consolidate a round whose invariant-briefing-prefix proof is broken. Re-run the offending reviewer(s), then re-consolidate.`);
+    }
+    if (options.expectedDispatchUnits !== undefined && prefixVerdict.reviewerCount > 0
+        && prefixVerdict.reviewerCount < options.expectedDispatchUnits) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX sentinel count (${prefixVerdict.reviewerCount}) is short of the expected dispatch-unit count (${options.expectedDispatchUnits}) for head ${options.headSha} — ${options.expectedDispatchUnits - prefixVerdict.reviewerCount} dispatched reviewer(s) never ran the fresh-context guard (no sentinel written). Re-run the missing reviewer(s), then re-consolidate.`);
+    }
+
+    // GATE-EXEC-BRIEFING-PREFIX dispatch-prompt LAYOUT (#1841, completes #1468):
+    // the hash checks above prove the recorded prefix is byte-identical across
+    // reviewers, but prove NOTHING about whether any reviewer's ACTUAL prompt
+    // LED with it. This reads the leading-bytes dispatch records
+    // record-dispatch-prompt-layout.mjs writes at fan-out and fails closed when
+    // a recorded prompt is angle-first (dynamic per-unit prose ahead of the
+    // invariant prefix/pointer line) instead of prefix-first. A round with NO
+    // dispatch-prompt records at all (the orchestrator has not yet been updated
+    // to capture them) is never newly blocked — progressive/optional capture,
+    // same posture as GATE-EXEC-PRIMER-EVIDENCE below.
+    const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
+    if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
+      throw new Error(`GATE-EXEC-BRIEFING-PREFIX dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt was not cache-aligned. Re-dispatch the offending reviewer(s) prefix-first, then re-consolidate.`);
+    }
+  }
+
+  // GATE-EXEC-PRIMER-EVIDENCE (#1475): the fan-in enforcing primer-dispatch
+  // ordering evidence as a real fail-closed input to consolidation. The
+  // primer-evidence artifact (Phase 1.5 step 4, `<gate>-<headSha>`
+  // `.primer-evidence.json`) and the dispatch plan it was derived from are
+  // passed in TOGETHER (parse-time both-or-neither); when present the fan-in
+  // re-validates them via enforcePrimerEvidence and FAILS CLOSED (this throw
+  // -> exit 1) when the ordering barrier, request-group coverage, model-group
+  // binding, request-prefix fingerprint, shared-prefix hash, or plan hash is
+  // missing or mismatched — the refusal names the failing check. Absent both
+  // flags the fan-in proceeds unchanged: recording evidence is progressive /
+  // optional, so rounds that never recorded it (all pre-slice-3 rounds) are
+  // not newly blocked. This is the wiring that gives GATE-EXEC-PRIMER-EVIDENCE
+  // a real invocation site (previously it was dead code referenced only by its
+  // own error-message string).
+  if (options.primerEvidence !== undefined && options.primerPlan !== undefined) {
+    const readJson = async (filePath, label) => {
+      let text;
+      try {
+        text = await readFile(filePath, "utf8");
+      } catch (err) {
+        throw new Error(`--primer-${label} "${filePath}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`--primer-${label} "${filePath}" is not valid JSON`);
+      }
+    };
+    const evidence = await readJson(options.primerEvidence, "evidence");
+    const plan = await readJson(options.primerPlan, "plan");
+    try {
+      enforcePrimerEvidence({ plan, evidence });
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // GATE-EXEC-CACHE-TELEMETRY (#1476): the fan-in enforcing the before/after
+  // cache-telemetry evidence as a real fail-closed input to consolidation. The
+  // cache-telemetry artifact (Phase 1.5 step 5, `<gate>-<headSha>`
+  // `.cache-telemetry.json`) is passed as a single JSON path; when present the
+  // fan-in re-validates it via enforceCacheTelemetryEvidence and FAILS CLOSED
+  // (this throw -> exit 1) when the artifact is missing, when verified provider
+  // reuse is claimed for an opaque/unavailable-telemetry harness
+  // (opaque_veracity), when a verified result lacks a measured create-then-read
+  // sequence (measured_sequence), when the aggregate/token report contradicts
+  // the recorded events (aggregate_consistency / token_aggregate), or when the
+  // capability record is missing (capability_record) — the refusal names the
+  // failing check. This is the wiring that gives GATE-EXEC-CACHE-TELEMETRY a
+  // real invocation site (previously it was dead code referenced only by its
+  // own error-message string). Absent the flag the fan-in proceeds unchanged:
+  // recording telemetry is progressive / optional, so rounds that never recorded
+  // it (all pre-slice-4 rounds) are not newly blocked.
+  if (options.cacheTelemetry !== undefined) {
+    let text;
+    try {
+      text = await readFile(options.cacheTelemetry, "utf8");
+    } catch (err) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let evidence;
+    try {
+      evidence = JSON.parse(text);
+    } catch {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is not valid JSON`);
+    }
+    // Bind the artifact to this round's --head-sha/--gate when those are
+    // provided: a cache-telemetry artifact is <gate>-<headSha>-scoped evidence
+    // (GATE-EXEC-CACHE-TELEMETRY), so a stale or mismatched artifact for a
+    // DIFFERENT head or gate must fail closed rather than pass as this round's
+    // telemetry.
+    if (
+      options.headSha !== undefined &&
+      String(evidence?.headSha ?? "").trim().toLowerCase() !== options.headSha
+    ) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for head ${JSON.stringify(
+        evidence?.headSha,
+      )} but this round consolidates head ${options.headSha} — a stale/mismatched cache-telemetry artifact must not be accepted for a different head`);
+    }
+    if (options.gate !== undefined && String(evidence?.gate ?? "").trim() !== options.gate) {
+      throw new Error(`--cache-telemetry "${options.cacheTelemetry}" is stamped for gate ${JSON.stringify(
+        evidence?.gate,
+      )} but this round consolidates gate ${options.gate} — a mismatched cache-telemetry artifact must not be accepted`);
+    }
+    try {
+      enforceCacheTelemetryEvidence({ evidence });
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   if (options.prChecklistMatrix !== undefined) {
     const hasPrChecklistMatrix = rawArtifacts.some(
-      (a) => typeof a.angle === "string" && a.angle.trim() === "pr-checklist-matrix",
+      (a) => typeof a.angle === "string" && a.angle.trim() === FANIN_SYNTHETIC_ANGLES[0],
     );
     if (!hasPrChecklistMatrix) {
       rawArtifacts.push(resolvePrChecklistMatrixUpsert(options.prChecklistMatrix));
     }
   }
 
-  const angles = rawArtifacts.map((a) => ({
-    angle: a.angle.trim(),
-    verdict: a.verdict.trim(),
-    findingCount: Array.isArray(a.findings) ? a.findings.length : 0,
-  }));
-
   // Load this worktree's config to resolve the gate's configured blocking
   // severities when --gate is supplied, so the overall verdict honors e.g. a
-  // repo that also blocks clean on worth-fixing-now. Without --gate, keep
-  // consolidateFanin's own ["must-fix"] default (no config side effects).
+  // repo that also blocks clean on medium. Without --gate, keep
+  // consolidateFanin's own ["high"] default (no config side effects).
   // --repo-root anchors this explicitly (default process.cwd()) so the overall
   // verdict is deterministic regardless of the CLI's invocation directory.
+  // Loaded HERE (before the --carried-angles block below) because that block
+  // also needs this same config's mandatory-angle contract.
   let blockCleanOnFindingSeverities;
+  let mandatoryAngles; // raw configured mandatory-angle names (resolveGateAngleContract) — only set when --gate is given; fed to angleReviewSurface's alwaysRerun below
   if (options.gate !== undefined) {
     const repoRoot = options.repoRoot ?? process.cwd();
     // A nonexistent/non-directory root would make loadDevLoopConfig silently
@@ -633,15 +1301,123 @@ export async function consolidateGateFanin(options) {
     // loadDevLoopConfig never throws: on a parse/validation failure it still
     // returns `config` merged from the shipped defaults, silently REPLACING
     // this worktree's real gates.<gate>.blockCleanOnFindingSeverities with
-    // ["must-fix"]. Since --gate was given specifically to honor that
+    // ["high"]. Since --gate was given specifically to honor that
     // config, a failed load must fail closed here rather than silently
     // emitting a verdict computed from the wrong severities.
     if (Array.isArray(errors) && errors.length > 0) {
       throw new Error(`--gate ${options.gate} was given but this worktree's config (--repo-root ${JSON.stringify(repoRoot)}) could not be fully loaded/validated: ${JSON.stringify(errors)}`);
     }
+    // review (#1808) has no config section of its own; its computed verdict
+    // reuses pre_approval_gate's configured blocking severities (the stricter
+    // gate's bar) purely to decide "clean" vs "findings_present" TRUTHFULLY —
+    // review carries no gate obligations, so nothing here actually blocks a
+    // merge/ready transition, and it carries no mandatory-angle enforcement
+    // of its own (this repo's own configured mandatory angles are not
+    // review's to enforce; #1808 non-goal: no new reviewer angles).
     const gateKey = options.gate === "draft_gate" ? "draft" : "preApproval";
     blockCleanOnFindingSeverities = resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
+    if (options.gate === "review") {
+      mandatoryAngles = [];
+    } else {
+      // Lowercased to match the base+lowercase key compared against alwaysRerun
+      // below — a mandatory angle configured with case drift (e.g. "Correctness")
+      // must be refused exactly like its lowercase form.
+      mandatoryAngles = resolveGateAngleContract(config, gateKey).mandatoryAngles.map((name) => String(name).trim().toLowerCase());
+    }
   }
+
+  // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert
+  // its clean entry the same way --pr-checklist-matrix does, so it is not
+  // invisible to findingsJson/checkFanoutAngleCoverage/the posted verdict
+  // comment. A REAL artifact for that angle always wins (e.g. Phase 1 resolved
+  // it fresh for the first time this head even though a stale plan still named
+  // it) — this only fills a gap, never overrides. Matched by baseAngleName +
+  // lowercase (not exact string) — same normalization
+  // resolve-angle-carry-forward.mjs's own attribution uses — so a real
+  // artifact named `<angle>-delta-at-...` or spelled with different case
+  // still suppresses the synthetic upsert rather than duplicating the angle.
+  //
+  // high (gate-evidence/correctness): --carried-angles is NOT trusted bare.
+  // Every name is checked against TWO independent sources of truth before it is
+  // allowed to mint a clean entry — parseConsolidateFaninCliArgs already
+  // requires both to be present alongside --carried-angles, and a programmatic
+  // caller that bypasses the parser is re-checked here so this function stays
+  // fail-closed on its own:
+  //   1. angleReviewSurface(...).kind !== "kinds" — the SAME predicate
+  //      resolve-angle-carry-forward.mjs's own producer (buildCarryForwardPlan
+  //      -> resolveCarryForwardAngles) uses to decide plan.carried membership,
+  //      fed --gate's configured mandatoryAngles as alwaysRerun. This refuses a
+  //      configured mandatory angle ("kind: always" via alwaysRerun), a
+  //      hardcoded ALWAYS_INCLUDE angle — gate-evidence/renderer-security/
+  //      pr-description — ("kind: always" unconditionally, independent of any
+  //      config), AND an unmapped/unknown angle ("kind: unknown") in one seam,
+  //      so this check and the producer's own rule can never drift apart
+  //      (checking only the configured mandatory set, as a prior version did,
+  //      missed the hardcoded ALWAYS_INCLUDE angles entirely).
+  //   2. --carry-forward-plan's own "carried" list — the proof that this
+  //      angle really was resolved as carried, not just typed in.
+  if (options.carriedAngles !== undefined) {
+    if (!mandatoryAngles) {
+      throw new Error("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried (fail-closed)");
+    }
+    const planCarried = Array.isArray(options.carryForwardPlan) ? options.carryForwardPlan : null;
+    if (!planCarried) {
+      throw new Error("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
+    }
+    // coverage: re-validate entry SHAPE here too, not just presence of the
+    // array — a programmatic caller of consolidateGateFanin bypasses
+    // parseConsolidateFaninCliArgs (and its validateCarryForwardPlanShape call)
+    // entirely, so a malformed plan entry must still fail closed with this
+    // module's own message rather than an incidental TypeError three lines
+    // down (or, for a missing carriedFromHead specifically, silently minting
+    // an unmarked "clean" row indistinguishable from a fresh review).
+    validateCarryForwardPlanEntries(planCarried);
+    // Keyed on the EXACT trimmed angle name, not base+lowercase: the presence
+    // proof means "the plan carried THIS name". A base-collapsed key let a
+    // carried sibling (coverage vs coverage-delta-at-<sha>) vouch for a name
+    // the plan never carried, minting an unreviewed synthetic clean entry.
+    const planByName = new Map();
+    for (const entry of planCarried) {
+      const name = entry.angle.trim();
+      if (!planByName.has(name)) planByName.set(name, entry);
+    }
+    // Suppression is checked against REAL artifacts ONLY (a fixed snapshot
+    // taken before this loop runs), never against a sibling --carried-angles
+    // entry: two distinct carried names sharing a base+lowercase key (e.g.
+    // "coverage" and its legitimate "coverage-delta-at-<sha>" sibling) are both
+    // independently carry-forward-eligible rows and must both upsert,
+    // regardless of --carried-angles array order. Mutating this set inside the
+    // loop (as a prior version did) silently dropped whichever one sorted
+    // second. Carried-vs-carried dedup instead uses the EXACT (trimmed) angle
+    // name, so only a literal repeated name in --carried-angles collapses.
+    const realAngleKeys = new Set(rawArtifacts.map((a) => baseAngleName(a.angle.trim()).toLowerCase()));
+    const seenCarriedNames = new Set();
+    for (const angle of options.carriedAngles) {
+      const trimmedAngle = angle.trim();
+      const key = baseAngleName(trimmedAngle).toLowerCase();
+      const surface = angleReviewSurface(key, { alwaysRerun: mandatoryAngles });
+      if (surface.kind !== "kinds") {
+        const why = surface.kind === "always"
+          ? `it always re-runs (one of --gate ${options.gate}'s configured MANDATORY angles, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle)`
+          : "it has no declared review surface (an unmapped/unknown angle, fail-closed)";
+        throw new Error(`--carried-angles names "${angle}", which can never legitimately carry forward: ${why} — resolve-angle-carry-forward.mjs can never put it in plan.carried, so refusing to mint a fabricated clean entry for it (fail-closed)`);
+      }
+      const planEntry = planByName.get(trimmedAngle);
+      if (!planEntry) {
+        throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
+      }
+      if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) continue;
+      seenCarriedNames.add(trimmedAngle);
+      rawArtifacts.push({ angle: trimmedAngle, verdict: "clean", findings: [], carriedFromHead: planEntry.carriedFromHead });
+    }
+  }
+
+  const angles = rawArtifacts.map((a) => ({
+    angle: a.angle.trim(),
+    verdict: a.verdict.trim(),
+    findingCount: Array.isArray(a.findings) ? a.findings.length : 0,
+    ...(typeof a.carriedFromHead === "string" ? { carriedFromHead: a.carriedFromHead } : {}),
+  }));
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
   // Bound each finding's free-text fields before they reach either output
@@ -695,6 +1471,30 @@ export async function consolidateGateFanin(options) {
     throw new Error(`fan-in is blocked — refusing to emit a consolidated findings shape (${detail})`);
   }
 
+  // GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: when the caller names the round's full
+  // resolved angle set (--resolved-angles) and this round computed a "clean"
+  // verdict, every resolved angle must have either a real per-angle artifact
+  // or a proven carry — checkFanoutAngleCoverage's own mandatory-angle check
+  // (elsewhere in the write/read paths that consume this ledger) protects
+  // only a caller-supplied MANDATORY subset, so a wrong carry-forward
+  // declaration naming only non-mandatory angles could otherwise close clean
+  // with no mechanical refusal (see the Gate Review Sub-Loop Contract's Phase
+  // 3 backstop paragraph). `rawArtifacts` already includes both real
+  // artifacts and any --carried-angles upserts at this point, so passing
+  // `options.carriedAngles` alongside it is redundant-but-harmless for those
+  // — it only makes a difference for a resolved angle with NEITHER.
+  if (options.resolvedAngles !== undefined && consolidated.verdict === "clean") {
+    const { missingAngles } = checkResolvedAngleEvidence(options.resolvedAngles, {
+      recordedAngles: rawArtifacts,
+      carriedAngles: options.carriedAngles ?? [],
+    });
+    if (missingAngles.length > 0) {
+      throw new Error(
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found`,
+      );
+    }
+  }
+
   // --ledger-out is the durable, always-complete audit trail and must land on
   // disk before ANY throw-capable step runs against it — not just --out's own
   // I/O (EISDIR/EEXIST/EACCES on a bad caller-supplied path), but also the
@@ -708,7 +1508,17 @@ export async function consolidateGateFanin(options) {
   // (never budgeted)").
   if (options.ledgerOut !== undefined) {
     await mkdir(path.dirname(options.ledgerOut), { recursive: true });
-    await writeFile(options.ledgerOut, `${JSON.stringify(findings, null, 2)}\n`, "utf8");
+    // Write `{ overallVerdict, findings }` rather than a bare array so the
+    // consolidator's COMPUTED verdict flows downstream to the durable ledger
+    // (write-gate-findings-log.mjs, via `--findings-file`) without an
+    // orchestrator hand-off — the defect #1616 describes is exactly that a
+    // caller can post a `--verdict` contradicting this computed value, and a
+    // value the orchestrator re-types is the same defect shape. Embedding it
+    // here makes `overallVerdict` available to the enforcement in
+    // upsert-checkpoint-verdict.mjs automatically, with no new flag and no
+    // recompute. A bare-array consumer (post-gate-findings.mjs) unwraps and
+    // ignores it; write-gate-findings-log.mjs threads it into the ledger.
+    await writeFile(options.ledgerOut, `${JSON.stringify({ overallVerdict: consolidated.verdict, findings }, null, 2)}\n`, "utf8");
   }
 
   const findingsJson = rawArtifacts.map((a) => {
@@ -724,6 +1534,13 @@ export async function consolidateGateFanin(options) {
         if (f.recommendation) entry.recommendation = f.recommendation;
         return entry;
       }),
+      // Marks a --carried-angles upsert (a prior clean verdict, not a fresh
+      // review at this head) so a reader of --out/the emitted result — not
+      // just the ledger's provenance.perAngle — can tell carried from fresh.
+      // upsert-checkpoint-verdict.mjs's buildAngleSectionFromNested only reads
+      // angle/verdict/findings/unparseable, so this extra field never affects the
+      // rendered gate comment.
+      ...(typeof a.carriedFromHead === "string" ? { carriedFromHead: a.carriedFromHead } : {}),
     };
   });
 
@@ -738,7 +1555,7 @@ export async function consolidateGateFanin(options) {
   let withheldOut = false;
   if (!wholeRoundFits) {
     // A degraded round's only durable record is --ledger-out (the marker text
-    // in "findingsJson"/--out literally says "see the disposition ledger", and
+    // in "findingsJson"/--out names the machine-local findings ledger, and
     // tier 4 writes no --out file at all). Without --ledger-out nothing
     // durable lands on disk — the full findings exist only on this process's
     // stdout, which the sanctioned ledger/post path cannot consume — exactly
@@ -763,6 +1580,15 @@ export async function consolidateGateFanin(options) {
     severityCounts: consolidated.counts.bySeverity,
     overallVerdict: consolidated.verdict,
     ...(wholeRoundFits ? {} : { commentBudgetExceeded: true }),
+    // Echoes every artifact this call actually wrote to disk (never a path
+    // that was only requested — see the "out" omission below) so ONE
+    // invocation with --out/--ledger-out tells the caller both what to read
+    // AND where it already landed, with no second invocation needed to
+    // rediscover the paths it just passed in. "ledgerOut" is safe to include
+    // here unconditionally: reaching this point already means the earlier
+    // --ledger-out write (always-complete, before the render-budget pass)
+    // succeeded — a blocked round throws before either point is reached.
+    ...(options.ledgerOut !== undefined ? { ledgerOut: options.ledgerOut } : {}),
   };
 
   // parseConsolidateFaninCliArgs already rejects an --out/--ledger-out pair
@@ -795,6 +1621,11 @@ export async function consolidateGateFanin(options) {
     } else {
       await mkdir(path.dirname(options.out), { recursive: true });
       await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
+      // Echoed only when a file actually landed at this path — the tier-4
+      // withheld case above deletes rather than writes it, and a result
+      // claiming "out" then would send a caller to read a file that does
+      // not exist (or is stale from an earlier round).
+      result.out = options.out;
     }
   }
 

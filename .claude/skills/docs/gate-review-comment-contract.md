@@ -1,17 +1,65 @@
 # Checkpoint Verdict Comment Contract
 
-Canonical owner for gate-review **PR comment field** rules for the two gate boundaries in
+Canonical owner for gate-review **verdict field** rules for the two gate boundaries in
 the dev-loop workflow: `draft_gate` and `pre_approval_gate`.
 
 ## Purpose
 
-Gate-review PR comments make the workflow auditable and transparent from the PR
+Gate-review verdicts make the workflow auditable and transparent from the PR
 conversation alone. A reviewer or maintainer can inspect which gate ran, which head
 commit was reviewed, whether it passed cleanly, and whether a result is current for
 the latest head — without relying on local or session-only artifacts.
 
+<!-- rule: GATE-COMMENT-SINGLE-SURFACE -->
+`GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
+review of type COMMENT, posted by `upsert-checkpoint-verdict.mjs`. Its body carries the required
+verdict fields below; with `--findings-ledger`, that same review also carries the round's
+findings — locatable ones as its inline comments, the rest body-filed under the verdict fields
+(`GATE-EXEC-FINDING-THREADS`, [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+No separate verdict issue comment, no separate findings review, and no deferred-summary comment
+is posted. Each finding's text appears exactly once across the round; the body's per-angle
+breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
+review body; a verdict posted as an ISSUE comment still validates and is still corrected on
+its own surface (back-compat read).
+
+<!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
+`GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
+scan BOTH verdict surfaces — the PR-review stream (`pulls/<n>/reviews`, the primary surface per
+GATE-COMMENT-SINGLE-SURFACE) and the visible issue-comment stream (`issues/<n>/comments`, the
+back-compat read). Scanning the issue-comment stream alone reports a legitimately-posted
+PR-review verdict as "missing": the post-drive audit that filed #1674 falsely concluded #1614's
+round-2 `draft_gate` and `pre_approval_gate` verdicts were unposted because it read only
+`issues/1614/comments`, where no verdict body lives (the verdicts existed as PR reviews at the
+merged head). The deterministic post-drive audit helper is
+`scripts/github/audit-gate-evidence.mjs` — it reads both surfaces through
+`fetchGateEvidenceComments` and reports each gate's verdict as visible regardless of which
+surface carries it, so a verdict posted only as a PR review is never reported missing. The
+sanctioned poster never creates one. Two documented
+exceptions exist: the opt-in findings comment (`gates.postFindingsComments`,
+`GATE-COMMENT-IDENTITY-DISJOINT` below) adds a sanctioned second visible surface when a repo
+opts in, and the zero-dep fallback poster
+(`skills/dev-loop/scripts/post-gate-verdict-fallback.mjs`), used only when `@dev-loops/core`
+is absent, posts a verdict issue comment the dev-loop skill documents as a degraded
+audit-trail artifact.
+
+<!-- rule: GATE-COMMENT-IDENTITY-DISJOINT -->
+`GATE-COMMENT-IDENTITY-DISJOINT`: The verdict surface and the opt-in findings comment
+(`gates.postFindingsComments`, `post-gate-findings.mjs` — the opt-in exception
+`GATE-COMMENT-SINGLE-SURFACE` names) identify "their"
+comment by different claim keys, and each tool's upsert MUST NOT ever claim the other's comment.
+The verdict is claimed through its parsed verdict fields (gate name plus reviewed head); the
+findings comment through its own `dev-loops:gate-findings gate=` marker. Enforced at the claim
+seam by machine-artifact filtering plus verdict-body precedence: the marker summarizer treats a
+body carrying a known machine-artifact marker token (owned by the artifact filter in
+`copilot-helpers.mjs`, delimiter-anchored so no suffixed `<token>-<x>` variant matches) as a
+non-candidate UNLESS it also carries the producer-owned verdict body heading — which is how the
+round's own review, marker and all, stays claimable while the findings comment (which never
+carries that heading) never is. That silent replacement previously destroyed a full round's
+visible findings record seconds after it was posted. Within its OWN claim key each tool keys
+identity as it needs (the findings comment's marker is deliberately gate-only).
+
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->
-`GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict comment evidence contract only.
+`GATE-COMMENT-SCOPE-ONLY`: This document owns the visible checkpoint verdict evidence contract only.
 It does not restate the full PR follow-up procedure; that
 remains owned by the relevant workflow skill. The broader family-local PR lifecycle
 that consumes this evidence is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
@@ -26,6 +74,68 @@ This contract covers exactly two gates with distinct lifecycle semantics:
 - `pre_approval_gate` — **recurring per-head gate.** Runs right before final approval /
   merge readiness on the current head SHA. A new pass is required for each new head
   after post-draft changes.
+
+A THIRD gate, `review` (`GATE_NAMES`, `scripts/github/_gate-names.mjs`), exists
+outside this contract's scope: a standalone, on-demand review pass reachable on
+any PR with no lifecycle obligation of its own (see the
+[Review skill](../review/SKILL.md)). It posts through the same single-surface
+poster and required-fields shape this document defines, but is a deliberately
+NON-EVIDENCE gate. The guard is authoritative recognition, not absence:
+`review` IS a recognized gate name in the gate-comment header vocabulary a
+comment is parsed against (`@dev-loops/core/github/copilot-helpers`), and
+recognizing a comment's header as `review` is exactly what makes the parser
+return non-evidence immediately — before it ever falls through to the
+lenient whole-body `draft_gate`/`pre_approval_gate` token scan that a
+genuinely unidentifiable comment relies on. That holds regardless of
+`--findings-ledger`/the gate-findings-review marker. (`review` is also absent
+from `GATE_CONFIG_KEY` in `@dev-loops/core/loop/gate-fanin`, but that is a
+separate, unrelated fact — `review` has no `draft`/`preApproval`-style config
+threshold — not the mechanism that keeps its comments from being misread as
+draft/pre-approval evidence.) So a `review` comment never satisfies
+`draft_gate` or `pre_approval_gate` evidence and `GATE-COMMENT-NON-
+SUBSTITUTION` below applies to it symmetrically: a clean `review` comment
+authorizes nothing this contract's two gates require.
+
+<!-- rule: GATE-REVIEW-SUBMIT-MODES -->
+### `review` gate submit modes (#1840)
+
+`GATE-REVIEW-SUBMIT-MODES`: `upsert-checkpoint-verdict.mjs`'s `--submit
+<pending|comment|request-changes|approve>` flag is SCOPED TO `--gate review`
+ONLY — passing it on `draft_gate`/`pre_approval_gate` is rejected with a named
+error (never silently ignored); those two gates always submit a `COMMENT`
+review per `GATE-COMMENT-SINGLE-SURFACE` (`GATE-COMMENT-NON-SUBSTITUTION`: a
+clean pre-approval must stay a submitted, visible evidence surface, never
+substitutable by a differently-submitted review).
+
+| Mode | GitHub review `event` | Effect |
+|---|---|---|
+| `pending` | omitted | Creates an author-only draft review — invisible to other reviewers until a human submits it |
+| `comment` (default when `--submit` is omitted) | `COMMENT` | Submits the review immediately (today's behavior, unchanged) |
+| `request-changes` | `REQUEST_CHANGES` | Submits the review; a GitHub-native branch-protection signal that can BLOCK merge until dismissed |
+| `approve` | `APPROVE` | Submits the review; a GitHub-native branch-protection signal that SATISFIES a required-approvals rule |
+
+`request-changes`/`approve` carry GitHub-native branch-protection effects
+independent of any dev-loops gate. A headless/non-interactive review run
+(`--auto`) is restricted to `pending`/`comment` — `--submit
+approve`/`--submit request-changes` are REFUSED headless, so automation can
+never auto-approve or auto-block a PR; they are reachable only through the
+[Review skill](../review/SKILL.md)'s interactive multiple-choice submit step.
+
+Since #1888 that guarantee is STRUCTURAL, not caller self-identification:
+the absence of `--auto` proves nothing (a headless caller can simply omit
+the flag), so `approve`/`request-changes` additionally REQUIRE the explicit
+`--interactive-confirm` token — passed only by the review skill's
+interactive submit step after a human made the choice — and are REFUSED
+without it, both at CLI parse time and in the `upsertCheckpointVerdict()`
+runtime entry (direct callers cannot bypass the CLI parser). `--auto` still
+refuses those modes even WITH the token. Headless/agent callers may use
+`--submit pending` or `--submit comment`.
+
+Every submit mode — including `approve` — stays a NON-evidence `review`
+verdict for dev-loops gates: the authoritative-`review`-header guard above
+reads only the comment body, never the review's `event`/`state`, so
+`detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs`
+report no draft/pre-approval evidence from it regardless of submit mode.
 
 ## Separate chains per gate
 
@@ -56,7 +166,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 ## Required fields
 
 <!-- rule: GATE-COMMENT-REQUIRED-FIELDS -->
-`GATE-COMMENT-REQUIRED-FIELDS`: Every gate-review PR comment MUST include:
+`GATE-COMMENT-REQUIRED-FIELDS`: Every gate-review verdict body MUST include:
 
 | Field | Description |
 |---|---|
@@ -66,6 +176,27 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Blocking severities** | (clean verdicts only) Which severity levels must be clean per gate config |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
 | **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
+
+## Optional size-budget fields
+
+<!-- rule: GATE-COMMENT-SIZE-BUDGET-FIELDS -->
+`GATE-COMMENT-SIZE-BUDGET-FIELDS`: `GATE-COMMENT-REQUIRED-FIELDS` above covers only the
+fields every verdict body MUST carry. The size-budget merge gate
+([Size-budget merge gate](./merge-preconditions.md#size-budget-merge-gate-issue-1480)) adds
+three further fields that are OPTIONAL — rendered only when a `pre_approval_gate` verdict
+is posted with size-budget evidence (`--size-budget-json`), omitted entirely otherwise. An
+absent field reads as absent (`null`), never as a false negative:
+
+| Field | Rendered line | Values |
+|---|---|---|
+| **Size-budget outcome** | `**Size-budget outcome:** <outcome>` | The recorded `gates.size` outcome, e.g. `pass`, `escalate`, `block` |
+| **Size-budget T1 slice** | `**Size-budget T1 slice:** touched` or `**Size-budget T1 slice:** not touched` | Whether the diff touches the T1 tier |
+| **Size-budget waiver** | `**Size-budget waiver:** none`, `**Size-budget waiver:** granted`, or `**Size-budget waiver:** granted by <approver>` | Whether a size-budget waiver was granted, and by whom if known |
+
+All three fields are rendered together or not at all: they appear only when the outcome is
+supplied, and are read back as `null` (not a parse failure) when the verdict body carries
+none of them — the pre-size-budget comment shape stays valid evidence for every other rule
+in this document.
 
 ## Verdict definitions
 
@@ -79,6 +210,28 @@ with the fixed meaning below:
 | `findings_present` | The gate found issues at blocking severities; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
+This rule is enforced at write time and at post time, not just documented:
+`write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
+`--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is
+written, and `upsert-checkpoint-verdict.mjs` refuses a `--verdict` that
+contradicts the consolidated ledger's `overallVerdict` for the same head and
+gate (#1616). The consolidator (`consolidate-fanin.mjs`) already computes
+`overallVerdict` from this rule's definitions; it threads through
+`--ledger-out`'s `{ overallVerdict, findings }` wrapper into the durable ledger
+(`write-gate-findings-log.mjs`), and `upsert-checkpoint-verdict.mjs` reads it
+and derives the verdict by default (passing no `--verdict` is valid), accepts
+a matching explicit value, and refuses a contradiction citing this rule. No
+override flag — a round whose verdict genuinely differs from the computed one
+is a consolidator bug to fix, not an operator decision to override.
+
+`write-gate-findings-log.mjs`'s write-time contradiction refusal always
+compares `--verdict` against the wrapper's `overallVerdict` — the
+consolidator's computed round verdict — whether or not `--judge-verdict` was
+also supplied. The judge only enriches findings with `act`/`defer`/`reject`
+dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525));
+it never revises the round verdict, so a `--judge-verdict` run is held to the
+exact same contradiction check as a run without one.
+
 ## Disposition ledger
 
 Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER`
@@ -86,10 +239,15 @@ Durable-ledger sequencing and content are owned by `GATE-EXEC-DISPOSITION-LEDGER
 The visible PR comment is a summary for auditability; the disposition ledger is the
 complete durable record.
 
+Disposing of the ledger's non-blocking findings as inline review threads on the round's own
+review is owned by `GATE-EXEC-FINDING-THREADS` and `GATE-EXEC-THREAD-DISPOSITION`
+([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition));
+a deferred finding's record is owned by `GATE-EXEC-DEFERRAL-RECORD` there too.
+
 ## Readable deterministic format
 
 <!-- rule: GATE-COMMENT-VALIDATION-REPORTING -->
-`GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible comment compact, deterministic, and
+`GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible verdict body compact, deterministic, and
 slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
 `Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
 MUST stay deterministically parseable even if label wording changes. Validation reporting
@@ -162,14 +320,14 @@ so the two rules do not conflict.
 
 | Scenario | Rule |
 |---|---|
-| Same head SHA rerun | Idempotent behavior: do not post a second visible marker for the same gate+head. Reuse/suppress by default; if correction is needed, update/replace the existing marker in place. |
-| New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict comment MUST be posted for the new head; the older-head comment remains but does not satisfy readiness for the new head |
-| New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` comment is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
+| Same head SHA rerun | Idempotent behavior: do not post a second visible surface for the same gate+head. An identical rerun posts nothing; if correction is needed, update the existing review's body in place (a legacy verdict issue comment is corrected on its own surface). Inline finding comments are never re-posted — a same-head correction body-files any still-unposted finding, since GitHub exposes no endpoint to add inline comments to a submitted review. |
+| New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict review MUST be posted for the new head; the older-head surface remains but does not satisfy readiness for the new head |
+| New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` verdict is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
 
 ## Fail-closed behavior
 
 <!-- rule: GATE-COMMENT-FAIL-CLOSED -->
-`GATE-COMMENT-FAIL-CLOSED`: If the required checkpoint verdict comment cannot be posted
+`GATE-COMMENT-FAIL-CLOSED`: If the required checkpoint verdict review cannot be posted
 (for example due to a GitHub API error, permission restriction, or tooling failure), the
 workflow MUST NOT cross the gate boundary:
 
@@ -177,7 +335,7 @@ workflow MUST NOT cross the gate boundary:
 - do not declare final-approval readiness (for `pre_approval_gate`)
 
 The gate boundary is not crossed until both the review verdict is `clean` **and** the
-required visible PR comment is confirmed posted for the current head SHA.
+required visible PR review is confirmed posted for the current head SHA.
 
 ## Relationship to other contracts
 
@@ -185,7 +343,7 @@ required visible PR comment is confirmed posted for the current head SHA.
 |---|---|
 | `draft_gate` boundary | Governs the draft → ready-for-review transition in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 |
 | `pre_approval_gate` boundary | Governs final-approval readiness in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) Step 7 and the narrowed [Final Approval](../final-approval/SKILL.md) route |
-| Local/session artifacts | These remain complementary; the visible PR comment is the minimum required auditable surface, not a replacement for all local artifacts |
+| Local/session artifacts | These remain complementary; the visible PR review is the minimum required auditable surface, not a replacement for all local artifacts |
 
 ## See also
 

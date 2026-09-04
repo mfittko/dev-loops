@@ -12,7 +12,17 @@ import {
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
+import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
+import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine } from "@dev-loops/core/loop/review-dispatch-plan";
+import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { runNode } from "../_helpers.mjs";
+
+// #1592: several fixtures below deliberately keep pre-rename severity
+// spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 
 // Drive the REAL renderer upsert-checkpoint-verdict.mjs itself uses — the
 // structured findings sub-block is what enforcePostedCommentLimit bounds at
@@ -167,7 +177,7 @@ test("parseConsolidateFaninCliArgs rejects missing --findings-dir", () => {
 test("parseConsolidateFaninCliArgs rejects invalid --gate", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "bogus_gate"]),
-    /draft_gate or pre_approval_gate/,
+    /draft_gate, pre_approval_gate, review/,
   );
 });
 
@@ -203,7 +213,7 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
           { angle: "scope", verdict: "clean", findingCount: 0 },
         ],
       );
-      assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": 1, "defer": 0 });
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 1, low: 0, question: 0, nit: 0 });
       assert.equal(result.findings.length, 2);
       for (const finding of result.findings) {
         assert.ok(typeof finding.angle === "string" && finding.angle.length > 0);
@@ -248,10 +258,10 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
         findingsJson: [{
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "must-fix", summary: "x", disposition: "accepted-for-fix" }],
+          findings: [{ severity: "high", summary: "x", disposition: "accepted-for-fix" }],
         }],
-        findings: [{ severity: "must-fix", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
-        severityCounts: { "must-fix": 1, "worth-fixing-now": 0, defer: 0 },
+        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        severityCounts: { high: 1, medium: 0, low: 0, question: 0, nit: 0 },
         overallVerdict: "findings_present",
       });
     },
@@ -279,17 +289,121 @@ test("consolidateGateFanin writes --out as the nested findingsJson shape", async
   );
 });
 
-test("consolidateGateFanin writes --ledger-out as the flat findings shape (the --findings-file input write-gate-findings-log.mjs/post-gate-findings.mjs accept)", async () => {
+test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings } wrapper write-gate-findings-log.mjs/post-gate-findings.mjs accept", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
     async (dir) => {
       const ledgerPath = path.join(dir, "out", "ledger.json");
       const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.deepEqual(written, result.findings);
+      // --ledger-out carries the consolidator's computed overallVerdict
+      // alongside the flat findings, so it flows downstream to the durable
+      // ledger (and upsert-checkpoint-verdict.mjs's enforcement) without an
+      // orchestrator hand-off (#1616).
+      assert.deepEqual(written, { overallVerdict: result.overallVerdict, findings: result.findings });
       assert.equal(result.findings.length, 1);
     },
   );
+});
+
+// One-shot fan-in (AC4): a SINGLE consolidateGateFanin call with both --out
+// and --ledger-out must report verdict, severityCounts, AND both artifact
+// paths on its own return value, so a caller never needs a second call just
+// to re-extract a different shape or rediscover a path it already passed in.
+test("consolidateGateFanin echoes verdict, severityCounts, and both written artifact paths from one call", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const outPath = path.join(dir, "out", "findings.json");
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+      assert.equal(result.overallVerdict, "findings_present");
+      assert.deepEqual(result.severityCounts, { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
+      assert.equal(result.out, outPath);
+      assert.equal(result.ledgerOut, ledgerPath);
+      // Both echoed paths are real, already-written files — a caller never
+      // has to guess or re-derive them from a second invocation.
+      assert.ok(JSON.parse(await readFile(outPath, "utf8")));
+      assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
+    },
+  );
+});
+
+// Same guarantee through the real CLI entrypoint with --jq: the ONE call that
+// writes --out/--ledger-out to disk also prints just severityCounts on
+// stdout via --jq, proving the shipped procedure (write both artifacts AND
+// extract severityCounts) needs no second invocation.
+test("consolidate-fanin CLI: one invocation with --out/--ledger-out/--jq writes both artifacts and prints severityCounts", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const cliOutDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cli-oneshot-"));
+      try {
+        const outPath = path.join(cliOutDir, "findings.json");
+        const ledgerPath = path.join(cliOutDir, "ledger.json");
+        const cliResult = await runNode(
+          path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+          ["--findings-dir", dir, "--out", outPath, "--ledger-out", ledgerPath, "--jq", ".severityCounts"],
+        );
+        assert.equal(cliResult.code, 0, cliResult.stderr);
+        assert.deepEqual(JSON.parse(cliResult.stdout), { high: 1, medium: 0, low: 0, question: 0, nit: 0 });
+        assert.ok(JSON.parse(await readFile(outPath, "utf8")));
+        assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
+      } finally {
+        await rm(cliOutDir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+// A tier-4 (withheld) round never writes --out — "out" must be omitted from
+// the result rather than pointing at a file that was deleted (or never
+// existed), which would send a caller to read stale/missing content.
+test("consolidateGateFanin omits \"out\" from the result when the round is withheld (tier 4)", async () => {
+  // Same structural-floor fixture the withheld-tier tests below use (25
+  // angles x 30 findings each) — far more real angles than even a bare
+  // marker per angle can fit.
+  const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+  await withFindingsDir(files, async (dir) => {
+    const outPath = path.join(dir, "out", "findings.json");
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    const result = await consolidateGateFanin({ findingsDir: dir, out: outPath, ledgerOut: ledgerPath });
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.deepEqual(result.findingsJson, []); // withheld tier
+    // withheld: no --out file on disk, and the result must not claim one.
+    assert.equal("out" in result, false);
+    assert.equal(result.ledgerOut, ledgerPath);
+    await assert.rejects(() => readFile(outPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Short errors (AC5): an argument error's stderr JSON is a one-line error +
+// hint, never the CLI's own (multi-KB) USAGE text — that full text renders
+// only under --help, which is unaffected.
+test("consolidate-fanin CLI: an argument error prints a short hint (not the full USAGE text), exit 1", async () => {
+  const cliResult = await runNode(
+    path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+    [],
+  );
+  assert.equal(cliResult.code, 1);
+  assert.equal(cliResult.stdout, "");
+  const payload = JSON.parse(cliResult.stderr);
+  assert.deepEqual(Object.keys(payload), ["ok", "error", "hint"]);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /Missing required argument: --findings-dir/);
+  assert.equal(payload.hint, "run with --help for usage");
+  assert.equal("usage" in payload, false);
+});
+
+test("consolidate-fanin CLI: --help still prints the full USAGE text on stdout, exit 0", async () => {
+  const cliResult = await runNode(
+    path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+    ["--help"],
+  );
+  assert.equal(cliResult.code, 0);
+  assert.equal(cliResult.stderr, "");
+  assert.match(cliResult.stdout, /^Usage: consolidate-fanin\.mjs/);
+  assert.match(cliResult.stdout, /--findings-dir <dir>/);
 });
 
 // parseConsolidateFaninCliArgs's --out/--ledger-out same-path guard is a
@@ -312,7 +426,7 @@ test("consolidateGateFanin rejects --out === --ledger-out even when the CLI pars
       // The ledger must still be intact on disk, not deleted by the rm() the
       // guard exists to prevent from ever running against it.
       const written = JSON.parse(await readFile(samePath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -331,7 +445,7 @@ test("consolidateGateFanin rejects a --out that is a symlink alias of --ledger-o
         /resolve to the same file/,
       );
       const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-      assert.equal(written.length, 1);
+      assert.equal(written.findings.length, 1);
     },
   );
 });
@@ -412,6 +526,336 @@ test("a finding's oversized file reference is truncated with a plain ellipsis su
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GATE-EXEC-PRIMER-EVIDENCE wiring (#1475): the fan-in enforces the recorded
+// primer-dispatch evidence against the dispatch plan via enforcePrimerEvidence,
+// failing closed on missing/mismatched evidence — and proceeds unchanged when
+// neither flag is given (progressive/optional recording).
+// ---------------------------------------------------------------------------
+
+const PRIMER_FP = "sha256:" + "a".repeat(64);
+const PRIMER_HEAD = "0123456789abcdef0123456789abcdef01234567";
+
+function makePrimerPlanAndEvidence() {
+  const plan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: PRIMER_HEAD,
+    sharedPrefixPath: "/tmp/shared.md",
+    sharedPrefixHash: PRIMER_FP,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope", "dry"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+  const evidence = buildPrimerEvidence({
+    plan,
+    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 11 }],
+  });
+  return { plan, evidence };
+}
+
+async function withPrimerFiles(files, fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "primer-evidence-"));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content), "utf8");
+    }
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("consolidateGateFanin enforces valid primer evidence and consolidates (GATE-EXEC-PRIMER-EVIDENCE)", async () => {
+  const { plan, evidence } = makePrimerPlanAndEvidence();
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": evidence, "primer-plan.json": plan },
+        async (pdir) => {
+          const result = await consolidateGateFanin({
+            findingsDir: dir,
+            primerEvidence: path.join(pdir, "primer-evidence.json"),
+            primerPlan: path.join(pdir, "primer-plan.json"),
+          });
+          assert.equal(result.ok, true);
+          assert.equal(result.overallVerdict, "clean");
+          assert.equal(result.angles.length, 1);
+        },
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed when primer evidence violates the ordering barrier", async () => {
+  const { plan } = makePrimerPlanAndEvidence();
+  // Violation: the reviewer release at t=5 lands BEFORE its primer at t=10.
+  const violation = buildPrimerEvidence({
+    plan,
+    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
+    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 5 }],
+  });
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": violation, "primer-plan.json": plan },
+        async (pdir) => {
+          await assert.rejects(
+            consolidateGateFanin({
+              findingsDir: dir,
+              primerEvidence: path.join(pdir, "primer-evidence.json"),
+              primerPlan: path.join(pdir, "primer-plan.json"),
+            }),
+            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("primer_order"),
+          );
+        },
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed when primer evidence references a plan it did not come from", async () => {
+  const { evidence } = makePrimerPlanAndEvidence();
+  // A DIFFERENT plan (different request group model) than the evidence was
+  // built from: the plan-hash / shared-prefix bindings no longer match.
+  const otherPlan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: PRIMER_HEAD,
+    sharedPrefixPath: "/tmp/shared.md",
+    requestGroups: [
+      {
+        model: "model-c",
+        requestPrefixFingerprint: "sha256:" + "c".repeat(64),
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withPrimerFiles(
+        { "primer-evidence.json": evidence, "primer-plan.json": otherPlan },
+        async (pdir) => {
+          await assert.rejects(
+            consolidateGateFanin({
+              findingsDir: dir,
+              primerEvidence: path.join(pdir, "primer-evidence.json"),
+              primerPlan: path.join(pdir, "primer-plan.json"),
+            }),
+            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("shared_prefix_hash"),
+          );
+        },
+      );
+    },
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --primer-evidence without --primer-plan (and vice versa)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-evidence", "/tmp/e.json"]),
+    /--primer-evidence and --primer-plan must be given together/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-plan", "/tmp/p.json"]),
+    /--primer-evidence and --primer-plan must be given together/,
+  );
+});
+
+// --------------------------------------------------------------------------
+// GATE-EXEC-CACHE-TELEMETRY wiring (#1476): the fan-in enforces the before/after
+// cache-telemetry evidence via enforceCacheTelemetryEvidence, failing closed on
+// an opaque/over-claimed/unmeasured artifact — and proceeds unchanged when the
+// flag is absent (progressive/optional recording).
+// --------------------------------------------------------------------------
+
+const TELEMETRY_HEAD = "abcdef1234567890abcdef1234567890abcdef12";
+
+function makeTelemetryPlan() {
+  return buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: TELEMETRY_HEAD,
+    sharedPrefixHash: PRIMER_FP,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "claude" },
+  });
+}
+
+function makeTelemetryEvidence() {
+  return buildCacheTelemetryEvidence({
+    plan: makeTelemetryPlan(),
+    primerCacheCreations: [{ model: "model-a", primerForm: "lead_reviewer", tokens: 12000 }],
+    reviewerCacheReads: [
+      { model: "model-a", angle: "scope", tokens: 200 },
+      { model: "model-a", angle: "dry", tokens: 210 },
+    ],
+  });
+}
+
+async function withTelemetryFile(filename, content, fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cache-telemetry-"));
+  try {
+    await writeFile(path.join(dir, filename), typeof content === "string" ? content : JSON.stringify(content), "utf8");
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("consolidateGateFanin enforces valid cache-telemetry evidence (GATE-EXEC-CACHE-TELEMETRY)", async () => {
+  const evidence = makeTelemetryEvidence();
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", evidence, async (tdir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          headSha: TELEMETRY_HEAD,
+          gate: "pre_approval_gate",
+        });
+        assert.equal(result.ok, true);
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a cache-telemetry artifact stamped for a different head/gate", async () => {
+  // The artifact is <gate>-<headSha>-scoped evidence: a stale/mismatched
+  // artifact for a different head OR gate must fail closed rather than pass as
+  // this round's telemetry when --head-sha/--gate are provided.
+  const evidence = makeTelemetryEvidence(); // stamped for TELEMETRY_HEAD / pre_approval_gate
+  const wrongHead = { ...evidence, headSha: "ffffffffffffffffffffffffffffffffffffffff" };
+  const wrongGate = { ...evidence, gate: "draft_gate" };
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", wrongHead, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("stale/mismatched cache-telemetry artifact"),
+        );
+      });
+      await withTelemetryFile("cache-telemetry.json", wrongGate, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+            headSha: TELEMETRY_HEAD,
+            gate: "pre_approval_gate",
+          }),
+          (err) => err.message.includes("mismatched cache-telemetry artifact"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on cache telemetry over-claiming opaque reuse", async () => {
+  // Build under an opaque (pi) harness then mutate the verdict to simulate an
+  // over-claim; the fan-in must refuse it as an opaque_veracity violation.
+  const plan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: TELEMETRY_HEAD,
+    requestGroups: [
+      {
+        model: "model-a",
+        requestPrefixFingerprint: PRIMER_FP,
+        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+        ttlIntent: "1h",
+        angles: ["scope"],
+      },
+    ],
+    capabilities: { harness: "pi" },
+  });
+  const honest = buildCacheTelemetryEvidence({
+    plan,
+    primerCacheCreations: [{ model: "model-a" }],
+    reviewerCacheReads: [{ model: "model-a", angle: "scope" }],
+  });
+  const subverted = { ...honest, cacheReuseVerified: true };
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", subverted, async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          }),
+          (err) => err.message.includes("GATE-EXEC-CACHE-TELEMETRY") && err.message.includes("opaque_veracity"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on an unreadable/malformed cache-telemetry artifact", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await withTelemetryFile("cache-telemetry.json", "{ not json", async (tdir) => {
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            cacheTelemetry: path.join(tdir, "cache-telemetry.json"),
+          }),
+          (err) => err.message.includes("not valid JSON"),
+        );
+      });
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a missing (unreadable) cache-telemetry path", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        consolidateGateFanin({
+          findingsDir: dir,
+          cacheTelemetry: "/nonexistent/cache-telemetry.json",
+        }),
+        (err) => err.message.includes("could not be read"),
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.ok, true);
+    },
+  );
+});
+
 // pr-checklist-matrix mandatory-angle upsert
 // ---------------------------------------------------------------------------
 
@@ -459,22 +903,637 @@ test("consolidateGateFanin does not upsert pr-checklist-matrix when an artifact 
 });
 
 // ---------------------------------------------------------------------------
+// --carried-angles upsert: a carry-forward plan's `carried` angles got no
+// Phase 2 artifact and would otherwise be invisible to findingsJson/
+// checkFanoutAngleCoverage/the posted verdict comment — indistinguishable
+// from a truncated fan-out.
+//
+// must-fix (gate-evidence): --carried-angles is proof-carrying, not a bare
+// trust-me list — it REQUIRES --gate and --carry-forward-plan
+// (resolve-angle-carry-forward.mjs's own "carried" evidence) and is checked
+// against BOTH the gate's configured mandatory angles and the proven plan
+// before it is allowed to mint a clean entry. See the fail-closed tests below.
+// ---------------------------------------------------------------------------
+
+// Isolated repoRoot with a minimal .devloops: this repo's shipped
+// extension-defaults.yaml always contributes the draft gate's own mandatory
+// angle ("pr-description") regardless of repoRoot (D3 name-merge across
+// config layers), so an empty/minimal override here is enough to get a real,
+// known mandatoryAngles set without hand-writing angle entries.
+async function withMinimalConfigRepoRoot(fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cfgroot-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "version: 1\n", "utf8");
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function carryForwardPlanJson(angles, { carriedFromHead = "a".repeat(40) } = {}) {
+  return JSON.stringify({ carried: angles.map((angle) => ({ angle, carriedFromHead, reason: "test fixture" })) });
+}
+
+test("parseConsolidateFaninCliArgs parses --carried-angles + --carry-forward-plan together", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--gate", "draft_gate",
+    "--carried-angles", '["correctness","docs"]',
+    "--carry-forward-plan", carryForwardPlanJson(["correctness", "docs"]),
+  ]);
+  assert.deepEqual(result.carriedAngles, ["correctness", "docs"]);
+  assert.deepEqual(result.carryForwardPlan.map((e) => e.angle), ["correctness", "docs"]);
+});
+
+test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", "not json"]),
+    /--carried-angles must be a JSON array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '{"angle":"docs"}']),
+    /--carried-angles must be a JSON array of non-empty angle-name strings/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs",""]']),
+    /--carried-angles must be a JSON array of non-empty angle-name strings/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs parses --resolved-angles", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--resolved-angles", '["correctness","dry"]',
+  ]);
+  assert.deepEqual(result.resolvedAngles, ["correctness", "dry"]);
+});
+
+test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --resolved-angles", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", "not json"]),
+    /--resolved-angles must be a JSON array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", '{"angle":"dry"}']),
+    /--resolved-angles must be a JSON array of non-empty angle-name strings/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--resolved-angles", '["dry",""]']),
+    /--resolved-angles must be a JSON array of non-empty angle-name strings/,
+  );
+});
+
+// #1783: checkFanoutAngleCoverage's own mandatory-angle check misses a wrong
+// carry-forward declaration naming only a NON-mandatory angle — it never
+// looks past the caller-supplied mandatory subset. --resolved-angles is the
+// fan-in-side backstop that protects every resolved angle, not just the
+// mandatory ones.
+test("consolidateGateFanin refuses a clean verdict when --resolved-angles names a wrongly-carried NON-mandatory angle with no artifact and no proven carry", async () => {
+  await withFindingsDir(
+    { "correctness.json": { angle: "correctness", verdict: "clean", findings: [] } },
+    async (dir) => {
+      // "dry" is part of this round's resolved set but was neither reviewed
+      // (no artifact) nor declared carried — exactly the gap a wrong
+      // write-gate-context.mjs --carried-angles list leaves behind.
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, resolvedAngles: ["correctness", "dry"] }),
+        /GATE-EXEC-RESOLVED-ANGLE-EVIDENCE.*"clean".*dry/s,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin passes when every --resolved-angles angle has a real artifact or a proven carry", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "correctness.json": { angle: "correctness", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["dry"])).carried,
+          resolvedAngles: ["correctness", "dry"],
+        });
+        assert.equal(result.overallVerdict, "clean");
+        assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["correctness", "dry"]);
+      },
+    );
+  });
+});
+
+// #1783: the resolved-angle-evidence backstop only guards a "clean" round — a
+// round that already computed findings_present must NOT be refused for a
+// missing resolved angle (that would mask the real findings behind a
+// RESOLVED-ANGLE error). Pins the `consolidated.verdict === "clean"` skip.
+test("consolidateGateFanin does NOT apply --resolved-angles refusal on a findings_present round", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "correctness.json": {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "real defect", file: "src/a.mjs", line: 1 }],
+        },
+      },
+      async (dir) => {
+        // "dry" has neither an artifact nor a proven carry — on a clean round
+        // this refuses, but here the round is already findings_present.
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          resolvedAngles: ["correctness", "dry"],
+        });
+        assert.equal(result.overallVerdict, "findings_present");
+      },
+    );
+  });
+});
+
+test("parseConsolidateFaninCliArgs rejects a malformed --carry-forward-plan", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", "not json"]),
+    /--carry-forward-plan must be JSON/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '["docs"]']),
+    /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '"not-an-object-or-array"']),
+    /--carry-forward-plan must be a JSON object with a "carried" array, or a bare JSON array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"notCarried":[]}']),
+    /--carry-forward-plan must have a "carried" array/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"carried":[{"angle":"docs"}]}']),
+    /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", '{"carried":[{"angle":"docs","carriedFromHead":"not-a-sha"}]}']),
+    /carried\[0\]\.carriedFromHead must be a 7-64 char hex SHA/,
+  );
+});
+
+// contract-surface (worth-fixing-now): the shipped Phase 3 procedure, this
+// CLI's own --help, and its former error text all documented --carry-forward-plan
+// as accepting "resolve-angle-carry-forward.mjs's own result, or at least its
+// `carried` array" — but the parser rejected a bare array outright. Accept it
+// (normalized to `{ carried: <array> }`) so that documented shorthand is true,
+// rather than rewriting four doc/error-text sites to instead demand the
+// wrapper object.
+test("parseConsolidateFaninCliArgs accepts a bare JSON array as --carry-forward-plan", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--gate", "draft_gate",
+    "--carried-angles", '["docs"]',
+    "--carry-forward-plan", '[{"angle":"docs","carriedFromHead":"AAA1234"}]',
+  ]);
+  assert.deepEqual(result.carryForwardPlan, [{ angle: "docs", carriedFromHead: "aaa1234" }]);
+});
+
+test("parseConsolidateFaninCliArgs rejects --carried-angles / --carry-forward-plan / --gate given without each other", () => {
+  const plan = carryForwardPlanJson(["docs"]);
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]']),
+    /--carried-angles requires --carry-forward-plan/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carry-forward-plan", plan]),
+    /--carry-forward-plan was given without --carried-angles/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs"]', "--carry-forward-plan", plan]),
+    /--carried-angles requires --gate/,
+  );
+});
+
+test("consolidateGateFanin upserts a carriedFromHead-marked clean entry for every carried angle with no real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness", "coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness", "coverage"], { carriedFromHead: "b".repeat(40) })).carried,
+        });
+        assert.deepEqual(
+          result.angles.map((a) => a.angle).sort(),
+          ["correctness", "coverage", "docs"],
+        );
+        // Carried entries are marked; the freshly reviewed "docs" entry is not.
+        assert.deepEqual(
+          result.findingsJson.find((a) => a.angle === "correctness"),
+          { angle: "correctness", verdict: "clean", findings: [], carriedFromHead: "b".repeat(40) },
+        );
+        assert.equal(result.angles.find((a) => a.angle === "correctness").carriedFromHead, "b".repeat(40));
+        assert.equal(result.angles.find((a) => a.angle === "docs").carriedFromHead, undefined);
+        assert.equal(result.overallVerdict, "clean");
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "correctness.json": {
+          angle: "correctness",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "real finding, not carried" }],
+        },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness"])).carried,
+        });
+        assert.equal(result.angles.length, 1);
+        assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
+        assert.equal(result.angles[0].carriedFromHead, undefined, "a REAL artifact's entry is never marked carried");
+      },
+    );
+  });
+});
+
+// A real artifact whose angle collides with a carried name only by case or by
+// a `-delta-at-...` suffix must still suppress the synthetic upsert (base-name
+// + case-insensitive match, same rule resolve-angle-carry-forward.mjs's own
+// attribution uses) — an exact-string check would duplicate the angle.
+test("consolidateGateFanin suppresses the carried upsert for a case-drifted/delta-suffixed real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "coverage.json": {
+          angle: "Coverage-delta-at-abc123",
+          verdict: "findings_present",
+          findings: [{ severity: "worth-fixing-now", summary: "real, case/delta-drifted" }],
+        },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried,
+        });
+        assert.equal(result.angles.length, 1, "the real (case/delta-drifted) artifact must not get a duplicate synthetic clean row");
+        assert.equal(result.angles[0].angle, "Coverage-delta-at-abc123");
+        assert.equal(result.angles[0].findingCount, 1);
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence, consolidate-fanin.mjs:641): a gate's configured
+// MANDATORY angle can never legitimately appear in a carry-forward plan
+// (resolve-angle-carry-forward.mjs always forces it into mustRerun), so
+// naming one in --carried-angles can only be a fabricated or stale list —
+// refuse it even when a (necessarily fabricated) plan entry claims it.
+test("consolidateGateFanin refuses a --carried-angles entry that is the gate's configured MANDATORY angle", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["pr-description"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["pr-description"])).carried,
+          }),
+          /MANDATORY angles.*pr-description|pr-description.*MANDATORY/s,
+        );
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence/correctness, round 2): the ALWAYS_INCLUDE surface
+// (gate-evidence, renderer-security, pr-description) is refused UNCONDITIONALLY
+// — angleReviewSurface returns { kind: "always" } for these regardless of the
+// gate's CONFIGURED mandatoryAngles set, so checking only mandatoryAngles (as a
+// prior version did) let a plan naming gate-evidence/renderer-security mint a
+// clean entry at draft_gate, where neither is configured mandatory.
+test("consolidateGateFanin refuses gate-evidence and renderer-security for draft_gate even though neither is a configured mandatory angle there", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    for (const angle of ["gate-evidence", "renderer-security"]) {
+      await withFindingsDir(
+        { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+        async (dir) => {
+          await assert.rejects(
+            () => consolidateGateFanin({
+              findingsDir: dir,
+              gate: "draft_gate",
+              repoRoot,
+              carriedAngles: [angle],
+              carryForwardPlan: JSON.parse(carryForwardPlanJson([angle])).carried,
+            }),
+            new RegExp(`${angle}.*never legitimately carry forward|can never legitimately carry forward.*${angle}`, "s"),
+          );
+        },
+      );
+    }
+  });
+});
+
+// Same predicate, at pre_approval_gate: pr-description is not in THIS repo's
+// configured preApproval mandatoryAngles (acceptance-criteria/yagni/
+// contradiction-lens/pr-checklist-matrix are), but it is still hardcoded
+// ALWAYS_INCLUDE and must still be refused.
+test("consolidateGateFanin refuses pr-description for pre_approval_gate even though it is not that gate's configured mandatory angle", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "pre_approval_gate",
+            repoRoot,
+            carriedAngles: ["pr-description"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["pr-description"])).carried,
+          }),
+          /pr-description.*never legitimately carry forward|can never legitimately carry forward.*pr-description/s,
+        );
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence, round 3): a MANDATORY angle configured with case
+// drift (e.g. "Correctness") must be refused exactly like its lowercase form —
+// the compared key is base+lowercase, so the configured mandatory set is
+// lowercased before feeding angleReviewSurface's alwaysRerun.
+test("consolidateGateFanin refuses a case-drifted configured mandatory angle from a carry plan", async () => {
+  const dir0 = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-cfgroot-"));
+  try {
+    await writeFile(
+      path.join(dir0, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    angles:\n      - name: Correctness\n        mandatory: true\n",
+      "utf8",
+    );
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot: dir0,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness"])).carried,
+          }),
+          /correctness.*never legitimately carry forward|can never legitimately carry forward.*correctness/si,
+        );
+      },
+    );
+  } finally {
+    await rm(dir0, { recursive: true, force: true });
+  }
+});
+
+// Copilot round (exact-name plan proof): a carried sibling sharing the base
+// key (coverage-delta-at-<sha>) must NOT vouch for a name the plan never
+// carried — the presence proof is exact-name, not base-collapsed.
+test("consolidateGateFanin refuses a carried angle whose only plan sibling shares the base key", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["coverage"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage-delta-at-abc1234"])).carried,
+          }),
+          /coverage.*not present in --carry-forward-plan/s,
+        );
+      },
+    );
+  });
+});
+
+// An unmapped/unknown angle name (angleReviewSurface -> { kind: "unknown" })
+// must also be refused — resolve-angle-carry-forward.mjs's own producer never
+// carries such a name either (fail-closed default), so a plan claiming
+// otherwise can only be fabricated.
+test("consolidateGateFanin refuses an unmapped/unknown --carried-angles entry", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["totally-bogus-unmapped-angle"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["totally-bogus-unmapped-angle"])).carried,
+          }),
+          /totally-bogus-unmapped-angle.*no declared review surface|no declared review surface.*totally-bogus-unmapped-angle/s,
+        );
+      },
+    );
+  });
+});
+
+// must-fix (gate-evidence, consolidate-fanin.mjs:641): a carried name absent
+// from the proven carry-forward plan is refused — the plan is the evidence
+// that an angle was actually resolved as carried, not just typed in.
+test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-forward-plan's carried list", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried, // plan proves "coverage", not "correctness"
+          }),
+          /not present in --carry-forward-plan/,
+        );
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin fails closed when --carried-angles is given without --gate or --carry-forward-plan (parser bypassed)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, carriedAngles: ["correctness"] }),
+        /--carried-angles requires --gate/,
+      );
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", carriedAngles: ["correctness"] }),
+        /--carried-angles requires --carry-forward-plan/,
+      );
+    },
+  );
+});
+
+// coverage (consolidate-fanin.mjs:587): an all-angles-carried round — Phase 2
+// dispatched nothing because Phase 1.2 carried every resolved angle — has a
+// legitimately empty --findings-dir; it must consolidate the carried entries
+// instead of throwing "contains no *.json findings artifacts".
+test("consolidateGateFanin consolidates an all-carried round even with an empty --findings-dir", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    const emptyDir = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-allcarried-"));
+    try {
+      const result = await consolidateGateFanin({
+        findingsDir: emptyDir,
+        gate: "draft_gate",
+        repoRoot,
+        carriedAngles: ["correctness", "coverage"],
+        carryForwardPlan: JSON.parse(carryForwardPlanJson(["correctness", "coverage"])).carried,
+      });
+      assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["coverage", "correctness"].sort());
+      assert.equal(result.overallVerdict, "clean");
+    } finally {
+      await rm(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// determinism (worth-fixing-now): two DISTINCT carried names sharing a
+// base+lowercase key (a base angle and its `-delta-at-<sha>` re-review
+// sibling — both legal, independently carry-forward-eligible rows per
+// resolve-angle-carry-forward.mjs's own bucketed attribution) must BOTH
+// upsert, regardless of --carried-angles array order. A prior version's
+// upsert-suppression set was mutated inside the loop and collapsed the
+// second-listed name into a no-op.
+test("consolidateGateFanin upserts both carried entries when two distinct names share a base+lowercase key, in either array order", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    for (const angles of [["coverage", "coverage-delta-at-abc1234"], ["coverage-delta-at-abc1234", "coverage"]]) {
+      await withFindingsDir(
+        { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+        async (dir) => {
+          const result = await consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: angles,
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(angles)).carried,
+          });
+          assert.deepEqual(
+            result.angles.map((a) => a.angle).sort(),
+            ["coverage", "coverage-delta-at-abc1234", "docs"].sort(),
+            `order ${JSON.stringify(angles)} must not drop either carried sibling`,
+          );
+        },
+      );
+    }
+  });
+});
+
+// coverage (worth-fixing-now): the entry-shape check must be enforced INSIDE
+// consolidateGateFanin too, not only on the parse path — a programmatic caller
+// bypasses parseConsolidateFaninCliArgs (and its validateCarryForwardPlanShape
+// call) entirely. Three previously-untested shapes: missing carriedFromHead
+// (the SILENT defect — minted an unmarked clean row indistinguishable from a
+// fresh review instead of failing closed), missing angle, and a null entry.
+test("consolidateGateFanin fails closed on a malformed programmatic --carry-forward-plan entry (parser bypassed)", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [{ angle: "correctness" }], // missing carriedFromHead
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [{ carriedFromHead: "a".repeat(40) }], // missing angle
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["correctness"],
+            carryForwardPlan: [null],
+          }),
+          /carried\[0\] must be an object with non-empty string "angle" and "carriedFromHead"/,
+        );
+      },
+    );
+  });
+});
+
+test("e2e: a legitimately carried, non-mandatory angle fills a gate's pool coverage check alongside a real artifact", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [] },
+        "pr-description.json": { angle: "pr-description", verdict: "clean", findings: [] },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["dry"])).carried,
+        });
+        const coverage = checkFanoutAngleCoverage(result.findingsJson, {
+          mandatoryAngles: ["pr-description"],
+          pool: ["scope", "dry", "pr-description"],
+        });
+        assert.deepEqual(coverage, { missingMandatory: [], foreignAngles: [] });
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // defer -> deferred disposition derivation
 // ---------------------------------------------------------------------------
 
-test("consolidateGateFanin derives a deferred disposition for defer-severity findings", async () => {
+test("consolidateGateFanin derives a deferred disposition for nice-to-have findings", async () => {
   await withFindingsDir(
     {
       "naming.json": {
         angle: "naming",
         verdict: "findings_present",
-        findings: [{ severity: "defer", summary: "style nit" }],
+        findings: [{ severity: "nice-to-have", summary: "style nit" }],
       },
     },
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
       assert.equal(result.findings.length, 1);
-      assert.equal(result.findings[0].severity, "defer");
+      assert.equal(result.findings[0].severity, "low"); // "nice-to-have" input normalizes to canonical "low"
       assert.equal(result.findings[0].disposition, "deferred");
     },
   );
@@ -537,7 +1596,7 @@ test("consolidateGateFanin includes a symlinked *.json artifact (not silently dr
 
     const result = await consolidateGateFanin({ findingsDir: dir });
     assert.equal(result.overallVerdict, "findings_present");
-    assert.equal(result.severityCounts["must-fix"], 1);
+    assert.equal(result.severityCounts.high, 1); // "must-fix" input normalizes to canonical "high"
     assert.ok(result.angles.some((a) => a.angle === "correctness"), "symlinked angle must be present, not dropped");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -637,6 +1696,35 @@ test("consolidateGateFanin fails closed on an unknown severity", async () => {
   );
 });
 
+// must-fix (input-validation): a raw per-angle findings artifact that
+// self-declares "carriedFromHead" must NOT flow that claim through — a fresh
+// reviewer artifact is the least-trusted input in the flow (subagent-written,
+// glob-discovered from --findings-dir) and, before this guard, this bypassed
+// BOTH proof checks (--carried-angles's mandatory/ALWAYS_INCLUDE + plan checks)
+// entirely: exit 0, angle marked carried, with NO --carried-angles given at
+// all. Reproduces the reviewer's exact repro (a mandatory-angle artifact
+// self-declaring carriedFromHead, no carry flags whatsoever).
+test("consolidateGateFanin refuses a raw artifact that self-declares carriedFromHead, even with no --carried-angles at all", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "acceptance-criteria.json": {
+          angle: "acceptance-criteria",
+          verdict: "clean",
+          findings: [],
+          carriedFromHead: "abc1234",
+        },
+      },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, gate: "pre_approval_gate", repoRoot }),
+          /must not declare "carriedFromHead"/,
+        );
+      },
+    );
+  });
+});
+
 // End-to-end acceptance: the emitted findingsJson must survive the REAL
 // upsert-checkpoint-verdict parsing (normalizeStructuredFindings) and the
 // REAL mandatory-angle coverage check (checkFanoutAngleCoverage) — including
@@ -730,13 +1818,22 @@ test("blocked fan-in refuses to emit findingsJson/--out (fail closed), never an 
       artifact: { angle: "scope", verdict: "blocked", findings: [] },
       detailPattern: /scope: reported verdict "blocked" — re-run that reviewer, then re-consolidate/,
     },
-    "padded-severity": {
-      artifact: {
-        angle: "scope",
-        verdict: "findings_present",
-        findings: [{ severity: " must-fix ", summary: "padded" }],
-      },
-      detailPattern: /scope: angle 'scope' has a finding with invalid severity/,
+    // #1592: incidental whitespace around a RECOGNIZED severity is no longer
+    // invalid (normalizeSeverity trims — but does NOT lowercase — before the
+    // alias lookup; see gate-fanin.test.mjs's own
+    // normalizeSeverity("HIGH") === "HIGH" pin, and the sibling "a severity
+    // with incidental whitespace..." test in gate-fanin.test.mjs), and an
+    // unrecognized severity token is now caught earlier, by this CLI's OWN
+    // artifact-shape floor (a distinct,
+    // unwrapped Error — not routed through consolidateFanin's "fan-in is
+    // blocked" wrapper), which is exactly what a stricter shared floor should
+    // do. This variant instead exercises a malformation the floor does NOT
+    // check but consolidateFanin's OWN validation does — a mismatched
+    // verdict/findings-count pair — so this test still pins two DISTINCT
+    // "fan-in is blocked" detail messages.
+    "findings-present-with-no-findings": {
+      artifact: { angle: "scope", verdict: "findings_present", findings: [] },
+      detailPattern: /scope: angle 'scope' reported findings_present but has no findings/,
     },
   };
   for (const [name, { artifact: badArtifact, detailPattern }] of Object.entries(variants)) {
@@ -1016,7 +2113,7 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     }));
     if (angle === MIXED_ANGLE) {
       findings[1] = { ...findings[1], severity: "must-fix" };
-      findings[2] = { ...findings[2], severity: "defer" };
+      findings[2] = { ...findings[2], severity: "nice-to-have" };
     }
     files[`angle${i}.json`] = { angle, verdict: "findings_present", findings };
   }
@@ -1040,11 +2137,13 @@ test("a fan-in too large to render at minimum summary length still writes a comp
     // just a count) for a specific finding.
     const totalFindings = angleNames.length * FINDINGS_PER_ANGLE;
     assert.equal(result.findings.length, totalFindings);
-    assert.deepEqual(result.severityCounts, { "must-fix": 1, "worth-fixing-now": totalFindings - 2, defer: 1 });
+    // Legacy-spelled input ("worth-fixing-now"/"must-fix"/"nice-to-have")
+    // normalizes to the canonical output vocabulary.
+    assert.deepEqual(result.severityCounts, { high: 1, medium: totalFindings - 2, low: 1, question: 0, nit: 0 });
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.deepEqual(writtenLedger, result.findings);
-    assert.equal(writtenLedger.length, totalFindings);
-    const pinnedLedgerEntry = writtenLedger.find((f) => f.summary === PINNED_SUMMARY);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
+    assert.equal(writtenLedger.findings.length, totalFindings);
+    const pinnedLedgerEntry = writtenLedger.findings.find((f) => f.summary === PINNED_SUMMARY);
     assert.ok(pinnedLedgerEntry, "the ledger must carry the exact, un-shrunk original summary text");
     assert.equal(pinnedLedgerEntry.angle, MIXED_ANGLE);
 
@@ -1066,22 +2165,23 @@ test("a fan-in too large to render at minimum summary length still writes a comp
       assert.equal(section.findings.length, 1);
       const marker = section.findings[0].summary;
       assert.match(marker, new RegExp(`${FINDINGS_PER_ANGLE} finding\\(s\\)`));
-      assert.match(marker, /see the disposition ledger/);
+      assert.match(marker, /— in the disposition ledger/);
       if (angle === MIXED_ANGLE) {
-        // Highest-severity-wins: must-fix beats worth-fixing-now/defer, and
+        // Highest-severity-wins: high beats medium/low, and
         // the marker's own disposition matches that severity's derivation
         // (accepted-for-fix — the default blockCleanOnFindingSeverities is
-        // ["must-fix"]).
-        assert.match(marker, /must-fix: 1/);
-        assert.match(marker, /worth-fixing-now: 28/);
-        assert.match(marker, /defer: 1/);
-        assert.equal(section.findings[0].severity, "must-fix");
+        // ["high"]). Legacy-spelled input ("must-fix"/"worth-fixing-now"/
+        // "nice-to-have") normalizes to the canonical output vocabulary.
+        assert.match(marker, /high: 1/);
+        assert.match(marker, /medium: 28/);
+        assert.match(marker, /low: 1/);
+        assert.equal(section.findings[0].severity, "high");
         assert.equal(section.findings[0].disposition, "accepted-for-fix");
       } else {
-        assert.match(marker, /must-fix: 0/);
-        assert.match(marker, new RegExp(`worth-fixing-now: ${FINDINGS_PER_ANGLE}`));
-        assert.match(marker, /defer: 0/);
-        assert.equal(section.findings[0].severity, "worth-fixing-now");
+        assert.match(marker, /high: 0/);
+        assert.match(marker, new RegExp(`medium: ${FINDINGS_PER_ANGLE}`));
+        assert.match(marker, /low: 0/);
+        assert.equal(section.findings[0].severity, "medium");
         assert.equal(section.findings[0].disposition, "deferred");
       }
     }
@@ -1158,7 +2258,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
       angle: "style",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1173,7 +2273,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     // "correctness" keeps its REAL finding (severity + file + line), not a marker.
     const correctnessFinding = byAngle.get("correctness").findings[0];
-    assert.equal(correctnessFinding.severity, "must-fix");
+    assert.equal(correctnessFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(correctnessFinding.file, "foo.mjs");
     assert.equal(correctnessFinding.line, 12);
     // Full, UN-shrunk text — not just a startsWith prefix, which a
@@ -1184,11 +2284,18 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
     // round's budget.
     assert.equal(correctnessFinding.summary, "null deref at foo.mjs:12 when x is undefined", `expected the ORIGINAL, un-shrunk summary to survive, got: ${correctnessFinding.summary}`);
     assert.ok(!correctnessFinding.summary.endsWith(" …"), "a narrow angle's real finding must not be shrunk when it already fits the whole round");
-    assert.ok(!/omitted.*see the disposition ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
+    assert.ok(!/omitted.*ledger/.test(correctnessFinding.summary), "a narrow angle must not be marker-collapsed when its real finding already fits");
 
     // "style" (the actual cause of the overflow) IS collapsed to a marker.
     const styleFinding = byAngle.get("style").findings[0];
     assert.match(styleFinding.summary, /^300 finding\(s\) omitted from this comment/);
+    // All 300 findings are "nice-to-have" (normalizes to "low") — the
+    // breakdown must count them there, in SEVERITY_ORDER, not leave a
+    // zeroed/mis-tallied parenthesized section.
+    assert.ok(
+      styleFinding.summary.includes("(high: 0, question: 0, medium: 0, low: 300, nit: 0)"),
+      `expected the severity breakdown to tally all 300 findings under "low", got: ${styleFinding.summary}`,
+    );
     assertRendersWithoutThrowing(result.findingsJson);
   });
 });
@@ -1198,7 +2305,7 @@ test("a narrow angle keeps its real finding instead of a longer marker when a wi
 // findings, its bare marker} renders cheaper in isolation — not "bare
 // always wins". A single-finding angle with no file/line and a summary at or
 // under the shrink floor renders its real form (62 chars, measured) SHORTER
-// than its own bare "N omitted — see ledger" marker (83 chars, measured):
+// than its own bare "N omitted — in ledger" marker (22 chars at N=30, measured):
 // angleRenderCost(real) <= angleRenderCost(bareMarker) is true, so this angle
 // is seeded with its real findings directly and is then EXCLUDED from
 // upgradeOrder (it never enters the per-severity upgrade walk the sibling
@@ -1218,7 +2325,7 @@ test("a narrow angle whose real findings render cheaper than its own bare marker
       angle: "wide",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1232,7 +2339,7 @@ test("a narrow angle whose real findings render cheaper than its own bare marker
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "must-fix");
+    assert.equal(narrowFinding.severity, "high"); // "must-fix" input normalizes to canonical "high"
     assert.equal(narrowFinding.summary, "x", "the narrow angle's real (un-shrunk, un-marked) summary must survive");
     assert.ok(!/omitted.*see (the disposition )?ledger/.test(narrowFinding.summary), "the narrow angle must not be marker-collapsed even though it never entered the upgrade loop");
     assertRendersWithoutThrowing(result.findingsJson);
@@ -1262,7 +2369,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
       angle: "wide",
       verdict: "findings_present",
       findings: Array.from({ length: 300 }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `naming nit ${j} ${"z".repeat(150)}`,
         file: `src/f${j}.mjs`,
         line: j + 1,
@@ -1276,7 +2383,7 @@ test("an angle whose original text is too long but whose whole-round-shrunk form
 
     const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
     const narrowFinding = byAngle.get("narrow").findings[0];
-    assert.equal(narrowFinding.severity, "worth-fixing-now");
+    assert.equal(narrowFinding.severity, "medium"); // "worth-fixing-now" input normalizes to canonical "medium"
     assert.ok(narrowFinding.summary.length < originalSummary.length, "the original, un-shrunk summary must not have survived (too long to fit)");
     assert.ok(originalSummary.startsWith(narrowFinding.summary.replace(/ …$/, "")), "the emitted summary must be a truncated PREFIX of the original real text");
     assert.ok(narrowFinding.summary.endsWith(" …"), "a truncated-real candidate ends with the plain ellipsis suffix, distinguishing it from an omitted-count marker");
@@ -1311,9 +2418,15 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
       assert.equal(section.verdict, "findings_present");
       assert.equal(section.findings.length, 1);
       const summary = section.findings[0].summary;
-      if (summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`) {
+      if (summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`) {
         bareCount += 1;
-      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("see the disposition ledger")) {
+      } else if (summary.startsWith(`${FINDINGS_PER_ANGLE} finding(s) omitted from this comment`) && summary.endsWith("— in the disposition ledger")) {
+        // Every finding here is "worth-fixing-now" (normalizes to "medium") —
+        // the parenthesized breakdown must tally all of them there.
+        assert.ok(
+          summary.includes(`(high: 0, question: 0, medium: ${FINDINGS_PER_ANGLE}, low: 0, nit: 0)`),
+          `expected the severity breakdown to tally all ${FINDINGS_PER_ANGLE} findings under "medium", got: ${summary}`,
+        );
         verboseCount += 1;
       } else {
         assert.fail(`marker summary is neither the whole verbose sentence nor the whole bare one (half-truncated?): ${summary}`);
@@ -1336,7 +2449,14 @@ test("a fan-in with enough angles that not all can afford the verbose marker kee
 // above.
 test("a fan-in with enough angles that none can afford the verbose marker uses bare everywhere and still renders", async () => {
   const FINDINGS_PER_ANGLE = 30;
-  const ANGLE_COUNT = 20;
+  // #1592: the canonical severity spellings (e.g. "medium") are shorter than
+  // the pre-rename ones (e.g. "worth-fixing-now"), so a per-angle count
+  // calibrated to the OLD word lengths could tip a single angle's verbose
+  // marker back under the render budget. 23 (rather than 20) angles keeps
+  // this fixture calibrated to the ALL-BARE tier under the new spellings —
+  // still over budget for even a single verbose marker, but not yet over
+  // budget for the withheld tier (see the sibling test right below this one).
+  const ANGLE_COUNT = 23;
   const files = wideAngleFiles({ angleCount: ANGLE_COUNT, findingsPerAngle: FINDINGS_PER_ANGLE });
   await withFindingsDir(files, async (dir) => {
     const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
@@ -1348,7 +2468,7 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
       assert.equal(section.findings.length, 1);
       // Exactly the bare sentence — never a truncated fragment of the
       // verbose one (no " …", no cut-off mid-word).
-      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — see ledger`);
+      assert.equal(section.findings[0].summary, `${FINDINGS_PER_ANGLE} omitted — in ledger`);
       assert.equal(section.findings[0].disposition, "deferred");
     }
     // The ledger is still complete regardless of how far the marker degraded.
@@ -1359,12 +2479,16 @@ test("a fan-in with enough angles that none can afford the verbose marker uses b
 
 // Budget-allocation-by-severity regression: when not every angle can afford
 // the verbose marker, the scarce budget must go to the must-fix-carrying
-// angle first, regardless of filename/artifact-index order. All 13 "defer"
+// angle first, regardless of filename/artifact-index order. All 13 "nice-to-have"
 // angles sort alphabetically BEFORE the one must-fix-carrying angle
 // ("z-mustfix"), so an index/filename-ordered upgrade walk (the prior,
 // reverted behavior) would spend the verbose budget on defer-only angles and
 // leave the must-fix angle bare. Reverting the severity-first ordering back
-// to plain index order fails this test.
+// to plain index order fails this test. Both severities are LEGACY spellings
+// ("must-fix"/"nice-to-have") — this also pins angleWorstSeverityRank
+// ranking correctly on a legacy-spelled artifact (consolidateFanin
+// normalizes on the way in, so this exercises the same end-to-end path a
+// live pre-rename reviewer artifact would take).
 test("the must-fix-carrying angle wins the scarce verbose-marker budget over defer-only angles regardless of file/name order", async () => {
   const FINDINGS_PER_ANGLE = 30;
   const DEFER_ANGLE_COUNT = 13;
@@ -1374,7 +2498,7 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
       angle: `defer-angle-${i}`,
       verdict: "findings_present",
       findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
-        severity: "defer",
+        severity: "nice-to-have",
         summary: `finding ${i}-${j} ${"z".repeat(150)}`,
         file: `src/f${i}.mjs`,
         line: j + 1,
@@ -1407,7 +2531,58 @@ test("the must-fix-carrying angle wins the scarce verbose-marker budget over def
     // Sanity: this fixture really does force at least one angle to bare —
     // otherwise the test would pass even with the old, unfixed ordering.
     const bareCount = [...byAngle.values()].filter(
-      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — see ledger`,
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
+    ).length;
+    assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
+  });
+});
+
+// #1592: SEVERITY_ORDER ranks "question" ahead of "medium" (both defer/
+// answer eventually, but a question keeps gate-close blocked the same way a
+// defect does) — angleWorstSeverityRank must give the scarce verbose-marker
+// budget to a question-carrying angle before a medium-only one, mirroring the
+// must-fix-vs-defer-only case above.
+test("the question-carrying angle wins the scarce verbose-marker budget over medium-only angles", async () => {
+  const FINDINGS_PER_ANGLE = 30;
+  const MEDIUM_ANGLE_COUNT = 13;
+  const files = {};
+  for (let i = 0; i < MEDIUM_ANGLE_COUNT; i++) {
+    files[`d${String(i).padStart(2, "0")}.json`] = {
+      angle: `medium-angle-${i}`,
+      verdict: "findings_present",
+      findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+        severity: "medium",
+        summary: `finding ${i}-${j} ${"z".repeat(150)}`,
+        file: `src/f${i}.mjs`,
+        line: j + 1,
+      })),
+    };
+  }
+  files["z-question.json"] = {
+    angle: "question-angle",
+    verdict: "findings_present",
+    findings: Array.from({ length: FINDINGS_PER_ANGLE }, (_, j) => ({
+      severity: "question",
+      summary: `finding question-${j} ${"z".repeat(150)}`,
+      file: "src/fquestion.mjs",
+      line: j + 1,
+    })),
+  };
+  await withFindingsDir(files, async (dir) => {
+    const result = await consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "ledger.json") });
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+
+    const byAngle = new Map(result.findingsJson.map((a) => [a.angle, a]));
+    const questionSummary = byAngle.get("question-angle").findings[0].summary;
+    assert.match(
+      questionSummary,
+      new RegExp(`^${FINDINGS_PER_ANGLE} finding\\(s\\) omitted`),
+      "the question-carrying angle must keep the verbose breakdown",
+    );
+
+    const bareCount = [...byAngle.values()].filter(
+      (a) => a.findings[0].summary === `${FINDINGS_PER_ANGLE} omitted — in ledger`,
     ).length;
     assert.ok(bareCount > 0, "fixture must force at least one angle to bare to actually exercise the allocation choice");
   });
@@ -1436,8 +2611,8 @@ test("a fan-in with far more angles than even bare markers can fit withholds --o
 
     // The ledger is still written in full regardless.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
-    assert.deepEqual(writtenLedger, result.findings);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.deepEqual(writtenLedger, { overallVerdict: result.overallVerdict, findings: result.findings });
   });
 });
 
@@ -1512,7 +2687,7 @@ test("a withheld-tier round still writes a complete ledger when --out is an exis
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
 });
 
@@ -1533,6 +2708,794 @@ test("a marker-tier round still writes a complete ledger when --out's parent dir
 
     // The ledger must still be complete on disk despite the --out failure.
     const writtenLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
-    assert.equal(writtenLedger.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
+    assert.equal(writtenLedger.findings.length, ANGLE_COUNT * FINDINGS_PER_ANGLE);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Head-stamp guard: a stale artifact staged from an earlier round must be
+// distinguishable from a fresh verdict at the reviewed head.
+// ---------------------------------------------------------------------------
+
+const HEAD_A = "a1".repeat(20);
+const HEAD_B = "b2".repeat(20);
+
+test("parseConsolidateFaninCliArgs parses and normalizes --head-sha, rejecting non-hex", () => {
+  const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A.toUpperCase()]);
+  assert.equal(result.headSha, HEAD_A);
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", "not-a-sha"]),
+    /--head-sha must be a 7-64 char hex SHA/,
+  );
+});
+
+test("consolidateGateFanin accepts an artifact stamped with the round's head", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A });
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed, naming the angle, on a mismatched undeclared head stamp", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_B } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        (err) => err.message.includes('"scope"') && err.message.includes(HEAD_B) && err.message.includes(HEAD_A),
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a missing head stamp (unknown provenance)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /angle "scope" has no valid "headSha" stamp/,
+      );
+      // A malformed stamp is the same unknown-provenance failure, not a bypass.
+      await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", findings: [], headSha: "zz-not-hex" }), "utf8");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /angle "scope" has no valid "headSha" stamp/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin exempts a declared carried-forward angle from the head-stamp check", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A },
+        "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"], { carriedFromHead: HEAD_B })).carried,
+        });
+        // The real artifact wins for the carried angle (existing behavior);
+        // provenance stays the plan's carriedFromHead, no second field.
+        assert.deepEqual(result.angles.map((a) => a.angle).sort(), ["coverage", "scope"]);
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin without --head-sha keeps the pre-stamp behavior for unstamped artifacts", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.overallVerdict, "clean");
+    },
+  );
+});
+
+test("consolidateGateFanin normalizes a mixed-case stamp and a programmatic mixed-case headSha", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: `  ${HEAD_A.toUpperCase()}  ` } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A.toUpperCase() });
+      assert.equal(result.overallVerdict, "clean");
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: "not hex" }),
+        /--head-sha must be a 7-64 char hex SHA/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin lets a blocked artifact reach the blocked-verdict path, not the stamp guard", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "blocked", error: "sentinel refused", findings: [] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A }),
+        /fan-in is blocked .* re-run that reviewer/,
+      );
+    },
+  );
+});
+
+test("consolidateGateFanin rejects a non-string programmatic headSha (no coercion)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      for (const bad of [123, ["a1".repeat(20)], { sha: HEAD_A }]) {
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: bad }),
+          /--head-sha must be a 7-64 char hex SHA string/,
+        );
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin exempts a carried angle case-insensitively but never a delta-sibling by base name", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    // Case-insensitive exact-name match: "Coverage" exempts a "coverage" artifact.
+    await withFindingsDir(
+      { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["Coverage"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["Coverage"], { carriedFromHead: HEAD_B })).carried,
+        });
+        assert.equal(result.ok, true);
+      },
+    );
+    // No baseAngleName collapse: a fresh -delta-at-<sha> sibling is NOT exempted
+    // by its base being carried — its stale stamp still fails closed.
+    await withFindingsDir(
+      { "coverage-delta.json": { angle: "coverage-delta-at-abc1234", verdict: "clean", findings: [], headSha: HEAD_B } },
+      async (dir) => {
+        await assert.rejects(
+          () => consolidateGateFanin({
+            findingsDir: dir,
+            headSha: HEAD_A,
+            gate: "draft_gate",
+            repoRoot,
+            carriedAngles: ["coverage"],
+            carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"], { carriedFromHead: HEAD_B })).carried,
+          }),
+          /coverage-delta-at-abc1234.*stamped for head/,
+        );
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX fan-in integration (#1618): consolidate-fanin MUST
+// run verify-briefing-prefixes before consolidation. The verifier had ZERO
+// callers before this. Each behavior below has a test that fails when reverted
+// (proven by mutation). Sentinel files live directly under <tmpRoot>/ (the tmp/
+// directory) and are read
+// by verifyBriefingPrefixesForHead; the findings artifacts carry headSha stamps
+// matching the round head so the head-stamp guard does not fire first.
+// ---------------------------------------------------------------------------
+
+async function writePrefixSentinel(tmpRoot, scope, headSha, prefixHash) {
+  await mkdir(tmpRoot, { recursive: true });
+  const body = { scope, ...(prefixHash === null ? {} : { prefixHash }) };
+  await writeFile(
+    path.join(tmpRoot, `checkpoint-context-sentinel-${scope}-${headSha}.json`),
+    `${JSON.stringify(body)}\n`,
+    "utf8",
+  );
+}
+
+// A round whose reviewers all recorded the SAME prefix hash consolidates (the
+// invariant-briefing prefix was byte-identical across reviewers). This is the
+// baseline the fail-closed tests below mutate against.
+test("#1618 AC: a round whose sentinels share one prefix hash consolidates", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC4: a head with NO sentinels at all still consolidates — offline/inline/test
+// paths where the fresh-context guard was never invoked stay byte-identical. The
+// count check is skipped (reviewerCount === 0), even with expectedDispatchUnits.
+test("#1618 AC4: a head with no sentinels still consolidates (offline/test path unchanged)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 3 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC1: two sentinels for the head recording DISTINCT prefix hashes → fail
+// closed (a seeded-briefing divergence, the mid-flight-rebuild case). Mutation:
+// revert the verifyBriefingPrefixesForHead call and this passes (the divergence
+// is silently consolidated) — so the test fails when reverted.
+test("#1618 AC1: consolidation fails closed when two sentinels record distinct prefix hashes", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "b".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /DIFFERENT.*prefix hash/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC2: any sentinel for the head recording NO prefix hash → fail closed (the
+// proof was never established for that reviewer — never grandfathered).
+test("#1618 AC2: consolidation fails closed when a sentinel is hashless", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, null);
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /no recorded prefix hash/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 (per-angle framing): expectedDispatchUnits = non-carried angle count, and
+// the sentinel count is short of it → fail closed (a dispatched reviewer never
+// ran the fresh-context guard). expectedDispatchUnits is the dispatch-UNIT
+// count; in per-angle dispatch one unit == one angle, so it equals the angle
+// count here.
+test("#1618 AC3 (per-angle): fails closed when sentinel count < expected dispatch-unit count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Only ONE of two dispatched reviewers wrote a sentinel.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX")
+            && /sentinel count \(1\) is short of the expected dispatch-unit count \(2\)/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 (grouped framing): grouped dispatch writes one sentinel per GROUP. Two
+// angles in ONE group → expectedDispatchUnits=1, and one sentinel SATISFIES it
+// (the non-regression case for #1579/#1601 grouped fan-out — comparing against
+// the angle count would false-fail here). Two groups with only one sentinel →
+// fail closed.
+test("#1618 AC3 (grouped): one sentinel per group — count is the dispatch-UNIT count, not the angle count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Two angles in ONE group → one sentinel satisfies expectedDispatchUnits=1.
+        // (A literal "sentinel count < angle count" check would false-fail here —
+        // this is the regression guard for grouped fan-out.)
+        await writePrefixSentinel(tmpRoot, "draft-gate-group-correctness-input", HEAD_A, "a".repeat(64));
+        const ok = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 1 });
+        assert.equal(ok.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1618 AC3 (grouped): fails closed when sentinel count < group count", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Two groups dispatched, only one reviewer wrote a sentinel.
+        await writePrefixSentinel(tmpRoot, "draft-gate-group-a", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 }),
+          /sentinel count \(1\) is short of the expected dispatch-unit count \(2\)/,
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC3 is skipped (not enforced) when expectedDispatchUnits is omitted — the hash
+// checks (AC1/AC2) still run. This preserves backward compatibility for callers
+// that have not yet threaded the dispatch-unit count.
+test("#1618: without --expected-dispatch-units the count check is skipped (hash checks still run)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // One sentinel for a one-angle round; no expectedDispatchUnits declared.
+        await writePrefixSentinel(tmpRoot, "draft-gate-scope", HEAD_A, "a".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// The briefing-prefix check only runs when --head-sha is given (the same
+// boundary the artifact head-stamp guard uses). Without --head-sha, a divergent
+// sentinel population does not block consolidation (offline/legacy path).
+test("#1618: the briefing-prefix check only runs with --head-sha (no head-sha = no check)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // Divergent hashes that WOULD fail AC1 — but no headSha, so no check.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "b".repeat(64));
+        const result = await consolidateGateFanin({ findingsDir: dir, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// CLI parsing: --expected-dispatch-units must be a positive integer.
+test("parseConsolidateFaninCliArgs parses --expected-dispatch-units and rejects non-positive-int", () => {
+  const ok = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--expected-dispatch-units", "3"]);
+  assert.equal(ok.expectedDispatchUnits, 3);
+  assert.equal(ok.tmpRoot, undefined);
+  for (const bad of ["0", "-1", "1.5", "abc"]) {
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--expected-dispatch-units", bad]),
+      /--expected-dispatch-units must be a positive integer/,
+    );
+  }
+});
+
+test("parseConsolidateFaninCliArgs parses --tmp-root", () => {
+  const ok = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--head-sha", HEAD_A, "--tmp-root", "/var/tmp"]);
+  assert.equal(ok.tmpRoot, "/var/tmp");
+});
+
+// ---------------------------------------------------------------------------
+// GATE-EXEC-BRIEFING-PREFIX records-floor (#1868): the round's persisted
+// request-plan artifact (<gate>-<headSha>.dispatch-plan.json under
+// tmp/gate-context/**) is the AUTHORITY for expected dispatch units. A round
+// whose plan expects units but records ZERO sentinels fails closed (the
+// vacuous-pass residual from #1468); a genuinely zero-unit round does not.
+// ---------------------------------------------------------------------------
+
+async function writeGateRequestPlan(tmpRoot, gate, headSha, plan) {
+  const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${gate}-${headSha}.dispatch-plan.json`), `${JSON.stringify(plan)}\n`, "utf8");
+}
+
+// AC (vacuous-pass-now-fails): the plan expects 2 pending angles but the round
+// recorded zero sentinels and zero dispatch-prompt records — the exact
+// coordinator-round shape #1868 closes. Mutation: revert the floor check and
+// this test fails (the vacuous pass returns).
+test("#1868: a round whose request plan expects units but recorded ZERO sentinels fails closed (records-floor)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: ["coverage", "correctness"] }],
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX records-floor (#1868)")
+            && /pends 2 pending angle\(s\)/.test(err.message)
+            && /ZERO reviewer sentinels/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC (compliant-passes): the plan expects units and the round recorded sentinels
+// with a matching gate-record hash — consolidates clean, unchanged.
+test("#1868: a compliant round (plan expects units, sentinels recorded with matching hashes) still consolidates", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: ["coverage", "correctness"] }],
+        });
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// AC (zero-unit-no-false-fail): an all-carried / genuinely zero-unit gate has
+// a plan whose requestGroups carry no angles — the floor must NOT fire.
+test("#1868: a genuinely zero-unit gate (plan with no pending angles, zero sentinels) is not forced to fail", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [],
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// The floor is derived from the PERSISTED plan artifact, not a caller flag: a
+// caller passing a positive --expected-dispatch-units cannot create a floor
+// where no plan exists (that stays the exact-count reconciliation only), and
+// conversely the plan floor applies with NO flag at all (covered by the first
+// test, which passes no expectedDispatchUnits).
+test("#1868: with no persisted request plan, zero sentinels still consolidate (floor is plan-derived, not flag-derived)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// A CORRUPT plan artifact cannot be silently ignored: the plan is the
+// enforcement authority, so unparseable JSON fails closed.
+test("#1868: an unparseable persisted request-plan artifact fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        const dirPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+        await mkdir(dirPath, { recursive: true });
+        await writeFile(path.join(dirPath, `draft_gate-${HEAD_A}.dispatch-plan.json`), "{not json", "utf8");
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /could not be read\/parsed/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// A parseable plan whose SHAPE is drifted fails closed too — the plan is the
+// enforcement authority, never silently ignorable (#1868 review finding).
+test("#1868: a shape-drifted (non-array requestGroups) request-plan artifact fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: "drifted",
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array requestGroups/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1868: a requestGroup with a non-array angles field fails closed", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-floor-"));
+      try {
+        await writeGateRequestPlan(tmpRoot, "draft_gate", HEAD_A, {
+          gate: "draft_gate",
+          headSha: HEAD_A,
+          requestGroups: [{ model: "test-model", angles: "drifted" }],
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("records-floor (#1868)") && /non-array angles field/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1618 record-matching path: when on-disk per-gate briefing-prefix records
+// exist, consolidate-fanin's verifier exercises the record-matching branch
+// (not only the flat fallback the tests above cover). A sentinel whose hash
+// matches a gate record consolidates; a sentinel whose hash matches NO record
+// fails closed (the production path — write-gate-context persists records).
+// ---------------------------------------------------------------------------
+
+async function writeGateBriefingRecord(tmpRoot, gate, headSha, bytes) {
+  const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${gate}-${headSha}.briefing-prefix.txt`), bytes);
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+test("#1618 record-matching: sentinels whose hashes match an on-disk gate record consolidate", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        // Both sentinels record the SAME hash that matches the draft_gate record.
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, expectedDispatchUnits: 2 });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1618 record-matching: a sentinel whose hash matches NO gate record fails closed", async () => {
+  await withFindingsDir(
+    {
+      "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A },
+      "correctness.json": { angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_A },
+    },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-prefix-"));
+      try {
+        // A gate record exists, but the sentinels record a DIFFERENT hash.
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+        await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /matches no gate briefing-prefix record/i.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1841 (completes #1468): dispatch-prompt LAYOUT enforcement, wired into the
+// SAME --head-sha fan-in block as the GATE-EXEC-BRIEFING-PREFIX hash checks
+// above. The hash checks prove the recorded prefix is byte-identical; this
+// proves whether the reviewer's ACTUAL prompt led with it — an angle-first
+// prompt is caught mechanically here, not only documented.
+// ---------------------------------------------------------------------------
+
+async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, leading }) {
+  await mkdir(tmpRoot, { recursive: true });
+  await writeFile(
+    dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha),
+    JSON.stringify({ scope, headSha, prefixPath, leading }),
+  );
+}
+
+test("#1841 AC4: a head with no dispatch-prompt records still consolidates (offline/legacy path unchanged)", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: a round whose dispatched reviewer prompt is prefix-first (inline) consolidates", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${bytes}## Angle: coverage\nDo the thing.`,
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: a round whose dispatched reviewer prompt leads with the byte-identical POINTER line consolidates", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        const pointerLine = renderBriefingPointerLine(prefixPath);
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${pointerLine}\n## Angle: coverage\nDo the thing.`,
+        });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#1841 AC1/AC2: fails closed when a dispatched reviewer prompt is ANGLE-FIRST (dynamic prose ahead of the invariant prefix)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        // Angle-first: dynamic per-unit prose BEFORE the invariant prefix.
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `## Angle: coverage\nDo the thing.\n${bytes}`,
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /do not lead with the round's byte-identical/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1841 AC3: primer-evidence enforcement default decision. Investigation could
+// not prove (within the shipped harness, offline in this repo) that the Phase
+// 1.5 primer measurably produces provider cache reuse without a live
+// multi-reviewer dispatch to observe — so enforcement stays OPT-IN (unchanged):
+// the fan-in proceeds unchanged, primer evidence unenforced, when neither
+// --primer-evidence nor --primer-plan is given, even on a --head-sha round
+// that also passes the (now-enforced) dispatch-layout/prefix-hash checks.
+// This test pins that decision so a future default-on flip requires
+// deliberately breaking it, not silently drifting.
+// ---------------------------------------------------------------------------
+
+test("#1841 AC3: primer-evidence enforcement stays OPT-IN by default — a round with neither flag consolidates unenforced", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-primer-default-"));
+      try {
+        const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
 });

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -24,6 +23,9 @@ At least one edit:
                                 (--title/--body/--body-file reject empty or
                                 whitespace-only values; use --milestone "" only
                                 to clear the milestone)
+  --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
+                                refuse a body that embeds grill
+                                transcript/synthesis/Q&A headings.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -48,6 +50,7 @@ export function parseEditPrCliArgs(argv) {
       "add-assignee": { type: "string", multiple: true },
       "remove-assignee": { type: "string", multiple: true },
       milestone: { type: "string" },
+      "enforce-grill": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -64,6 +67,7 @@ export function parseEditPrCliArgs(argv) {
     addAssignees: [],
     removeAssignees: [],
     milestone: undefined,
+    enforceGrill: false,
     jq: undefined,
     silent: false,
   };
@@ -138,6 +142,10 @@ export function parseEditPrCliArgs(argv) {
       options.milestone = token.value;
       continue;
     }
+    if (token.name === "enforce-grill") {
+      options.enforceGrill = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -166,18 +174,10 @@ export function parseEditPrCliArgs(argv) {
 }
 
 async function resolveBody(options) {
-  if (options.bodyFile === undefined) return options.body;
-  // Stdin (fd 0): the fs/promises readFile does NOT accept an integer fd, so read
-  // it synchronously via the callback-style API (which does). A real path stays on
-  // the async promise read.
-  const body =
-    options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
   // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
   // silently clear the PR body (USAGE promises --body/--title reject empties).
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
-  return body;
+  // allowStdin: `--body-file -` reads stdin (fd 0).
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
 }
 
 // Build the `gh pr edit` args and the parallel `edited` list (which fields were
@@ -220,6 +220,28 @@ async function buildEditArgs(options) {
 }
 
 export async function editPr(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+  // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
+  // refuse to write a body that embeds grill transcript/synthesis/Q&A headings
+  // (the raw Q&A and synthesis belong in an ephemeral tmp artifact, not the
+  // durable PR body). Judgment-bound grill clauses stay agent-level.
+  if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
+    const body = await resolveBody(options);
+    const heading = detectGrillEmbedHeading(body);
+    if (heading !== null) {
+      throw new Error(
+        `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS: PR body embeds grill material under heading \`## ${heading}\`; ` +
+        `the raw grill transcript/synthesis/Q&A must stay in an ephemeral tmp artifact, not the durable PR body.`,
+      );
+    }
+    // Stdin (`--body-file -`) was already consumed by resolveBody above to run
+    // the grill check; forward the resolved text inline so buildEditArgs reuses
+    // it instead of re-reading the exhausted fd 0 (which would yield "" and
+    // throw). A real file path re-reads idempotently, so only stdin is rewritten.
+    if (options.bodyFile === "-") {
+      options.body = body;
+      options.bodyFile = undefined;
+    }
+  }
   const { args, edited } = await buildEditArgs(options);
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {

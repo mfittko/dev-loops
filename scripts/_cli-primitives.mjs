@@ -5,8 +5,10 @@ export {
   requireTokenValue,
   parsePositiveInteger,
   parseNonNegativeInteger,
+  parseAllowedRefsCsv,
   parsePrNumber,
   parseIssueNumber,
+  resolveBodyOrFile,
   runChild,
   runCommand,
 } from "@dev-loops/core/cli/primitives";

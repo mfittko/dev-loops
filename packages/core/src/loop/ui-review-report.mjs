@@ -22,6 +22,7 @@
 
 import { isClaudeHarness } from "./run-context.mjs";
 import { sanitizeCopilotSummonTokens } from "../github/copilot-helpers.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
 
 /** Findings past this cap are dropped from the artifact and the drop is logged. */
 export const ARTIFACT_MAX_FINDINGS = 100;
@@ -33,10 +34,6 @@ export const ARTIFACT_MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
  * must-fix in the drive's classification: an error response the app returned and
  * a server-log exception the request raised. */
 const SERVER_ERROR_KINDS = new Set(["error-response", "server-log-exception"]);
-
-function normalizeSha(value) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
 
 /** A confirmed user-facing server error: a must-fix error-response / server-log
  * exception. This is the single-source predicate the severity policy keys off. */
@@ -195,7 +192,7 @@ export function buildReviewInput({ findings = [], headSha = null, hosting = null
   const verdict = list.length === 0 ? "APPROVE" : (blocking ? "REQUEST_CHANGES" : "COMMENT");
 
   return {
-    headSha: normalizeSha(headSha),
+    headSha: trimmedOrNull(headSha),
     verdict,
     inlineComments,
     summaryFindings,

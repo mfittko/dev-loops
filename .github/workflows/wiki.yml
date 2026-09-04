@@ -19,7 +19,7 @@ jobs:
   compile-wiki:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Check out repository
@@ -67,33 +67,8 @@ jobs:
           name: compiled-wiki
           path: .llmwiki/wiki
 
-  publish-wiki:
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_wiki == 'true')
-    needs: compile-wiki
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Download compiled wiki
-        uses: actions/download-artifact@v4
-        with:
-          name: compiled-wiki
-          path: .llmwiki/wiki
-
       - name: Publish wiki
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_wiki == 'true')
         env:
           LLMWIKI_PUBLISH_REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
         run: |

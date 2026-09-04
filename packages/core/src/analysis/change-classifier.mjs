@@ -22,6 +22,10 @@ export const ChangeCategory = Object.freeze({
   // child_process/shell exec, untrusted network fetch, destructive filesystem
   // ops / local-file upload). Triggers an up-front adversarial threat-model angle.
   SECURITY_SENSITIVE_SEAM: "SECURITY_SENSITIVE_SEAM",
+  // #1442: a changed file is on the prose surface (docs/articles/**,
+  // docs/presentations/**, README*, narrative docs/*.md) — ADR 0041 prose half.
+  // Triggers the required fail-closed `deslop` gate angle.
+  PROSE_PRESENT: "PROSE_PRESENT",
 });
 
 // ---------------------------------------------------------------------------
@@ -68,6 +72,12 @@ export const CATEGORY_ANGLE_MAP = {
   // never dropped for such a diff (a seam is dangerous regardless of size).
   [ChangeCategory.SECURITY_SENSITIVE_SEAM]: [
     "threat-model", "input-validation", "scope", "correctness",
+  ],
+  // #1442 (ADR 0041 prose half): a prose-surface path is present → run the
+  // required `deslop` gate angle. skills/docs/** is deliberately NOT prose, so
+  // a normative-contract-only docs diff never triggers deslop.
+  [ChangeCategory.PROSE_PRESENT]: [
+    "deslop",
   ],
 };
 

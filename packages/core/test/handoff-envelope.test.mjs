@@ -121,7 +121,7 @@ const defaultSettings = {
   gates: {
     draft: {
       angles: ["scope", "coverage", "correctness"],
-      blockCleanOnFindingSeverities: ["must-fix"],
+      blockCleanOnFindingSeverities: ["high"],
       requireCi: true,
     },
   },
@@ -307,6 +307,21 @@ test("combo: local_implementation (phase)", () => {
   );
   assert.equal(env.target.phase, "10");
   assert.ok(env.acceptance.evidence.includes("changed-files"));
+});
+
+test("combo: SPIKE-RELAXED-GATE-PROFILE — a spike run resolves the spike gate (#1628)", () => {
+  const resolverOutput = {
+    ...localPhaseBundle("/tmp/spike.md"),
+    spikeIntakeState: "spike_ready_for_exit",
+  };
+  const env = buildDevLoopHandoffEnvelope(
+    resolverOutput,
+    defaultSettings,
+    {},
+    defaultOptions
+  );
+  assert.equal(env.currentGate, "spike");
+  assert.ok(env.acceptance.criteria.some((c) => c.id === "spike-recorded"));
 });
 
 test("combo: issue_intake", () => {
@@ -695,14 +710,15 @@ test("gate-config: draft gate config from settings", () => {
   assert.ok(env.gateConfig);
   assert.deepEqual(env.gateConfig.angles, ["scope", "coverage", "correctness"]);
   assert.equal(env.gateConfig.requireCi, true);
-  assert.deepEqual(env.gateConfig.blockCleanOnFindingSeverities, ["must-fix"]);
+  assert.deepEqual(env.gateConfig.blockCleanOnFindingSeverities, ["high"]);
 });
 
 test("gate-config: pre-approval gate config from settings", () => {
   const settings = {
     ...defaultSettings,
     gates: {
-      draft: { angles: ["scope"], requireCi: true, blockCleanOnFindingSeverities: ["must-fix"] },
+      draft: { angles: ["scope"], requireCi: true, blockCleanOnFindingSeverities: ["high"] },
+      // Legacy spelling as input (backward compat): still resolves the angles correctly.
       preApproval: { angles: ["dry", "kiss"], requireCi: true, blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] },
     },
   };
@@ -724,7 +740,7 @@ test("gate-config: excludes filtered angles", () => {
       draft: {
         angles: ["scope", "coverage", { name: "deep", enabled: false }],
         requireCi: true,
-        blockCleanOnFindingSeverities: ["must-fix"],
+        blockCleanOnFindingSeverities: ["high"],
       },
     },
   };

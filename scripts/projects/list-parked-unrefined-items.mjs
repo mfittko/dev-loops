@@ -22,7 +22,13 @@ import { main as listQueueItems } from "./list-queue-items.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
-import { detectIssueRefinementArtifact, REFINEMENT_ARTIFACT_SOURCES } from "@dev-loops/core/loop/issue-refinement-artifact";
+import {
+  MISSING_AC_CHECKLIST_FINDING,
+  MISSING_DOD_CHECKLIST_FINDING,
+  MISSING_EXPLICIT_NON_GOALS_FINDING,
+  detectIssueRefinementArtifact,
+  REFINEMENT_ARTIFACT_SOURCES,
+} from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--project <number|id>]
 
@@ -35,8 +41,8 @@ refinement-completeness check as the enqueue gate. It never grills or mutates.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops queue.board.number /
-                          queue.board.title.
+                          resolved from the .devloops tracker.board
+                          number / title.
   --help, -h              Show this help.
 
 Output (stdout):
@@ -110,6 +116,35 @@ function parseCliArgs(argv) {
   return args;
 }
 
+// Fixed-bound concurrency limiter: runs `fn` over `items` in chunks of `limit`,
+// preserving result order (index-stable) regardless of per-item completion
+// order. Fail-closed: a chunk's Promise.all rejects on the first per-item
+// throw and propagates it (like a sequential loop). Unlike a sequential loop
+// it does not cancel the chunk's other in-flight calls — Promise.all cannot —
+// so siblings already started run to completion before the rejection surfaces.
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.all(chunk.map((item) => fn(item)));
+    for (let j = 0; j < chunkResults.length; j++) results[i + j] = chunkResults[j];
+  }
+  return results;
+}
+
+const BODY_FETCH_CONCURRENCY = 4;
+
+// The enqueue gate's per-finding vocabulary (one taxonomy, no drift):
+// a matrix miss reports the actually-missing arm, not the full source
+// list — an AC-only issue is missing its DoD checklist, not everything.
+// Keys derive from the exported findings so the map cannot drift from the
+// predicate's vocabulary (a typo'd key would silently fall back).
+const MISSING_BY_FINDING = new Map([
+  [MISSING_DOD_CHECKLIST_FINDING, ["Definition of done checklist"]],
+  [MISSING_AC_CHECKLIST_FINDING, ["Acceptance criteria checklist"]],
+  [MISSING_EXPLICIT_NON_GOALS_FINDING, ["explicit Non-goals section"]],
+]);
+
 async function main(args, { env = process.env, runChild = _runChild, cwd = process.cwd() } = {}) {
   // The park column is where the enqueue fail-safe diverts un-refined issues.
   const parkedColumn = nonSuccessBoardColumn(cwd);
@@ -119,29 +154,29 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
   );
   const items = listed.items ?? [];
 
-  const unrefined = [];
-  for (const item of items) {
+  const perItem = await mapConcurrent(items, BODY_FETCH_CONCURRENCY, async (item) => {
     // Issue-only: a PR in the park column is not gated by the refinement check.
-    if (item.issueNumber == null) continue;
+    if (item.issueNumber == null) return null;
     const body = await fetchIssueBody(
       { repo: args.repo, issue: item.issueNumber },
       { env, runChild },
     );
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
-    // finding !== null is the explicit "has NO refinement artifact" signal.
-    if (artifact.finding === null) continue;
-    unrefined.push({
+    // finding !== null is the explicit "fails the refinement floor" signal:
+    // no refinement artifact, or an incomplete matrix arm (#1877 — an
+    // AC-only or DoD-only body carries a partial artifact but still fails).
+    if (artifact.finding === null) return null;
+    return {
       issueNumber: item.issueNumber,
       title: item.title ?? null,
       url: item.url ?? null,
       itemId: item.itemId ?? null,
       finding: artifact.finding,
       reason: artifact.reason,
-      // The three artifact sources any ONE of which clears the gate — the same
-      // single-source vocabulary the enqueue gate reports (one taxonomy, no drift).
-      missing: [...REFINEMENT_ARTIFACT_SOURCES],
-    });
-  }
+      missing: MISSING_BY_FINDING.get(artifact.finding) ?? [...REFINEMENT_ARTIFACT_SOURCES],
+    };
+  });
+  const unrefined = perItem.filter((x) => x !== null);
 
   return { ok: true, parkedColumn, items: unrefined };
 }

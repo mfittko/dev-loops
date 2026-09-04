@@ -270,18 +270,20 @@ const QUEUE_DESCRIPTIONS = {
 };
 const { run: _queueRunDescription, ...PROJECT_DESCRIPTIONS } = QUEUE_DESCRIPTIONS;
 
-const SUBCOMMAND_ROUTES = {
+export const SUBCOMMAND_ROUTES = {
   gate: {
     "upsert-verdict":     "scripts/github/upsert-checkpoint-verdict.mjs",
     "detect-evidence":    "scripts/github/detect-checkpoint-evidence.mjs",
     "consolidate-fanin":  "scripts/loop/consolidate-fanin.mjs",
     "write-findings-log": "scripts/github/write-gate-findings-log.mjs",
+    "judge-pass":         "scripts/loop/judge-pass.mjs",
     "post-findings":      "scripts/github/post-gate-findings.mjs",
     "request-copilot":    "scripts/github/request-copilot-review.mjs",
     "probe-copilot":      "scripts/github/probe-copilot-review.mjs",
     "capture-threads":    "scripts/github/capture-review-threads.mjs",
     "reply-resolve":      "scripts/github/reply-resolve-review-threads.mjs",
     "offer-human-handoff": "scripts/github/offer-human-handoff.mjs",
+    "size-budget":        "scripts/loop/check-size-budget.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -330,7 +332,7 @@ const SUBCOMMAND_ROUTES = {
 // Back-compat subcommand aliases: { category: { oldName: { canonical, notice } } }.
 // Aliases keep existing callers working while emitting a one-line deprecation
 // notice to stderr so they migrate to the canonical subcommand.
-const SUBCOMMAND_ALIASES = {
+export const SUBCOMMAND_ALIASES = {
   pr: {
     "create-draft": {
       canonical: "create",
@@ -364,12 +366,14 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "detect-evidence": "Check merge preconditions",
     "consolidate-fanin": "Consolidate per-angle findings artifacts",
     "write-findings-log": "Write disposition ledger",
+    "judge-pass": "Derive the fixer act list from the judge verdict (fan-in → judge → fixer)",
     "post-findings": "Post gate fan-out findings comment",
     "request-copilot": "Request Copilot review",
     "probe-copilot": "Poll for Copilot review activity",
     "capture-threads": "Capture review threads",
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
+    "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",
@@ -482,6 +486,7 @@ function buildCliHelpLines() {
     "- dev-loops status                 Show readiness snapshot",
     "- dev-loops doctor                 Show full diagnostic checks",
     "- dev-loops gates                  Print gate state",
+    "- dev-loops --version              Print version and exit",
     "",
     "Subcommands:",
     ...TOP_LEVEL_HELP_CATEGORY_ORDER.flatMap((category) => buildSubcommandLines(category, { includeHeader: true })),
@@ -499,6 +504,8 @@ function buildCliUsageLines(action) {
   switch (action) {
     case "help": case "status": case "doctor": case "gates":
       return ["Usage:", `- dev-loops ${action}`];
+    case "version":
+      return ["Usage:", "- dev-loops --version"];
     case "hide":
       return ["Usage:", "- dev-loops hide", "`hide` is only supported without extra arguments, and only inside the Pi extension."];
     default:
@@ -578,6 +585,15 @@ function parseTopLevelCommand(argv) {
   // Bare --help / -h
   if (cmd === "--help" || cmd === "-h") return { kind: "help" };
 
+  // Version flag (#1897): stable single-line output, no @dev-loops/core
+  // import, so it works in a deps-less marketplace checkout too.
+  if (cmd === "--version" || cmd === "-v") {
+    if (args.length > 1) {
+      return { kind: "malformed", message: "`--version` does not accept additional arguments.", usageAction: "version" };
+    }
+    return { kind: "version" };
+  }
+
   // Top-level commands
   if (TOP_LEVEL_COMMANDS.has(cmd)) {
     if (args.some((a) => a === "--help" || a === "-h")) return { kind: "help" };
@@ -630,6 +646,11 @@ export async function runCli({
   switch (fromTop.kind) {
     case "help": {
       writeLines(stdout, buildCliHelpLines());
+      return 0;
+    }
+    case "version": {
+      const version = readOwnVersion() ?? "unknown";
+      writeLines(stdout, [`dev-loops ${version}`]);
       return 0;
     }
     case "category_help": {
@@ -711,11 +732,23 @@ export async function runCli({
       // Retry on usage/flag errors: parse usage for valid flags, retry once (#483).
       // Reached only once core is confirmed resolvable above, so this dynamic
       // import (not a top-level one) never throws ERR_MODULE_NOT_FOUND itself.
-      const { isUsageError, buildCorrectedArgs } = result.status !== 0
+      const { isUsageError, buildCorrectedArgs, extractUsageText } = result.status !== 0
         ? await import("@dev-loops/core/cli/retry-wrapper")
         : {};
       if (result.status !== 0 && isUsageError(result.stderr)) {
-        const correctedArgs = buildCorrectedArgs(scriptArgs, result.stderr);
+        // An argument error's stderr JSON now carries a short `hint`, not the
+        // full usage text (short-error contract), so `buildCorrectedArgs`
+        // usually has nothing to extract valid flags from. `--help` still
+        // prints the full usage unchanged — fetch it there instead so the
+        // auto-correct retry keeps working.
+        let usageSource = result.stderr;
+        if (!extractUsageText(usageSource)) {
+          const helpResult = spawnSync("node", [fromTop.scriptPath, "--help"], {
+            cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+          });
+          if (helpResult.stdout) usageSource = helpResult.stdout;
+        }
+        const correctedArgs = buildCorrectedArgs(scriptArgs, usageSource);
         if (correctedArgs && correctedArgs.length > 0) {
           const retryResult = spawnSync("node", [fromTop.scriptPath, ...correctedArgs], {
             cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   JqFilterError,
   evaluateJqFilter,
+  assertJqFilterSyntax,
+  preflightJqFilter,
   emitResult,
   matchJqOutputToken,
 } from "../../scripts/lib/jq-output.mjs";
@@ -133,6 +135,67 @@ test("emitResult: invalid --jq fails closed (exit 2 + stderr), distinct from pre
   assert.equal(emitResult(sample, { jq: "bogus", silent: true, stdout: out, stderr: err }), 2);
   assert.equal(out.get(), "");
   assert.match(err.get(), /--jq/);
+});
+
+test("assertJqFilterSyntax: syntactically invalid filters throw JqFilterError (before any data exists)", () => {
+  assert.throws(() => assertJqFilterSyntax("ciStatus"), JqFilterError); // no leading '.'
+  assert.throws(() => assertJqFilterSyntax(".items | bogusfn"), JqFilterError); // unsupported stage
+  assert.throws(() => assertJqFilterSyntax(""), JqFilterError); // empty filter
+  assert.throws(() => assertJqFilterSyntax("select()"), JqFilterError); // empty predicate
+  assert.throws(() => assertJqFilterSyntax('== "x"'), JqFilterError); // empty LHS
+  assert.throws(() => assertJqFilterSyntax("select(.x > bogus)"), JqFilterError); // unparsable operand
+  assert.throws(() => assertJqFilterSyntax("{ok,url}"), JqFilterError); // object construction stays unsupported
+});
+
+test("assertJqFilterSyntax: syntactically valid filters pass (identical subset to evaluateJqFilter)", () => {
+  assert.doesNotThrow(() => assertJqFilterSyntax("."));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".ciStatus"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".snapshot.nested.deep"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".items[1].n"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".[0]"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".items[]"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".newComments[] | .body"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".items | length"));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".snapshot | keys"));
+  assert.doesNotThrow(() => assertJqFilterSyntax('.ciStatus=="success"'));
+  assert.doesNotThrow(() => assertJqFilterSyntax(".items[] | select(.n>1) | .n"));
+});
+
+test("assertJqFilterSyntax: a data-dependent failure is NOT rejected at parse time (only knowable once data exists)", () => {
+  // `length` on a scalar throws at evaluation (see evaluateJqFilter test below)
+  // but its syntax alone is valid — assertJqFilterSyntax must not pre-reject it.
+  assert.doesNotThrow(() => assertJqFilterSyntax(".foo | length"));
+  assert.throws(() => evaluateJqFilter({ foo: 5 }, ".foo | length"), JqFilterError);
+  // Order-compare across mismatched runtime types is the same story: valid
+  // syntax, data-dependent failure.
+  assert.doesNotThrow(() => assertJqFilterSyntax("select(.s > 3)"));
+  assert.throws(() => evaluateJqFilter({ s: "5" }, "select(.s > 3)"), JqFilterError);
+});
+
+test("preflightJqFilter: undefined jq is a no-op (nothing to validate)", () => {
+  const err = sink();
+  assert.equal(preflightJqFilter(undefined, { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightJqFilter: a valid filter passes through", () => {
+  const err = sink();
+  assert.equal(preflightJqFilter(".ok", { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightJqFilter: an invalid filter writes the same envelope emitResult would and returns 2", () => {
+  const err = sink();
+  assert.equal(preflightJqFilter("bogus", { stderr: err }), 2);
+  const parsed = JSON.parse(err.get().trim());
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.error, /^--jq \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+
+  // emitResult on the identical filter produces byte-identical stderr — proves
+  // the two share one formatter, not two grammars that could drift apart.
+  const emitErr = sink();
+  emitResult({}, { jq: "bogus", stdout: sink(), stderr: emitErr });
+  assert.equal(err.get(), emitErr.get());
 });
 
 test("matchJqOutputToken: consumes --jq/--silent tokens into options, ignores others", () => {

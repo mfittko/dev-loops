@@ -12,14 +12,17 @@ import {
   PLAN_FILE_REFINE_STOP,
 } from "@dev-loops/core/loop/plan-file-refine-contract";
 import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-intake-contract";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { classifyDocsGrillFinding } from "../loop/docs-grill-contract.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { DEFAULT_TIER_DEFAULTS } from "../loop/check-size-budget.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   refine-plan-file.mjs --plan-file <path> --payload <path> [--json]
 Refine a local plan file in place: write the refiner-produced Acceptance
-criteria, Definition of done, coverage matrix, and recorded docs-grill
-findings into the plan file, advance the intake state to
+criteria, Definition of done, per-phase size estimate, coverage matrix, and
+recorded docs-grill findings into the plan file, advance the intake state to
 plan_refined_ready_for_promotion, and stop at a local human-review
 checkpoint. Read-only against the tracker: no GitHub calls, no issue/PR/
 comment, no promotion.
@@ -28,7 +31,14 @@ Required:
   --plan-file <path>  Path to the phase-doc-format plan file to refine in place
   --payload <path>    Path to a JSON file with the refiner output
                       ({ acceptanceCriteria, definitionOfDone, coverageMatrix,
+                        sizeEstimate: { logicLoc, tier?, oversizeJustification? },
                         grillFindings? })
+                      sizeEstimate uses check-size-budget.mjs's vocabulary
+                      (logicLoc, tier: default|t1|t3). An estimate over the
+                      repo's gates.size.tiers.default.softLoc must carry a
+                      non-empty oversizeJustification (the refiner looked for
+                      a seam to split the phase and, finding none, records
+                      why it is cohesive) or the refine fails closed.
 Optional:
   --json              Machine-readable JSON output
   --help              Show this help
@@ -91,7 +101,7 @@ export function parseRefinePlanFileCliArgs(argv) {
   return options;
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, repoRoot = resolveRepoRoot(process.cwd()) } = {}) {
   const options = parseRefinePlanFileCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
@@ -119,6 +129,27 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     };
   });
 
+  // Same threshold the actual post-hoc PR size budget escalates on (Phase 1 of
+  // #1480): a repo-configured gates.size.tiers.default.softLoc wins, else the
+  // check-size-budget.mjs fallback — the plan-time estimate and the real diff
+  // measurement are checked against the same number.
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
+  // A broken .devloops must not silently pick the fallback threshold at plan
+  // time and diverge from the post-hoc size-budget gate (which fails closed on
+  // config errors). Plan-time is advisory — the real diff measurement re-checks
+  // fail-closed — so surface the errors rather than aborting the refine.
+  if (Array.isArray(configErrors) && configErrors.length > 0) {
+    const detail = configErrors
+      .map((e) => (typeof e === "string" ? e : e?.message ?? JSON.stringify(e)))
+      .join("; ");
+    process.stderr.write(
+      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size threshold falls back to the default softLoc, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
+    );
+  }
+  const sizeSoftLoc = typeof config?.gates?.size?.tiers?.default?.softLoc === "number"
+    ? config.gates.size.tiers.default.softLoc
+    : DEFAULT_TIER_DEFAULTS.softLoc;
+
   const [acHeading, dodHeading] = PLAN_FILE_REFINEMENT_SECTIONS;
   const result = refinePlanFileInPlace({
     markdownText,
@@ -126,6 +157,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     hasAcceptanceCriteria: extractSection(markdownText, acHeading) ? true : false,
     hasDefinitionOfDone: extractSection(markdownText, dodHeading) ? true : false,
     payload: { ...payload, grillDispositions },
+    sizeSoftLoc,
   });
 
   if (!result.ok) {
@@ -149,6 +181,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     planFileIntakeState: result.planFileIntakeState,
     stop: result.stop,
     grillDispositions: result.grillDispositions,
+    sizeEstimate: result.sizeEstimate,
   };
   if (options.json) {
     process.exitCode = emitResult(summary, { jq: options.jq, silent: options.silent, stdout });
@@ -160,6 +193,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
         `  state: ${result.planFileIntakeState}`,
         `  stop: ${result.stop.kind} (${PLAN_FILE_REFINE_STOP.LOCAL_HUMAN_REVIEW === result.stop.kind ? "stop for local human review; no tracker artifact created" : result.stop.kind})`,
         `  grill findings recorded: ${result.grillDispositions.length}`,
+        `  size estimate: ${result.sizeEstimate.logicLoc} logic LOC (tier: ${result.sizeEstimate.tier})${result.sizeEstimate.overBudget ? ` — oversize: justified (${result.sizeEstimate.oversizeNote})` : ""}`,
       ].join("\n") + "\n",
     );
   }

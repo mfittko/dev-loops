@@ -1,28 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseCreateIssueCliArgs, createIssue, runCli } from "../../scripts/github/create-issue.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh({ code = 0, stdout, stderr = "" } = {}) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    return {
-      code,
-      stdout: code === 0 ? (stdout ?? "https://github.com/o/n/issues/42\n") : "",
-      stderr,
-    };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
+  return makeGhStub(
+    [{ code, stdout: code === 0 ? (stdout ?? "https://github.com/o/n/issues/42\n") : "", stderr }],
+    { repeatLastOnOverflow: true },
+  );
 }
 
 test("parseCreateIssueCliArgs: requires --repo and --title", () => {
@@ -152,6 +142,33 @@ test("createIssue: throws on unparseable URL output", async () => {
     () => createIssue({ repo: "o/n", title: "T", body: "b", labels: [], assignees: [] }, { run }),
     /no parseable issue URL/,
   );
+});
+
+test("runCli: creates the issue and idempotently/fail-open attempts the Backlog board add", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "create-issue-board-"));
+  try {
+    const { run, calls } = stubGh({ stdout: "https://github.com/o/n/issues/42\n" });
+    const stdout = captureStream();
+    const stderr = captureStream();
+    // cwd without a queue.board -> the board add fails OPEN (no-board-configured):
+    // the issue creation still succeeds and the run still exits 0.
+    const code = await runCli(
+      ["--repo", "o/n", "--title", "T", "--body", "b"],
+      { run, stdout, stderr, cwd: tempDir },
+    );
+    assert.equal(code, 0);
+    const out = JSON.parse(stdout.get());
+    assert.equal(out.ok, true);
+    assert.equal(out.issueNumber, 42);
+    assert.equal(out.board.enqueued, false);
+    assert.equal(out.board.reason, "no-board-configured");
+    // Only the gh issue create call happened; no board-add gh calls for an
+    // unconfigured board.
+    assert.equal(calls.length, 1);
+    assert.ok(stderr.get().includes("not enqueued"));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("runCli: --jq extracts issueNumber; --silent maps to exit code", async () => {

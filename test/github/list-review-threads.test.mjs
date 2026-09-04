@@ -279,3 +279,31 @@ test("fetchAllReviewThreads + filterThreads compose directly (unit-level)", asyn
   const filteredOut = filterThreads(threads, { author: "someone-else" });
   assert.equal(filteredOut.length, 0);
 });
+
+test("fetchAllReviewThreads fails closed on non-advancing and unbounded cursor sequences", async () => {
+  const page = (cursor) => ({
+    code: 0,
+    stderr: "",
+    stdout: threadsPayload({ hasNextPage: true, endCursor: cursor, nodes: [] }),
+  });
+
+  let calls = 0;
+  await assert.rejects(
+    () => fetchAllReviewThreads(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => { calls += 1; return page("SAME"); } },
+    ),
+    /pagination did not advance/,
+  );
+  assert.equal(calls, 2);
+
+  let cycleCalls = 0;
+  await assert.rejects(
+    () => fetchAllReviewThreads(
+      { repo: "owner/repo", pr: 1 },
+      { env: {}, runChild: async () => { cycleCalls += 1; return page(cycleCalls % 2 === 0 ? "A" : "B"); } },
+    ),
+    /exceeded 100 pages/,
+  );
+  assert.equal(cycleCalls, 100);
+});

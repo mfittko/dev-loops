@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mfittko/dev-loops/schemas/dev-loop-config.schema.json",
   "title": "dev-loops config",
-  "description": "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* layer, consumer .devloops (.yaml/.yml/.json), and the legacy .pi/dev-loop/settings.*/overrides.* fallbacks. The zod loader remains authoritative: cross-field refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) are enforced there and cannot be expressed in JSON Schema.",
+  "description": "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, the repo-local .pi/dev-loop/defaults.* layer, and consumer .devloops (.yaml/.yml/.json). The zod loader remains authoritative: cross-field refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) are enforced there and cannot be expressed in JSON Schema.",
   "type": "object",
   "properties": {
     "version": {
@@ -205,6 +205,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -220,8 +229,8 @@
               "type": "object",
               "properties": {
                 "subtractive": {
-                  "default": false,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "default": true,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
@@ -244,19 +253,96 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
+            },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "worthFixingNowFixWindow": {
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
@@ -308,6 +394,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -323,8 +418,8 @@
               "type": "object",
               "properties": {
                 "subtractive": {
-                  "default": false,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "default": true,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
@@ -347,19 +442,96 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
+            },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "worthFixingNowFixWindow": {
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
@@ -411,6 +583,15 @@
                         "description": "Model tier alias for this angle (used when `model` is absent).",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "scope": {
+                        "description": "Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full.",
+                        "type": "string",
+                        "enum": [
+                          "full",
+                          "changed-files",
+                          "docs-only"
+                        ]
                       }
                     },
                     "required": [
@@ -426,8 +607,8 @@
               "type": "object",
               "properties": {
                 "subtractive": {
-                  "default": false,
-                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (was gates.<gate>.dynamicAngles).",
+                  "default": true,
+                  "description": "Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles.",
                   "type": "boolean"
                 },
                 "additive": {
@@ -450,23 +631,198 @@
             },
             "blockCleanOnFindingSeverities": {
               "default": [
-                "must-fix"
+                "high"
               ],
-              "description": "Finding severities that block a clean gate verdict.",
+              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "high",
+                  "medium",
+                  "low",
                   "must-fix",
                   "worth-fixing-now",
+                  "nice-to-have",
                   "defer"
                 ]
               }
+            },
+            "mediumFixWindow": {
+              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "worthFixingNowFixWindow": {
+              "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "tiers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Tier name; surfaces as the tier:<name> resolution reason."
+                  },
+                  "match": {
+                    "type": "object",
+                    "properties": {
+                      "kinds": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        },
+                        "description": "Changed-file kinds this tier matches; every changed file's classifyFile() kind must be in this set."
+                      },
+                      "maxFiles": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change touches at most this many files."
+                      },
+                      "maxLines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Match only when the change stays within this many changed lines."
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Diff-class conditions that select this tier."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle set this tier resolves to when matched; unioned with the gate's mandatory angles."
+                  }
+                },
+                "required": [
+                  "name",
+                  "match",
+                  "angles"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             }
           },
           "additionalProperties": false,
           "description": "Relaxed spike gate profile; applies only to spike-mode work."
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "testDiscount": {
+              "default": 0.25,
+              "description": "Weight applied to test LOC when computing logicLoc = code + testDiscount * test.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "absoluteHardLoc": {
+              "default": 2000,
+              "description": "Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier.",
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "tiers": {
+              "default": {},
+              "description": "Per-tier soft/waiver/slice thresholds and path patterns.",
+              "type": "object",
+              "properties": {
+                "default": {
+                  "default": {
+                    "softLoc": 400,
+                    "waiverLoc": 1500
+                  },
+                  "description": "Fallback tier applied to every changed file that matches no t1/t3 pattern.",
+                  "type": "object",
+                  "properties": {
+                    "softLoc": {
+                      "description": "Escalate above this many logic LOC; null disables the soft threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "waiverLoc": {
+                      "description": "Block (waiver required) above this many logic LOC, up to absoluteHardLoc; null disables the waiver threshold for this tier.",
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "t1": {
+                  "description": "Risk-slice tier (money/auth/shared/ungated paths). Empty by default — a repo defines its own patterns; the T1 slice is computed separately from whole-PR LOC.",
+                  "type": "object",
+                  "properties": {
+                    "patterns": {
+                      "description": "Glob-style path patterns; a changed file matching one resolves to this tier.",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "sliceHardLoc": {
+                      "description": "T1 only: block above this many T1-slice logic LOC unless waived by a named human approver.",
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "t3": {
+                  "description": "Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies. Per-tier soft/waiver thresholds are not yet honored (Phase 1).",
+                  "type": "object",
+                  "properties": {
+                    "patterns": {
+                      "description": "Glob-style path patterns; a changed file matching one resolves to this tier.",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "description": "Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns."
         },
         "requireFanoutEvidence": {
           "type": "boolean",
@@ -480,11 +836,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "Cap on parallel gate fan-out reviewers; overflow runs in sequential batches."
+          "description": "SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."
         },
         "postFindingsComments": {
           "type": "boolean",
-          "description": "Post consolidated gate findings as a marker-tagged PR comment (default true)."
+          "description": "Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false)."
         },
         "anglePool": {
           "type": "array",
@@ -497,6 +853,67 @@
         "rejectForeignAngles": {
           "type": "boolean",
           "description": "Reject fan-out provenance naming angles outside the gate's configured pool (default true)."
+        },
+        "fanout": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "default": "grouped",
+              "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split).",
+              "type": "string",
+              "enum": [
+                "grouped",
+                "per-angle"
+              ]
+            },
+            "groups": {
+              "description": "Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup).",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Group name; recorded as the shared reviewer's provenance `group` when this group dispatches."
+                  },
+                  "angles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Angle names batched onto one reviewer when this group resolves."
+                  }
+                },
+                "required": [
+                  "name",
+                  "angles"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "maxAnglesPerGroup": {
+              "default": 3,
+              "description": "Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxConcurrent": {
+              "default": 4,
+              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "sequential": {
+              "default": false,
+              "description": "Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate)."
         }
       },
       "additionalProperties": false,
@@ -568,7 +985,7 @@
         },
         "requireRetrospective": {
           "type": "boolean",
-          "description": "Require a retrospective checkpoint before a loop completes."
+          "description": "Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."
         },
         "requireDraftFirst": {
           "type": "boolean",
@@ -577,6 +994,23 @@
         "devModeDefault": {
           "type": "boolean",
           "description": "Default new loops to dev mode."
+        },
+        "stallDetection": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Enable agent-level stall -> auto-fresh-dispatch.",
+              "type": "boolean"
+            },
+            "thresholdMinutes": {
+              "default": 5,
+              "description": "No-turn-progress window in minutes before a child is treated as stalled.",
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
         },
         "baseBranch": {
           "type": "string",
@@ -653,23 +1087,6 @@
           "minimum": 0,
           "maximum": 10
         },
-        "board": {
-          "type": "object",
-          "properties": {
-            "number": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "description": "GitHub Projects board number."
-            },
-            "title": {
-              "type": "string",
-              "minLength": 1,
-              "description": "GitHub Projects board title."
-            }
-          },
-          "additionalProperties": false,
-          "description": "Deprecated: use tracker.board instead. GitHub Projects board identifier."
-        },
         "archiveOlderThanDays": {
           "type": "integer",
           "exclusiveMinimum": 0,
@@ -707,7 +1124,7 @@
             }
           },
           "additionalProperties": false,
-          "description": "Tracker board identifier; supersedes the deprecated queue.board."
+          "description": "Tracker board identifier."
         }
       },
       "additionalProperties": false,
@@ -1006,6 +1423,63 @@
       },
       "additionalProperties": false,
       "description": "UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps."
+    },
+    "postMerge": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "run": {
+                "type": "string",
+                "minLength": 1
+              },
+              "onlyIfChanged": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "verify": {
+                "type": "string",
+                "minLength": 1
+              },
+              "timeoutMs": {
+                "default": 120000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600000
+              },
+              "verifyTimeoutMs": {
+                "default": 60000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600000
+              },
+              "verifyIntervalMs": {
+                "default": 2000,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60000
+              }
+            },
+            "required": [
+              "name",
+              "run"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "description": "Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify)."
     }
   },
   "required": [

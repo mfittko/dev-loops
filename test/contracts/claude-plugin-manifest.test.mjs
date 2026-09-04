@@ -37,7 +37,7 @@ test("the plugin exposes exactly the expected agents + skills (locks the surface
     .filter((f) => f.endsWith(".md"))
     .map((f) => f.slice(0, -".md".length))
     .sort();
-  assert.deepEqual(agents, ["dev-loop", "developer", "docs", "fixer", "quality", "refiner", "review"]);
+  assert.deepEqual(agents, ["dev-loop", "developer", "docs", "fixer", "judge", "quality", "refiner", "review"]);
 
   // A skill is a dir containing SKILL.md. `.claude/skills/` also holds bundled shared content
   // (e.g. `docs/` from #816) which is NOT a skill — assert the exact set of SKILL-bearing dirs.
@@ -47,7 +47,7 @@ test("the plugin exposes exactly the expected agents + skills (locks the surface
     if (existsSync(path.join(repoRoot, ".claude", "skills", d.name, "SKILL.md"))) skills.push(d.name);
   }
   skills.sort();
-  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "ui-review"]);
+  assert.deepEqual(skills, ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "review", "ui-review"]);
 });
 
 test("the publish files allowlist ships the plugin (not the project settings.json) and preserves Pi packaging", async () => {

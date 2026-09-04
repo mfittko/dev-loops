@@ -636,8 +636,7 @@ test("detect-initial-copilot-pr-state rejects malformed arguments deterministica
   const missingIssueErr = JSON.parse(missingIssue.stderr);
   assert.equal(missingIssueErr.ok, false);
   assert.equal(missingIssueErr.error, "detect-initial-copilot-pr-state requires both --repo <owner/name> and --issue <number>");
-  assert.equal(typeof missingIssueErr.usage, "string");
-  assert(missingIssueErr.usage.length > 0);
+  assert.equal(missingIssueErr.hint, "run with --help for usage");
 
   const badIssue = await runNode(["--repo", "owner/repo", "--issue", "0"]);
   assert.equal(badIssue.code, 1);
@@ -645,8 +644,7 @@ test("detect-initial-copilot-pr-state rejects malformed arguments deterministica
   const badIssueErr = JSON.parse(badIssue.stderr);
   assert.equal(badIssueErr.ok, false);
   assert.equal(badIssueErr.error, "--issue must be a positive integer");
-  assert.equal(typeof badIssueErr.usage, "string");
-  assert(badIssueErr.usage.length > 0);
+  assert.equal(badIssueErr.hint, "run with --help for usage");
 });
 
 test("detect-initial-copilot-pr-state fails closed when required PR facts are missing", async () => {

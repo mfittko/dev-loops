@@ -29,7 +29,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewDriveRecipe } from "@dev-loops/core/config";
-import { driveUiReview, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
+import { driveUiReview, isAbortedRequestFailure, isErrorResponseStatus, PAGE_ERROR_STACK_MAX_CHARS, DRIVE_SESSION_HEADER } from "@dev-loops/core/loop/ui-review-drive";
 import { captureNamedUiState, launchWebkit, toStopReason } from "./ui-review-capture.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -139,6 +139,11 @@ export function attachPageListeners(page) {
   page.on("requestfailed", (req) => {
     const url = typeof req.url === "function" ? req.url() : req.url;
     const failure = typeof req.failure === "function" ? req.failure()?.errorText : req.failure;
+    // Pre-filter browser-aborted requests here, mirroring the response listener's
+    // isErrorResponseStatus pre-filter above: bounds the buffer AND keeps
+    // navigation-cancelled assets out of each state's console.json, which shapes
+    // this same buffer. The classifier owns the policy (isAbortedRequestFailure).
+    if (isAbortedRequestFailure(failure)) return;
     requestFailures.push({ url, failure: failure ?? null });
   });
   page.on("pageerror", (err) => {

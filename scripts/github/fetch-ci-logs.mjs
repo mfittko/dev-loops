@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -105,15 +106,6 @@ export function parseFetchCiLogsCliArgs(argv) {
   return options;
 }
 
-async function ghJson(run, ghCommand, args, env, label) {
-  const result = await run(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`${label} failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label });
-}
-
 function tailLines(text, n) {
   const lines = String(text).replace(/\r?\n$/u, "").split(/\r?\n/u);
   return lines.slice(Math.max(0, lines.length - n)).join("\n");
@@ -123,11 +115,8 @@ export async function fetchCiLogs(options, { env = process.env, ghCommand = "gh"
   // 1. Resolve the PR's current head SHA — logs must be scoped to the head being
   //    evaluated, not a stale push.
   const pr = await ghJson(
-    run,
-    ghCommand,
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"],
-    env,
-    "gh pr view",
+    { env, ghCommand, runChild: run, label: "gh pr view" },
   );
   const headSha = typeof pr.headRefOid === "string" ? pr.headRefOid.trim() : "";
   if (headSha.length === 0) {
@@ -136,11 +125,8 @@ export async function fetchCiLogs(options, { env = process.env, ghCommand = "gh"
 
   // 2. List Actions runs for that exact commit.
   const runs = await ghJson(
-    run,
-    ghCommand,
     ["run", "list", "--repo", options.repo, "--commit", headSha, "--json", "databaseId,name,conclusion,status"],
-    env,
-    "gh run list",
+    { env, ghCommand, runChild: run, label: "gh run list" },
   );
   if (!Array.isArray(runs)) {
     throw new Error("gh run list did not return a JSON array");

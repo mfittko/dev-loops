@@ -85,5 +85,7 @@ multi-browser coverage. The criterion is only the conservative path-glob +
 registry-membership + passing-coverage check. The reusable named-state artifact
 shape and the WebKit config the shared harness builds on are documented in
 [UI Smoke Harness](./ui-smoke-harness.md) and [UI Artifact Contract](./ui-artifact-contract.md);
-the optional designer/vision review loop that consumes those artifacts is in
-[UI Designer Review Loop](./ui-designer-review-loop.md).
+the required designer/vision review loop that consumes those artifacts is in
+[UI Designer Review Loop](./ui-designer-review-loop.md) (required recorded-
+evidence pass on the rendered-HTML paths, ADR 0041 / issue #1443, distinct from
+this e2e smoke gate).

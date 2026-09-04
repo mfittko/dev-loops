@@ -24,6 +24,8 @@
  * posting, visual-regression/pixel-diffing, cross-browser matrix.
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+
 const MUST_FIX = "must-fix";
 
 /** Request header the drive advertises its drive-session id on, so a cooperating
@@ -42,6 +44,19 @@ const MUTATING_ACTIONS = new Set(["click", "select", "upload", "dispatch"]);
  * buffer bounding) and the classifier, so the policy has a single source. */
 export function isErrorResponseStatus(status) {
   return typeof status === "number" && (status < 200 || status >= 400);
+}
+
+/** The one owner of the request-abort carve-out: a request the browser itself
+ * aborted carries no defect signal. Navigating away cancels in-flight asset
+ * requests, so these appear on every multi-step flow. Matched per engine:
+ * WebKit reports "cancelled", Chromium "net::ERR_ABORTED", Firefox
+ * "NS_BINDING_ABORTED". Matching is case-insensitive and substring-based because
+ * engines wrap the token in longer text. A genuine DNS/connection/TLS failure
+ * carries a different token and is still classified must-fix. */
+export function isAbortedRequestFailure(failure) {
+  if (typeof failure !== "string") return false;
+  const f = failure.toLowerCase();
+  return f.includes("cancelled") || f.includes("canceled") || f.includes("err_aborted") || f.includes("ns_binding_aborted");
 }
 
 /** Bound the stack text carried onto a page-error failure so a runaway stack
@@ -157,6 +172,16 @@ export function classifyFailures({
   }
 
   for (const f of requestFailures) {
+    // A request the BROWSER aborted is not evidence of a defect: navigating away
+    // cancels every asset request still in flight, so a flow with more than one
+    // `goto` manufactures one of these per unfinished image/font on the page it
+    // left. Measured on sofatutor 2026-08-05: a clean two-goto admin2 walk
+    // produced 13, all "cancelled", all classified must-fix — and since
+    // `ok: failures.length === 0`, they failed an otherwise passing drive and
+    // would have been posted as findings against the PR. This is the request-abort
+    // counterpart of the 3xx carve-out in isErrorResponseStatus: a real
+    // server/network fault still arrives with its own failure text and is kept.
+    if (isAbortedRequestFailure(f.failure)) continue;
     failures.push({
       kind: "request-failed",
       severity: MUST_FIX,
@@ -259,7 +284,7 @@ export async function driveUiReview(
   // No-retry is a fixed policy — log it every run so the bound is never implicit.
   record(`caps: maxScreenshots=${resolvedCaps.maxScreenshots}, maxFlows=${resolvedCaps.maxFlows}, maxStepsPerFlow=${resolvedCaps.maxStepsPerFlow}, retries=${resolvedCaps.retries} (no-retry)`);
 
-  const session = typeof driveSession === "string" && driveSession.trim().length > 0 ? driveSession.trim() : null;
+  const session = trimmedOrNull(driveSession);
   const base = () => ({ appUrl: appUrl ?? null, logs, driveSession: session });
 
   // 1. Authenticate as the target role. Fail closed: no session -> STOP, drive

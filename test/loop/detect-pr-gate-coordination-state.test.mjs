@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import test, { describe, it } from "node:test";
+import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
+import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
@@ -56,7 +58,7 @@ function buildMockRuntime(rawEnv = {}, extra = {}) {
     // (a mock throw would not distinguish "git missing" from "git present").
     return defaultRunChild(cmd, cmdArgs, childEnv, stdinText);
   };
-  return { env: { ...process.env, ...rawEnv, DEVLOOPS_RUN_ID: "" }, ghCommand: "gh", runChild, ...extra };
+  return { env: runIdFreeEnv({ ...rawEnv, DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, ...extra };
 }
 
 // Run the CLI in-process when gh entries are stashed on the env, mirroring main()'s
@@ -68,11 +70,10 @@ const runNode = async (args = [], options = {}) => {
   const entries = options.env?.[GH_MOCK_ENTRIES];
   const fallback = () => runNodeHelper(scriptPath, args, {
     ...options,
-    env: {
-      ...process.env,
+    env: runIdFreeEnv({
       ...(options.env ?? {}),
       DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-    },
+    }),
   });
   if (!entries) return fallback();
   let opts;
@@ -114,6 +115,20 @@ function writeGitStub(_tempDir, { stdout = "", stderr = "", exitCode = 0, assert
 function jsonLine(value) {
   return `${JSON.stringify(value)}\n`;
 }
+
+test("parseDetectPrGateCoordinationCliArgs reports --expected-issue in its own error message, not --pr (#1713)", () => {
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "abc"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  assert.throws(
+    () => parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "0"]),
+    /--expected-issue must be a positive integer/u,
+  );
+  // A valid value still parses.
+  const opts = parseDetectPrGateCoordinationCliArgs(["--repo", "mfittko/dev-loops", "--pr", "1713", "--expected-issue", "1628"]);
+  assert.equal(opts.expectedIssue, 1628);
+});
 
 test("parseGitStatusConflictFiles parses NUL-delimited porcelain output with deterministic paths", () => {
   const parsed = parseGitStatusConflictFiles([
@@ -277,6 +292,110 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         reason: "No deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body).",
       },
     });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1915: the "don't go ready dirty" invariant must hold regardless of how the
+// draft->ready transition happened (wrapper, raw `gh pr ready`, or the GitHub
+// UI). This pins that the loop's OWN state detection — not just the caller-side
+// ready-for-review.mjs guard — routes a non-draft PR carrying only unresolved
+// GATE-AUTHORED finding threads (bot-authored, dev-loops:finding marker) back
+// to the fixer/disposition path (unresolved_feedback_present / feedback_resolution),
+// never forward to pre_approval_gate, even when draft_gate itself posted clean.
+test("detect-pr-gate-coordination-state routes a ready PR with only unresolved gate-authored threads to feedback_resolution, not pre_approval_gate (#1915)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-gate-authored-thread-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [],
+        }),
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
+        stdout: jsonLine({ users: [], teams: [] }),
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=266"],
+        stdout: jsonLine({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "PRRT_1",
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "scripts/foo.mjs",
+                      line: 10,
+                      comments: {
+                        nodes: [
+                          {
+                            id: "PRRC_1",
+                            databaseId: 111,
+                            body: "<!-- dev-loops:finding 0123456789abcdef severity=high angle=correctness round=1 -->\nFix this bug.",
+                            author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      },
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "def56789abcdef" }),
+      },
+      {
+        // #1584/#1585 reproduction shape: draft_gate posted clean on the current
+        // head even though gate-authored threads remain unresolved.
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 11,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: def56789abcdef",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            html_url: "https://example.test/comment/11",
+            updated_at: "2026-05-31T20:00:00Z",
+          },
+        ]]),
+      },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.lifecycleState, "unresolved_feedback_present");
+    assert.equal(parsed.loopDisposition, "unresolved_feedback");
+    assert.equal(parsed.gateBoundary, "feedback_resolution");
+    assert.equal(parsed.nextAction, "address_review_feedback");
+    assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1105,9 +1224,8 @@ test("detect-pr-gate-coordination-state progresses past the removed retrospectiv
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-retro-"));
 
   try {
-    await mkdir(path.join(tempDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tempDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tempDir, ".devloops"),
       [
         "version: 1",
       ].join("\n"),
@@ -1331,7 +1449,7 @@ test("detect-pr-gate-coordination-state leaves refinement=present when linked is
       { stdout: '[]\n' },
       {
         stdout: JSON.stringify({
-          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n",
+          body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n",
         }) + "\n",
       },
       {
@@ -1512,6 +1630,184 @@ test("detect-pr-gate-coordination-state: spoofed plan-file marker (no AC/DoD) st
   }
 });
 
+test("detect-pr-gate-coordination-state auto-releases the runner-coordination lock at terminal stop boundaries (#1632)", async () => {
+  // A dev-loop run that reaches a gate-coordination terminal stop (approval
+  // checkpoint / merge-ready / done / blocked) must release its runner-coordination
+  // lock immediately so a fresh re-dispatch acquires the lock without a takeover.
+  // The Copilot-loop terminal release in `loop handoff` (#1128) only covers
+  // Copilot-loop terminal states; this covers the gate-coordination terminal stops
+  // the handoff release misses (e.g. an internal-only / local-impl PR stopped at the
+  // approval checkpoint without a terminal handoff).
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(releaseCalls.length, 1, "runner lock released exactly once at the terminal stop");
+    assert.equal(releaseCalls[0].repo, "owner/repo");
+    assert.equal(releaseCalls[0].pr, 10);
+    assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state does NOT release the runner-coordination lock at non-terminal boundaries (#1632)", async () => {
+  // A non-terminal gate boundary (e.g. draft gate needed) must keep the lock held —
+  // the run is still active and mid-gate.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-no-release-"));
+  try {
+    // A clean plan-file promotion body routes to the draft-gate boundary (non-terminal).
+    const cleanBody =
+      `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\n` +
+      "## Acceptance criteria\n- [ ] a\n\n## Definition of done\n- [ ] b\n";
+    const cleanEnv = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 11,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: cleanBody,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const releaseCalls = [];
+    const releaseMock = async (args) => {
+      releaseCalls.push(args);
+      return { ok: true, status: "released" };
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 11 },
+      buildMockRuntime(cleanEnv, { releaseAsyncRunnerOwnershipImpl: releaseMock }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert.equal(
+      [PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL, PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY, PR_CHECKPOINT_ACTION.REPORT_DONE, PR_CHECKPOINT_ACTION.REPORT_BLOCKED].includes(result.nextAction),
+      false,
+      "non-terminal boundary must not be a terminal stop action",
+    );
+    assert.equal(releaseCalls.length, 0, "runner lock NOT released at a non-terminal boundary");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("TERMINAL_RUNNER_RELEASE_ACTIONS covers exactly the four run-completion/stop actions (#1632)", () => {
+  // All four gate-coordination terminal stop actions trigger the release; no
+  // mid-gate / non-terminal action does. Proves the Set membership that the
+  // integration test (REPORT_BLOCKED) exercises for one action holds for all four.
+  // Cardinality is asserted so a future accidental 5th member is caught here
+  // rather than silently releasing at a non-terminal mid-gate boundary.
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.size, 4);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.REPORT_DONE), true);
+  assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(PR_CHECKPOINT_ACTION.REPORT_BLOCKED), true);
+  // Mid-gate / non-terminal actions must NOT release.
+  for (const action of [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+    PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS,
+  ]) {
+    assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.has(action), false, `${action} must not release`);
+  }
+});
+
+test("detect-pr-gate-coordination-state is non-fatal when the runner release throws (#1632)", async () => {
+  // A release failure (e.g. a corrupt coordination file, or a thrown release)
+  // must never block gate-coordination detection — the try/catch swallows it.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-throw-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 12,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const throwingRelease = async () => {
+      throw new Error("simulated release failure (corrupt coordination file)");
+    };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 12 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: throwingRelease }),
+    );
+
+    // The detector still returns its result despite the release throwing.
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: plan-file marker + bare linked-refinement-doc mention (no checklists) stays missing (fail closed)", async () => {
   // A crafted body pairs the plan-file promotion marker with a plain
   // `tmp/refinement/x.md` mention and zero AC/DoD checklist items. That mention
@@ -1648,6 +1944,105 @@ test("loadRefinementArtifact: non-draft issue-less PR stays unknown (refinement 
   assert.equal(result.linkedIssue, null);
 });
 
+test("loadRefinementArtifact: #1877 allFailed arm still surfaces prBodyUncheckedAcItems/prBodyUncheckedDodItems (PR body is local, not hostage to issue-fetch health)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // Linked-issue body fetch FAILS (non-zero gh exit), but the PR body — the
+    // #1877 block's only input — is in hand and carries an unchecked AC box.
+    const { env } = await writeGhStubHelper(tmp, [
+      { exitCode: 1, stdout: "", stderr: "gh: issue view failed (simulated transient failure)\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [{ number: 900 }],
+          body: "Closes #900\n\n## Acceptance criteria\n\n- [ ] open AC\n\n## Definition of done\n\n- [x] done item\n",
+        },
+        prDraft: false,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    // allFailed arm: status stays unknown, but the #1877 fields must be
+    // populated from the PR body so the deterministic pre-approval block
+    // stays armed (no fail-open on a transient issue-fetch failure).
+    assert.equal(result.status, "unknown");
+    assert.match(result.reason, /Failed to fetch issue bodies/);
+    assert.deepEqual(result.prBodyUncheckedAcItems, ["open AC"]);
+    assert.deepEqual(result.prBodyUncheckedDodItems, []);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (AC-only body) surfaces the detector's finding, not the generic artifact miss — the draft gate is the backstop for the enqueue gate's full-matrix floor", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    // AC checklist + Non-goals present, DoD checklist ABSENT: a #1877 matrix
+    // miss (missing_dod_checklist), not a bare no-artifact miss. The mixed
+    // branch must thread the detector's finding through so the draft gate —
+    // the unconditional backstop for the enqueue gate's full-matrix floor
+    // (QUEUE-ENQUEUE-REFINEMENT-GATE) — surfaces the same taxonomy.
+    const acOnlyIssueBody = [
+      "## Problem", "", "Fix the thing.", "",
+      "## Acceptance criteria", "", "- [ ] AC1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: acOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssue, 900);
+    assert.equal(result.specSource, "linked_issue");
+    assert.equal(result.finding, "missing_dod_checklist");
+    assert.match(result.reason, /no Definition of done checklist/);
+    assert.equal(result._onlyEnforcedWhenDraft, true);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: #1877 matrix-miss linked issue (DoD-only body) surfaces missing_ac_checklist", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const dodOnlyIssueBody = [
+      "## Definition of done", "", "- [ ] DoD1", "",
+      "## Non-goals", "", "- none", "",
+    ].join("\n");
+    const { env } = await writeGhStubHelper(tmp, [
+      { stdout: JSON.stringify({ body: dodOnlyIssueBody }) + "\n" },
+    ]);
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+      },
+      { env },
+    );
+    assert.equal(result.status, "missing");
+    assert.equal(result.finding, "missing_ac_checklist");
+    assert.match(result.reason, /no Acceptance criteria checklist/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferences keeps linked-issue behavior (regression)", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
@@ -1668,6 +2063,35 @@ test("loadRefinementArtifact: tracker-backed draft PR with closingIssuesReferenc
     assert.equal(result.linkedIssue, 900);
     assert.equal(result.specSource, "linked_issue");
     assert.equal(result.finding, "missing_refinement_artifact");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadRefinementArtifact: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS — a tracker-backed (expectedIssue) draft PR dropping its Closes #N surfaces missing_refinement_artifact instead of validating clean", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const result = await loadRefinementArtifact(
+      {
+        repo: "owner/repo",
+        prData: {
+          number: 12,
+          closingIssuesReferences: [],
+          body: "## Probe\n\nProse only.\n\n## Acceptance criteria\n\n- [ ] the AC\n\n## Definition of done\n\n- [ ] the DoD\n\n## Non-goals\n\n- None.\n",
+        },
+        prDraft: true,
+        prClosed: false,
+        prMerged: false,
+        expectedIssue: 900,
+      },
+    );
+    // Even though the body carries AC/DoD, a tracker-backed PR that dropped its
+    // closing reference must fail closed (missing_closing_issue_reference), not
+    // be reclassified as an issue-less lightweight body and validate clean.
+    assert.equal(result.status, "missing");
+    assert.equal(result.linkedIssues.length, 0);
+    assert.equal(result.finding, "missing_refinement_artifact");
+    assert.match(result.reason, /missing_closing_issue_reference/);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -1710,7 +2134,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -1771,7 +2195,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       // issue view stub for refinement artifact lookup
       {
         assertArgs: ["issue", "view", "527", "--repo", "owner/repo", "--json", "body"],
-        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n" }),
+        stdout: jsonLine({ body: "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n" }),
       },
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -1829,6 +2253,123 @@ test("deriveUiE2ePassed reads UI e2e checks from statusCheckRollup", () => {
   );
 });
 
+// #1443: designer/vision recorded-evidence carve-out derives from light/spike relaxed-gate profiles.
+test("deriveUiDesignerReviewExempt honors light/spike relaxed-gate carve-outs", () => {
+  // Light-dispatched → exempt regardless of scope.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: true, changedFiles: ["a"], config: {} }), true);
+  // Spike → exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ spike: true, changedFiles: ["a"], config: {} }), true);
+  // Light mode disabled (no threshold) → not exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a"], config: {} }), false);
+  // Under configured light threshold → exempt.
+  const config = { localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } } };
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
+  // Over file threshold → not exempt.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b", "c"], config }), false);
+  // Line threshold honored when line data is supplied (mirrors the canonical
+  // light-mode rule's maxLines dimension).
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], changedLines: 15, config }), true);
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], changedLines: 25, config }), false);
+  // Files-only callers (no line data) keep the files-only behavior.
+  assert.equal(deriveUiDesignerReviewExempt({ lightweight: false, changedFiles: ["a", "b"], config }), true);
+});
+
+// #1443: the designer evidence read seam passes recorded evidence through and
+// fails closed (null) when no recorded evidence is supplied.
+test("deriveUiDesignerReviewEvidence surfaces recorded evidence and fails closed when absent (#1443)", () => {
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  assert.equal(deriveUiDesignerReviewEvidence(evidence, ["docs/articles/foo.html"]), evidence);
+  assert.equal(deriveUiDesignerReviewEvidence(null, ["docs/articles/foo.html"]), null);
+  assert.equal(deriveUiDesignerReviewEvidence(undefined, []), null);
+});
+
+// #1443: the CLI read-seam flags parse into the detector options.
+test("parseDetectPrGateCoordinationCliArgs parses --designer-review-evidence and --spike (#1443)", () => {
+  const opts = parseDetectPrGateCoordinationCliArgs([
+    "--repo", "owner/repo", "--pr", "1740",
+    "--spike",
+    "--designer-review-evidence", "tmp/evidence.json",
+  ]);
+  assert.equal(opts.spike, true);
+  assert.equal(opts.designerReviewEvidence, "tmp/evidence.json");
+});
+
+// #1443 AC1 end-to-end: a rendered-HTML diff with recorded designer/vision
+// evidence (satisfied outcome) PASSES the required recorded-evidence check
+// through the builder wiring (the reachable pass branch), while one without
+// evidence fails closed.
+test("AC1: rendered-HTML diff with satisfied recorded evidence passes the builder, without it blocks (#1443)", () => {
+  const context = {
+    repo: "owner/repo",
+    pr: 1740,
+    currentHeadSha: "021ac63deadbeef",
+    interpretation: { state: "pr_draft" },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: {},
+    gateEvidence: { draftGate: {}, preApprovalGate: {}, draftGateMarker: {}, preApprovalGateMarker: {} },
+    prData: {
+      isDraft: true,
+      state: "OPEN",
+      title: "t",
+      files: [{ path: "docs/articles/foo.html" }],
+      closingIssuesReferences: [],
+    },
+  };
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  const input = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 2,
+    draftGateConfig: {},
+    preApprovalGateConfig: {},
+    postConvergenceSignificantChange: false,
+    designerReviewEvidence: evidence,
+  });
+  assert.deepEqual(input.designerReviewEvidence, evidence);
+  const scoping = evaluateUiDesignerReviewScoping(extractChangedFiles(context.prData), {
+    designerReviewEvidence: input.designerReviewEvidence,
+    designerReviewExempt: false,
+  });
+  assert.equal(scoping.required, true);
+  assert.equal(scoping.satisfied, true);
+  assert.equal(scoping.missing.length, 0);
+  assert.equal(scoping.unsatisfied.length, 0);
+
+  // Fail-closed path: no recorded evidence -> blocks naming the artifact.
+  const blocked = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 2,
+    draftGateConfig: {},
+    preApprovalGateConfig: {},
+    postConvergenceSignificantChange: false,
+    designerReviewEvidence: null,
+  });
+  const blockedScoping = evaluateUiDesignerReviewScoping(extractChangedFiles(context.prData), {
+    designerReviewEvidence: blocked.designerReviewEvidence,
+    designerReviewExempt: false,
+  });
+  assert.equal(blockedScoping.satisfied, false);
+  assert.ok(blockedScoping.missing.includes("docs/articles/foo.html"));
+});
+
+// #1443: loadRecordedDesignerEvidence reads a recorded evidence file and
+// returns null when no path is supplied.
+test("loadRecordedDesignerEvidence reads a recorded evidence file / null when absent (#1443)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dr-1443-"));
+  const evidencePath = path.join(dir, "evidence.json");
+  const evidence = [{ artifact: "docs/articles/foo.html", outcome: DESIGNER_REVIEW_SATISFIED_OUTCOME }];
+  await writeFile(evidencePath, JSON.stringify(evidence));
+  assert.deepEqual(await loadRecordedDesignerEvidence(evidencePath), evidence);
+  assert.equal(await loadRecordedDesignerEvidence(undefined), null);
+  assert.equal(await loadRecordedDesignerEvidence(""), null);
+  // A JSON value whose type cannot describe recorded evidence (e.g. a bare
+  // string) must throw a clear error, not surface a misleading "missing
+  // evidence" verdict downstream.
+  const badPath = path.join(dir, "bad.json");
+  await writeFile(badPath, JSON.stringify("not-an-object"));
+  await assert.rejects(() => loadRecordedDesignerEvidence(badPath), /must contain a JSON object or array/);
+  await rm(dir, { recursive: true, force: true });
+});
+
 // #1472: buildGateCoordinationEvaluatorInput is the exact function
 // detectPrGateCoordinationState calls to assemble evaluatePrGateCoordination's
 // input — not a re-implementation. Mutation check: replacing
@@ -1873,6 +2414,161 @@ test("buildGateCoordinationEvaluatorInput threads unresolvedThreadCount from con
     postConvergenceSignificantChange: false,
   });
   assert.equal(nonZeroInput.unresolvedThreadCount, 3);
+});
+
+test("buildGateCoordinationEvaluatorInput threads postConvergenceReviewSuppressed from context (#1441)", () => {
+  const context = {
+    repo: "owner/repo",
+    pr: 1460,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN", title: "Fix things", reviews: [], files: [] },
+    mergeStateStatus: "CLEAN",
+    mergeable: "MERGEABLE",
+    conflictFiles: [],
+    interpretation: { state: "ready_to_rerequest_review", sameHeadCleanConverged: false, roundCapCleanEligible: false },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+    postConvergenceReviewSuppressed: true,
+  };
+  const input = buildGateCoordinationEvaluatorInput({
+    context,
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(input.postConvergenceReviewSuppressed, true);
+
+  const unsuppressedInput = buildGateCoordinationEvaluatorInput({
+    context: { ...context, postConvergenceReviewSuppressed: false },
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(unsuppressedInput.postConvergenceReviewSuppressed, false);
+});
+
+// #1441: resolvePostConvergenceReviewSuppressed is the real function
+// loadPrGateCoordinationContext calls to compute postConvergenceReviewSuppressed
+// — exercised directly here (real marker read + real live re-verification via a
+// stubbed gh compare call) rather than a hand-asserted boolean.
+describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
+  async function withTempCheckpointDir(fn) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "gate-coordination-suppression-"));
+    try {
+      await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
+
+  // prData carries Copilot's actual last submitted review (commit "oldsha"),
+  // matching the marker's claimed lastReviewedHeadSha: resolvePostConvergenceReviewSuppressed
+  // re-derives this live rather than trusting the marker's own field.
+  const prDataWithLastReview = (sha) => ({
+    reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: sha } }],
+  });
+
+  it("returns true when a marker matches the current head and the delta re-verifies as docs-only", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild } = makeGhMock([
+        {
+          assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
+        },
+      ]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("oldsha") },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, true);
+    });
+  });
+
+  it("returns false, without any classification call, when the live last-reviewed head disagrees with the marker's claim", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump (stale claim)" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        // Copilot's live last submitted review is actually on "othersha", not
+        // the marker's claimed "oldsha" — a stale/hand-edited marker must not
+        // shrink the compare window it feeds to the classifier.
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("othersha") },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0, "must not classify a delta from an unverified base");
+    });
+  });
+
+  it("returns false without any gh call when no marker exists", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0, "must not call gh when no marker is present");
+    });
+  });
+
+  it("returns false when the marker's head no longer matches (a further push invalidates it)", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "stalesha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild, calls } = makeGhMock([]);
+      const suppressed = await resolvePostConvergenceReviewSuppressed(
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { env: {}, ghCommand: "gh", runChild, checkpointDir },
+      );
+      assert.equal(suppressed, false);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  it("returns false when a pending request or unresolved threads exist, without even reading the marker", async () => {
+    await withTempCheckpointDir(async (checkpointDir) => {
+      await writeSuppressionMarker(
+        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump" },
+        { checkpointDir },
+      );
+      const { runChild } = makeGhMock([]);
+      assert.equal(
+        await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 } },
+          { env: {}, ghCommand: "gh", runChild, checkpointDir },
+        ),
+        false,
+      );
+      assert.equal(
+        await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 1 } },
+          { env: {}, ghCommand: "gh", runChild, checkpointDir },
+        ),
+        false,
+      );
+    });
+  });
 });
 
 // #1472: isRoundCapReachedCleanGrant names the shape evaluatePrGateCoordination's
@@ -1965,4 +2661,119 @@ test("formal-request guard does not re-block the round_cap_reached clean-grant s
     false,
     "the round_cap_reached clean grant must not be rewritten to request_copilot_review",
   );
+});
+
+test("detect-pr-gate-coordination-state routes to pre_approval_gate when a lingering requested status is settled by a clean current-head review (#1588)", async () => {
+  // Reproduces the #1584 trap: all pre_approval_gate preconditions met (CI green,
+  // 0 unresolved threads, clean submitted Copilot review on the current head),
+  // but GitHub's requested_reviewers still lists Copilot (a lingering `requested`
+  // status). Before #1588, detect-pr-gate-coordination-state.mjs mapped
+  // `requested → "requested"` unconditionally, and applyUnsettledCopilotReviewEntryGuard
+  // (#1190) discarded the RUN_PRE_APPROVAL_GATE grant, dead-ending the loop into
+  // `stop`. The shared reconciliation helper settles the stale request (its
+  // timestamp predates the latest same-head submitted review) to `none`, so the
+  // loop proceeds to pre_approval_gate.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-1588-converged-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 1584,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "deadbeef12345678",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [
+            {
+              // Clean submitted Copilot review on the current head
+              author: { login: "copilot-pull-request-reviewer[bot]" },
+              state: "COMMENTED",
+              commit: { oid: "deadbeef12345678" },
+              submittedAt: "2026-06-01T10:30:00Z",
+            },
+          ],
+        }),
+      },
+      {
+        // GitHub's requested_reviewers still lists Copilot (lingering — not yet cleared)
+        assertArgs: ["api", "repos/owner/repo/pulls/1584/requested_reviewers"],
+        stdout: jsonLine({ users: [{ login: "copilot-pull-request-reviewer[bot]" }], teams: [] }),
+      },
+      {
+        // Review threads: 0 unresolved
+        assertArgs: ["api", "graphql", "pr=1584"],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+      },
+      {
+        // Head check (detectCheckpointEvidence)
+        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "deadbeef12345678" }),
+      },
+      {
+        // Clean draft_gate evidence on the current head
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/1584/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 70,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: deadbeef12345678",
+              "Verdict: clean",
+              "Findings summary: Draft gate passed.",
+              "Next action: Mark ready for review.",
+            ].join("\n"),
+            html_url: "https://example.test/comment/70",
+            updated_at: "2026-06-01T10:00:00Z",
+          },
+        ]]),
+      },
+      {
+        // PR reviews stream (detectCheckpointEvidence also fetches reviews)
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/1584/reviews?per_page=100"],
+        stdout: jsonLine([]),
+      },
+      {
+        // Timeline for fetchLatestCopilotReviewRequestAt: the review_requested
+        // event predates the submitted review (stale request → settles to "none")
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: '{"login":"copilot-pull-request-reviewer[bot]","created_at":"2026-06-01T09:00:00Z"}\n',
+      },
+      {
+        // Timeline for fetchCopilotEverFormallyRequested: Copilot WAS formally
+        // requested (so the #613 guard does NOT fire — pre_approval_gate proceeds)
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: 'copilot-pull-request-reviewer[bot]\n',
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "1584"], { env });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+
+    // The lingering requested status is reconciled to "none" (stale request
+    // settled by the clean current-head review), so the interpreter reaches
+    // ready_to_rerequest_review (not waiting_for_copilot_review, which is what
+    // an unreconciled "requested" status would produce).
+    assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
+
+    // The loop routes to pre_approval_gate, not a dead-end stop.
+    assert.equal(parsed.gateBoundary, "pre_approval_gate_needed");
+    assert.equal(parsed.nextAction, "run_pre_approval_gate");
+    assert.ok(
+      parsed.allowedNextActions.includes("run_pre_approval_gate"),
+      "run_pre_approval_gate must be an allowed next action",
+    );
+    assert.ok(
+      !parsed.forbiddenActions.includes("run_pre_approval_gate"),
+      "run_pre_approval_gate must NOT be forbidden — the settled request must not trap the loop",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

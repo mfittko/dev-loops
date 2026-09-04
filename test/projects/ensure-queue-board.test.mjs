@@ -145,6 +145,8 @@ describe("ensure-queue-board", () => {
             url: "https://github.com/users/mfittko/projects/2",
           }),
         },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
         {
           payload: createFieldResponse({ id: "PVTSSF_new", name: "Status" }),
         },
@@ -159,6 +161,7 @@ describe("ensure-queue-board", () => {
       assert.ok(result.project.id);
       assert.ok(result.project.url);
       assert.equal(result.project.statusFieldId, "PVTSSF_new");
+      assert.equal(result.project.linkedRepo, "mfittko/dev-loops");
     });
 
     it("creates project for org owner", async () => {
@@ -174,6 +177,8 @@ describe("ensure-queue-board", () => {
             url: "https://github.com/orgs/myorg/projects/1",
           }),
         },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
         {
           payload: createFieldResponse({ id: "PVTSSF_org", name: "Status" }),
         },
@@ -196,6 +201,8 @@ describe("ensure-queue-board", () => {
             url: "https://github.com/users/mfittko/projects/3",
           }),
         },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
         {
           payload: createFieldResponse({ id: "PVTSSF_custom", name: "Status" }),
         },
@@ -216,6 +223,8 @@ describe("ensure-queue-board", () => {
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops", project: 1 },
@@ -295,6 +304,22 @@ describe("ensure-queue-board", () => {
         /owner\/name/,
       );
     });
+
+    it("defaults linkRepo to the given repo when --link-repo is omitted (QUEUE-BOARD-LINKED)", async () => {
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.project.linkedRepo, "mfittko/dev-loops");
+    });
   });
 
   describe("column auto-repair", () => {
@@ -310,6 +335,8 @@ describe("ensure-queue-board", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([partialField]) },
         { payload: updateFieldResponse() },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops" },
@@ -341,6 +368,8 @@ describe("ensure-queue-board", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([nonStandardField]) },
         { payload: updateFieldResponse(expectedOptions) },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops" },
@@ -438,6 +467,8 @@ describe("ensure-queue-board", () => {
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops" },
@@ -458,6 +489,8 @@ describe("ensure-queue-board", () => {
         {
           payload: createFieldResponse({ id: "PVTSSF_new", name: "Status" }),
         },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops" },
@@ -496,6 +529,8 @@ describe("ensure-queue-board", () => {
         { payload: page1 },
         { payload: page2 },
         { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: repoIdPayload() },
+        { payload: linkRepoResponse() },
       ];
       const result = await main(
         { repo: "mfittko/dev-loops" },
@@ -523,21 +558,37 @@ describe("ensure-queue-board", () => {
       await assert.rejects(() => main({}), /required/);
     });
 
+    // A gh CLI/GraphQL failure on the user probe now falls through to the org
+    // probe (#1949); when both fail the same way (e.g. a systemic auth
+    // failure), resolveOwner fails closed with NO_USER_ID and preserves the
+    // underlying org-probe error via `cause`.
     it("throws on GraphQL API error", async () => {
-      const responses = [{ error: "gh: authentication required" }];
+      const responses = [
+        { error: "gh: authentication required" },
+        { error: "gh: authentication required" },
+      ];
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
-        /gh api graphql failed/,
+        (error) => {
+          assert.equal(error.code, "NO_USER_ID");
+          assert.match(error.cause.message, /gh api graphql failed/);
+          return true;
+        },
       );
     });
 
     it("throws on GraphQL errors in payload", async () => {
-      const responses = [{
-        payload: { errors: [{ message: "Could not resolve to a User" }] },
-      }];
+      const responses = [
+        { payload: { errors: [{ message: "Could not resolve to a User" }] } },
+        { payload: { errors: [{ message: "Could not resolve to a User" }] } },
+      ];
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
-        /GraphQL errors/,
+        (error) => {
+          assert.equal(error.code, "NO_USER_ID");
+          assert.match(error.cause.message, /GraphQL errors/);
+          return true;
+        },
       );
     });
 
@@ -585,7 +636,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    number: 42",
         ].join("\n"));
@@ -601,7 +652,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.yaml"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: From Yaml",
         ].join("\n"));
@@ -617,7 +668,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.json"), JSON.stringify({
           version: 1,
-          queue: {
+          tracker: {
             board: { number: 99 },
           },
         }));
@@ -633,7 +684,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops.yml"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: From Yml",
         ].join("\n"));
@@ -649,7 +700,7 @@ describe("ensure-queue-board", () => {
       try {
         writeFileSync(path.join(tmp, ".devloops"), [
           "version: 1",
-          "queue:",
+          "tracker:",
           "  board:",
           "    title: My Board",
         ].join("\n"));
@@ -691,6 +742,8 @@ describe("rename/reconcile drift", () => {
     { payload: userPayload() },
     { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
     { payload: getFieldsResponse([STATUS_FIELD]) },
+    { payload: repoIdPayload() },
+    { payload: linkRepoResponse() },
   ];
 
   it("reports empty repairs when all standard columns are present", async () => {
@@ -714,6 +767,8 @@ describe("rename/reconcile drift", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([RENAMED_FIELD]) },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
     ];
     const result = await main(
       { repo: "mfittko/dev-loops" },
@@ -738,6 +793,8 @@ describe("rename/reconcile drift", () => {
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([RENAMED_FIELD]) },
       { payload: updateFieldResponse(expectedOptions) },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
     ];
     const result = await main(
       { repo: "mfittko/dev-loops", repairRename: true },
@@ -765,6 +822,8 @@ describe("rename/reconcile drift", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([conflictField]) },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
     ];
     const result = await main(
       { repo: "mfittko/dev-loops", repairRename: true },
@@ -796,6 +855,8 @@ describe("rename/reconcile drift", () => {
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([mixedField]) },
       { payload: updateFieldResponse(expectedOptions) },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
     ];
     const result = await main(
       { repo: "mfittko/dev-loops", repairRename: true },
@@ -824,6 +885,8 @@ describe("rename conflict when standard already exists", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([duplicateStandardField]) },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
     ];
     const result = await main(
       { repo: "mfittko/dev-loops", repairRename: true },
@@ -848,6 +911,8 @@ describe("rename conflict when standard already exists", () => {
           url: "https://github.com/users/mfittko/projects/2",
         }),
       },
+      { payload: repoIdPayload() },
+      { payload: linkRepoResponse() },
       {
         payload: createFieldResponse({ id: "PVTSSF_new", name: "Status" }),
       },

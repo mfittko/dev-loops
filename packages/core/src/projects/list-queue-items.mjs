@@ -1,6 +1,6 @@
 import { runChild as _runChild } from "../cli/primitives.mjs";
-import { parseJsonText } from "../github/review-threads.mjs";
 import { resolveProjectSelector, findProject } from "./resolve-project.mjs";
+import { ghGraphql, resolveOwner } from "../github/gh.mjs";
 
 // ── Validation ───────────────────────────────────────────────────────────
 
@@ -30,45 +30,7 @@ function validateRepo(repo) {
   return repo;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -136,23 +98,6 @@ const GET_PROJECT_ITEMS = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Paginated project listing ────────────────────────────────────────────
 

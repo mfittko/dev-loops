@@ -438,8 +438,7 @@ test("detect-linked-issue-pr rejects malformed arguments deterministically", asy
   const missingIssueErr = JSON.parse(missingIssue.stderr);
   assert.equal(missingIssueErr.ok, false);
   assert.equal(missingIssueErr.error, "Linked PR detection requires both --repo <owner/name> and --issue <number>");
-  assert.equal(typeof missingIssueErr.usage, "string");
-  assert(missingIssueErr.usage.length > 0);
+  assert.equal(missingIssueErr.hint, "run with --help for usage");
 
   const badIssue = await runNode(["--repo", "owner/repo", "--issue", "0"]);
   assert.equal(badIssue.code, 1);
@@ -447,8 +446,7 @@ test("detect-linked-issue-pr rejects malformed arguments deterministically", asy
   const badIssueErr = JSON.parse(badIssue.stderr);
   assert.equal(badIssueErr.ok, false);
   assert.equal(badIssueErr.error, "--issue must be a positive integer");
-  assert.equal(typeof badIssueErr.usage, "string");
-  assert(badIssueErr.usage.length > 0);
+  assert.equal(badIssueErr.hint, "run with --help for usage");
 });
 
 test("runNode rejects deterministically when the child process cannot spawn", async () => {

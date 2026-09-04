@@ -121,6 +121,26 @@ async function pathExists(p) {
 }
 
 /**
+ * True when `abs` is, or sits under, a `node_modules` directory (#1627). A
+ * source entry resolving under node_modules would link/copy the MAIN checkout's
+ * installed dependencies into the worktree, silently testing main's deps instead
+ * of the branch's (WORKTREE-DEPS-ISOLATED). Such entries are rejected by the
+ * provisioning loop below, mirroring the existing {mode:"reject", reason:"traversal"}
+ * shape with a distinct reason so the failure is attributable.
+ */
+function isUnderNodeModules(abs, root) {
+  // Reject only sources that resolve under THIS repo's node_modules (root/
+  // node_modules), never a node_modules component in an ancestor dir: a repos
+  // installed under a path named node_modules (e.g. /work/node_modules/dev-
+  // loops) must not have every provisioning entry rejected (WORKTREE-DEPS-
+  // ISOLATED applies to the main checkout's dependencies, not to arbitrary
+  // path segments).
+  const rootModules = path.join(path.resolve(root), "node_modules");
+  const target = path.resolve(abs);
+  return target === rootModules || target.startsWith(`${rootModules}${path.sep}`);
+}
+
+/**
  * The lexical `inside()` guard in expandEntry can't see through symlinks: a
  * source that is itself a symlink (or sits under a symlinked dir) pointing
  * OUTSIDE repoRoot resolves clean lexically but escapes on realpath. Re-check
@@ -242,6 +262,15 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         continue;
       }
       for (const src of matches) {
+        // Reject any entry whose resolved source is, or sits under, node_modules
+        // (#1627): provisioning must never mirror the main checkout's installed
+        // dependencies into a worktree (WORKTREE-DEPS-ISOLATED). Same reject shape
+        // as the traversal guards.
+        if (isUnderNodeModules(src, root)) {
+          logWarn(`rejected (node_modules source): ${entry} → ${src}`);
+          actions.push({ mode: "reject", reason: "node_modules", entry, src });
+          continue;
+        }
         // Symlink-aware traversal guard: a source whose realpath escapes the
         // main checkout is rejected before any copy/link (the lexical inside()
         // above cannot see through symlinks).

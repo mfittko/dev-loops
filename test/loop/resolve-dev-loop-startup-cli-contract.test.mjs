@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "resolve-dev-loop-startup.mjs");
@@ -89,12 +90,18 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
-      cwd: repoRoot,
+      // An isolated, non-repo cwd (no `.devloops`) rather than repoRoot: this
+      // repo's own `.devloops` sets `workflow.requireRetrospective: true`
+      // (pinned in resolve-dev-loop-startup.test.mjs), which would make the
+      // resolver run a live git ancestry check against this worktree's own
+      // history for the retrospective gate — an ambient dependency this test
+      // must never have. (The retrospectiveCheckpointState in the input above
+      // is not authoritative either way — the resolver always recomputes it —
+      // but an isolated cwd keeps that recomputation itself hermetic: no
+      // checkpoint file, no config opting into the ancestry check.)
+      cwd: tmpDir,
       encoding: "utf8",
       env: { ...process.env, ...resolverTestEnv() },
-      // Note: This test assumes no .pi/dev-loop-retrospective-checkpoint.json
-      // exists in repoRoot — the explicit retrospectiveCheckpointState in the
-      // input ensures deterministic routing regardless.
     });
 
     assert.equal(result.status, 0);
@@ -158,7 +165,10 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
     const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
-      cwd: repoRoot,
+      // Isolated cwd, not repoRoot — see the identical note in the previous
+      // test: repoRoot's own `.devloops` opts into the live retrospective
+      // query, which this test must not depend on.
+      cwd: tmpDir,
       encoding: "utf8",
       // Deliberately omit every async-context signal so both the rejection
       // path AND its exact reason are exercised hermetically — independent of
@@ -168,7 +178,7 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
       env: Object.fromEntries(
         Object.entries(process.env).filter(
           ([k]) =>
-            k !== "DEVLOOPS_RUN_ID" &&
+            !RUN_ID_MARKERS.includes(k) &&
             k !== "CLAUDECODE" &&
             k !== "DEVLOOPS_DETACHED",
         ),
@@ -199,9 +209,8 @@ test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allow
     loopState: "unresolved_feedback_present",
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
-    await mkdir(path.join(tmpDir, ".pi", "dev-loop"), { recursive: true });
     await writeFile(
-      path.join(tmpDir, ".pi", "dev-loop", "settings.yaml"),
+      path.join(tmpDir, ".devloops"),
       "version: 1\nworkflow:\n  asyncStartMode: allowed\n",
       "utf8",
     );
@@ -507,8 +516,8 @@ test("resolve-dev-loop-startup malformed args keep documented stderr JSON shape"
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
   const parsed = JSON.parse(result.stderr);
-  assert.deepEqual(Object.keys(parsed), ["ok", "error", "usage"]);
+  assert.deepEqual(Object.keys(parsed), ["ok", "error", "hint"]);
   assert.equal(parsed.ok, false);
   assert.equal(parsed.error, "Unknown argument: --bogus");
-  assert.match(parsed.usage, /Usage:\n  resolve-dev-loop-startup\.mjs --issue <number>/);
+  assert.equal(parsed.hint, "run with --help for usage");
 });

@@ -3,8 +3,15 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildCreateArgs as coreBuildCreateArgs, createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
+import { enqueueBoardItem } from "./create-pr.mjs";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import {
+  JQ_OUTPUT_PARSE_OPTIONS,
+  JQ_OUTPUT_USAGE,
+  emitResult,
+  matchJqOutputToken,
+  preflightJqFilter,
+} from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: create-issue.mjs --repo <owner/name> --title <t> (--body <b> | --body-file <path>) [--milestone <m>] [--label <l>...] [--assignee <u>...]
 Create an issue. Thin wrapper over \`gh issue create\` — use this instead of an
@@ -164,7 +171,7 @@ export async function createIssue(options, { env = process.env, ghCommand = "gh"
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild, cwd = process.cwd() } = {},
 ) {
   let options;
   try {
@@ -177,6 +184,12 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // Reject a syntactically invalid --jq BEFORE the mutation below, so a
+  // malformed filter can never create the issue then fail (BASE-JQ-OUTPUT-
+  // GUARANTEE would otherwise catch it after the fact -> ok:false on a call
+  // that already succeeded -> a caller retry double-creates).
+  const jqSyntaxError = preflightJqFilter(options.jq, { stderr });
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
   let result;
   try {
     result = await createIssue(options, { env, ghCommand, run });
@@ -184,7 +197,24 @@ export async function runCli(
     stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
     return 1;
   }
-  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+
+  // QUEUE-BOARD-LINKED: idempotent, fail-open board add to Backlog so a newly
+  // created issue lands on the board (a guard at every entry point, not one).
+  // Fail-open by design (non-goal): a board outage must never block issue
+  // creation, so an enqueue failure is reported, not fatal.
+  const issueNumber = Number.isInteger(result.issueNumber) ? result.issueNumber : null;
+  const board = await enqueueBoardItem({
+    repo: options.repo,
+    itemNumber: issueNumber,
+    column: "Backlog",
+    cwd,
+    env,
+    runChild: run,
+  });
+  if (!board.enqueued) {
+    stderr.write(`[create-issue] Board note: issue not enqueued (${board.reason}).\n`);
+  }
+  return emitResult({ ...result, board }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

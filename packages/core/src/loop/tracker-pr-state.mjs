@@ -29,6 +29,9 @@
  *                   business fields
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+import { normalizeGateReviewVerdict } from "./policy-constants.mjs";
+
 /** Stable state name constants for the tracker-first story-to-PR lifecycle. */
 export const TRACKER_PR_STATE = Object.freeze({
   /**
@@ -119,19 +122,6 @@ export const REVERSE_SYNC_ACTION = Object.freeze({
   [TRACKER_PR_STATE.PR_CLOSED_UNMERGED]: "none",
   [TRACKER_PR_STATE.BLOCKED_NEEDS_USER_DECISION]: "none",
 });
-
-const GATE_REVIEW_VERDICT_SET = new Set(["clean", "findings_present", "blocked"]);
-
-function normalizeSha(value) {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
-}
-
-function normalizeGateReviewVerdict(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return GATE_REVIEW_VERDICT_SET.has(normalized) ? normalized : null;
-}
 
 function hasCleanVisibleCurrentHeadDraftGate(snapshot) {
   return snapshot.prHeadSha !== null
@@ -236,9 +226,9 @@ export function normalizeTrackerPrSnapshot(raw) {
     prDraft: normalizeBooleanLike(raw.prDraft),
     prMerged: normalizeBooleanLike(raw.prMerged),
     prClosed: normalizeBooleanLike(raw.prClosed),
-    prHeadSha: prExists ? normalizeSha(raw.prHeadSha) : null,
+    prHeadSha: prExists ? trimmedOrNull(raw.prHeadSha) : null,
     draftGateCommentVisible: normalizeBooleanLike(raw.draftGateCommentVisible),
-    draftGateCommentHeadSha: prExists ? normalizeSha(raw.draftGateCommentHeadSha) : null,
+    draftGateCommentHeadSha: prExists ? trimmedOrNull(raw.draftGateCommentHeadSha) : null,
     draftGateCommentVerdict: normalizeGateReviewVerdict(raw.draftGateCommentVerdict),
   };
 }

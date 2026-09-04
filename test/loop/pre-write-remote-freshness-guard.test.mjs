@@ -105,7 +105,7 @@ test("freshness guard exits non-zero with usage when --branch is missing", async
   const parsed = JSON.parse(result.stderr.trim());
   assert.equal(parsed.ok, false);
   assert.ok(/required/i.test(parsed.error));
-  assert.ok(typeof parsed.usage === "string" && parsed.usage.includes("--branch"));
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("parseRemoteFreshnessGuardCliArgs --help returns help flag", () => {

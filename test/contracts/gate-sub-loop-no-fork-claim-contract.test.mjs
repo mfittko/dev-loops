@@ -63,3 +63,10 @@ test("gate-review sub-loop contract owns the build-once neutral-bundle rule by I
   // The honesty fix (#895) is durable via single-owner rule ID, not phrase-pinned prose.
   assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "skills/docs/gate-review-sub-loop-contract.md");
 });
+
+test("gate-review sub-loop contract owns the source-read-worktree rule by ID (#1603)", () => {
+  // Reviewers reading stale INSTALLED skill/doc copies instead of the worktree
+  // source under review produced false must-fix findings (#1603). The rule is
+  // durable via single-owner rule ID so the invariant survives prose rewording.
+  assertRuleOwned("GATE-EXEC-SOURCE-READ-WORKTREE", "skills/docs/gate-review-sub-loop-contract.md");
+});

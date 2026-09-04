@@ -1368,7 +1368,7 @@ test("steer-loop.mjs exits non-zero on missing subcommand arguments (submit)", a
   const err = JSON.parse(result.stderr);
   assert.equal(err.ok, false);
   assert.ok(typeof err.error === "string" && err.error.length > 0);
-  assert.ok(typeof err.usage === "string" && err.usage.length > 0);
+  assert.equal(err.hint, "run with --help for usage");
 });
 
 test("steer-loop.mjs exits non-zero on unknown subcommand", async () => {

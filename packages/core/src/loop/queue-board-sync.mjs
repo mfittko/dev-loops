@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { runChild as coreRunChild } from "../cli/primitives.mjs";
 import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
+import { ghGraphql, resolveOwner } from "../github/gh.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
@@ -172,9 +172,8 @@ function readDevloopsSettings(repoRoot) {
     try {
       const raw = readFileSync(base + ext, "utf8");
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced
-      // alongside `queue` so loadBoardConfig can prefer tracker.board over
-      // the deprecated queue.board without a second file read.
+      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced so
+      // loadBoardConfig can read tracker.board directly.
       return { settings: settings?.queue ?? null, tracker: settings?.tracker ?? null };
     } catch (err) {
       if (err?.code === "ENOENT") {
@@ -204,18 +203,15 @@ function boardSelector(board) {
 }
 
 export function loadBoardConfig(repoRoot) {
-  const { settings: queue, tracker, error } = readDevloopsSettings(repoRoot);
+  const { tracker, error } = readDevloopsSettings(repoRoot);
   if (error) {
     return { enabled: false, reason: `config read/parse error: ${error}` };
   }
-  // tracker.board (canonical) takes priority over the deprecated queue.board
-  // (issue #1408) — see resolveTrackerBoard in ../config/config.mjs for the
-  // equivalent resolution against the validated, loaded config.
+  // tracker.board (canonical board key, issue #1408) — see resolveTrackerBoard
+  // in ../config/config.mjs for the equivalent resolution against the
+  // validated, loaded config.
   const trackerBoard = boardSelector(tracker?.board);
   if (trackerBoard) return trackerBoard;
-  if (!queue) return { enabled: false };
-  const queueBoard = boardSelector(queue.board);
-  if (queueBoard) return queueBoard;
   return { enabled: false };
 }
 
@@ -281,18 +277,6 @@ export function loadStateColumnMap(repoRoot) {
 
 // ── Minimal project lookup (read-only, no create/repair) ────────────────
 
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
-
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
   "  user(login:$login) {",
@@ -314,46 +298,6 @@ const LIST_ORG_PROJECTS = [
   "  }",
   "}"
 ].join("\n");
-
-async function ghGraphql(query, vars, env, runChild) {
-  const child = runChild ?? coreRunChild;
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await child(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = JSON.parse(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 async function listAllProjects(login, kind, env, runChild) {
   const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;

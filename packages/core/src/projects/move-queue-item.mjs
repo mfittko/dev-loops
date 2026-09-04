@@ -1,6 +1,8 @@
 import { runChild as _runChild } from "../cli/primitives.mjs";
-import { parseJsonText } from "../github/review-threads.mjs";
+import { runPickupRefinementGate } from "../loop/issue-refinement-artifact.mjs";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "../loop/queue-board-sync.mjs";
 import { resolveProjectSelector, findProject, parseItemRef } from "./resolve-project.mjs";
+import { ghGraphql, resolveOwner } from "../github/gh.mjs";
 
 // ── Validation ───────────────────────────────────────────────────────────
 
@@ -27,45 +29,7 @@ function validateRepo(repo) {
   return repo;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -143,23 +107,6 @@ const UPDATE_ITEM_FIELD = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Paginated project listing ────────────────────────────────────────────
 
@@ -252,6 +199,7 @@ function statusOf(node) {
 function classifyExitCode(err) {
   if (err.code === "INVALID_REPO" || err.code === "INVALID_PROJECT" || err.code === "INVALID_ITEM" ||
       err.code === "INVALID_COLUMN" || err.code === "INVALID_ARGS") return 1;
+  if (err.code === "MISSING_REFINEMENT_ARTIFACT") return 4;
   if (err.code === "PROJECT_NOT_FOUND" || err.code === "FIELD_NOT_FOUND" || err.code === "COLUMN_NOT_FOUND" ||
       err.code === "ITEM_NOT_FOUND") return 3;
   return 2;
@@ -259,7 +207,7 @@ function classifyExitCode(err) {
 
 // ── Main logic ──────────────────────────────────────────────────────────
 
-async function main(args, { env = process.env, runChild } = {}) {
+async function main(args, { env = process.env, runChild, cwd = null } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   const [owner, repoName] = repo.split("/");
@@ -365,6 +313,38 @@ async function main(args, { env = process.env, runChild } = {}) {
     };
   }
 
+  // 5b. QUEUE-ENQUEUE-REFINEMENT-GATE: moving an ISSUE into the pickup column
+  // must pass the same refinement gate `queue add` applies — a guard at one
+  // entry point but not its sibling is exactly the asymmetry this closes. Put
+  // here (in core, not the script wrapper) so every caller routing through core
+  // is covered — reconcile-queue.mjs included. reconcile is unaffected because
+  // it passes no cwd and never derives the pickup column. The column name is
+  // only derivable when cwd/config is supplied: an interactive `queue move` from
+  // a worktree passes cwd (gate fires), while headless callers (e.g.
+  // reconcile-queue.mjs) omit it and are unaffected — we simply never derive
+  // the column.
+  let refinement = null;
+  if (issueNumber !== null && typeof cwd === "string" && cwd.length > 0) {
+    const { columnNames, error: columnError } = loadStateColumnMap(cwd);
+    const pickupColumn = columnNames[LOGICAL_COLUMN.NEXT_UP];
+    if (pickupColumn && toColumn === pickupColumn) {
+      // Mirror queue add's fail-closed posture on a malformed `.devloops` when the
+      // interactive path supplied cwd AND the target is actually the pickup
+      // column: a config parse failure must never silently bypass the just-moved
+      // pickup refinement gate (the exact sibling asymmetry this issue closes).
+      // Scoped here (after the pickup-column guard) so an unrelated column move
+      // is not over-broadened into a hard CONFIG_ERROR failure.
+      if (columnError) {
+        throw Object.assign(
+          new Error(`could not resolve the pickup column (config read/parse error: ${columnError})`),
+          { code: "CONFIG_ERROR" },
+        );
+      }
+      const decision = await runPickupRefinementGate({ issueNumber, repo, env, runChild: child, auto: false, repoRoot: cwd });
+      refinement = { refined: decision.action === "enqueue" };
+    }
+  }
+
   // 6. Update Status via mutation
   const updatePayload = await ghGraphql(UPDATE_ITEM_FIELD, {
     projectId: project.id,
@@ -388,6 +368,7 @@ async function main(args, { env = process.env, runChild } = {}) {
       newColumn: toColumn,
       unchanged: false,
     },
+    ...(refinement ? { refinement } : {}),
   };
 }
 

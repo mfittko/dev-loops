@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, parseProjectRef, findProject, applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue archive-done --repo <owner/name> [--project <number|id|board-uri>] [--older-than <duration>] [--dry-run]
        (dev-loops project archive-done … is a back-compat alias)
@@ -17,8 +18,7 @@ Options:
   --project <number|id|board-uri>     Project number, node ID, or board URI
                                       (e.g. https://github.com/users/me/projects/3).
                                       When omitted, resolved from .devloops
-                                      tracker.board (or the deprecated
-                                      queue.board) number / title.
+                                      tracker.board number / title.
   --older-than <duration>             Closed-for threshold. Format: <n><unit> where unit is
                                       h (hours), d (days), or w (weeks). Default resolves
                                       from .devloops queue.archiveOlderThanDays, else 7d.
@@ -145,32 +145,7 @@ function parseDuration(raw) {
   return n * UNIT_MS[m[2]];
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild("gh", ["api", "graphql", "--field", `query=${query}`, ...fieldArgs], env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_USER_ID = ["query($login:String!) {", "  user(login:$login) { id }", "}"].join("\n");
-const GET_ORG_ID = ["query($login:String!) {", "  organization(login:$login) { id }", "}"].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -231,14 +206,6 @@ const ARCHIVE_ITEM = [
 ].join("\n");
 
 // ── Owner / project resolution ─────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) return { id: userPayload.data.user.id, kind: "user" };
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) return { id: orgPayload.data.organization.id, kind: "org" };
-  throw Object.assign(new Error(`Could not resolve owner ID for "${login}"`), { code: "NO_USER_ID" });
-}
 
 async function listAllProjects(login, kind, env, runChild) {
   const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
@@ -363,7 +330,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     : null;
   if (!projectRef && !projectTitle) {
     throw Object.assign(
-      new Error("--project is required (or set tracker.board — or the deprecated queue.board — number / title in .devloops)"),
+      new Error("--project is required (or set tracker.board number / title in .devloops)"),
       { code: "INVALID_PROJECT" },
     );
   }
@@ -443,7 +410,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
   }
 
   // Resolve board + threshold defaults from .devloops when the flags are absent.
-  // Precedence: explicit --project flag > queue.board.number/title.
+  // Precedence: explicit --project flag > tracker.board.number/title.
   //             explicit --older-than flag > queue.archiveOlderThanDays > 7d.
   applyDevloopsBoard(args, cwd);
   const settings = resolveSettings(cwd);

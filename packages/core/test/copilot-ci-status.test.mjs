@@ -63,6 +63,42 @@ test("summarizeHeadScopedCheckRunsSignal preserves unsupported completed conclus
   assert.equal(summary.unsupportedCompleted, true);
 });
 
+test("summarizeHeadScopedCheckRunsSignal flags all-queued as a zero-allocation stall (#1631)", () => {
+  // Every check-run still `queued` (no runner allocated / no job picked up) →
+  // allQueued true. This is the zero-allocation stall signal the CI watcher
+  // bails on instead of burning its full watch budget.
+  const stalled = summarizeHeadScopedCheckRunsSignal({
+    check_runs: [
+      { status: "queued", conclusion: null, name: "build" },
+      { status: "QUEUED", conclusion: null, name: "lint" },
+    ],
+  });
+  assert.equal(stalled.allQueued, true);
+  assert.equal(stalled.status, "pending");
+});
+
+test("summarizeHeadScopedCheckRunsSignal clears allQueued when any job is progressing (#1631)", () => {
+  // A run that IS progressing (in_progress / completed) must NOT read as a
+  // zero-allocation stall.
+  const inProgress = summarizeHeadScopedCheckRunsSignal({
+    check_runs: [
+      { status: "queued", conclusion: null, name: "build" },
+      { status: "in_progress", conclusion: null, name: "lint" },
+    ],
+  });
+  assert.equal(inProgress.allQueued, false);
+
+  const completed = summarizeHeadScopedCheckRunsSignal({
+    check_runs: [{ status: "completed", conclusion: "success", name: "build" }],
+  });
+  assert.equal(completed.allQueued, false);
+});
+
+test("summarizeHeadScopedCheckRunsSignal reports allQueued false for an empty set", () => {
+  const empty = summarizeHeadScopedCheckRunsSignal({ check_runs: [] });
+  assert.equal(empty.allQueued, false);
+});
+
 test("normalizeHeadScopedCheckRunsStatus returns failure over pending for mixed check runs", () => {
   const status = normalizeHeadScopedCheckRunsStatus({
     check_runs: [

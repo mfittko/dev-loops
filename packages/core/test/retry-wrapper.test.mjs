@@ -28,6 +28,33 @@ test("isUsageError — JSON runtime error without usage field", () => {
   assert.equal(isUsageError(stderr), false);
 });
 
+test("isUsageError — current short-error envelope { ok: false, hint } (formatCliError never emits usage anymore)", () => {
+  const stderr = JSON.stringify({
+    ok: false,
+    error: "Missing required argument: --findings-dir",
+    hint: "run with --help for usage",
+  });
+  assert.equal(isUsageError(stderr), true);
+});
+
+test("isUsageError — hint envelope detects a usage error even when the message matches NONE of the USAGE_PATTERNS regexes", () => {
+  // "Missing required argument:" (plural "arguments" shape) matches none of
+  // the /Unknown argument:|Missing required option:|.../ patterns — before
+  // the hint field was recognized, this whole error class silently stopped
+  // being retryable once formatCliError dropped the `usage` field.
+  const stderr = JSON.stringify({
+    ok: false,
+    error: "Missing required arguments: gate, headSha",
+    hint: "run with --help for usage",
+  });
+  assert.equal(isUsageError(stderr), true);
+});
+
+test("isUsageError — { ok: false } with neither usage nor hint is a non-retryable runtime error", () => {
+  const stderr = JSON.stringify({ ok: false, error: "gh command failed: Bad credentials" });
+  assert.equal(isUsageError(stderr), false);
+});
+
 test("isUsageError — unknown argument text pattern", () => {
   assert.equal(isUsageError("Unknown argument: --timeout-ms"), true);
 });

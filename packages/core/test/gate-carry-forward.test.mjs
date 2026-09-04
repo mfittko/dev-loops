@@ -30,10 +30,32 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(angleReviewSurface("scope", { alwaysRerun: ["scope"] }).kind, "always");
   });
 
+  test("alwaysRerun matches case-insensitively — a case-drifted configured mandatory angle is still always", () => {
+    assert.equal(angleReviewSurface("correctness", { alwaysRerun: ["Correctness"] }).kind, "always");
+    assert.equal(angleReviewSurface("Correctness".toLowerCase(), { alwaysRerun: [" CORRECTNESS "] }).kind, "always");
+  });
+
   test("unmapped / empty angle -> unknown (fail-closed)", () => {
     assert.equal(angleReviewSurface("no-such-angle").kind, "unknown");
     assert.equal(angleReviewSurface("").kind, "unknown");
     assert.equal(angleReviewSurface(null).kind, "unknown");
+  });
+
+  // The trim+lowercase normalization applies to the `kinds` map lookup too,
+  // not just the alwaysRerun/ALWAYS_INCLUDE checks above: a case-drifted
+  // MAPPED angle name resolves the same `kinds` surface as its canonical
+  // form, rather than falling through to `unknown`. Pinned deliberately —
+  // dropping the normalization on this lookup would silently flip these
+  // back to fail-closed `unknown` with no other test noticing (the existing
+  // case-drift tests above pre-lowercase their own lookup argument).
+  test("case/whitespace-drifted MAPPED angle names resolve the same kinds surface, not unknown", () => {
+    assert.equal(angleReviewSurface("Correctness").kind, "kinds");
+    assert.deepEqual([...angleReviewSurface("Correctness").kinds].sort(), [...angleReviewSurface("correctness").kinds].sort());
+    assert.equal(angleReviewSurface(" DOCS ").kind, "kinds");
+  });
+
+  test("case-drifted hardcoded ALWAYS_INCLUDE angle name resolves always, not unknown", () => {
+    assert.equal(angleReviewSurface("Pr-Description").kind, "always");
   });
 
   test("code-correctness angles' surface excludes docs", () => {
@@ -46,6 +68,16 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
 
   test("docs angle surface is docs only", () => {
     const surface = angleReviewSurface("docs");
+    assert.equal(surface.kind, "kinds");
+    assert.deepEqual([...surface.kinds], ["docs"]);
+  });
+
+  // #1442: deslop's review surface is the `docs` kind — a clean deslop verdict
+  // carries forward across a delta with no docs file, and re-runs on any doc
+  // change (prose or not; non-prose docs never vote clean on deslop in the
+  // first place because PROSE_PRESENT is not armed).
+  test("deslop angle surface is docs (fail-closed carry-forward)", () => {
+    const surface = angleReviewSurface("deslop");
     assert.equal(surface.kind, "kinds");
     assert.deepEqual([...surface.kinds], ["docs"]);
   });
@@ -104,10 +136,10 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   });
 
   test("isDevLoopConfigSourcePath matches the config-source family and nothing else", () => {
-    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml"]) {
+    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml", "packages/core/src/config/extension-defaults.yaml"]) {
       assert.equal(isDevLoopConfigSourcePath(p), true, p);
     }
-    for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", null]) {
+    for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", "packages/core/src/config/config.mjs", null]) {
       assert.equal(isDevLoopConfigSourcePath(p), false, String(p));
     }
   });
@@ -216,6 +248,20 @@ describe("resolveCarryForwardAngles — partition", () => {
     });
     assert.equal(carried.length, 0);
     assert.equal(mustRerun.length, 2);
+  });
+
+  // Pin the case-drift lookup widening end to end at the decision seam this
+  // function drives: a case-drifted MAPPED angle name (as might appear in a
+  // prior findings-log entry) still carries forward on a delta provably
+  // outside its surface — it must not fail closed to must-re-run just
+  // because the recorded name's case drifted from the canonical one.
+  test("a case-drifted mapped angle name carries forward on a non-implicating delta", () => {
+    const { carried, mustRerun } = resolveCarryForwardAngles({
+      prevAngles: ["Correctness"],
+      changedFiles: ["docs/guide.md"],
+    });
+    assert.deepEqual(carried.map((c) => c.angle), ["Correctness"]);
+    assert.deepEqual(mustRerun, []);
   });
 });
 

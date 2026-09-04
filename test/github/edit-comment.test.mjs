@@ -9,30 +9,44 @@ import {
   editComment,
   runCli,
 } from "../../scripts/github/edit-comment.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 const COMMENT_URL = "https://github.com/o/n/issues/7#issuecomment-123";
 
-function stubGh(responses) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const resp = responses.shift();
-    if (!resp) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (responses) => makeGhStub(responses);
 
 test("parseEditCommentCliArgs: parses repo/comment-id/body", () => {
   const out = parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi"]);
   assert.equal(out.repo, "o/n");
   assert.equal(out.commentId, 123);
   assert.equal(out.body, "hi");
+});
+
+test("parseEditCommentCliArgs: parses --allowed-refs csv", () => {
+  const out = parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi", "--allowed-refs", "1670,9000"]);
+  assert.deepEqual(out.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseEditCommentCliArgs: rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "123", "--body", "hi", "--allowed-refs", "abc"]),
+    /positive integers/,
+  );
+});
+
+test("editComment: an --allowed-refs deliberate cross-ref posts", async () => {
+  const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  const result = await editComment({ repo: "o/n", commentId: 123, body: "deliberate cross-ref to issue #1670", allowedRefs: ["1670"] }, { run });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ["api", "-X", "PATCH", "repos/o/n/issues/comments/123", "-f", "body=deliberate cross-ref to issue #1670"]);
+});
+
+test("editComment: a raw unallowlisted id still refuses even when another is allowed (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => editComment({ repo: "o/n", commentId: 7, body: "see #1670 but also #999", allowedRefs: ["1670"] }, { run }),
+    /#999/,
+  );
 });
 
 test("parseEditCommentCliArgs: requires repo + comment-id", () => {
@@ -105,6 +119,18 @@ test("editComment: rejects an empty --body-file", async () => {
 test("editComment: rejects an empty --body", async () => {
   const { run } = stubGh([]);
   await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, body: "   " }, { run }), /--body must not be empty/);
+});
+
+test("editComment: refuses a body containing a raw issue/PR id (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => editComment({ repo: "o/n", commentId: 7, body: "see issue #1670" }, { run }),
+    /#1670/,
+  );
+  // a clean body still PATCHes
+  const { run: run2, calls: calls2 } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  await editComment({ repo: "o/n", commentId: 7, body: "clean edit" }, { run: run2 });
+  assert.deepEqual(calls2[0], ["api", "-X", "PATCH", "repos/o/n/issues/comments/7", "-f", "body=clean edit"]);
 });
 
 test("editComment: throws when gh fails", async () => {

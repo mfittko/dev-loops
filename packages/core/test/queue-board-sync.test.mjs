@@ -34,7 +34,7 @@ test("loadBoardConfig returns disabled when no .devloops", async () => {
 });
 
 test("loadBoardConfig enabled by projectNumber", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 7\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 7\n");
   try {
     assert.deepEqual(loadBoardConfig(dir), { enabled: true, projectNumber: 7 });
   } finally {
@@ -43,9 +43,30 @@ test("loadBoardConfig enabled by projectNumber", async () => {
 });
 
 test("loadBoardConfig enabled by boardTitle", async () => {
-  const dir = await makeRepo('queue:\n  board:\n    title: "My Queue"\n');
+  const dir = await makeRepo('tracker:\n  board:\n    title: "My Queue"\n');
   try {
     assert.deepEqual(loadBoardConfig(dir), { enabled: true, boardTitle: "My Queue" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadBoardConfig resolves tracker.board.number without a stale title (#1589)", async () => {
+  // A project number is stable across renames; a title is not. The queue must
+  // resolve the board from `tracker.board.number` alone — no `title` required.
+  const dir = await makeRepo("tracker:\n  board:\n    number: 3\n");
+  try {
+    assert.deepEqual(loadBoardConfig(dir), { enabled: true, projectNumber: 3 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadBoardConfig ignores a removed queue.board block (#1701)", async () => {
+  // queue.board is no longer an alias; only tracker.board resolves a board.
+  const dir = await makeRepo('queue:\n  board:\n    title: "dev-loops Queue"\n');
+  try {
+    assert.deepEqual(loadBoardConfig(dir), { enabled: false });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -64,7 +85,7 @@ test("syncBoardStatus skips when board not configured", async () => {
 });
 
 test("syncBoardStatus moves item when configured", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const moved = [];
     const result = await syncBoardStatus(
@@ -100,7 +121,7 @@ test("syncBoardStatus moves item when configured", async () => {
 // covered above (PR-ready); this covers the merge → "Done" transition with the
 // same stringified-ref contract.
 test("syncBoardStatus moves item to Done (merge transition)", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const moved = [];
     const result = await syncBoardStatus(
@@ -131,7 +152,7 @@ test("syncBoardStatus moves item to Done (merge transition)", async () => {
 });
 
 test("syncBoardStatus fail-open when move fails", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const result = await syncBoardStatus(
       "owner/repo",
@@ -154,7 +175,7 @@ test("syncBoardStatus fail-open when move fails", async () => {
 });
 
 test("nonSuccessBoardColumn uses default", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     assert.equal(nonSuccessBoardColumn(dir), "Backlog");
   } finally {
@@ -163,7 +184,7 @@ test("nonSuccessBoardColumn uses default", async () => {
 });
 
 test("nonSuccessBoardColumn uses configured value", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n  nonSuccessStatus: Todo\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\nqueue:\n  nonSuccessStatus: Todo\n");
   try {
     assert.equal(nonSuccessBoardColumn(dir), "Todo");
   } finally {
@@ -279,7 +300,7 @@ test("loadStateColumnMap returns defaults when no config present", async () => {
 
 test("loadStateColumnMap reads queue.statusColumns overrides (AC3)", async () => {
   const dir = await makeRepo(
-    "queue:\n  board:\n    number: 5\n  statusColumns:\n    next_up: Todo\n    done: Shipped\n",
+    "tracker:\n  board:\n    number: 5\nqueue:\n  statusColumns:\n    next_up: Todo\n    done: Shipped\n",
   );
   try {
     const mapping = loadStateColumnMap(dir);
@@ -322,7 +343,7 @@ test("loadStateColumnMap returns error:null for a clean/missing config (#1098)",
 
 test("loadStateColumnMap reads queue.stateColumnMap per-state overrides (AC3)", async () => {
   const dir = await makeRepo(
-    "queue:\n  board:\n    number: 5\n  stateColumnMap:\n    final_approval_ready: ready_for_review\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",
+    "tracker:\n  board:\n    number: 5\nqueue:\n  stateColumnMap:\n    final_approval_ready: ready_for_review\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",
   );
   try {
     const mapping = loadStateColumnMap(dir);
@@ -334,7 +355,7 @@ test("loadStateColumnMap reads queue.stateColumnMap per-state overrides (AC3)", 
 
 test("loadStateColumnMap ignores unknown statusColumns keys (allow-list)", async () => {
   const dir = await makeRepo(
-    "queue:\n  board:\n    number: 5\n  statusColumns:\n    bogus_column: Nope\n    next_up: Todo\n",
+    "tracker:\n  board:\n    number: 5\nqueue:\n  statusColumns:\n    bogus_column: Nope\n    next_up: Todo\n",
   );
   try {
     const mapping = loadStateColumnMap(dir);
@@ -349,7 +370,7 @@ test("loadStateColumnMap ignores unknown statusColumns keys (allow-list)", async
 
 test("loadStateColumnMap ignores stateColumnMap entries with an unknown logical-column value", async () => {
   const dir = await makeRepo(
-    "queue:\n  board:\n    number: 5\n  stateColumnMap:\n    pr_draft: not_a_column\n    blocked_needs_user_decision: next_up\n",
+    "tracker:\n  board:\n    number: 5\nqueue:\n  stateColumnMap:\n    pr_draft: not_a_column\n    blocked_needs_user_decision: next_up\n",
   );
   try {
     const mapping = loadStateColumnMap(dir);
@@ -366,7 +387,7 @@ test("loadStateColumnMap ignores stateColumnMap entries with an unknown logical-
 
 test("loadStateColumnMap is not vulnerable to prototype pollution via config keys", async () => {
   const dir = await makeRepo(
-    'queue:\n  board:\n    number: 5\n  statusColumns:\n    __proto__: { polluted: yes }\n  stateColumnMap:\n    __proto__: { polluted: yes }\n',
+    'tracker:\n  board:\n    number: 5\nqueue:\n  statusColumns:\n    __proto__: { polluted: yes }\n  stateColumnMap:\n    __proto__: { polluted: yes }\n',
   );
   try {
     const mapping = loadStateColumnMap(dir);
@@ -396,7 +417,7 @@ test("syncBoardStatus is a no-op when board config disabled, driven by mapping (
 });
 
 test("syncBoardStatus is a logged no-op when item is not on the board (AC4)", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const logs = [];
     const result = await syncBoardStatus(
@@ -425,7 +446,7 @@ test("syncBoardStatus is a logged no-op when item is not on the board (AC4)", as
 });
 
 test("syncBoardStatus also treats ITEM_NOT_FOUND as the not-on-board no-op (AC4)", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const logs = [];
     const result = await syncBoardStatus(
@@ -452,7 +473,7 @@ test("syncBoardStatus also treats ITEM_NOT_FOUND as the not-on-board no-op (AC4)
 });
 
 test("syncBoardStatus logs a distinct fail-open message for non-not-on-board errors", async () => {
-  const dir = await makeRepo("queue:\n  board:\n    number: 5\n");
+  const dir = await makeRepo("tracker:\n  board:\n    number: 5\n");
   try {
     const logs = [];
     const result = await syncBoardStatus(
@@ -480,7 +501,7 @@ test("syncBoardStatus logs a distinct fail-open message for non-not-on-board err
 });
 
 test("syncBoardStatus resolves boardTitle to project number and moves item", async () => {
-  const dir = await makeRepo('queue:\n  board:\n    title: "BoardTitle Test Queue"\n');
+  const dir = await makeRepo('tracker:\n  board:\n    title: "BoardTitle Test Queue"\n');
   try {
     const moved = [];
     const result = await syncBoardStatus(

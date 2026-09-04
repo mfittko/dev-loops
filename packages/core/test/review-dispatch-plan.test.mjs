@@ -1,0 +1,1044 @@
+import assert from "node:assert/strict";
+import test, { describe } from "node:test";
+
+import {
+  CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
+  CACHE_BOUNDARY_VALUES,
+  HARNESS_DEFAULT_CAPABILITIES,
+  INHERIT_MODEL_KEY,
+  PRIMER_FORM_DEDICATED,
+  PRIMER_FORM_LEAD_REVIEWER,
+  TTL_INTENT_VALUES,
+  buildAngleRequestGroups,
+  buildReviewDispatchPlan,
+  cacheReuseVeracity,
+  composeCacheAwareRequest,
+  fingerprintRequestPrefix,
+  fingerprintStablePrefix,
+  normalizeHarnessCapabilities,
+  opaqueMarker,
+  partitionPrimerGroups,
+  resolvePrimerForm,
+  sha256Hex,
+  DISPATCH_PROMPT_LEADING_CAP_BYTES,
+  composeReviewerPromptText,
+  renderBriefingPointerLine,
+  verifyPromptLeadingAlignment,
+  DEFAULT_DIFF_EXCLUDE_GLOBS,
+  classifyDiffFileExclusion,
+  filterDiffForInline,
+  matchesDiffExcludeGlob,
+} from "../src/loop/review-dispatch-plan.mjs";
+
+describe("normalizeHarnessCapabilities — explicit capability model (Section D)", () => {
+  test("claude default posture is explicit, fixed TTL, telemetry available", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "claude" });
+    assert.equal(caps.breakpointControl, "automatic");
+    assert.equal(caps.barrierSignal, "completion_only");
+    assert.equal(caps.cacheTtlControl, "fixed");
+    assert.equal(caps.usageTelemetry, "available");
+    assert.ok(Object.isFrozen(caps));
+  });
+
+  test("pi default posture is conservative/opaque and telemetry unavailable (fail toward no over-claim)", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "pi" });
+    assert.equal(caps.breakpointControl, "opaque");
+    assert.equal(caps.usageTelemetry, "unavailable");
+  });
+
+  test("unknown harness name fails closed", () => {
+    assert.throws(() => normalizeHarnessCapabilities({ harness: "no-such" }));
+  });
+
+  test("invalid dimension value fails closed", () => {
+    assert.throws(() =>
+      normalizeHarnessCapabilities({ capabilities: { usageTelemetry: "definitely" } }),
+    );
+  });
+
+  test("unknown dimension fails closed", () => {
+    assert.throws(() =>
+      normalizeHarnessCapabilities({ capabilities: { magic: "on" } }),
+    );
+  });
+
+  test("explicit capabilities override defaults and are validated", () => {
+    const caps = normalizeHarnessCapabilities({
+      harness: "pi",
+      capabilities: { barrierSignal: "first_output", cacheTtlControl: "5m_1h" },
+    });
+    assert.equal(caps.barrierSignal, "first_output");
+    assert.equal(caps.cacheTtlControl, "5m_1h");
+    assert.equal(caps.usageTelemetry, "unavailable");
+  });
+
+  test("missing dimension after overrides fails closed", () => {
+    // A bare non-object capability input is rejected outright.
+    assert.throws(() => normalizeHarnessCapabilities({ capabilities: "nope" }));
+  });
+});
+
+describe("cacheReuseVeracity — opaque harnesses never claim verified reuse (Section D/AC-9)", () => {
+  test("telemetry available -> verified", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "claude" });
+    assert.equal(cacheReuseVeracity(caps).verified, true);
+  });
+
+  test("telemetry unavailable -> verified false with an explicit reason", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "pi" });
+    const r = cacheReuseVeracity(caps);
+    assert.equal(r.verified, false);
+    assert.match(r.reason, /cannot be verified/);
+  });
+
+  test("missing capability record -> verified false", () => {
+    assert.equal(cacheReuseVeracity(null).verified, false);
+  });
+});
+
+describe("fingerprintRequestPrefix — complete observable prefix (Section A/AC-2)", () => {
+  const base = {
+    model: "anthropic/claude-opus",
+    tools: ["read", "bash", "edit"],
+    systemInstructions: ["You are a review agent."],
+    settings: { thinking: true },
+    contentBlocks: [{ type: "text", role: "briefing" }],
+    sharedArtifact: "tmp/gate-context/pre_approval_gate-abc.briefing-prefix.txt",
+  };
+
+  test("covers model, tools, instructions, settings, blocks, bytes, ttl", () => {
+    const { fingerprint } = fingerprintRequestPrefix(base);
+    assert.match(fingerprint, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("is byte-deterministic: same input -> same fingerprint", () => {
+    const a = fingerprintRequestPrefix(base).fingerprint;
+    const b = fingerprintRequestPrefix({ ...base }).fingerprint;
+    assert.equal(a, b);
+  });
+
+  test("model change changes the fingerprint (heterogeneous routing is not conflated)", () => {
+    const a = fingerprintRequestPrefix(base).fingerprint;
+    const c = fingerprintRequestPrefix({ ...base, model: "anthropic/claude-haiku" }).fingerprint;
+    assert.notEqual(a, c);
+  });
+
+  test("ttl intent and boundary are folded in", () => {
+    const a = fingerprintRequestPrefix(base).fingerprint;
+    const b = fingerprintRequestPrefix({ ...base, ttlIntent: "1h", cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX }).fingerprint;
+    assert.notEqual(a, b);
+  });
+
+  test("requires a non-empty concrete model", () => {
+    assert.throws(() => fingerprintRequestPrefix({ model: "" }));
+  });
+
+  test("angleSuffix is folded into the fingerprint only when provided (invasive marker)", () => {
+    const base = { model: "m", tools: ["read"] };
+    const plain = fingerprintRequestPrefix(base).fingerprint;
+    const withSuffix = fingerprintRequestPrefix({ ...base, angleSuffix: ["correctness"] }).fingerprint;
+    assert.notEqual(plain, withSuffix);
+    // absent angleSuffix stays byte-identical (no spurious fingerprint churn).
+    assert.equal(plain, fingerprintRequestPrefix({ ...base }).fingerprint);
+  });
+
+  test("non-array tools / contentBlocks fail closed instead of silently dropping the field", () => {
+    const base = { model: "m" };
+    assert.throws(() => fingerprintRequestPrefix({ ...base, tools: "read" }));
+    assert.throws(() => fingerprintRequestPrefix({ ...base, contentBlocks: "x" }));
+  });
+
+  test("invalid cacheBoundary / ttlIntent fail closed instead of folding an un-reproducible value", () => {
+    const base = { model: "m", tools: ["read"] };
+    assert.throws(() => fingerprintRequestPrefix({ ...base, cacheBoundary: "5min" }));
+    assert.throws(() => fingerprintRequestPrefix({ ...base, ttlIntent: "5min" }));
+    // Valid enum values fold in cleanly.
+    assert.match(
+      fingerprintRequestPrefix({ ...base, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h" }).fingerprint,
+      /^sha256:[0-9a-f]{64}$/,
+    );
+  });
+
+  test("throws on a non-finite number in settings, rather than collapsing it to JSON null", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { temperature: NaN } }),
+      /non-finite number/,
+    );
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { temperature: Infinity } }),
+      /non-finite number/,
+    );
+  });
+
+  test("throws on a non-plain object in settings (Date/Map/Set are keyless and would collide with {})", () => {
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { at: new Date() } }), /not a plain object/);
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { m: new Map() } }), /not a plain object/);
+    assert.throws(() => fingerprintRequestPrefix({ model: "m", settings: { s: new Set() } }), /not a plain object/);
+  });
+
+  test("an own __proto__ key in settings is preserved (not silently dropped by a plain-object accumulator)", () => {
+    const settingsWithProto = JSON.parse('{"__proto__":{"a":1}}');
+    const a = fingerprintRequestPrefix({ model: "m", settings: settingsWithProto }).fingerprint;
+    const b = fingerprintRequestPrefix({ model: "m", settings: JSON.parse('{"__proto__":{"a":2}}') }).fingerprint;
+    assert.notEqual(a, b, "two settings objects differing only under __proto__ must not hash identically");
+  });
+
+  test("throws on an undefined value in settings, rather than silently dropping it (would otherwise collide { thinking: undefined } with {})", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { thinking: undefined } }),
+      /is a undefined/,
+    );
+  });
+
+  test("throws on a function value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { onDone: () => {} } }),
+      /is a function/,
+    );
+  });
+
+  test("throws on a symbol value in settings, rather than silently dropping it", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { tag: Symbol("x") } }),
+      /is a symbol/,
+    );
+  });
+
+  test("throws on a bigint value in settings with the module's own keyPath-annotated message, not a raw JSON.stringify TypeError", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", settings: { budget: 10n } }),
+      /sha256Hex: fingerprint input at \$\.settings\.budget is a bigint/,
+    );
+  });
+
+  test("tools: two object-shaped tool defs differing only in key order produce the same fingerprint", () => {
+    const a = fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", schema: { path: "string", limit: "number" } }] }).fingerprint;
+    const b = fingerprintRequestPrefix({ model: "m", tools: [{ schema: { limit: "number", path: "string" }, name: "Read" }] }).fingerprint;
+    assert.equal(a, b, "object-shaped tool definitions canonicalize key order the same as any other object input");
+  });
+
+  test("tools: a non-finite number nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", schema: { temperature: NaN } }] }),
+      /fingerprint input at \$\.tools\[0\]\.schema\.temperature is a non-finite number/,
+    );
+  });
+
+  test("tools: a non-plain object nested inside an entry throws with the array-index keyPath", () => {
+    assert.throws(
+      () => fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", at: new Date() }] }),
+      /fingerprint input at \$\.tools\[0\]\.at is not a plain object/,
+    );
+  });
+});
+
+describe("fingerprintStablePrefix — AC-1: changing only gateState does not change the shared prefix", () => {
+  const stablePrefix = "You are a review agent with sys tools.";
+  const briefing = "materialized shared briefing block bytes";
+
+  test("returned fingerprint is the stable prefix + briefing only", () => {
+    const r = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing });
+    assert.match(r.stableFingerprint, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("stable fingerprint is identity across gateState-only changes (AC-1)", () => {
+    const a = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    const b = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    assert.equal(a, b);
+  });
+
+  test("changing the briefing changes the stable fingerprint (head-specific bytes matter)", () => {
+    const a = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    const c = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing + "!" }).stableFingerprint;
+    assert.notEqual(a, c);
+  });
+});
+
+describe("composeCacheAwareRequest — stable/volatile separation (Section B)", () => {
+  const stablePrefix = "stable agent/system/tool prefix";
+  const briefing = "SHARED_BRIEFING_BLOCK";
+
+  test("cache boundary sits after stable prefix + briefing block, before volatile/angle", () => {
+    const r = composeCacheAwareRequest({
+      stablePrefix,
+      briefingBlock: briefing,
+      volatileState: { headSha: "deadbeef", ciStatus: "green", round: 3 },
+      angleSuffix: "correctness",
+    });
+    const slots = r.segments.map((s) => s.slot);
+    assert.deepEqual(slots, [
+      "stablePrefix",
+      "briefingBlock",
+      "<cache boundary>",
+      "volatileState",
+      "angleSuffix",
+    ]);
+    assert.equal(r.segments[r.boundaryIndex].slot, "<cache boundary>");
+  });
+
+  test("no volatile or angle cases keep a minimal 3-segment request", () => {
+    const r = composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing });
+    assert.deepEqual(r.segments.map((s) => s.slot), ["stablePrefix", "briefingBlock", "<cache boundary>"]);
+  });
+
+  test("cache-boundary marker segment is byte-empty (no label leaked into request bytes)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing });
+    const marker = r.segments[r.boundaryIndex];
+    assert.equal(marker.slot, "<cache boundary>");
+    assert.equal(marker.bytes, "", "boundary label must not be injected into provider-visible prompt bytes");
+    // The label still lives in the separate cacheBoundary field.
+    assert.equal(r.cacheBoundary, CACHE_BOUNDARY_AFTER_SHARED_PREFIX);
+  });
+
+  test("invalid cacheBoundary / ttlIntent fail closed in composeCacheAwareRequest", () => {
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, cacheBoundary: "5min" }));
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, ttlIntent: "forever" }));
+  });
+
+  test("briefedBytes canonicalizes a Buffer stablePrefix (no Buffer.toJSON data array)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing });
+    assert.ok(!r.briefedBytes.includes('"type":"Buffer"'), "nested Buffer must not expand into a decimal data array");
+    assert.ok(r.briefedBytes.includes("__buffer:"), "nested Buffer canonicalized to a hex marker");
+    // Byte-deterministic across identical Buffer bytes.
+    assert.equal(
+      r.briefedBytes,
+      composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing }).briefedBytes,
+    );
+  });
+
+  test("stable fingerprint is unchanged by volatile/angle changes (AC-1 + AC-3)", () => {
+    const base = { stablePrefix, briefingBlock: briefing };
+    const withVolatile = composeCacheAwareRequest({ ...base, volatileState: { tag: "x" } }).stableFingerprint;
+    const withAngle = composeCacheAwareRequest({ ...base, angleSuffix: "security" }).stableFingerprint;
+    const plain = composeCacheAwareRequest(base).stableFingerprint;
+    assert.equal(withVolatile, plain);
+    assert.equal(withAngle, plain);
+  });
+});
+
+describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact", () => {
+  const fp = "sha256:" + "a".repeat(64);
+  const plan = buildReviewDispatchPlan({
+    gate: "pre_approval_gate",
+    headSha: "abcdef1234567890",
+    sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+    sharedPrefixHash: fp,
+    requestGroups: [
+      { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+      { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+    ],
+    capabilities: { harness: "claude" },
+  });
+
+  test("records structure without duplicating briefing content", () => {
+    assert.equal(plan.gate, "pre_approval_gate");
+    assert.equal(plan.headSha, "abcdef1234567890");
+    assert.ok(plan.sharedPrefixPath.endsWith("briefing-prefix.txt"));
+    assert.equal(plan.requestGroups.length, 2);
+    assert.deepEqual(plan.requestGroups[0].angles, ["correctness", "security"]);
+    assert.match(plan.planHash, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("planHash is byte-deterministic", () => {
+    const b = buildReviewDispatchPlan({
+      gate: "pre_approval_gate",
+      headSha: "abcdef1234567890",
+      sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+        { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+      ],
+      capabilities: { harness: "claude" },
+    });
+    assert.equal(b.planHash, plan.planHash);
+  });
+
+  test("sharedPrefixHash is normalized to canonical sha256:<hex> regardless of caller format", () => {
+    const rawHex = "e".repeat(64);
+    const prefixed = `sha256:${rawHex}`;
+    const withRaw = buildReviewDispatchPlan({ gate: "g", headSha: "abc1234", sharedPrefixHash: rawHex, requestGroups: [] });
+    const withPrefixed = buildReviewDispatchPlan({ gate: "g", headSha: "abc1234", sharedPrefixHash: prefixed, requestGroups: [] });
+    assert.equal(withRaw.sharedPrefixHash, prefixed);
+    assert.equal(withPrefixed.sharedPrefixHash, prefixed);
+    // Identical underlying bytes produce an identical plan (no mixed-format drift).
+    assert.equal(withRaw.planHash, withPrefixed.planHash);
+  });
+
+  test("requestPrefixFingerprint is normalized to canonical sha256:<hex>", () => {
+    const rawHex = "f".repeat(64);
+    const plan = buildReviewDispatchPlan({
+      gate: "g",
+      headSha: "abc1234",
+      requestGroups: [{ model: "m", requestPrefixFingerprint: rawHex, angles: ["a"] }],
+    });
+    assert.equal(plan.requestGroups[0].requestPrefixFingerprint, `sha256:${rawHex}`);
+  });
+
+  test("extra shadowing a plan key cannot mask a real pinned-field change", () => {
+    const base = {
+      gate: "pre_approval_gate",
+      sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+        { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+      ],
+      capabilities: { harness: "claude" },
+    };
+    // Two plans that differ in their REAL headSha but carry the SAME opacity
+    // shadowing extra. Under the old {...plan, ...extra} fold, the extra's
+    // shadowed headSha would mask the real difference and both would hash
+    // identically; the fingerprint must pin the plan's actual values instead.
+    const a = buildReviewDispatchPlan({ ...base, headSha: "aaaa1111111111111111111111111111111111", extra: { headSha: "bbbb2222222222222222222222222222222222", gate: "draft_gate" } });
+    const b = buildReviewDispatchPlan({ ...base, headSha: "bbbb2222222222222222222222222222222222", extra: { headSha: "bbbb2222222222222222222222222222222222", gate: "draft_gate" } });
+    assert.notEqual(a.planHash, b.planHash, "extra shadowing must not mask a real headSha change");
+    // The returned plan still carries the REAL values, not the extra's.
+    assert.equal(a.headSha, "aaaa1111111111111111111111111111111111");
+    assert.equal(b.headSha, "bbbb2222222222222222222222222222222222");
+    assert.equal(a.gate, "pre_approval_gate");
+    assert.equal(b.gate, "pre_approval_gate");
+  });
+
+  test("distinct opaque extra still diverges the fingerprint", () => {
+    const base = {
+      gate: "pre_approval_gate",
+      headSha: "abcdef1234567890",
+      sharedPrefixPath: "tmp/gate-context/pre_approval_gate-abcdef1234567890.briefing-prefix.txt",
+      sharedPrefixHash: fp,
+      requestGroups: [
+        { model: "anthropic/claude-opus", requestPrefixFingerprint: fp, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "5m", angles: ["correctness", "security"] },
+        { model: "anthropic/claude-haiku", requestPrefixFingerprint: fp, ttlIntent: "1h", angles: ["docs"] },
+      ],
+      capabilities: { harness: "claude" },
+    };
+    const a = buildReviewDispatchPlan({ ...base, extra: { reportParseCue: "alpha" } });
+    const b = buildReviewDispatchPlan({ ...base, extra: { reportParseCue: "beta" } });
+    assert.notEqual(a.planHash, b.planHash);
+    assert.notEqual(a.planHash, plan.planHash);
+  });
+
+  test("usages fail closed on bad input", () => {
+    assert.throws(() => buildReviewDispatchPlan({ gate: "", headSha: "abc" }));
+    assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "not-a-sha" }));
+    assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc", sharedPrefixHash: "nope" }));
+    assert.throws(() =>
+      buildReviewDispatchPlan({
+        gate: "g",
+        headSha: "abc",
+        requestGroups: [{ model: "m", angles: [] }],
+      }),
+    );
+  });
+
+  test("validateRequestGroups fail-closed branches (full negative coverage)", () => {
+    assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc", requestGroups: "nope" }));
+    assert.throws(() =>
+      buildReviewDispatchPlan({ gate: "g", headSha: "abc", requestGroups: [{ model: "", angles: ["a"] }] }),
+    );
+    assert.throws(() =>
+      buildReviewDispatchPlan({
+        gate: "g",
+        headSha: "abc",
+        requestGroups: [{ model: "m", requestPrefixFingerprint: "not-hex", angles: ["a"] }],
+      }),
+    );
+    assert.throws(() =>
+      buildReviewDispatchPlan({
+        gate: "g",
+        headSha: "abc",
+        requestGroups: [{ model: "m", cacheBoundary: "never", angles: ["a"] }],
+      }),
+    );
+    assert.throws(() =>
+      buildReviewDispatchPlan({
+        gate: "g",
+        headSha: "abc",
+        requestGroups: [{ model: "m", ttlIntent: "forever", angles: ["a"] }],
+      }),
+    );
+  });
+});
+
+describe("buildAngleRequestGroups — angle -> model bucketing into requestGroups", () => {
+  function baseInput(overrides = {}) {
+    return {
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "security", model: "opus" },
+        { angle: "docs", model: null },
+      ],
+      sharedPrefixHash: "sha256:" + "a".repeat(64),
+      toolDefinitions: ["Read", "Grep", "Bash"],
+      instructions: "system+agent instructions",
+      settings: { thinking: "extended", toolChoice: "auto" },
+      blockBoundaries: ["shared_prefix", "cache_boundary", "volatile_tail"],
+      ...overrides,
+    };
+  }
+
+  test("partitions angles by concrete model; angles sharing a model share one group", () => {
+    const groups = buildAngleRequestGroups(baseInput());
+    const opusGroup = groups.find((g) => g.model === "opus");
+    assert.deepEqual(opusGroup.angles, ["correctness", "security"]);
+  });
+
+  test("an angle with model:null forms its own explicit inherit bucket, never merged with a concrete id", () => {
+    const groups = buildAngleRequestGroups(baseInput());
+    const inheritGroup = groups.find((g) => g.model === INHERIT_MODEL_KEY);
+    assert.ok(inheritGroup, "inherit group present");
+    assert.deepEqual(inheritGroup.angles, ["docs"]);
+    assert.equal(groups.length, 2, "opus and inherit stay separate groups");
+  });
+
+  test("groups are sorted by model; angles within a group are sorted", () => {
+    const groups = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "zeta", model: "opus" },
+        { angle: "alpha", model: "opus" },
+        { angle: "beta", model: "sonnet" },
+      ],
+    }));
+    assert.deepEqual(groups.map((g) => g.model), ["opus", "sonnet"]);
+    assert.deepEqual(groups[0].angles, ["alpha", "zeta"]);
+  });
+
+  test("each group carries cacheBoundary and requestPrefixFingerprint fields", () => {
+    for (const group of buildAngleRequestGroups(baseInput())) {
+      assert.equal(group.cacheBoundary, CACHE_BOUNDARY_AFTER_SHARED_PREFIX);
+      assert.match(group.requestPrefixFingerprint, /^sha256:[0-9a-f]{64}$/);
+    }
+  });
+
+  test("empty angleModels produces an empty array (no throw)", () => {
+    assert.deepEqual(buildAngleRequestGroups(baseInput({ angleModels: [] })), []);
+  });
+
+  test("an angle listed twice under two different models throws", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({
+        angleModels: [
+          { angle: "correctness", model: "opus" },
+          { angle: "correctness", model: "sonnet" },
+        ],
+      })),
+      /listed with two different models/,
+    );
+  });
+
+  test("a concrete model literally named 'inherit' throws (would collide with the reserved bucket key)", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: "inherit" }] })),
+      /collides with the bucket key reserved for "no override"/,
+    );
+  });
+
+  test("throws on a non-array angleModels (a string, or null)", () => {
+    assert.throws(() => buildAngleRequestGroups(baseInput({ angleModels: "x" })), /angleModels must be an array/);
+    assert.throws(() => buildAngleRequestGroups(baseInput({ angleModels: null })), /angleModels must be an array/);
+  });
+
+  test("throws on an angleModels entry with an empty/non-string angle", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "", model: "opus" }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: 1 }] })),
+      /every angleModels entry needs a non-empty string angle/,
+    );
+  });
+
+  test("throws on an angleModels entry with an invalid model (empty string, or a non-string)", () => {
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: "" }] })),
+      /invalid model/,
+    );
+    assert.throws(
+      () => buildAngleRequestGroups(baseInput({ angleModels: [{ angle: "correctness", model: 1 }] })),
+      /invalid model/,
+    );
+  });
+
+  test("the same angle listed twice with the SAME model collapses to one entry in one group (not a duplicate)", () => {
+    const groups = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "correctness", model: "opus" },
+      ],
+    }));
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0].angles, ["correctness"]);
+  });
+
+  test("two builds of identical input produce byte-identical JSON", () => {
+    const a = JSON.stringify(buildAngleRequestGroups(baseInput()));
+    const b = JSON.stringify(buildAngleRequestGroups(baseInput()));
+    assert.equal(a, b);
+  });
+
+  test("requestGroups order is independent of angleModels input order", () => {
+    const ordered = baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+        { angle: "security", model: "sonnet" },
+      ],
+    });
+    const permuted = baseInput({
+      angleModels: [
+        { angle: "security", model: "sonnet" },
+        { angle: "correctness", model: "opus" },
+        { angle: "docs", model: null },
+      ],
+    });
+    assert.equal(JSON.stringify(buildAngleRequestGroups(ordered)), JSON.stringify(buildAngleRequestGroups(permuted)));
+  });
+
+  test("does NOT change the fingerprint when only the angle suffix (angle set within a group) changes", () => {
+    const a = buildAngleRequestGroups(baseInput()).find((g) => g.model === "opus").requestPrefixFingerprint;
+    const b = buildAngleRequestGroups(baseInput({
+      angleModels: [
+        { angle: "correctness", model: "opus" },
+        { angle: "security", model: "opus" },
+        { angle: "docs", model: null },
+        { angle: "threat-model", model: "opus" },
+      ],
+    })).find((g) => g.model === "opus").requestPrefixFingerprint;
+    assert.equal(a, b, "the angle list is the volatile suffix — never a fingerprint input");
+  });
+
+  test("changes when the tool set/order, instructions, settings, or blockBoundaries change", () => {
+    const base = buildAngleRequestGroups(baseInput()).find((g) => g.model === "opus").requestPrefixFingerprint;
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ toolDefinitions: ["Bash", "Grep", "Read"] })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ instructions: "different instructions" })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ settings: { thinking: "off", toolChoice: "auto" } })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ blockBoundaries: ["shared_prefix", "volatile_tail"] })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ sharedPrefixHash: "sha256:" + "0".repeat(64) })).find((g) => g.model === "opus").requestPrefixFingerprint);
+    assert.notEqual(base, buildAngleRequestGroups(baseInput({ ttlIntent: "1h" })).find((g) => g.model === "opus").requestPrefixFingerprint);
+  });
+});
+
+describe("resolvePrimerForm — default by harness capability (Section C/AC-6)", () => {
+  test("completion_only + fixed TTL (no adequate declared TTL) -> dedicated primer", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "claude" });
+    const r = resolvePrimerForm({ capabilities: caps, ttlIntent: "5m" });
+    assert.equal(r.primerForm, PRIMER_FORM_DEDICATED);
+  });
+
+  test("completion_only + 5m_1h TTL + explicit 1h intent -> lead reviewer may prime", () => {
+    const caps = normalizeHarnessCapabilities({
+      capabilities: { barrierSignal: "completion_only", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
+    });
+    const r = resolvePrimerForm({ capabilities: caps, ttlIntent: "1h" });
+    assert.equal(r.primerForm, PRIMER_FORM_LEAD_REVIEWER);
+  });
+
+  test("first_output + adequate TTL -> lead reviewer", () => {
+    const caps = normalizeHarnessCapabilities({
+      capabilities: { barrierSignal: "first_output", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
+    });
+    assert.equal(resolvePrimerForm({ capabilities: caps, ttlIntent: "5m" }).primerForm, PRIMER_FORM_LEAD_REVIEWER);
+  });
+
+  test("pi opaque posture defaults to dedicated primer (cannot observe barrier)", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "pi" });
+    assert.equal(resolvePrimerForm({ capabilities: caps }).primerForm, PRIMER_FORM_DEDICATED);
+  });
+
+  test("first_output + 5m_1h TTL control + no adequate declared ttlIntent -> lead reviewer (second disjunct)", () => {
+    const caps = normalizeHarnessCapabilities({
+      capabilities: { barrierSignal: "first_output", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
+    });
+    assert.equal(
+      resolvePrimerForm({ capabilities: caps, ttlIntent: "harness_managed" }).primerForm,
+      PRIMER_FORM_LEAD_REVIEWER,
+    );
+  });
+});
+
+describe("partitionPrimerGroups — one primer group per model/request-prefix (Section C)", () => {
+  test("distinct models -> distinct groups, never cross-warmed", () => {
+    const fp = "sha256:" + "b".repeat(64);
+    const groups = partitionPrimerGroups(
+      [
+        { model: "m1", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
+        { model: "m2", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
+      ],
+      normalizeHarnessCapabilities({ harness: "claude" }),
+    );
+    assert.equal(groups.length, 2);
+    assert.notEqual(groups[0].model, groups[1].model);
+  });
+
+  test("two groups resolving to the same model/prefix collapse to one primer group", () => {
+    const fp = "sha256:" + "c".repeat(64);
+    const groups = partitionPrimerGroups([
+      { model: "m1", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
+      { model: "m1", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
+    ]);
+    assert.equal(groups.length, 1);
+    assert.deepEqual([...groups[0].groups.flatMap((g) => g.angles)], ["a", "b"]);
+  });
+
+  test("model id containing '::' is not truncated by partition key parsing", () => {
+    const fp = "sha256:" + "d".repeat(64);
+    const groups = partitionPrimerGroups([
+      { model: "a::b:c", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
+      { model: "a::b:c", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
+    ]);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].model, "a::b:c");
+    assert.equal(groups[0].requestPrefixFingerprint, fp);
+  });
+
+  test("collapsed groups with mixed TTL intents take the conservative dedicated primer", () => {
+    const foFixed = normalizeHarnessCapabilities({
+      capabilities: { barrierSignal: "first_output", cacheTtlControl: "fixed", breakpointControl: "explicit", usageTelemetry: "available" },
+    });
+    const fp = "sha256:" + "e".repeat(64);
+    // 5m -> lead; harness_managed -> dedicated under fixed TTL control.
+    const groups = partitionPrimerGroups([
+      { model: "m", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
+      { model: "m", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "harness_managed" },
+    ], foFixed);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].primerForm, PRIMER_FORM_DEDICATED);
+  });
+
+  test("collapsed groups all with adequate TTL -> lead reviewer primer", () => {
+    const foFixed = normalizeHarnessCapabilities({
+      capabilities: { barrierSignal: "first_output", cacheTtlControl: "fixed", breakpointControl: "explicit", usageTelemetry: "available" },
+    });
+    const fp = "sha256:" + "f".repeat(64);
+    const groups = partitionPrimerGroups([
+      { model: "m", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "1h" },
+      { model: "m", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
+    ], foFixed);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].primerForm, PRIMER_FORM_LEAD_REVIEWER);
+  });
+
+  test("groups lacking a requestPrefixFingerprint are NOT collapsed (fail-closed)", () => {
+    const groups = partitionPrimerGroups([
+      { model: "m", angles: ["a"], ttlIntent: "5m" },
+      { model: "m", angles: ["b"], ttlIntent: "5m" },
+      { model: "other", angles: ["c"], ttlIntent: "5m" },
+    ]);
+    // Each fingerprint-less group forms its own partition — without a proven
+    // prefix, two 'm' groups cannot be shown to share a cache-relevant prefix,
+    // so merging them would let one primer silently cover unknown prefixes.
+    assert.equal(groups.length, 3);
+    const mGroups = groups.filter((g) => g.model === "m");
+    assert.equal(mGroups.length, 2);
+    for (const g of groups) assert.equal(g.requestPrefixFingerprint, null);
+    assert.deepEqual([...mGroups.map((g) => g.groups[0].angles[0])].sort(), ["a", "b"]);
+  });
+});
+
+describe("sha256Hex — deterministic hashing + opaque markers", () => {
+  test("sha256Hex produces sha256:<64 hex> for a string", () => {
+    assert.match(sha256Hex("x"), /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("sha256Hex is byte-deterministic across object key order", () => {
+    const a = sha256Hex({ b: 1, a: 2 });
+    const b = sha256Hex({ a: 2, b: 1 });
+    assert.equal(a, b);
+  });
+
+  test("opaqueMarker marks harness-owned values as unverifiable", () => {
+    assert.match(opaqueMarker("model"), /^__opaque:/);
+  });
+
+  test("nested Buffers are canonicalized to hex (not Buffer.toJSON data array)", () => {
+    const a = sha256Hex({ bytes: Buffer.from("hello"), label: "x" });
+    // Same bytes reconstructed identically -> identical hash (memory vs disk).
+    assert.equal(a, sha256Hex({ bytes: Buffer.from("hello"), label: "x" }));
+    // A Buffer and an identical hex string must NOT collide (prefix disambiguates).
+    assert.notEqual(a, sha256Hex({ bytes: "hello", label: "x" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyPromptLeadingAlignment / renderBriefingPointerLine — dispatch-prompt
+// LAYOUT check (#1841, completes #1468): mechanically proving whether a
+// dispatched reviewer prompt actually LEADS with the round's byte-identical
+// invariant prefix/pointer line, never angle-first.
+// ---------------------------------------------------------------------------
+describe("renderBriefingPointerLine — pointer-seeding mode's byte-identical pointer line", () => {
+  test("is deterministic for the same prefixPath", () => {
+    const a = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    const b = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    assert.equal(a, b);
+  });
+
+  test("differs when the prefixPath differs (a per-reviewer/angle-varying path would defeat prefix matching)", () => {
+    const a = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt");
+    const b = renderBriefingPointerLine("tmp/gate-context/o-r/pr-1/draft_gate-abc-coverage.briefing-prefix.txt");
+    assert.notEqual(a, b);
+  });
+
+  test("throws on an empty prefixPath", () => {
+    assert.throws(() => renderBriefingPointerLine(""), /non-empty prefixPath/);
+  });
+});
+
+describe("composeReviewerPromptText — deterministic reviewer-prompt composer (issue #1852)", () => {
+  const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+  const VOLATILE_BYTES = "# volatile tail\ngate: draft_gate\nhead: abc\n";
+
+  test("composes prefix INLINED as the leading bytes, then volatile, then the angle suffix", () => {
+    const composed = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo the thing.",
+    });
+    assert.equal(composed, `${PREFIX_BYTES}${VOLATILE_BYTES}## Angle: coverage\nDo the thing.`);
+    assert.ok(composed.startsWith(PREFIX_BYTES));
+  });
+
+  test("AC1: two different groups' composed prompts share an identical leading prefix span, byte-for-byte", () => {
+    const coverage = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo coverage things.",
+    });
+    const security = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: security\nDo security things (a longer angle suffix, different length).",
+    });
+    assert.notEqual(coverage, security);
+    const sharedSpan = PREFIX_BYTES + VOLATILE_BYTES;
+    assert.equal(coverage.slice(0, sharedSpan.length), sharedSpan);
+    assert.equal(security.slice(0, sharedSpan.length), sharedSpan);
+  });
+
+  test("an absent volatile tail composes as empty — never blocking", () => {
+    const composed = composeReviewerPromptText({ prefixBytes: PREFIX_BYTES, angleSuffix: "## Angle: coverage\nDo the thing." });
+    assert.equal(composed, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`);
+  });
+
+  test("throws on an empty prefixBytes (never composes angle-first by accident)", () => {
+    assert.throws(() => composeReviewerPromptText({ prefixBytes: "", angleSuffix: "## Angle: coverage" }), /non-empty prefixBytes/);
+  });
+
+  test("throws on an empty/whitespace-only angleSuffix", () => {
+    assert.throws(() => composeReviewerPromptText({ prefixBytes: PREFIX_BYTES, angleSuffix: "   " }), /non-empty angleSuffix/);
+  });
+
+  test("the composed output verifies as inline-aligned via verifyPromptLeadingAlignment", () => {
+    const composed = composeReviewerPromptText({
+      prefixBytes: PREFIX_BYTES,
+      volatileBytes: VOLATILE_BYTES,
+      angleSuffix: "## Angle: coverage\nDo the thing.",
+    });
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: composed,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt",
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "inline");
+  });
+});
+
+describe("verifyPromptLeadingAlignment — GATE-EXEC-BRIEFING-PREFIX layout check", () => {
+  const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+  const PREFIX_PATH = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+
+  test("inline mode: a prompt whose leading bytes ARE the prefix passes", () => {
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "inline");
+  });
+
+  test("pointer mode: a prompt leading with the byte-identical pointer line passes, angle suffix after", () => {
+    const pointerLine = renderBriefingPointerLine(PREFIX_PATH);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${pointerLine}\n## Angle: coverage\nDo the thing.`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, true);
+    assert.equal(verdict.mode, "pointer");
+  });
+
+  test("REJECTS an angle-first prompt (dynamic per-unit prose ahead of the invariant prefix)", () => {
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `## Angle: coverage\nDo the thing.\n${PREFIX_BYTES}`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+    assert.match(verdict.reason, /does not LEAD with/);
+  });
+
+  test("REJECTS an angle-first prompt in pointer-seeding mode (prose ahead of the pointer line)", () => {
+    const pointerLine = renderBriefingPointerLine(PREFIX_PATH);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `## Angle: coverage\nDo the thing.\n${pointerLine}`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("REJECTS a pointer line naming a DIFFERENT path (per-reviewer path variance defeats matching)", () => {
+    const otherPointerLine = renderBriefingPointerLine(`${PREFIX_PATH}.other`);
+    const verdict = verifyPromptLeadingAlignment({
+      promptLeading: `${otherPointerLine}\n## Angle: coverage\n`,
+      prefixBytes: PREFIX_BYTES,
+      prefixPath: PREFIX_PATH,
+    });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("REJECTS an empty/missing promptLeading", () => {
+    const verdict = verifyPromptLeadingAlignment({ promptLeading: "", prefixBytes: PREFIX_BYTES, prefixPath: PREFIX_PATH });
+    assert.equal(verdict.aligned, false);
+  });
+
+  test("DISPATCH_PROMPT_LEADING_CAP_BYTES is comfortably above the 200 KiB inline-diff cap", () => {
+    assert.ok(DISPATCH_PROMPT_LEADING_CAP_BYTES > 200 * 1024);
+  });
+});
+
+describe("matchesDiffExcludeGlob / classifyDiffFileExclusion — diff-inline exclude patterns (issue #1853)", () => {
+  test("literal filename pattern matches only that exact path", () => {
+    assert.equal(matchesDiffExcludeGlob("package-lock.json", "package-lock.json"), true);
+    assert.equal(matchesDiffExcludeGlob("packages/app/package-lock.json", "package-lock.json"), false);
+  });
+
+  test("**/ prefix matches the same basename at any depth, including the root", () => {
+    assert.equal(matchesDiffExcludeGlob("package-lock.json", "**/package-lock.json"), true);
+    assert.equal(matchesDiffExcludeGlob("packages/app/package-lock.json", "**/package-lock.json"), true);
+  });
+
+  test("a single * matches within one path segment only", () => {
+    assert.equal(matchesDiffExcludeGlob("dist/foo.js", "dist/*.js"), true);
+    assert.equal(matchesDiffExcludeGlob("dist/nested/foo.js", "dist/*.js"), false);
+    assert.equal(matchesDiffExcludeGlob("dist/nested/foo.js", "dist/**"), true);
+  });
+
+  test("classifyDiffFileExclusion: DEFAULT_DIFF_EXCLUDE_GLOBS covers common lockfiles + generated trees", () => {
+    for (const p of ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "packages/core/package-lock.json"]) {
+      assert.equal(classifyDiffFileExclusion(p), "default", p);
+    }
+    for (const p of ["dist/index.js", "node_modules/x/index.js", ".claude/agents/foo.md"]) {
+      assert.equal(classifyDiffFileExclusion(p), "default", p);
+    }
+  });
+
+  test("classifyDiffFileExclusion: a review-relevant source file is never classified", () => {
+    assert.equal(classifyDiffFileExclusion("packages/core/src/loop/review-dispatch-plan.mjs"), null);
+  });
+
+  test("classifyDiffFileExclusion: a caller excludeGlobs entry is 'configured', layered on top of the default set (never replacing it)", () => {
+    assert.equal(classifyDiffFileExclusion("dist/index.js"), "default"); // still excluded even with no excludeGlobs
+    assert.equal(classifyDiffFileExclusion("vendor/generated.rb", { excludeGlobs: ["vendor/**"] }), "configured");
+    assert.equal(classifyDiffFileExclusion("package-lock.json", { excludeGlobs: [] }), "default");
+  });
+
+  test("DEFAULT_DIFF_EXCLUDE_GLOBS is frozen and non-empty", () => {
+    assert.ok(Object.isFrozen(DEFAULT_DIFF_EXCLUDE_GLOBS));
+    assert.ok(DEFAULT_DIFF_EXCLUDE_GLOBS.length > 0);
+  });
+});
+
+describe("filterDiffForInline — filtered diff for the shared per-head block (issue #1853)", () => {
+  const SRC_HUNK = [
+    "diff --git a/src/foo.mjs b/src/foo.mjs",
+    "index 1111111..2222222 100644",
+    "--- a/src/foo.mjs",
+    "+++ b/src/foo.mjs",
+    "@@ -1,2 +1,2 @@",
+    "-old line",
+    "+new line",
+    " context",
+  ].join("\n");
+  const LOCKFILE_HUNK = [
+    "diff --git a/package-lock.json b/package-lock.json",
+    "index 3333333..4444444 100644",
+    "--- a/package-lock.json",
+    "+++ b/package-lock.json",
+    "@@ -1,3 +1,3 @@",
+    '-  "version": "1.0.0",',
+    '+  "version": "1.0.1",',
+    " other",
+  ].join("\n");
+  const DIFF_WITH_LOCKFILE = `${SRC_HUNK}\n${LOCKFILE_HUNK}\n`;
+
+  test("AC1: strips a lockfile's hunk out of the diff entirely", () => {
+    const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    assert.ok(!filteredDiff.includes("package-lock.json"));
+    assert.ok(!filteredDiff.includes('"version": "1.0.1"'));
+    assert.ok(filteredDiff.includes("src/foo.mjs"));
+    assert.ok(filteredDiff.includes("new line"));
+    assert.deepEqual(excludedFiles, [{ path: "package-lock.json", reason: "default" }]);
+    assert.deepEqual(includedFiles, ["src/foo.mjs"]);
+  });
+
+  test("a non-excluded file's block passes through byte-for-byte unchanged", () => {
+    const { filteredDiff } = filterDiffForInline(SRC_HUNK);
+    assert.equal(filteredDiff, SRC_HUNK);
+  });
+
+  test("a diff excluding every file collapses to an empty filteredDiff (no dangling separators)", () => {
+    const { filteredDiff, excludedFiles } = filterDiffForInline(LOCKFILE_HUNK);
+    assert.equal(filteredDiff, "");
+    assert.equal(excludedFiles.length, 1);
+  });
+
+  test("an absent/empty diff passes through as empty, never throws", () => {
+    assert.deepEqual(filterDiffForInline(null), { filteredDiff: "", excludedFiles: [], includedFiles: [] });
+    assert.deepEqual(filterDiffForInline(""), { filteredDiff: "", excludedFiles: [], includedFiles: [] });
+  });
+
+  test("configured excludeGlobs additionally excludes a project-specific path, on top of the defaults", () => {
+    const vendorHunk = [
+      "diff --git a/vendor/generated.rb b/vendor/generated.rb",
+      "--- a/vendor/generated.rb",
+      "+++ b/vendor/generated.rb",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const combined = `${SRC_HUNK}\n${vendorHunk}\n`;
+    const { filteredDiff, excludedFiles } = filterDiffForInline(combined, { excludeGlobs: ["vendor/**"] });
+    assert.ok(!filteredDiff.includes("vendor/generated.rb"));
+    assert.ok(filteredDiff.includes("src/foo.mjs"));
+    assert.deepEqual(excludedFiles, [{ path: "vendor/generated.rb", reason: "configured" }]);
+  });
+
+  test("AC4: the filtered diff, once inlined into a shared prefix, is byte-identical across the round's reviewers regardless of angle suffix", () => {
+    const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    const prefixBytes = `## Invariant prefix\nrepo: o/r\nhead: abc\n\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;
+    const volatileBytes = "# volatile tail\n";
+    const coverage = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix: "## Angle: coverage" });
+    const security = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix: "## Angle: security, a longer suffix" });
+    const sharedSpan = prefixBytes + volatileBytes;
+    assert.equal(coverage.slice(0, sharedSpan.length), sharedSpan);
+    assert.equal(security.slice(0, sharedSpan.length), sharedSpan);
+    assert.ok(coverage.slice(0, sharedSpan.length).includes(filteredDiff));
+  });
+
+  test("AC4: ordering is static (prefix header) -> filtered-diff -> suffix in the composed prompt", () => {
+    const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
+    const staticHeader = "## Invariant prefix\nrepo: o/r\nhead: abc\n";
+    const prefixBytes = `${staticHeader}\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;
+    const composed = composeReviewerPromptText({ prefixBytes, angleSuffix: "## Angle: coverage\nDo the thing." });
+    const staticIdx = composed.indexOf(staticHeader);
+    const diffIdx = composed.indexOf(filteredDiff);
+    const suffixIdx = composed.indexOf("## Angle: coverage");
+    assert.ok(staticIdx === 0);
+    assert.ok(diffIdx > staticIdx, "filtered diff must sit after the static leading span");
+    assert.ok(suffixIdx > diffIdx, "the per-group suffix must sit after the filtered diff");
+    assert.ok(!composed.includes("package-lock.json"), "an excluded file's hunk never reaches the composed prompt");
+  });
+});

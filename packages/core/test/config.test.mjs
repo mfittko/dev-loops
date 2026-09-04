@@ -11,7 +11,9 @@ import {
   DevLoopConfigSchema,
   FileConfigSchema,
   BUILT_IN_DEFAULTS,
+  BLOCKING_SEVERITY_SPELLINGS,
 } from "../src/config/config.mjs";
+import { LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
@@ -25,11 +27,21 @@ import {
   resolveGateAngleContract,
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
+  resolveGateTier,
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
+  resolveFanoutGroups,
+  resolveMaxAnglesPerGroup,
+  resolveFanoutMaxConcurrent,
+  resolveFanoutSequential,
+  resolveFanoutEffectiveConcurrency,
+  DEFAULT_MAX_ANGLES_PER_GROUP,
+  DEFAULT_FANOUT_MAX_CONCURRENT,
+  DEFAULT_FANOUT_SEQUENTIAL,
+  resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
@@ -40,7 +52,13 @@ import {
   resolveBaseBranch,
   resolveTrackerProvider,
   resolveTrackerBoard,
+  resolvePostMergeActions,
 } from "../src/config/config.mjs";
+// #1592: a few fixtures below deliberately keep pre-rename severity spellings
+// ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
+// intentional backward-compat coverage (normalizeSeverity normalizes them on
+// read), not stale fixture drift; do not mass-rewrite them to the canonical
+// spelling.
 // ============================================================================
 // Schema validation tests (S1–S26)
 // ============================================================================
@@ -162,6 +180,47 @@ describe("schema validation", () => {
       },
     });
     assert.ok(!result.success);
+  });
+
+  test("S10d: workflow.stallDetection parses and resolves (#1669)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      workflow: {
+        asyncStartMode: "required",
+        requireRetrospective: false,
+        requireDraftFirst: false,
+        devModeDefault: false,
+        stallDetection: { enabled: true, thresholdMinutes: 7 },
+      },
+    });
+    assert.ok(result.success);
+    assert.equal(result.data.workflow.stallDetection.enabled, true);
+    assert.equal(result.data.workflow.stallDetection.thresholdMinutes, 7);
+
+    // unknown key inside stallDetection rejected
+    const bad = DevLoopConfigSchema.safeParse({
+      version: 1,
+      workflow: {
+        requireRetrospective: false,
+        requireDraftFirst: false,
+        devModeDefault: false,
+        stallDetection: { enabled: true, bogus: 1 },
+      },
+    });
+    assert.ok(!bad.success);
+
+    // resolver returns defaults when unset
+    const resolved = resolveWorkflowConfig({}, "stallDetection");
+    assert.equal(resolved.enabled, true);
+    assert.equal(resolved.thresholdMinutes, 5);
+
+    // resolver honors explicit override
+    const overridden = resolveWorkflowConfig(
+      { workflow: { stallDetection: { enabled: false, thresholdMinutes: 9 } } },
+      "stallDetection"
+    );
+    assert.equal(overridden.enabled, false);
+    assert.equal(overridden.thresholdMinutes, 9);
   });
 
   test("S11: strategy.default bad enum", () => {
@@ -489,6 +548,153 @@ describe("schema validation", () => {
     }).success);
   });
 
+  // postMerge.actions (#1457): a repo's local post-merge hook actions.
+  test("S36b: postMerge.actions with only name+run parses, applying default timeouts", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "git pull" }] },
+    });
+    assert.ok(result.success);
+    const [action] = result.data.postMerge.actions;
+    assert.equal(action.name, "sync-checkout");
+    assert.equal(action.run, "git pull");
+    assert.equal(action.onlyIfChanged, undefined);
+    assert.equal(action.verify, undefined);
+    assert.equal(action.timeoutMs, 120000);
+    assert.equal(action.verifyTimeoutMs, 60000);
+    assert.equal(action.verifyIntervalMs, 2000);
+  });
+
+  test("S36c: postMerge.actions with the full optional shape parses", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: {
+        actions: [
+          {
+            name: "restart-service",
+            run: "make restart",
+            onlyIfChanged: ["src/", "config/"],
+            verify: "curl -sf http://localhost:3000/health",
+            timeoutMs: 30000,
+            verifyTimeoutMs: 15000,
+            verifyIntervalMs: 1000,
+          },
+        ],
+      },
+    });
+    assert.ok(result.success);
+  });
+
+  test("S36d: postMerge.actions rejects an action missing name or run", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ run: "git pull" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "", run: "git pull" }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "" }] },
+    }).success);
+  });
+
+  test("S36e: postMerge.actions rejects an empty-string onlyIfChanged pattern", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "sync-checkout", run: "git pull", onlyIfChanged: [""] }] },
+    }).success);
+  });
+
+  test("S36f: postMerge.actions rejects a timeoutMs/verifyTimeoutMs/verifyIntervalMs past the ceiling or non-positive", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", timeoutMs: 600001 }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", verifyTimeoutMs: 0 }] },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", verifyIntervalMs: 60001 }] },
+    }).success);
+  });
+
+  test("S36g: an unknown key inside postMerge or a postMerge action is rejected", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [], unknownKey: true },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      postMerge: { actions: [{ name: "a", run: "r", unknownKey: true }] },
+    }).success);
+  });
+
+  test("S36h: a config without postMerge still parses exactly as before", () => {
+    const result = DevLoopConfigSchema.safeParse({ version: 1 });
+    assert.ok(result.success);
+    assert.equal(result.data.postMerge, undefined);
+  });
+
+  test("S36i: FileConfigSchema accepts postMerge.actions the same as DevLoopConfigSchema", () => {
+    const config = { version: 1, postMerge: { actions: [{ name: "sync-checkout", run: "git pull" }] } };
+    assert.ok(FileConfigSchema.safeParse(config).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, postMerge: { actions: [{ run: "git pull" }] } }).success);
+  });
+
+  // gates.size (fail-closed PR size/tier budget, Phase 1 — check-size-budget.mjs's
+  // pure computation; no enforcement wiring yet). See extension-defaults.yaml
+  // for the shipped defaults and BUILT_IN_DEFAULTS tests below for AC7.
+  test("S37: gates.size accepts full tier config (t1 patterns + sliceHardLoc, t3 patterns)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: {
+        size: {
+          testDiscount: 0.25,
+          absoluteHardLoc: 2000,
+          tiers: {
+            default: { softLoc: 400, waiverLoc: 1500 },
+            t1: { patterns: ["app/models/subscription*", "config/routes.rb"], sliceHardLoc: 400 },
+            t3: { patterns: ["app/frontends/*"] },
+          },
+        },
+      },
+    });
+    assert.ok(result.success);
+    assert.deepEqual(result.data.gates.size.tiers.t1.patterns, ["app/models/subscription*", "config/routes.rb"]);
+    assert.deepEqual(result.data.gates.size.tiers.t3.patterns, ["app/frontends/*"]);
+  });
+
+  test("S37b: gates.size rejects t1/t3 per-tier softLoc/waiverLoc, and t3 sliceHardLoc (not honored in Phase 1)", () => {
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t1: { patterns: ["app/models/*"], softLoc: 400 } } } },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t3: { patterns: ["app/frontends/*"], softLoc: null } } } },
+    }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { tiers: { t3: { patterns: ["app/frontends/*"], sliceHardLoc: 400 } } } },
+    }).success);
+  });
+
+  test("S38: gates.size rejects an unknown key (strict schema)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { size: { testDiscount: 0.25, bogusKey: true } },
+    });
+    assert.ok(!result.success);
+  });
+
 });
 
 // ============================================================================
@@ -553,9 +759,10 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(BUILT_IN_DEFAULTS.queue.maxAutoFiledIssues, 10);
   });
 
-  test("gates.postFindingsComments built-in resolves true (#953 AC2)", () => {
-    // Built-in gates is empty; resolver default is post-on.
-    assert.equal(resolveGatePostFindingsComments(BUILT_IN_DEFAULTS), true);
+  test("gates.postFindingsComments built-in resolves false (opt-in second surface)", () => {
+    // Built-in gates is empty; the consolidated findings comment duplicates the
+    // round's verdict review, so it is off until a repo asks for it.
+    assert.equal(resolveGatePostFindingsComments(BUILT_IN_DEFAULTS), false);
   });
 
   test("workflow defaults exist and use required async start with false boolean gates by default", () => {
@@ -564,6 +771,7 @@ describe("BUILT_IN_DEFAULTS", () => {
       requireRetrospective: false,
       requireDraftFirst: false,
       devModeDefault: false,
+      stallDetection: { enabled: true, thresholdMinutes: 5 },
     });
   });
 });
@@ -595,6 +803,22 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  test("L1b: gates.size shipped defaults are active with empty t1/t3 (AC7)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-size-budget-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.config.gates.size, {
+        testDiscount: 0.25,
+        absoluteHardLoc: 2000,
+        tiers: { default: { softLoc: 400, waiverLoc: 1500 } },
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L1-validation: invalid .devloops returns non-empty errors without throwing", async () => {
     // FIX C: loadDevLoopConfig never throws on a validation failure. Callers that
     // previously wrapped it in try/catch expecting a throw must instead treat a
@@ -619,6 +843,50 @@ describe("loader — graceful degradation", () => {
     }
   });
 
+  // #1578: a config layer carrying raw gates.<gate>.mandatoryAngles/
+  // excludeAngles keys is rejected by the strict GateConfig schema. The
+  // whole layer is dropped (packaged defaults remain), but the drop MUST NOT
+  // be silent — a visible warning naming the offending keys is pushed to the
+  // `warnings` channel (consistent with existing config warnings), not just
+  // the `errors` channel that many consumers ignore.
+  test("#1578: a raw-key gate layer is dropped with a visible warning naming the offending keys", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-raw-gate-keys-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        [
+          "version: 1",
+          "gates:",
+          "  preApproval:",
+          "    angles: [dry]",
+          "    mandatoryAngles: [pr-checklist-matrix]",
+          "    excludeAngles: [yagni]",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      // The layer was rejected — errors is non-empty.
+      assert.ok(Array.isArray(result.errors) && result.errors.length > 0, "raw-key layer should populate errors");
+      // A visible warning names the offending keys — not a silent drop.
+      // Assert the full prefixed key paths appear (e.g.
+      // gates.preApproval.mandatoryAngles) — the migration hint uses the
+      // placeholder form gates.<gate>.mandatoryAngles, so matching the real
+      // gate name proves the key-extraction worked, not the boilerplate. (#1578)
+      assert.ok(
+        result.warnings.some((w) =>
+          /Offending key\(s\):/.test(w) &&
+          /gates\.preApproval\.mandatoryAngles/.test(w) &&
+          /gates\.preApproval\.excludeAngles/.test(w),
+        ),
+        "warnings should name the offending raw keys with their full path in the Offending key(s) segment",
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("L1b: a plain consumer (no .devloops) defaults the retrospective gate OFF (#841)", async () => {
     // The retrospective is a dev-loop-development artifact; shipped defaults must be permissive so
     // an ordinary consumer's product PRs do not carry the meta-process gate. extension-defaults
@@ -628,6 +896,18 @@ describe("loader — graceful degradation", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.equal(result.config.workflow.requireRetrospective, false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("L1b2: a plain consumer (no .devloops) ships grouped fan-out dispatch with a default grouping table (AC6)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-default-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.equal(result.config.gates.fanout.mode, "grouped");
+      assert.ok(Array.isArray(result.config.gates.fanout.groups) && result.config.gates.fanout.groups.length > 0);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -696,7 +976,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L3: both files present, valid", async () => {
+  test("L3: both layers present, valid", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L3-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -706,13 +986,13 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first", refinement: { fanOut: 5 } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      // overrides.json beats defaults.json for strategy, but refinement falls through
+      // .devloops beats .pi/dev-loop/defaults.json for strategy, but refinement falls through
       assert.equal(result.config.strategy, "tracker-first");
       assert.equal(result.config.refinement.fanOut, 5);
     } finally {
@@ -755,7 +1035,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L6: overrides.json exists but is not valid JSON", async () => {
+  test("L6: .devloops exists but is not valid JSON", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L6-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -764,12 +1044,12 @@ describe("loader — graceful degradation", () => {
         path.join(piDir, "defaults.json"),
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
-      await writeFile(path.join(piDir, "overrides.json"), "broken json [[[");
+      await writeFile(path.join(tmpDir, ".devloops"), "broken json [[[");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.strategy, "local-first");
-      assert.ok(result.errors.length > 0, "should error for broken overrides");
+      assert.ok(result.errors.length > 0, "should error for broken .devloops");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -828,7 +1108,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1c: workflow family merges correctly from defaults.yaml and settings.yaml", async () => {
+  test("Y1c: workflow family merges correctly from defaults.yaml and .devloops", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-workflow-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -841,7 +1121,7 @@ describe("loader — graceful degradation", () => {
         "  requireDraftFirst: false",
         "  devModeDefault: false",
       ].join("\n"));
-      await writeFile(path.join(piDir, "settings.yaml"), [
+      await writeFile(path.join(tmpDir, ".devloops"), [
         "version: 1",
         "workflow:",
         "  requireDraftFirst: true",
@@ -854,42 +1134,53 @@ describe("loader — graceful degradation", () => {
         requireRetrospective: true,
         requireDraftFirst: true,
         devModeDefault: false,
+        stallDetection: { enabled: true, thresholdMinutes: 5 },
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("Y1d: loader falls back to legacy overrides.yaml when settings.yaml is absent", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-legacy-overrides-yaml-"));
-    try {
-      const piDir = path.join(tmpDir, ".pi", "dev-loop");
-      await mkdir(piDir, { recursive: true });
-      await writeFile(path.join(piDir, "overrides.yaml"), [
-        "version: 1",
-        "strategy: local-first",
-      ].join("\n"));
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
-      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.deepEqual(result.errors, []);
-      assert.equal(result.config.strategy, "local-first");
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  test("Y1e: settings.yaml takes precedence over legacy overrides.yaml", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-settings-preferred-yaml-"));
+  test("Y1d: legacy .pi/dev-loop/settings.yaml is ignored (removed #1701) — no values load, no deprecation warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-legacy-ignored-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "settings.yaml"), [
         "version: 1",
-        "strategy: tracker-first",
+        // A value NO shipped/extension layer would set — if the legacy path
+        // were ever read again, this would surface in resolved config.
+        "refinement:",
+        "  fanOut: 9",
       ].join("\n"));
-      await writeFile(path.join(piDir, "overrides.yaml"), [
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(result.errors, []);
+      // No values are applied from the removed legacy path: fanOut stays the
+      // shipped extension default (3), never the settings.yaml value (9).
+      assert.equal(result.config.refinement.fanOut, 3);
+      assert.equal(
+        result.warnings.some((w) => /deprecated/i.test(w)),
+        false,
+        "no legacy deprecation warning should fire",
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Y1e: .devloops takes precedence over .pi/dev-loop/defaults.yaml", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devloops-preferred-yaml-"));
+    try {
+      const piDir = path.join(tmpDir, ".pi", "dev-loop");
+      await mkdir(piDir, { recursive: true });
+      await writeFile(path.join(piDir, "defaults.yaml"), [
         "version: 1",
         "strategy: local-first",
+      ].join("\n"));
+      await writeFile(path.join(tmpDir, ".devloops"), [
+        "version: 1",
+        "strategy: tracker-first",
       ].join("\n"));
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
@@ -900,7 +1191,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1g: settings.yaml can override only gates.draft.requireCi without losing default draft angles", async () => {
+  test("Y1g: .devloops can override only gates.draft.requireCi without losing default draft angles", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-gate-require-ci-yaml-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -915,7 +1206,7 @@ describe("loader — graceful degradation", () => {
         "    required: true",
         "    requireCi: true",
       ].join("\n"));
-      await writeFile(path.join(piDir, "settings.yaml"), [
+      await writeFile(path.join(tmpDir, ".devloops"), [
         "version: 1",
         "gates:",
         "  draft:",
@@ -934,18 +1225,18 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("Y1f: settings.json takes precedence over legacy overrides.json", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-settings-preferred-json-"));
+  test("Y1f: .devloops.json takes precedence over .pi/dev-loop/defaults.json", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-devloops-preferred-json-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(
-        path.join(piDir, "settings.json"),
-        JSON.stringify({ version: 1, strategy: "tracker-first" }),
+        path.join(piDir, "defaults.json"),
+        JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
-        JSON.stringify({ version: 1, strategy: "local-first" }),
+        path.join(tmpDir, ".devloops.json"),
+        JSON.stringify({ version: 1, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
@@ -973,7 +1264,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L7: overrides.json is valid JSON but fails schema", async () => {
+  test("L7: .devloops is valid JSON but fails schema", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L7-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -983,14 +1274,14 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, unknownKey: true }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
       assert.equal(result.config.strategy, "local-first");
-      assert.ok(result.errors.length > 0, "should error for bad overrides schema");
+      assert.ok(result.errors.length > 0, "should error for bad .devloops schema");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1044,7 +1335,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L13: overrides.json has only refinement.fanOut: 7", async () => {
+  test("L13: .devloops has only refinement.fanOut: 7", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L13-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1054,7 +1345,7 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1067,13 +1358,13 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L14: both files invalid — still returns extension defaults", async () => {
+  test("L14: both layers invalid — still returns extension defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L14-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
       await mkdir(piDir, { recursive: true });
       await writeFile(path.join(piDir, "defaults.json"), "bad json");
-      await writeFile(path.join(piDir, "overrides.json"), "also bad");
+      await writeFile(path.join(tmpDir, ".devloops"), "also bad");
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
@@ -1085,7 +1376,7 @@ describe("loader — graceful degradation", () => {
     }
   });
 
-  test("L15: defaults.json has version: 1 but overrides.json has version: 2", async () => {
+  test("L15: defaults.json has version: 1 but .devloops has version: 2", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-L15-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1095,13 +1386,13 @@ describe("loader — graceful degradation", () => {
         JSON.stringify({ version: 1, strategy: "local-first" }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 2, strategy: "tracker-first" }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       assert.ok(result.config);
-      // overrides.json rejected, defaults.json applied
+      // .devloops rejected (version mismatch), defaults.json applied
       assert.equal(result.config.strategy, "local-first");
       assert.ok(result.errors.length > 0, "should error for version mismatch");
     } finally {
@@ -1164,7 +1455,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M2: overrides.json beats defaults.json", async () => {
+  test("M2: .devloops beats .pi/dev-loop/defaults.json", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M2-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1174,7 +1465,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1, refinement: { fanOut: 5 } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1185,7 +1476,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M3: missing key in overrides falls through to defaults", async () => {
+  test("M3: missing key in .devloops falls through to defaults", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M3-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1195,7 +1486,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1, refinement: { fanOut: 5, mode: "sequential" } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, refinement: { fanOut: 7 } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1224,7 +1515,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M5: overrides.json sets a key defaults.json doesn't mention", async () => {
+  test("M5: .devloops sets a key defaults.json doesn't mention", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M5-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1234,7 +1525,7 @@ describe("loader — precedence", () => {
         JSON.stringify({ version: 1 }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, models: { conductor: "gpt-5" } }),
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
@@ -1245,7 +1536,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M6: shallow merge — models.roles in overrides replaces entire models.roles", async () => {
+  test("M6: shallow merge — models.roles in .devloops replaces entire models.roles", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M6-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1258,7 +1549,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           models: { roles: { correctness: "gpt-4" } },
@@ -1267,8 +1558,8 @@ describe("loader — precedence", () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
       const roles = result.config.models.roles;
-      // Shallow merge: overrides replaces entire models.roles
-      assert.ok(roles.correctness, "should have correctness from overrides");
+      // Shallow merge: .devloops replaces entire models.roles
+      assert.ok(roles.correctness, "should have correctness from .devloops");
       assert.ok(!roles.security, "should NOT have security (replaced by shallow merge)");
       assert.ok(!roles.style, "should NOT have style (replaced by shallow merge)");
     } finally {
@@ -1289,7 +1580,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           gates: { draft: { angles: [{ name: "dry", persona: "custom-dry-reviewer" }] } },
@@ -1309,7 +1600,7 @@ describe("loader — precedence", () => {
     }
   });
 
-  test("M8: workflow family merges correctly from defaults.json and overrides.json", async () => {
+  test("M8: workflow family merges correctly from defaults.json and .devloops", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-M8-"));
     try {
       const piDir = path.join(tmpDir, ".pi", "dev-loop");
@@ -1327,7 +1618,7 @@ describe("loader — precedence", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({
           version: 1,
           workflow: {
@@ -1344,6 +1635,7 @@ describe("loader — precedence", () => {
         requireRetrospective: true,
         requireDraftFirst: false,
         devModeDefault: true,
+        stallDetection: { enabled: true, thresholdMinutes: 5 },
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -1366,14 +1658,10 @@ describe("tracker config (#1408)", () => {
     assert.equal(resolveTrackerProvider({ tracker: { provider: "jira" } }), "jira");
   });
 
-  test("resolveTrackerBoard prefers tracker.board over the deprecated queue.board", () => {
+  test("resolveTrackerBoard resolves tracker.board and ignores removed legacy keys", () => {
     assert.equal(resolveTrackerBoard({}), null);
-    assert.deepEqual(resolveTrackerBoard({ queue: { board: { title: "Q" } } }), { title: "Q" });
     assert.deepEqual(resolveTrackerBoard({ tracker: { board: { number: 3 } } }), { number: 3 });
-    assert.deepEqual(
-      resolveTrackerBoard({ queue: { board: { title: "Q" } }, tracker: { board: { number: 3 } } }),
-      { number: 3 },
-    );
+    assert.equal(resolveTrackerBoard({ queue: { board: { title: "Q" } } }), null, "queue.board is no longer an alias (removed #1701)");
   });
 
   test("tracker.provider accepts any non-empty string (schema does not preclude an external provider)", () => {
@@ -1389,16 +1677,15 @@ describe("tracker config (#1408)", () => {
     assert.ok(!result.success);
   });
 
-  test("tracker.board validation error names tracker.board, not queue.board", () => {
+  test("tracker.board validation error names tracker.board", () => {
     const result = FileConfigSchema.safeParse({ version: 1, tracker: { board: {} } });
     assert.ok(!result.success);
     assert.ok(result.error.issues.some((i) => i.message === "tracker.board must set number or title"));
   });
 
-  test("queue.board validation error still names queue.board", () => {
-    const result = FileConfigSchema.safeParse({ version: 1, queue: { board: {} } });
-    assert.ok(!result.success);
-    assert.ok(result.error.issues.some((i) => i.message === "queue.board must set number or title"));
+  test("queue.board is no longer a valid config key (#1701 removal)", () => {
+    const result = FileConfigSchema.safeParse({ version: 1, queue: { board: { title: "Legacy Board" } } });
+    assert.ok(!result.success, "queue.board must fail schema validation");
   });
 
   test("strategy: \"github-first\" is accepted as a deprecated alias for tracker-first, with a warning", async () => {
@@ -1430,19 +1717,29 @@ describe("tracker config (#1408)", () => {
     }
   });
 
-  test("queue.board is accepted as a deprecated alias for tracker.board, with a warning", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-alias-board-"));
+  test("a .devloops setting only queue.board yields no board and no alias warning", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-tracker-board-only-"));
     try {
       await writeFile(
         path.join(tmpDir, ".devloops"),
         "version: 1\nqueue:\n  board:\n    title: Legacy Board\n",
       );
-      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { loadDevLoopConfig, resolveTrackerBoard } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(result.config.tracker.board, { title: "Legacy Board" });
-      assert.deepEqual(result.config.queue.board, { title: "Legacy Board" });
-      assert.ok(result.warnings.some((w) => /queue\.board is a deprecated alias for tracker\.board/.test(w)));
+      assert.ok(
+        result.errors.length > 0,
+        "queue.board must fail schema validation",
+      );
+      assert.ok(
+        result.config.tracker?.board == null,
+        "queue.board must not resolve onto tracker.board",
+      );
+      assert.equal(
+        result.warnings.some((w) => /deprecated alias for tracker\.board/.test(w)),
+        false,
+        "no alias warning should fire",
+      );
+      assert.deepEqual(resolveTrackerBoard(result.config), null);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1498,7 +1795,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage"] } } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         // Adds "custom-lens" only — does not restate scope/coverage.
         JSON.stringify({ version: 1, gates: { draft: { angles: ["custom-lens"] } } }),
       );
@@ -1522,7 +1819,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         JSON.stringify({ version: 1, gates: { draft: { angles: ["scope", "coverage", "correctness"] } } }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         // Drops "coverage" only — does not restate scope/correctness.
         JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", enabled: false }] } } }),
       );
@@ -1556,7 +1853,7 @@ describe("mergeConfigLayers — angle arrays merge by name (D3)", () => {
         }),
       );
       await writeFile(
-        path.join(piDir, "overrides.json"),
+        path.join(tmpDir, ".devloops"),
         JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", mandatory: true }] } } }),
       );
       const { loadDevLoopConfig, resolveGateConfig } = await import("../src/config/config.mjs");
@@ -1601,9 +1898,10 @@ describe("extension defaults", () => {
       assert.equal(result.config.autonomy.humanMergeOnly, true);
       // PR-first means auto-filing issues is near-zero; keep the cap minimal.
       assert.equal(result.config.queue.maxAutoFiledIssues, 1);
-      // Gate findings live on the PR as evidence, not tracker noise — keep them on.
-      assert.equal(result.config.gates.postFindingsComments, true);
-      assert.equal(resolveGatePostFindingsComments(result.config), true);
+      // Gate findings already live on the PR as the round's verdict review, so
+      // the consolidated second comment stays off.
+      assert.equal(result.config.gates.postFindingsComments, false);
+      assert.equal(resolveGatePostFindingsComments(result.config), false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -1782,7 +2080,15 @@ describe("role resolution", () => {
     assert.equal(result.fallback, false);
   });
 
-  test("R12: all 20 known angles resolve without fallback", () => {
+  // #1442: the required deslop gate angle resolves to the review persona.
+  test("R11d: deslop angle resolves to review persona (ADR 0041 prose half)", () => {
+    const result = resolveReviewerRole({}, "deslop");
+    assert.equal(result.persona, "review");
+    assert.equal(result.model, null);
+    assert.equal(result.fallback, false);
+  });
+
+  test("R12: all 21 known angles resolve without fallback (deslop added in #1442)", () => {
     const expectedPersonas = {
       scope: "review",
       coverage: "review",
@@ -1804,6 +2110,7 @@ describe("role resolution", () => {
       "state-concurrency": "review",
       "renderer-security": "review",
       determinism: "review",
+      deslop: "review", // #1442 (ADR 0041 prose half)
     };
 
     for (const [angle, expectedPersona] of Object.entries(expectedPersonas)) {
@@ -1811,6 +2118,33 @@ describe("role resolution", () => {
       assert.equal(result.persona, expectedPersona, `angle ${angle}`);
       assert.equal(result.fallback, false, `angle ${angle}`);
     }
+  });
+
+  // #1442 review finding (coverage, AC2): AC2 — "a prose diff with a planted
+  // binary-contrast construction is BLOCKED; a clean prose diff passes" — is
+  // enforced entirely by the fail-closed deslop persona prompt. No test bound
+  // the shipped prompt to that directive, so a regression that softens or drops
+  // fail-closed would pass the whole suite. This binds it so it cannot silently
+  // regress (the fail-closed blocking behavior itself runs as an LLM over this
+  // exact prompt).
+  test("R11e: shipped deslop prompt retains the fail-closed directive (AC2 binding)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const sourceDefaults = await readFile(
+      path.join(repoRoot, "packages", "core", "src", "config", "extension-defaults.yaml"),
+      "utf8",
+    );
+    const deslopBlock = sourceDefaults.match(
+      /- name: deslop[\s\S]*?prompt: >-[\s\S]*?fail closed when any survives/,
+    );
+    assert.ok(deslopBlock, "deslop persona prompt must exist in shipped extension-defaults.yaml");
+    const prompt = deslopBlock[0];
+    // Every surviving binary-contrast construction must block (`fail closed when
+    // any survives`), a missed instance is the failure mode (`Be exhaustive`),
+    // and skills/docs on the diff still respected.
+    assert.match(prompt, /fail closed when any survives/);
+    assert.match(prompt, /Be exhaustive/);
+    assert.match(prompt, /skills\/docs/);
   });
 
   test("R13: known angle with model override applies override", () => {
@@ -2165,9 +2499,11 @@ describe("role resolution", () => {
         mandatoryAngles: [],
         required: true,
         requireCi: true,
-        dynamicAngles: false,
+        dynamicAngles: true,
         additiveAngles: false,
-        blockCleanOnFindingSeverities: ["must-fix"],
+        blockCleanOnFindingSeverities: ["high"],
+        mediumFixWindow: 3,
+        tiers: [],
       });
     });
 
@@ -2184,9 +2520,11 @@ describe("role resolution", () => {
         mandatoryAngles: [],
         required: false,
         requireCi: false,
-        dynamicAngles: false,
+        dynamicAngles: true,
         additiveAngles: false,
-        blockCleanOnFindingSeverities: ["must-fix"],
+        blockCleanOnFindingSeverities: ["high"],
+        mediumFixWindow: 3,
+        tiers: [],
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);
     });
@@ -2329,7 +2667,7 @@ describe("role resolution", () => {
       };
       const result = resolveGateConfig(config, "draft");
       assert.deepEqual(result.angles, ["scope", "coverage"]);
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high"]);
     });
 
     test("resolveGateConfig returns configured blockCleanOnFindingSeverities", () => {
@@ -2338,12 +2676,12 @@ describe("role resolution", () => {
         gates: {
           draft: {
             angles: ["scope"],
-            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
+            blockCleanOnFindingSeverities: ["high", "medium"],
           },
         },
       };
       const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium"]);
     });
 
     test("resolveGateConfig returns default blockCleanOnFindingSeverities for missing field", () => {
@@ -2357,10 +2695,56 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "draft");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high"]);
     });
 
     test("resolveGateConfig blockCleanOnFindingSeverities returns a copy, not reference", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["high", "medium"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      result.blockCleanOnFindingSeverities.push("defer");
+      assert.deepEqual(config.gates.draft.blockCleanOnFindingSeverities, ["high", "medium"]);
+    });
+
+    test("resolveGateConfig returns blockCleanOnFindingSeverities for preApproval gate", () => {
+      const config = {
+        version: 1,
+        gates: {
+          preApproval: {
+            angles: ["dry"],
+            blockCleanOnFindingSeverities: ["high", "medium", "defer"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "preApproval");
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium", "low"]);
+    });
+
+    test("resolveGateConfig normalizes and dedupes legacy blockCleanOnFindingSeverities spellings", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["must-fix", "nice-to-have", "defer"],
+          },
+        },
+      };
+      const result = resolveGateConfig(config, "draft");
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "low"]);
+    });
+
+    // Backward compatibility (#1592): every pre-rename spelling still resolves
+    // to its canonical replacement, so a live PR / unmigrated config carrying
+    // the old vocabulary keeps behaving identically.
+    test("resolveGateConfig normalizes a fully legacy-spelled blockCleanOnFindingSeverities list", () => {
       const config = {
         version: 1,
         gates: {
@@ -2371,22 +2755,279 @@ describe("role resolution", () => {
         },
       };
       const result = resolveGateConfig(config, "draft");
-      result.blockCleanOnFindingSeverities.push("defer");
-      assert.deepEqual(config.gates.draft.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now"]);
+      assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium"]);
     });
 
-    test("resolveGateConfig returns blockCleanOnFindingSeverities for preApproval gate", () => {
+    // Fail-closed posture: an out-of-vocabulary blocking severity can only
+    // arrive through a config that failed schema validation (the schema enum
+    // rejects it; loadDevLoopConfig returns the raw merged config alongside
+    // its errors). Passing it through would make the gate silently block on
+    // nothing, so the resolve boundary refuses instead.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value, naming the value and the gate key", () => {
       const config = {
         version: 1,
         gates: {
-          preApproval: {
-            angles: ["dry"],
-            blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now", "defer"],
+          draft: {
+            angles: ["scope"],
+            blockCleanOnFindingSeverities: ["high", "critical"],
           },
         },
       };
-      const result = resolveGateConfig(config, "preApproval");
-      assert.deepEqual(result.blockCleanOnFindingSeverities, ["must-fix", "worth-fixing-now", "defer"]);
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.draft.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
+    test("resolveGateConfig throws on a non-string blockCleanOnFindingSeverities entry", () => {
+      const config = {
+        version: 1,
+        gates: { preApproval: { blockCleanOnFindingSeverities: ["high", 3] } },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "preApproval"),
+        (err) => err instanceof Error && err.message.includes("gates.preApproval.blockCleanOnFindingSeverities"),
+      );
+    });
+
+    test("resolveGateConfig names every out-of-vocabulary value when several are invalid", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: ["critical", "blocker", "high"] } },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) => err.message.includes('"critical"') && err.message.includes('"blocker"') && !err.message.includes('"high"'),
+      );
+    });
+
+    test("resolveGateConfig refuses an entry JSON.stringify cannot render instead of crashing the renderer", () => {
+      const circular = {};
+      circular.self = circular;
+      const nullProtoCycle = Object.create(null);
+      nullProtoCycle.self = nullProtoCycle;
+      for (const entry of [10n, circular, nullProtoCycle]) {
+        assert.throws(
+          () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [entry] } } }, "draft"),
+          /outside the schema's severity vocabulary/,
+        );
+      }
+    });
+
+    // JSON.stringify returns undefined (without throwing) for symbol values;
+    // the formatter's String() fallback must render a real token so the
+    // refusal message never carries an empty slot.
+    test("resolveGateConfig renders a non-empty token for a symbol entry in the refusal message", () => {
+      assert.throws(
+        () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [Symbol("oops")] } } }, "draft"),
+        (err) => err.message.includes("Symbol(oops)"),
+      );
+    });
+
+    // The guard's accept set is exact-spelling parity with the schema enum:
+    // a whitespace-varied entry fails schema validation, so it must refuse
+    // here too rather than being trim-normalized into acceptance.
+    test("resolveGateConfig refuses a whitespace-varied spelling the schema rejects", () => {
+      assert.throws(
+        () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: ["high "] } } }, "draft"),
+        /outside the schema's severity vocabulary/,
+      );
+    });
+
+    // The schema requires min 1; an empty list reaches this resolver only
+    // through a config that failed validation, and passing it through would
+    // make the gate block on nothing (and severity consumers diverge on it).
+    test("resolveGateConfig throws on an explicitly-empty blockCleanOnFindingSeverities array, naming the gate key", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: [] } },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) => err instanceof Error && err.message.includes("gates.draft.blockCleanOnFindingSeverities") && /is empty/.test(err.message),
+      );
+    });
+
+    // The schema requires an array; a scalar or mapping here is the same
+    // failed-validation channel and previously fell back to the high default
+    // silently, under-blocking relative to the author's intent.
+    test("resolveGateConfig throws on a present-but-non-array blockCleanOnFindingSeverities value, naming the gate key", () => {
+      for (const value of ["medium", { medium: true }, 3, null]) {
+        assert.throws(
+          () => resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: value } } }, "draft"),
+          (err) => err instanceof Error && err.message.includes("gates.draft.blockCleanOnFindingSeverities") && /must be an array/.test(err.message),
+          String(value),
+        );
+      }
+    });
+
+    // Parity pin for the derived vocabulary: every spelling the schema enum
+    // accepts must resolve to its canonical value without refusal, so the
+    // guard can never drift ahead of the schema. Derives the expected
+    // spelling set from BLOCKING_SEVERITY_SPELLINGS (config.mjs's single
+    // source for the vocabulary) instead of a hand-typed literal copy, so
+    // widening the vocabulary can't silently strand this pin behind the real
+    // list, and asserts the actual canonical resolved value (not just a
+    // length) so a resolver that returns the WRONG canonical spelling still
+    // fails this test.
+    test("resolveGateConfig accepts every schema-enum blockCleanOnFindingSeverities spelling and resolves it to its canonical value", () => {
+      for (const spelling of BLOCKING_SEVERITY_SPELLINGS) {
+        const result = resolveGateConfig({ version: 1, gates: { draft: { blockCleanOnFindingSeverities: [spelling] } } }, "draft");
+        const canonical = Object.hasOwn(LEGACY_SEVERITY_ALIASES, spelling) ? LEGACY_SEVERITY_ALIASES[spelling] : spelling;
+        assert.deepEqual(result.blockCleanOnFindingSeverities, [canonical], spelling);
+        assert.ok(BLOCKING_SEVERITY_SPELLINGS.includes(canonical), `canonical value "${canonical}" for "${spelling}" must itself be schema-enum vocabulary`);
+      }
+    });
+
+    // Case-sensitivity is deliberate (normalizeSeverity never lowercases):
+    // a mixed-case spelling is out of vocabulary and must refuse, not coerce.
+    test("resolveGateConfig throws on a mixed-case blockCleanOnFindingSeverities spelling", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { blockCleanOnFindingSeverities: ["HIGH"] } },
+      };
+      assert.throws(() => resolveGateConfig(config, "draft"), /outside the schema's severity vocabulary/);
+    });
+
+    // Fail-closed posture (issue #1761): resolveGateConfig validates every
+    // GateConfig-typed gate's blockCleanOnFindingSeverities together, eagerly,
+    // on every call — not only the requested gate's. Without this, a
+    // single-gate consumer (e.g. a draft-only fan-in consolidation) could
+    // resolve draft's (valid) config, consolidate a round, and flip
+    // ready-for-review before a later dual-gate call site (e.g. verdict
+    // posting) ever resolved preApproval and threw on ITS invalid list —
+    // leaving a written ledger artifact and no verdict. Requesting "draft"
+    // here must throw on preApproval's invalid list even though draft's own
+    // list is valid and draft is the only gate being resolved.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value on a DIFFERENT gate than the one requested (eager cross-gate validation)", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: { blockCleanOnFindingSeverities: ["high"] },
+          preApproval: { blockCleanOnFindingSeverities: ["critical"] },
+        },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.preApproval.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
+    // Same eager cross-gate guarantee for the third GateConfig-typed gate,
+    // spike. Without a spike pin, dropping "spike" from the eager loop (or
+    // regressing spike to lazy validation) would escape the suite and silently
+    // reintroduce the side-effect race for the spike gate.
+    test("resolveGateConfig throws on an out-of-vocabulary blockCleanOnFindingSeverities value on the spike gate when a DIFFERENT gate is requested (eager cross-gate validation)", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: { blockCleanOnFindingSeverities: ["high"] },
+          spike: { blockCleanOnFindingSeverities: ["critical"] },
+        },
+      };
+      assert.throws(
+        () => resolveGateConfig(config, "draft"),
+        (err) =>
+          err instanceof Error &&
+          err.message.includes("Config validation failed") &&
+          err.message.includes("gates.spike.blockCleanOnFindingSeverities") &&
+          err.message.includes('"critical"'),
+      );
+    });
+
+    test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { worthFixingNowFixWindow: 5 } },
+      };
+      assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 5);
+    });
+
+    test("resolveGateConfig prefers mediumFixWindow over the deprecated worthFixingNowFixWindow alias when both are set", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { mediumFixWindow: 2, worthFixingNowFixWindow: 5 } },
+      };
+      assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 2);
+    });
+
+    // The canonical key must round-trip through the REAL loader (per-layer
+    // FileConfigSchema parse + mergeGateObject), not just a hand-built plain
+    // object — every prior test in this describe block only exercised the
+    // alias, never this key, through loadDevLoopConfig.
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file's canonical mediumFixWindow", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-mediumfixwindow-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    mediumFixWindow: 7\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 7);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    // This is the test that actually catches a schema-level `.default()` on
+    // `mediumFixWindow` poisoning the deprecated-alias fallback: a layer that
+    // sets ONLY the alias. Each config layer is parsed independently through
+    // the FULL schema before merging (applyLayer → FileConfigSchema.safeParse
+    // per layer), so a `.default(3)` on `mediumFixWindow` would fill it on
+    // THIS layer's own parse even though the raw YAML never mentions it —
+    // permanently shadowing the real `worthFixingNowFixWindow: 5` override the
+    // test above alone would never expose (it never omits the canonical key).
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file setting ONLY the deprecated worthFixingNowFixWindow alias", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-wfn-alias-only-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    worthFixingNowFixWindow: 5\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 5);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("FileConfigSchema accepts every canonical and legacy DEFECT severity spelling, plus the deprecated worthFixingNowFixWindow alias", () => {
+      const config = {
+        version: 1,
+        gates: {
+          draft: {
+            blockCleanOnFindingSeverities: ["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"],
+            worthFixingNowFixWindow: 5,
+          },
+        },
+      };
+      assert.equal(FileConfigSchema.safeParse(config).success, true);
+    });
+
+    // #1592 follow-up: question/nit never block by severity — a config
+    // blocking on either would fight the disposition pass, which
+    // simultaneously auto-resolves them (question: answered/never-deferred;
+    // nit: deferred immediately) regardless of what blocks a clean verdict.
+    test("GateConfig rejects question/nit in blockCleanOnFindingSeverities (non-defect categories never block by severity)", () => {
+      for (const severity of ["question", "nit"]) {
+        const result = FileConfigSchema.safeParse({
+          version: 1,
+          gates: { draft: { blockCleanOnFindingSeverities: [severity] } },
+        });
+        assert.equal(result.success, false, severity);
+      }
     });
 
     test("GateConfig rejects invalid blockCleanOnFindingSeverities tokens", () => {
@@ -2609,7 +3250,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "input-validation", "determinism", "no-op", "link-check",
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
-      "semantic-drift",
+      "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
@@ -2624,16 +3265,16 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     spike: [],
   };
   // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
-  // both were deliberately narrowed to must-fix only (see the .devloops
+  // both were deliberately narrowed to high only (see the .devloops
   // gates.draft and gates.preApproval comments / issue #1527) because
-  // worth-fixing-now churns every gate round on a non-trivial change and
+  // medium churns every gate round on a non-trivial change and
   // never converges. spike is still pinned to its pre-#1404 value — draft's
   // and preApproval's entries here track the current shipped baseline
   // rather than the pre-#1404 one.
   const CURRENT_BLOCK_CLEAN = {
-    draft: ["must-fix"],
-    preApproval: ["must-fix"],
-    spike: ["must-fix"],
+    draft: ["high"],
+    preApproval: ["high"],
+    spike: ["high"],
   };
 
   const sortedSet = (arr) => [...new Set(arr)].sort();
@@ -2687,7 +3328,9 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     isp: ["review", "Interface Segregation Principle"],
     dip: ["review", "Dependency Inversion Principle"],
     "renderer-security": ["review", "Review this change for renderer security"],
-    "pr-checklist-matrix": ["review", "Verify before approval that the PR checklist"],
+    // #1877: the prompt was rewritten from the soft completeness judgment to
+    // the truthfulness backstop behind the deterministic pre-approval block.
+    "pr-checklist-matrix": ["review", "Completeness is enforced deterministically"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
   // Angles used by the shipped gates that never had a personas[angle] entry
@@ -2861,10 +3504,14 @@ describe("shipped defaults docs and deep angle wiring", () => {
 
       assert.deepEqual(result.errors, []);
       assert.equal(checklistRole.persona, "review");
-      assert.match(checklistRole.prompt, /checkbox/i);
-      assert.match(checklistRole.prompt, /AC\/DoD\/non-goals matrix/i);
-      assert.match(checklistRole.prompt, /markdown table/i);
+      // #1877: the angle is the truthfulness backstop behind the deterministic
+      // completeness block — it must name the matrix, checked boxes, the
+      // unchecked-box block, and the completeness-not-truthfulness boundary.
+      assert.match(checklistRole.prompt, /checked/i);
+      assert.match(checklistRole.prompt, /AC\/DoD\/Non-goals matrix/i);
       assert.match(checklistRole.prompt, /unchecked/i);
+      assert.match(checklistRole.prompt, /completeness/i);
+      assert.match(checklistRole.prompt, /TRUTHFULNESS/i);
       assert.ok(preApprovalAngles.includes("pr-checklist-matrix"), "pr-checklist-matrix must be in pre-approval gate angles after settings opt-in");
       assert.equal(checklistRole.fallback, false);
     } finally {
@@ -3137,7 +3784,7 @@ const lightConfig = (over = {}) => ({
   version: 1,
   localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20, ...over } },
   gates: {
-    preApproval: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] },
+    preApproval: { blockCleanOnFindingSeverities: ["high", "medium"] },
   },
 });
 
@@ -3193,7 +3840,7 @@ test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
 test("resolveGateDispatchMode: under threshold + blocking inline finding → escalated", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["worth-fixing-now"],
+    inlineFindingSeverities: ["medium"],
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "escalated");
@@ -3208,29 +3855,43 @@ test("resolveGateDispatchMode: under threshold + only non-blocking finding → i
   assert.equal(result.reason, "under_threshold");
 });
 
-test("resolveGateDispatchMode: draft gate under threshold + worth-fixing-now-only inline finding → stays inline (must-fix-only blocking set)", () => {
+test("resolveGateDispatchMode: draft gate under threshold + medium-only inline finding → stays inline (high-only blocking set)", () => {
   const config = {
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
-    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["worth-fixing-now"],
+    inlineFindingSeverities: ["medium"],
   });
   assert.equal(result.mode, "inline");
   assert.equal(result.reason, "under_threshold");
 });
 
-test("resolveGateDispatchMode: draft gate under threshold + must-fix inline finding → escalated", () => {
+test("resolveGateDispatchMode: draft gate under threshold + high inline finding → escalated", () => {
   const config = {
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
-    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix"] } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
     scope: { filesChanged: 1, linesChanged: 5 },
-    inlineFindingSeverities: ["must-fix"],
+    inlineFindingSeverities: ["high"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
+});
+
+test("resolveGateDispatchMode: legacy-spelled config blocking list still escalates against a legacy-spelled inline finding (backward compat)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { draft: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] } },
+  };
+  const result = resolveGateDispatchMode(config, "draft", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["worth-fixing-now"],
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "escalated");
@@ -3238,6 +3899,326 @@ test("resolveGateDispatchMode: draft gate under threshold + must-fix inline find
 
 test("GATE_FULL_LABEL is gate:full", () => {
   assert.equal(GATE_FULL_LABEL, "gate:full");
+});
+
+// ── Grouped fan-out dispatch (AC6) ────────────────────────────────────────
+
+function fanoutConfig(groups) {
+  return { version: 1, gates: { fanout: { mode: "grouped", groups } } };
+}
+
+test("resolveFanoutGroups: grouped default batches resolved angles onto their configured group", () => {
+  const config = fanoutConfig([
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check", "correctness"]);
+  assert.deepEqual(result, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "correctness", angles: ["correctness"] },
+  ]);
+});
+
+test("resolveFanoutGroups: an ungrouped angle colliding with an emitted group name gets a disambiguated unit name", () => {
+  const config = fanoutConfig([{ name: "docs", angles: ["link-check"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["link-check", "docs"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["link-check"] },
+    { name: "angle:docs", angles: ["docs"] },
+  ]);
+  assert.equal(new Set(result.map((g) => g.name)).size, result.length);
+});
+
+test("resolveFanoutGroups: an angle not covered by any group forms an implicit singleton group", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["scope"]);
+  assert.deepEqual(result, [{ name: "scope", angles: ["scope"] }]);
+});
+
+test("resolveFanoutGroups: a configured group with none of its angles resolved is dropped", () => {
+  const config = fanoutConfig([
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "process", angles: ["scope", "pr-description"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["scope"]);
+  assert.deepEqual(result, [{ name: "process", angles: ["scope"] }]);
+});
+
+test("resolveFanoutGroups: mode per-angle opts into one group per angle regardless of the grouping table", () => {
+  const config = {
+    version: 1,
+    gates: { fanout: { mode: "per-angle", groups: [{ name: "docs-surface", angles: ["docs", "link-check"] }] } },
+  };
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["docs"] },
+    { name: "link-check", angles: ["link-check"] },
+  ]);
+});
+
+test("resolveFanoutGroups: gate:full no longer restores per-angle — dispatches grouped (ADR 0047 superseded by 0048, #1601)", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs", "link-check"] }]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "link-check"], { fullLabel: true });
+  // gate:full forces the full angle set UPSTREAM (resolveGateTier); dispatch
+  // shape is GROUPED here — the configured group wins, no per-angle restoration.
+  assert.deepEqual(result, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+  ]);
+});
+
+test("resolveFanoutGroups: gate:full dispatches grouped with auto-chunked leftovers (#1601)", () => {
+  // gate:full + no configured groups: the full angle set is auto-chunked into
+  // units of ≤ maxAnglesPerGroup (default 3) — NOT per-angle singletons.
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d"], { fullLabel: true });
+  assert.deepEqual(result, [
+    { name: "group:a+b+c", angles: ["a", "b", "c"] },
+    { name: "d", angles: ["d"] },
+  ]);
+});
+
+test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 3, #1601)", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["scope", "docs"]);
+  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤3).
+  assert.deepEqual(result, [
+    { name: "group:scope+docs", angles: ["scope", "docs"] },
+  ]);
+});
+
+test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe before auto-chunking (#1601)", () => {
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
+  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤3).
+  assert.deepEqual(result, [
+    { name: "group:docs+scope", angles: ["docs", "scope"] },
+  ]);
+});
+
+test("resolveFanoutGroups: maxAnglesPerGroup chunks leftovers into units of ≤N (#1601 determinism)", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2 } } };
+  // 5 leftover angles, N=2 → 3 units [a,b],[c,d],[e]. Deterministic order, stable names.
+  assert.deepEqual(resolveFanoutGroups(config, "draft", ["a", "b", "c", "d", "e"]), [
+    { name: "group:a+b", angles: ["a", "b"] },
+    { name: "group:c+d", angles: ["c", "d"] },
+    { name: "e", angles: ["e"] },
+  ]);
+});
+
+test("resolveFanoutGroups: maxAnglesPerGroup: 1 and mode: per-angle both yield singletons with NO configured groups (#1601)", () => {
+  // With no configured groups, both produce one singleton unit per angle.
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1 } } }, "draft", ["scope", "docs"]);
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle" } } }, "draft", ["scope", "docs"]);
+  assert.deepEqual(n1, [
+    { name: "scope", angles: ["scope"] },
+    { name: "docs", angles: ["docs"] },
+  ]);
+  assert.deepEqual(pa, [
+    { name: "scope", angles: ["scope"] },
+    { name: "docs", angles: ["docs"] },
+  ]);
+});
+
+test("resolveFanoutGroups: per-angle and maxAnglesPerGroup: 1 DIVERGE when a configured multi-angle group matches (#1601 — not exact equivalents)", () => {
+  // per-angle bypasses configured groups (pure singletons); N=1 honors configured
+  // groups (matched first, never split) then singletons the leftovers. They are
+  // NOT equivalent when a configured multi-angle group matches a resolved angle.
+  const groups = [{ name: "docs-surface", angles: ["docs", "link-check"] }];
+  const pa = resolveFanoutGroups({ version: 1, gates: { fanout: { mode: "per-angle", groups } } }, "draft", ["docs", "link-check", "scope"]);
+  const n1 = resolveFanoutGroups({ version: 1, gates: { fanout: { maxAnglesPerGroup: 1, groups } } }, "draft", ["docs", "link-check", "scope"]);
+  // per-angle: 3 singletons (configured group bypassed).
+  assert.deepEqual(pa.map((g) => g.angles.length), [1, 1, 1]);
+  // N=1: configured group intact (2 angles, 1 unit) + leftover singleton.
+  assert.deepEqual(n1, [
+    { name: "docs-surface", angles: ["docs", "link-check"] },
+    { name: "scope", angles: ["scope"] },
+  ]);
+});
+
+test("resolveFanoutGroups: configured groups matched first, never split by maxAnglesPerGroup (#1601)", () => {
+  // A configured group of 4 angles stays ONE unit even when N=2 (the knob only
+  // chunks the leftover ungrouped pool).
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, groups: [{ name: "big", angles: ["a", "b", "c", "d"] }] } } };
+  const result = resolveFanoutGroups(config, "draft", ["a", "b", "c", "d", "e", "f"]);
+  assert.deepEqual(result, [
+    { name: "big", angles: ["a", "b", "c", "d"] },
+    { name: "group:e+f", angles: ["e", "f"] },
+  ]);
+});
+
+test("resolveFanoutGroups: single leftover angle keeps the pre-#1601 singleton name (collision → angle:<name>)", () => {
+  const config = fanoutConfig([{ name: "docs", angles: ["link-check"] }]);
+  // "docs" is a leftover colliding with the emitted group name "docs".
+  const result = resolveFanoutGroups(config, "draft", ["link-check", "docs"]);
+  assert.deepEqual(result, [
+    { name: "docs", angles: ["link-check"] },
+    { name: "angle:docs", angles: ["docs"] },
+  ]);
+  assert.equal(new Set(result.map((g) => g.name)).size, result.length);
+});
+
+test("resolveFanoutGroups: an angle named in two configured groups is claimed by the first (first-group-wins dedup)", () => {
+  const config = fanoutConfig([
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["docs", "b"] },
+  ]);
+  const result = resolveFanoutGroups(config, "draft", ["docs", "a", "b"]);
+  assert.deepEqual(result, [
+    { name: "g1", angles: ["docs", "a"] },
+    { name: "g2", angles: ["b"] },
+  ]);
+});
+
+test("resolveFanoutGroups: non-array/undefined resolvedAngles resolves to []", () => {
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", undefined), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", "not-an-array"), []);
+  assert.deepEqual(resolveFanoutGroups({ version: 1 }, "draft", null), []);
+});
+
+test("resolveFanoutGroups: empty resolvedAngles resolves to []", () => {
+  const config = fanoutConfig([{ name: "docs-surface", angles: ["docs"] }]);
+  assert.deepEqual(resolveFanoutGroups(config, "draft", []), []);
+});
+
+test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups entry (never zod-validated — a hand-built config, or the raw merged object loadDevLoopConfig returns on ANY validation failure)", () => {
+  const angles = ["docs", "scope"];
+  // A null entry (e.g. an empty YAML list item) is skipped; "scope" is the sole leftover → singleton.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, null] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+  // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group;
+  // both angles fall through to the leftover auto-chunk pool (≤3 → one unit).
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
+  );
+  // A missing/blank `name` drops the group; its angles fall through to the auto-chunk pool.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
+  );
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "  ", angles: ["docs"] }] } } }, "draft", angles),
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
+  );
+  // A non-array `groups` resolves as if no groups were configured.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: "not-an-array" } } }, "draft", angles),
+    [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
+  );
+  // Two groups sharing a name: the second is dropped, "scope" is the sole leftover → singleton.
+  assert.deepEqual(
+    resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: ["docs"] }, { name: "g", angles: ["scope"] }] } } }, "draft", angles),
+    [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
+  );
+});
+
+test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config override + defensive fallback (#1601)", () => {
+  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 3);
+  assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 4);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 5 } } }), 5);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
+  // Defensive: non-integer / sub-1 fall back to defaults.
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 3);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 3);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 0 } } }), 4);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 4);
+});
+
+test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound (#1726) with a cross-harness-safe default", () => {
+  // Shipped default is false → other harnesses/repos keep maxConcurrent behavior (no regression).
+  assert.equal(resolveFanoutSequential({ version: 1 }), false);
+  assert.equal(DEFAULT_FANOUT_SEQUENTIAL, false);
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 4);
+  // Effective concurrency follows maxConcurrent when not sequential.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: false, maxConcurrent: 3 } } }), 3);
+  // sequential forces one unit per wave regardless of maxConcurrent.
+  assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: true } } }), true);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }), 1);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true, maxConcurrent: 8 } } }), 1);
+  // A non-boolean truthy value is NOT honored (strict === true).
+  assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
+});
+
+test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-dup-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: dup",
+        "        angles: [a]",
+        "      - name: dup",
+        "        angles: [b]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.ok(errors.length > 0);
+    assert.match(errors.map((e) => e.message).join("\n"), /duplicate gates\.fanout\.groups name/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// AC3 (#1572) — per-angle scoped briefings: gates.<gate>.angles[].scope +
+// resolveGateAngleScope
+// ============================================================================
+
+test("GateAngleEntry schema accepts a valid scope value on an angle entry", () => {
+  const result = DevLoopConfigSchema.safeParse({
+    version: 1,
+    gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }] } },
+  });
+  assert.equal(result.success, true);
+});
+
+test("GateAngleEntry schema rejects an unknown scope value", () => {
+  const result = DevLoopConfigSchema.safeParse({
+    version: 1,
+    gates: { draft: { angles: [{ name: "docs", scope: "everything" }] } },
+  });
+  assert.equal(result.success, false);
+});
+
+test("resolveGateAngleScope: a configured angle scope resolves verbatim", () => {
+  const config = { gates: { draft: { angles: [{ name: "link-check", scope: "docs-only" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "link-check"), "docs-only");
+});
+
+test("resolveGateAngleScope: an angle with no scope field defaults to full", () => {
+  const config = { gates: { draft: { angles: [{ name: "scope" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "scope"), "full");
+});
+
+test("resolveGateAngleScope: an angle absent from the gate's configured angles fails open to full", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "unconfigured-angle"), "full");
+});
+
+test("resolveGateAngleScope: an unknown/malformed scope value is dropped at normalization and fails open to full (hand-built, never-zod-validated config)", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "everything" }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+});
+
+test("resolveGateAngleScope: a disabled entry's scope is never returned (mirrors findAngleEntry's enabled:false exclusion)", () => {
+  const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only", enabled: false }] } } };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+});
+
+test("resolveGateAngleScope: scope is looked up on the NAMED gate only, unlike findAngleEntry's cross-gate search", () => {
+  const config = {
+    gates: {
+      draft: { angles: [{ name: "docs" }] },
+      preApproval: { angles: [{ name: "docs", scope: "docs-only" }] },
+    },
+  };
+  assert.equal(resolveGateAngleScope(config, "draft", "docs"), "full");
+  assert.equal(resolveGateAngleScope(config, "preApproval", "docs"), "docs-only");
 });
 
 // ── Light mode eligibility ───────────────────────────────────────────────
@@ -3817,6 +4798,401 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(resolveGateConfig(config, "draft").additiveAngles, false);
   });
 
+  // ── Diff-class angle tiers (issue #1550): resolveGateTier consult at the top
+  // of resolveGateAnglesDynamic ──────────────────────────────────────────────
+
+  // Docs-only diff fixture: two markdown files, one changed line each (2 added
+  // + 2 deleted = 4 lines total via analyzeT1's real hunk-level count — NOT
+  // the fake-zero lineStats analyzeDiff's inferred-category path reports for
+  // an unambiguous diff).
+  const docsOnlyDiff = {
+    nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md",
+    diffOutput: [
+      "diff --git a/docs/guide.md b/docs/guide.md",
+      "@@ -1,1 +1,1 @@",
+      "-old guide line",
+      "+new guide line",
+      "diff --git a/README.md b/README.md",
+      "@@ -1,1 +1,1 @@",
+      "-old readme line",
+      "+new readme line",
+    ].join("\n"),
+  };
+
+  function draftConfigWithTiers(tiers) {
+    return {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["docs", "link-check", "correctness", { name: "pr-description", mandatory: true }],
+          // Pin dynamic OFF so these tier-isolation tests are unaffected by the
+          // #1579 default flip (they assert static-pool behavior, not dynamic).
+          dynamic: { subtractive: false },
+          ...(tiers ? { tiers } : {}),
+        },
+      },
+    };
+  }
+
+  test("tiers: a docs-only diff matching a configured tier returns the tier's angle set with a tier:<name> rationale", async () => {
+    const config = draftConfigWithTiers([
+      { name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["docs", "link-check"] },
+    ]);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check"]);
+    assert.deepEqual(result.skippedAngles, ["correctness"]);
+    assert.deepEqual(result.reasons, { correctness: "tier:docs-only" });
+    assert.equal(result.fallbackToAll, false);
+    assert.deepEqual(result.addedAngles, []);
+    assert.deepEqual(result.addedReasons, {});
+  });
+
+  test("tiers: the same diff WITHOUT a configured tier resolves byte-identically to today's static-angle behavior (regression)", async () => {
+    const config = draftConfigWithTiers(null);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff });
+    assert.deepEqual(result, {
+      recommendedAngles: ["pr-description", "docs", "link-check", "correctness"],
+      skippedAngles: [],
+      reasons: {},
+      fallbackToAll: false,
+      dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
+    });
+  });
+
+  test("tiers: hasFullLabel true skips tier resolution even when a tier would otherwise match", async () => {
+    const config = draftConfigWithTiers([
+      { name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["docs", "link-check"] },
+    ]);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: docsOnlyDiff, hasFullLabel: true });
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check", "correctness"]);
+  });
+
+
+  // ── #1579: grouped dynamic angles are the default ──────────────────────────
+
+  test("#1579 dynamic subtractive is ON by default (no dynamic key) — a diff narrows the pool", async () => {
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
+    assert.ok(result.recommendedAngles.length < 5, "pool narrowed from the full 5");
+    assert.ok(result.skippedAngles.includes("coverage"), "non-docs angle pruned by default");
+    assert.equal(result.fallbackToAll, false);
+  });
+
+  test("#1579 mandatory angle survives dynamic pruning under the default config (no dynamic key)", async () => {
+    // coverage is NOT recommended for a docs-only diff, so the classifier
+    // WOULD prune it — mandatory:true must keep it on the always-run floor.
+    const config = {
+      version: 1,
+      gates: {
+        draft: { angles: ["docs", { name: "coverage", mandatory: true }, "kiss"] },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("coverage"), "mandatory angle survives pruning");
+    assert.ok(!result.skippedAngles.includes("coverage"), "mandatory angle never skipped");
+    // kiss is non-mandatory and not docs-relevant → pruned (proves the floor
+    // is selective, not a blanket keep-all).
+    assert.ok(result.skippedAngles.includes("kiss"));
+  });
+
+  test("#1579 opt-out: dynamic.subtractive:false restores the full static pool even with a diff", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", "docs", "deep", "kiss"],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+  });
+
+  test("#1579 default config + no diff falls back to the full static pool (graceful degradation)", async () => {
+    // No explicit dynamic key (default ON), but no diff available — the
+    // resolver must not prune and must return the full configured pool.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft");
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.fallbackToAll, false);
+  });
+
+  test("#1579 gate:full label alone does NOT restore the full pool (only per-angle dispatch of the pruned set)", async () => {
+    // gate:full bypasses TIER resolution but NOT dynamic pruning: under the
+    // default subtractive:true + a diff, hasFullLabel still yields a pruned set
+    // (dispatched per-angle via resolveFanoutGroups), not the full static pool.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+      hasFullLabel: true,
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
+    assert.ok(result.recommendedAngles.length < 5, "pool still pruned — gate:full does not restore the full pool");
+    assert.ok(result.skippedAngles.length > 0, "non-docs angles still pruned under gate:full");
+    assert.equal(result.fallbackToAll, false);
+  });
+
+  test("#1579 default config + ambiguous diff → fallbackToAll restores the full pool (graceful degradation)", async () => {
+    // The CHANGELOG pins this as the graceful-degradation route for the new
+    // default: an unclassifiable (ambiguous) diff falls back to the full static
+    // pool with fallbackToAll:true, dynamicAnglesActive:true.
+    const config = {
+      version: 1,
+      gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.equal(result.fallbackToAll, true);
+    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
+    assert.deepEqual(result.skippedAngles, []);
+  });
+});
+describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
+  function draftConfigWithTiers(tiers) {
+    return {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["docs", "link-check", "correctness", "gate-evidence", { name: "pr-description", mandatory: true }],
+          tiers,
+        },
+      },
+    };
+  }
+
+  test("gate:full label bypasses tier resolution → gate_full_label", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md"],
+      filesChanged: 1,
+      linesChanged: 10,
+      hasFullLabel: true,
+    });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "gate_full_label" });
+  });
+
+  test("no tiers configured → no_tiers_configured", () => {
+    const config = { version: 1, gates: { draft: { angles: ["docs"] } } };
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "no_tiers_configured" });
+  });
+
+  test("an explicitly-empty tiers array also resolves to no_tiers_configured", () => {
+    const config = draftConfigWithTiers([]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "no_tiers_configured");
+  });
+
+  test("scope_unavailable: changedFiles omitted", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: changedFiles is an empty array", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: [], filesChanged: 0, linesChanged: 0 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: changedFiles is not an array", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: "docs/guide.md", filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: filesChanged is non-finite", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: Infinity, linesChanged: 5 });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("scope_unavailable: linesChanged is non-finite", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/guide.md"], filesChanged: 1, linesChanged: NaN });
+    assert.equal(result.reason, "scope_unavailable");
+  });
+
+  test("config_source_delta: a changed .devloops path fails closed even when a tier would otherwise match", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { kinds: ["docs", "config"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: [".devloops"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "config_source_delta");
+  });
+
+  test("config_source_delta: the shipped defaults file (the layer that ships the angle pool) fails closed too", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { kinds: ["docs", "config"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", {
+      changedFiles: ["packages/core/src/config/extension-defaults.yaml"],
+      filesChanged: 1,
+      linesChanged: 5,
+    });
+    assert.equal(result.reason, "config_source_delta");
+  });
+
+  test("unclassifiable_file: an unknown-kind changed file fails closed", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["assets/logo.png"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.reason, "unclassifiable_file");
+  });
+
+  test("kinds-only match: every changed file's classifyFile kind must be in the tier's kinds set", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs", "link-check"] }]);
+    const matched = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md", "README.md"],
+      filesChanged: 2,
+      linesChanged: 5000,
+    });
+    assert.equal(matched.tier, "docs-only");
+    assert.equal(matched.reason, "tier_match");
+    assert.deepEqual(matched.angles, ["pr-description", "docs", "link-check"]);
+
+    const mixed = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/guide.md", "src/main.mjs"],
+      filesChanged: 2,
+      linesChanged: 5,
+    });
+    assert.equal(mixed.reason, "no_tier_match");
+  });
+
+  test("maxLines-only match: line-count bound applies regardless of kind or file count", () => {
+    const config = draftConfigWithTiers([{ name: "small", match: { maxLines: 50 }, angles: ["correctness"] }]);
+    const atBound = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 50 });
+    assert.equal(atBound.reason, "tier_match");
+    const overBound = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 51 });
+    assert.equal(overBound.reason, "no_tier_match");
+  });
+
+  test("combined kinds + maxFiles + maxLines match requires every configured condition", () => {
+    const config = draftConfigWithTiers([
+      { name: "small-non-code", match: { kinds: ["docs", "test"], maxFiles: 3, maxLines: 50 }, angles: ["correctness"] },
+    ]);
+    const underBound = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/a.md", "test/b.test.mjs"],
+      filesChanged: 2,
+      linesChanged: 40,
+    });
+    assert.equal(underBound.reason, "tier_match");
+    const overLines = resolveGateTier(config, "draft", {
+      changedFiles: ["docs/a.md", "test/b.test.mjs"],
+      filesChanged: 2,
+      linesChanged: 60,
+    });
+    assert.equal(overLines.reason, "no_tier_match");
+  });
+
+  test("first-match-wins: an earlier tier shadows a later one that would also match", () => {
+    const config = draftConfigWithTiers([
+      { name: "broad", match: { kinds: ["docs"] }, angles: ["docs"] },
+      { name: "narrow", match: { kinds: ["docs"], maxLines: 10 }, angles: ["link-check"] },
+    ]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.tier, "broad");
+  });
+
+  test("mandatory angles are always unioned into the matched tier's angle set", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["gate-evidence"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.ok(result.angles.includes("pr-description"));
+    assert.ok(result.angles.includes("gate-evidence"));
+  });
+
+  test("angle_outside_pool: a tier angle absent from the gate's angle pool voids the whole match (no partial intersection)", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs", "typo-angle"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "angle_outside_pool" });
+  });
+
+  test("no_tier_match: no configured tier's conditions hold for this diff", () => {
+    const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
+    const result = resolveGateTier(config, "draft", { changedFiles: ["src/a.mjs"], filesChanged: 1, linesChanged: 5 });
+    assert.deepEqual(result, { tier: null, angles: null, reason: "no_tier_match" });
+  });
+
+  test("spike gate: a tier configured on gates.spike is accepted", () => {
+    const config = {
+      version: 1,
+      gates: {
+        spike: { angles: ["docs"], tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }] },
+      },
+    };
+    const result = resolveGateTier(config, "spike", { changedFiles: ["docs/a.md"], filesChanged: 1, linesChanged: 5 });
+    assert.equal(result.tier, "docs-only");
+    assert.equal(result.reason, "tier_match");
+  });
+
+  test("zod: an empty match ({}) is rejected at config-parse time", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
+    });
+    assert.equal(result.success, false);
+  });
+
+  test("zod: FileConfigSchema also rejects an empty match", () => {
+    const result = FileConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { tiers: [{ name: "docs-only", match: {}, angles: ["docs"] }] } },
+    });
+    assert.equal(result.success, false);
+  });
+
+  // #1442: the prose-only deslop angle is gated on the prose surface even when
+  // a docs-kind tier names it — a prose docs diff keeps it, an exempt
+  // skills/docs contract diff drops it.
+  test("tier with deslop: prose diff keeps deslop, skills/docs contract drops it", async () => {
+    const { resolveGateAnglesDynamic } = await import("../src/config/config.mjs");
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          dynamicAngles: true,
+          angles: ["link-check", "contract-surface", "gate-evidence", "deslop"],
+          tiers: [{ name: "docs-only", match: { kinds: ["docs"], maxLines: 300 }, angles: ["link-check", "contract-surface", "gate-evidence", "deslop"] }],
+        },
+      },
+    };
+    // Prose docs-only diff (< 300 lines) matches the docs-only tier and keeps deslop.
+    const prose = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/articles/foo.md", diffOutput: "@@ -1,1 +1,1 @@\n+not X. Y." },
+    });
+    assert.ok(prose.recommendedAngles.includes("deslop"), "prose diff must keep deslop through the docs tier");
+    // Exempt normative contract (skills/docs) matches the same docs tier but is
+    // NOT prose → deslop is stripped.
+    const contract = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tskills/docs/worktree-guidance.md", diffOutput: "@@ -1,1 +1,1 @@\n+M" },
+    });
+    assert.ok(!contract.recommendedAngles.includes("deslop"), "skills/docs contract diff must drop deslop");
+  });
 });
 
 describe("gates.requireFanoutEvidence", () => {
@@ -4003,24 +5379,25 @@ describe("removed localPlanning key (#1404 — 1.0 hard break)", () => {
 });
 
 describe("gates.postFindingsComments", () => {
-  test("defaults to true (opt-out) and resolveGatePostFindingsComments reflects it", () => {
-    // Default-on: the findings comment is posted unless explicitly disabled. The
-    // `!== false` resolver semantics keep opt-out robust for programmatic config.
-    assert.equal(resolveGatePostFindingsComments({}), true);
-    assert.equal(resolveGatePostFindingsComments({ gates: {} }), true);
-    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: true } }), true);
-    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
-    assert.equal(parsed.success, true);
-    assert.equal(parsed.data.gates.postFindingsComments, true);
-    assert.equal(resolveGatePostFindingsComments(parsed.data), true);
-  });
-
-  test("opt-out: explicit postFindingsComments: false suppresses the comment", () => {
+  test("defaults to false (opt-in) and resolveGatePostFindingsComments reflects it", () => {
+    // Default-off: the comment renders findings the round's verdict review
+    // already carries. The `=== true` resolver semantics keep the opt-in robust
+    // for programmatically-built config that bypasses schema defaulting.
+    assert.equal(resolveGatePostFindingsComments({}), false);
+    assert.equal(resolveGatePostFindingsComments({ gates: {} }), false);
     assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: false } }), false);
-    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: false } });
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { draft: {} } });
     assert.equal(parsed.success, true);
     assert.equal(parsed.data.gates.postFindingsComments, false);
     assert.equal(resolveGatePostFindingsComments(parsed.data), false);
+  });
+
+  test("opt-in: explicit postFindingsComments: true posts the second surface", () => {
+    assert.equal(resolveGatePostFindingsComments({ gates: { postFindingsComments: true } }), true);
+    const parsed = DevLoopConfigSchema.safeParse({ version: 1, gates: { postFindingsComments: true } });
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.data.gates.postFindingsComments, true);
+    assert.equal(resolveGatePostFindingsComments(parsed.data), true);
   });
 
   test("accepts postFindingsComments in full and file schemas", () => {
@@ -4350,5 +5727,120 @@ describe("resolveBaseBranch (#1368)", () => {
     // the bare name straight through — both derive from this one resolved value.
     assert.equal(`origin/${bare}`, "origin/spike/shakapacker-to-vite");
     assert.equal(bare, "spike/shakapacker-to-vite");
+  });
+});
+
+test("resolveGateDispatchMode: legacy defer input escalates against a nice-to-have blocking entry (cross-spelling)", () => {
+  const config = {
+    version: 1,
+    localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
+    gates: { preApproval: { blockCleanOnFindingSeverities: ["must-fix", "nice-to-have"] } },
+  };
+  const result = resolveGateDispatchMode(config, "preApproval", {
+    scope: { filesChanged: 1, linesChanged: 5 },
+    inlineFindingSeverities: ["defer"],
+  });
+  assert.equal(result.mode, "full_fanout");
+  assert.equal(result.reason, "escalated");
+});
+
+test("gates.fanout.sequential: a .devloops merging it loads cleanly through the zod schema (#1726)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-seq-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    sequential: true",
+        "    maxConcurrent: 8",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.equal(result.config.gates.fanout.sequential, true);
+    assert.equal(resolveFanoutSequential(result.config), true);
+    assert.equal(resolveFanoutEffectiveConcurrency(result.config), 1);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+describe("resolvePostMergeActions (#1457)", () => {
+  test("absent postMerge resolves to an empty array", () => {
+    assert.deepEqual(resolvePostMergeActions({ version: 1 }), []);
+    assert.deepEqual(resolvePostMergeActions(undefined), []);
+  });
+
+  test("resolves a full action verbatim, applying defaults for absent optional timing fields", () => {
+    const config = {
+      version: 1,
+      postMerge: { actions: [{ name: "  sync-checkout  ", run: "  git pull  " }] },
+    };
+    assert.deepEqual(resolvePostMergeActions(config), [
+      {
+        name: "sync-checkout",
+        run: "git pull",
+        onlyIfChanged: null,
+        verify: null,
+        timeoutMs: 120000,
+        verifyTimeoutMs: 60000,
+        verifyIntervalMs: 2000,
+      },
+    ]);
+  });
+
+  test("passes through onlyIfChanged, verify, and explicit timeouts unchanged", () => {
+    const config = {
+      version: 1,
+      postMerge: {
+        actions: [
+          {
+            name: "restart-service",
+            run: "make restart",
+            onlyIfChanged: ["src/", "config/"],
+            verify: "curl -sf http://localhost:3000/health",
+            timeoutMs: 30000,
+            verifyTimeoutMs: 15000,
+            verifyIntervalMs: 1000,
+          },
+        ],
+      },
+    };
+    assert.deepEqual(resolvePostMergeActions(config), [
+      {
+        name: "restart-service",
+        run: "make restart",
+        onlyIfChanged: ["src/", "config/"],
+        verify: "curl -sf http://localhost:3000/health",
+        timeoutMs: 30000,
+        verifyTimeoutMs: 15000,
+        verifyIntervalMs: 1000,
+      },
+    ]);
+  });
+
+  test("preserves declared order across multiple actions", () => {
+    const config = {
+      version: 1,
+      postMerge: {
+        actions: [
+          { name: "a", run: "run-a" },
+          { name: "b", run: "run-b" },
+          { name: "c", run: "run-c" },
+        ],
+      },
+    };
+    assert.deepEqual(resolvePostMergeActions(config).map((a) => a.name), ["a", "b", "c"]);
+  });
+
+  test("filters out a malformed action (blank name/run) rather than throwing", () => {
+    const config = {
+      version: 1,
+      postMerge: { actions: [{ name: "", run: "git pull" }, { name: "ok", run: "git pull" }] },
+    };
+    assert.deepEqual(resolvePostMergeActions(config).map((a) => a.name), ["ok"]);
   });
 });

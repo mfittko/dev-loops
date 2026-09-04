@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 /**
@@ -113,7 +115,7 @@ export function parsePositiveInteger(value, flag, parseError = null) {
 
 export function parseNonNegativeInteger(value, flag, parseError = null) {
   if (!/^\d+$/.test(value)) {
-    throw toCliError(`${flag} must be a non-negative integer`, parseError);
+    throw toCliError(`${flag} must be a non-negative integer, got "${value}"`, parseError);
   }
   return Number(value);
 }
@@ -126,16 +128,72 @@ export function parseIssueNumber(value, parseError = null) {
   return parsePositiveInteger(value, "--issue", parseError);
 }
 
-export function runChild(command, args, env = process.env) {
+// Parse a comma-separated allowlist of numeric issue/PR ids (e.g. `1670,9000`
+// from an `--allowed-refs` CLI option). Returns the ids as deduped numeric
+// strings, empty array for an empty/whitespace-only input. Rejects any
+// non-numeric (or zero) entry so a typo can never silently allowlist nothing.
+export function parseAllowedRefsCsv(value, flag, parseError = null) {
+  const parts = String(value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const ids = [];
+  for (const part of parts) {
+    if (!/^\d+$/u.test(part) || Number(part) === 0) {
+      throw toCliError(`${flag} must be a comma-separated list of positive integers (got ${JSON.stringify(part)})`, parseError);
+    }
+    if (!ids.includes(part)) {
+      ids.push(part);
+    }
+  }
+  return ids;
+}
+
+// `stdinText` is optional and additive: omit it and stdin stays closed exactly
+// as before. Supply it (a `gh api ... --input -` payload) and it is piped in,
+// so a caller that needs stdin no longer has to reach for a second, separately
+// injected runner — every gh call in a script can route through the ONE
+// runChild its tests already stub.
+export function runChild(command, args, env = process.env, stdinText = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { env, stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += String(chunk); });
     child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    if (stdinText !== undefined) {
+      child.stdin.end(stdinText);
+    }
     child.on("error", reject);
     child.on("close", (code) => { resolve({ code, stdout, stderr }); });
   });
+}
+
+/**
+ * Resolve a `--body <text>` / `--body-file <path>` pair to the actual body
+ * string, the one file-reading step every `--body-file` CLI flag in this repo
+ * needs: read the file (or stdin, when `allowStdin` and `bodyFile === "-"`)
+ * and FAIL CLOSED (throw) on an empty/whitespace-only result, so a blank or
+ * unreadable `--body-file` can never silently clear a PR/comment body. When
+ * `bodyFile` is absent, `body` is returned unchanged (no emptiness check —
+ * callers that must reject an empty inline `--body` do that themselves,
+ * since not every caller enforces it).
+ *
+ * @param {object} input
+ * @param {string} [input.body] — inline body value, returned as-is when no bodyFile
+ * @param {string} [input.bodyFile] — path to read the body from ("-" = stdin, when allowStdin)
+ * @param {boolean} [input.allowStdin] — honor `bodyFile === "-"` as stdin (fd 0); default false
+ * @returns {Promise<string | undefined>}
+ */
+export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false } = {}) {
+  if (bodyFile === undefined || bodyFile === null) return body;
+  // fs/promises readFile does not accept an integer fd, so stdin (fd 0) is
+  // read synchronously via readFileSync, which does accept one.
+  const content = allowStdin && bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(bodyFile, "utf8");
+  if (content.trim().length === 0) {
+    throw new Error(`--body-file ${bodyFile} is empty`);
+  }
+  return content;
 }
 
 export function runCommand(command, args, { cwd = process.cwd(), env = process.env } = {}) {

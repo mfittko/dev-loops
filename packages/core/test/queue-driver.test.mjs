@@ -288,7 +288,7 @@ test("runQueue handles empty queue", async () => {
 test("runQueue wires board transitions when configured and records them", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-board-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 7\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 7\n");
     const queue = {
       version: 1,
       entries: [createEntry(101, "issue")],
@@ -323,7 +323,7 @@ test("runQueue wires board transitions when configured and records them", async 
 test("runQueue syncs final-approval column for open PR when merge not authorized (#793)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-final-approval-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 7\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 7\n");
     const queue = {
       version: 1,
       entries: [createEntry(201, "issue")],
@@ -364,7 +364,7 @@ test("runQueue does sync a distinct Ready for Review column for open PR (#793)",
   try {
     await writeFile(
       path.join(dir, ".devloops"),
-      "queue:\n  board:\n    number: 7\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",
+      "tracker:\n  board:\n    number: 7\nqueue:\n  statusColumns:\n    ready_for_review: \"Ready for Review\"\n",
     );
     const queue = {
       version: 1,
@@ -430,7 +430,7 @@ test("runQueue final-approval board sync is a no-op when board unconfigured (#79
 test("runQueue records fallback board transition on failure", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-board-fail-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 7\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 7\n");
     const queue = {
       version: 1,
       entries: [createEntry(102, "issue")],
@@ -467,7 +467,7 @@ test("runQueue records fallback board transition on failure", async () => {
 test("runQueue with no orchestrator is a no-op: no entry marked done, board unchanged (#913)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-noorch-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 7\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 7\n");
     const queue = {
       version: 1,
       entries: [createEntry(911, "issue"), createEntry(909, "issue"), createEntry(912, "issue")],
@@ -505,7 +505,7 @@ test("runQueue with no orchestrator is a no-op: no entry marked done, board unch
 test("runQueue reflects a real merged-PR terminal signal to Done (#913 legit path)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-merged-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 7\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 7\n");
     const queue = { version: 1, entries: [createEntry(101, "issue")] };
     await writeQueue(dir, queue);
 
@@ -535,7 +535,7 @@ test("runQueue reflects a real merged-PR terminal signal to Done (#913 legit pat
 test("runQueue reorders ready entries by board Next Up order", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-order-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 3\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 3\n");
     const queue = {
       version: 1,
       entries: [
@@ -582,7 +582,7 @@ test("runQueue reorders ready entries by board Next Up order", async () => {
 test("runQueue picks Next Up members by position ascending; a local entry ABSENT from Next Up is NOT picked (#1091)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-gate-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 3\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 3\n");
     // 4 is present locally but ABSENT from Next Up → must never run.
     const queue = {
       version: 1,
@@ -617,7 +617,7 @@ test("runQueue picks Next Up members by position ascending; a local entry ABSENT
 test("runQueue fails CLOSED on empty Next Up: idle outcome, explicit reason, NO Backlog fallback (#1091)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-empty-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 3\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 3\n");
     // Local queue HAS work, but none of it is in Next Up → must NOT run.
     const queue = {
       version: 1,
@@ -654,7 +654,7 @@ test("runQueue fails CLOSED on empty Next Up: idle outcome, explicit reason, NO 
 test("runQueue fails CLOSED when a Next Up target has no local queue entry: actionable stop, NO Backlog pickup (#1091)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-missing-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 3\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 3\n");
     // Local queue has 1; Next Up lists 1 AND 99. 99 has no local entry (reconcile
     // not run/persisted, or the board changed since reconcile).
     const queue = {
@@ -693,7 +693,7 @@ test("runQueue fails CLOSED when a Next Up target has no local queue entry: acti
 test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback (#1091)", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-nextup-error-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), "queue:\n  board:\n    number: 3\n");
+    await writeFile(path.join(dir, ".devloops"), "tracker:\n  board:\n    number: 3\n");
     const queue = {
       version: 1,
       entries: [createEntry(1, "issue"), createEntry(2, "issue")],
@@ -721,6 +721,96 @@ test("runQueue surfaces a board-query ERROR and stops; no Backlog/local fallback
     assert.deepEqual(processed, []);
     assert.deepEqual(result.results, []);
     for (const e of result.queue.entries) assert.equal(e.status, "queued");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Size-budget merge gate (phase 3 of the fail-closed PR size budget) ──
+// Opt-in per entry via entryResult.sizeBudget: an orchestrator that never
+// evaluates the size budget (no `sizeBudget` field on its entryResult) sees
+// unchanged behavior — see "runQueue processes single entry successfully"
+// above, which stays the control for that case.
+
+test("runQueue never auto-merges an escalated PR without a human APPROVED review, even with mergeAuthorized: true", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(557, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({
+        ok: true,
+        pr: 89,
+        // Escalated outcome, no human review at all — the size-budget merge
+        // gate fails closed (resolveSizeBudgetHumanApprovalRequired: true).
+        sizeBudget: { sizeOutcome: "escalate", touchesT1: false, reviewDecision: null, unresolvedChangesRequestedCount: 0 },
+      }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    // Never reaches "merging"/"done" — routes exactly where an unauthorized
+    // merge would (gates_passing, then the final_approval_ready board sync).
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing"]);
+    assert.equal(result.queue.entries[0].status, "gates_passing");
+    assert.equal(result.queue.entries[0].retrospectiveWritten, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue auto-merges an escalated PR once a human APPROVED review with zero unresolved CHANGES_REQUESTED is recorded", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-approved-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(558, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({
+        ok: true,
+        pr: 90,
+        sizeBudget: { sizeOutcome: "escalate", touchesT1: false, reviewDecision: "APPROVED", unresolvedChangesRequestedCount: 0 },
+      }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing", "merging", "done"]);
+    assert.equal(result.queue.entries[0].status, "done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runQueue merge is unaffected when the orchestrator never evaluates the size budget (no sizeBudget field, back-compat)", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "queue-driver-size-budget-absent-"));
+  try {
+    const queue = {
+      version: 1,
+      entries: [createEntry(559, "issue")],
+    };
+    await writeQueue(dir, queue);
+
+    let transitions = [];
+    const result = await runQueue(dir, "test/repo", {
+      mergeAuthorized: true,
+      runEntry: async () => ({ ok: true, pr: 91 }),
+      onTransition: (state, entry) => transitions.push({ state, target: entry.target }),
+    });
+
+    const states = transitions.map((t) => t.state);
+    assert.deepEqual(states, ["running", "waiting_review", "gates_passing", "merging", "done"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

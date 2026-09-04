@@ -1,11 +1,17 @@
 import {
   evaluateRetrospectiveGate,
   normalizeRetrospectiveCheckpointState,
+  normalizeCheckpointCycleIdentity,
+  normalizeRetroProvenance,
+  resolveCheckpointStateFromArtifact,
+  RETROSPECTIVE_PROVENANCE,
 } from "./retrospective-checkpoint.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY,
 } from "./timeout-policy.mjs";
+import { trimmedOrNull } from "./normalize.mjs";
+import { normalizeGateReviewVerdict } from "./policy-constants.mjs";
 import {
   DEV_LOOP_ACTOR,
   DEV_LOOP_ARTIFACT_STATE,
@@ -32,6 +38,18 @@ import {
 
 export * from "./public-dev-loop-routing-contract.mjs";
 
+// Re-exported so script-layer callers (e.g. resolve-dev-loop-startup.mjs and
+// checkpoint-contract.mjs) can normalize a checkpoint cycle identity and
+// resolve a durable checkpoint artifact's state through the public routing
+// surface, without retrospective-checkpoint.mjs itself becoming a public
+// package export (see skills/docs/retrospective-checkpoint-contract.md).
+export {
+  normalizeCheckpointCycleIdentity,
+  normalizeRetroProvenance,
+  resolveCheckpointStateFromArtifact,
+  RETROSPECTIVE_PROVENANCE,
+};
+
 const COPILOT_ISSUE_ASSIGNEE = "copilot-swe-agent";
 
 const TARGET_KIND_SET = new Set(Object.values(DEV_LOOP_TARGET_KIND));
@@ -45,7 +63,6 @@ const ISSUE_READINESS_SET = new Set(Object.values(DEV_LOOP_ISSUE_READINESS));
 const ISSUE_ASSIGNMENT_STATE_SET = new Set(Object.values(DEV_LOOP_ISSUE_ASSIGNMENT_STATE));
 const VARIATION_MODE_SET = new Set(DEV_LOOP_VARIATION_PARAMETER_CONTRACT.allowedModeValues);
 const TARGET_PREFERENCE_SET = new Set(DEV_LOOP_VARIATION_PARAMETER_CONTRACT.allowedTargetPreferenceValues);
-const GATE_REVIEW_VERDICT_SET = new Set(["clean", "findings_present", "blocked"]);
 const ALLOWED_MODE_VALUES_TEXT = DEV_LOOP_VARIATION_PARAMETER_CONTRACT.allowedModeValues.join(", ");
 const ALLOWED_TARGET_PREFERENCE_VALUES_TEXT = DEV_LOOP_VARIATION_PARAMETER_CONTRACT.allowedTargetPreferenceValues.join(", ");
 const LINKED_PR_READY_FOR_FOLLOWUP_LOOP_STATE = "linked_pr_ready_for_followup";
@@ -71,8 +88,8 @@ function normalizeTarget(target) {
   const pr = Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null;
   const hasLinkedPr = Object.hasOwn(target, "linkedPr") && target.linkedPr !== null && target.linkedPr !== undefined;
   const linkedPr = Number.isInteger(target.linkedPr) && target.linkedPr > 0 ? target.linkedPr : null;
-  const branch = typeof target.branch === "string" && target.branch.trim().length > 0 ? target.branch.trim() : null;
-  const phase = typeof target.phase === "string" && target.phase.trim().length > 0 ? target.phase.trim() : null;
+  const branch = trimmedOrNull(target.branch);
+  const phase = trimmedOrNull(target.phase);
 
   if (kind === DEV_LOOP_TARGET_KIND.ISSUE && issue === null) {
     return null;
@@ -104,15 +121,6 @@ function normalizeActor(value) {
   return ACTOR_SET.has(normalized) ? normalized : null;
 }
 
-function normalizeSha(value) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function normalizeGateReviewVerdict(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return GATE_REVIEW_VERDICT_SET.has(normalized) ? normalized : null;
-}
-
 function normalizeGateReviewEvidence(evidence) {
   if (evidence === undefined || evidence === null) {
     return null;
@@ -127,10 +135,10 @@ function normalizeGateReviewEvidence(evidence) {
   }
 
   return {
-    currentHeadSha: normalizeSha(evidence.currentHeadSha),
+    currentHeadSha: trimmedOrNull(evidence.currentHeadSha),
     preApprovalGate: {
       visible: preApprovalGate.visible === true,
-      headSha: normalizeSha(preApprovalGate.headSha),
+      headSha: trimmedOrNull(preApprovalGate.headSha),
       verdict: normalizeGateReviewVerdict(preApprovalGate.verdict),
     },
   };
@@ -185,7 +193,7 @@ function normalizeOptionalLoopState(value) {
 }
 
 function normalizeAsyncRunId(value) {
-  const asString = normalizeSha(value);
+  const asString = trimmedOrNull(value);
   if (asString !== null) return asString;
   return null;
 }

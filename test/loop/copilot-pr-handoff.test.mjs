@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { after, before } from "node:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { claimRunnerOwnership, loadRunnerCoordinationState, recordExitSignalForRunner } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
 
 const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
@@ -47,11 +47,10 @@ const runNode = async (args = [], options = {}) => {
   if (!entries) {
     return runNodeHelper(scriptPath, args, {
       ...options,
-      env: {
-        ...process.env,
+      env: runIdFreeEnv({
         ...(options.env ?? {}),
         DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-      },
+      }),
     });
   }
   const { runChild } = makeGhMock(entries);
@@ -64,7 +63,7 @@ const runNode = async (args = [], options = {}) => {
   if (parsed.help) {
     return { code: 0, stdout: "", stderr: "" };
   }
-  const env = { ...process.env, ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" };
+  const env = runIdFreeEnv({ ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" });
   delete env[GH_MOCK_ENTRIES];
   const repoRoot = options.cwd ?? process.cwd();
   const stderrChunks = [];
@@ -178,23 +177,21 @@ test("copilot-pr-handoff rejects malformed arguments with usage guidance", async
   const missingPrErr = JSON.parse(missingPr.stderr);
   assert.equal(missingPrErr.ok, false);
   assert.equal(missingPrErr.error, "copilot-pr-handoff requires --pr <number>");
-  assert.equal(typeof missingPrErr.usage, "string");
-  assert(missingPrErr.usage.length > 0);
+  assert.equal(missingPrErr.hint, "run with --help for usage");
 
   const noArgs = await runNode([]);
   assert.equal(noArgs.code, 1);
   assert.equal(noArgs.stdout, "");
   const noArgsErr = JSON.parse(noArgs.stderr);
   assert.equal(noArgsErr.ok, false);
-  assert.equal(typeof noArgsErr.usage, "string");
+  assert.equal(noArgsErr.hint, "run with --help for usage");
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--unexpected"]);
   assert.equal(unknown.code, 1);
   const unknownErr = JSON.parse(unknown.stderr);
   assert.equal(unknownErr.ok, false);
   assert.equal(unknownErr.error, "Unknown argument: --unexpected");
-  assert.equal(typeof unknownErr.usage, "string");
-  assert(unknownErr.usage.length > 0);
+  assert.equal(unknownErr.hint, "run with --help for usage");
 
   const badWatchStatus = await runNode(["--repo", "owner/repo", "--pr", "17", "--watch-status", "later"]);
   assert.equal(badWatchStatus.code, 1);
@@ -901,12 +898,11 @@ process.exit(97);
     );
     await chmod(ghPath, 0o755);
 
-    const env = {
-      ...process.env,
+    const env = runIdFreeEnv({
       PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
       GH_REREQUEST_STATE_PATH: requestedStatePath,
-    };
+    });
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -1201,12 +1197,11 @@ process.exit(97);
     );
     await chmod(ghPath, 0o755);
 
-    const env = {
-      ...process.env,
+    const env = runIdFreeEnv({
       PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
       GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
       GH_REREQUEST_STATE_PATH: requestedStatePath,
-    };
+    });
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
 
@@ -2025,6 +2020,53 @@ test("copilot-pr-handoff stops cleanly when another run already owns the PR", as
     assert.equal(output.runnerOwnership.ok, false);
     assert.equal(output.runnerOwnership.error, "ownership_lost");
     assert.equal(output.runnerOwnership.activeRun.runId, "run-active");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #1706 AC-2/AC-1: a run that dies WITHOUT releasing (exit signal recorded) is
+// treated as immediately stale — pre-flight handoff takes its claim over and
+// proceeds instead of returning the blocking stop.
+test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds instead of stop (#1706)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-supersede-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: new Date().toISOString() });
+    // run-dead dies without releasing — record its exit signal (confirmed death)
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    assert.equal(sig.ok, true);
+
+    const BOT_COMMENT = JSON.stringify({
+      id: 199,
+      body: "Gate review: draft_gate verdict=clean",
+      user: { login: "copilot-pull-request-reviewer[bot]", type: "Bot" },
+      created_at: "2026-06-07T09:00:00Z",
+    });
+
+    const { env } = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: OPEN_PR + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"], stdout: BOT_COMMENT + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
+      cwd: tempDir,
+      env: { ...env, DEVLOOPS_RUN_ID: "run-new" },
+    });
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    // The dead-run claim was taken over — no blocking stop.
+    assert.equal(output.runnerOwnership.ok, true);
+    assert.equal(output.runnerOwnership.status, "taken_over");
+    assert.equal(output.runnerOwnership.activeRun.runId, "run-new");
+    assert.notEqual(output.state, "blocked_needs_user_decision");
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-new");
+    assert.equal(loaded.state.previousRun.runId, "run-dead");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

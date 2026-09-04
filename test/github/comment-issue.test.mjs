@@ -9,24 +9,11 @@ import {
   commentIssue,
   runCli,
 } from "../../scripts/github/comment-issue.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 const COMMENT_URL = "https://github.com/o/n/issues/7#issuecomment-123";
 
-function stubGh(responses) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const resp = responses.shift();
-    if (!resp) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (responses) => makeGhStub(responses);
 
 test("parseCommentIssueCliArgs: parses repo/issue/body", () => {
   const out = parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi"]);
@@ -41,6 +28,40 @@ test("parseCommentIssueCliArgs: requires repo + issue", () => {
 
 test("parseCommentIssueCliArgs: requires a body source", () => {
   assert.throws(() => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7"]), /--body <text> or --body-file/);
+});
+
+test("parseCommentIssueCliArgs: parses --allowed-refs csv", () => {
+  const out = parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "1670, 9000"]);
+  assert.deepEqual(out.allowedRefs, ["1670", "9000"]);
+});
+
+test("parseCommentIssueCliArgs: rejects a non-numeric --allowed-refs entry", () => {
+  assert.throws(
+    () => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "1670,abc"]),
+    /positive integers/,
+  );
+  assert.throws(
+    () => parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "hi", "--allowed-refs", "0"]),
+    /positive integers/,
+  );
+});
+
+test("commentIssue: an --allowed-refs deliberate cross-ref posts", async () => {
+  const { run, calls } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+  const result = await commentIssue(
+    { repo: "o/n", issue: 7, body: "deliberate cross-ref to issue #1670", allowedRefs: ["1670"] },
+    { run },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], ["issue", "comment", "7", "--repo", "o/n", "--body", "deliberate cross-ref to issue #1670"]);
+});
+
+test("commentIssue: a raw unallowlisted id still refuses (guard, #1731)", async () => {
+  const { run } = stubGh([]);
+  await assert.rejects(
+    () => commentIssue({ repo: "o/n", issue: 7, body: "see #1670 but also #999", allowedRefs: ["1670"] }, { run }),
+    /#999/,
+  );
 });
 
 test("parseCommentIssueCliArgs: --body and --body-file are mutually exclusive", () => {
@@ -109,11 +130,18 @@ test("runCli: --jq extracts the comment URL", async () => {
   assert.equal(stdout.get().trim(), COMMENT_URL);
 });
 
-test("runCli: invalid --jq filter fails closed with exit 2", async () => {
-  const { run } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
+test("runCli: invalid --jq filter fails closed with exit 2 BEFORE posting (no mutation)", async () => {
+  // Zero stubbed gh responses: if the comment gets posted despite the invalid
+  // filter, `run` throws "Unexpected gh call" and this test fails loudly
+  // instead of silently passing on a false-positive exit code (issue #1817:
+  // a mutation-then-fail ordering caused a caller retry to double-post).
+  const { run, calls } = stubGh([]);
   const stderr = captureStream();
-  const code = await runCli(["--repo", "o/n", "--issue", "7", "--body", "x", "--jq", "not!valid"], { run, stderr: stderr, stdout: captureStream() });
+  const code = await runCli(["--repo", "o/n", "--issue", "7", "--body", "x", "--jq", "not!valid"], { run, stderr, stdout: captureStream() });
   assert.equal(code, 2);
+  assert.match(stderr.get(), /--jq/);
+  assert.match(stderr.get(), /BASE-JQ-OUTPUT-GUARANTEE/);
+  assert.deepEqual(calls, [], "the comment must never post when --jq is syntactically invalid");
 });
 
 test("runCli: --silent maps success to exit 0 with no stdout", async () => {

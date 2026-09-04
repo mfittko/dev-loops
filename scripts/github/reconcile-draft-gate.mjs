@@ -4,6 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { zeroSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 // convertPrToDraft/markPrReady live in their own module (no dependency on this
@@ -18,10 +19,18 @@ Optional/manual recovery tool for an already non-draft PR when you want to
 retroactively record clean \`draft_gate\` evidence.
 Converts the PR to draft, validates the head, posts a reconciling clean
 draft_gate comment, then marks the PR ready for review again.
+This posts an INLINE verdict — it can only reconcile a PR that qualifies for
+the light-mode carve-out (localImplementation.lightMode, under
+maxFiles/maxLines, no gate:full label). When gates.requireFanoutEvidence is
+enabled and the PR is over that threshold, the reconciling post is refused:
+convert the PR to draft and run the real gate with --execution-mode
+fanout_fanin backed by a findings-log ledger instead of reconciling.
 Fail-closed guards:
   - Refuses to reconcile if any draft_gate evidence already exists on the PR.
   - Requires CI to be green on the current head SHA before posting the
     reconciling gate comment unless config disables \`gates.draft.requireCi\`.
+  - Refuses when the PR does not qualify for the light-mode inline carve-out
+    and \`gates.requireFanoutEvidence\` is enabled (see above).
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
@@ -34,8 +43,10 @@ Output (stdout, JSON):
     "headSha": "abc1234",
     "currentHeadSha": "abc1234",
     "commentId": 101,
-    "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101"
+    "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101"
   }
+  (commentId/commentUrl identify the posted gate verdict review; a legacy
+  verdict issue comment corrected in place yields an #issuecomment- URL.)
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
@@ -165,6 +176,26 @@ async function checkCiStatus({ repo, pr, headSha }, { env, ghCommand, runChild =
       : `Blocking CI/check state on head ${headSha.slice(0, 7)}: ${summarizeBlockingChecks(blockingChecks)}.`,
   };
 }
+
+// The shared post-time fan-out enforcement predicate (evaluateInlineFanoutMode,
+// detect-checkpoint-evidence.mjs) always includes this phrase in its rejection
+// message. This tool only ever posts an inline verdict, so once a PR is over
+// the light-mode threshold it can never synthesize qualifying evidence — that
+// refusal is correct, not a bug in this tool, but a bare "inline gate
+// verdicts are not accepted" leaves the operator without a recovery path.
+const FANOUT_REFUSAL_MARKER = "inline gate verdicts are not accepted";
+function isFanoutRefusalError(error) {
+  return error instanceof Error && error.message.includes(FANOUT_REFUSAL_MARKER);
+}
+function withFanoutRefusalGuidance(error) {
+  if (!isFanoutRefusalError(error)) return error;
+  return new Error(
+    `${error.message} reconcile-draft-gate only completes for a PR under the light-mode threshold ` +
+    `(it can only synthesize an inline verdict); this PR needs an actual fan-out gate run — convert it ` +
+    `to draft and post draft_gate with --execution-mode fanout_fanin backed by a findings-log ledger for ` +
+    `the current head, instead of reconciling.`
+  );
+}
 export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
@@ -210,7 +241,19 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       gate: "draft_gate",
       headSha,
       verdict: "clean",
-      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "defer": 0 },
+      // This tool only ever posts an INLINE verdict, so it can only satisfy
+      // requireFanoutEvidence for a PR that qualifies for the light-mode
+      // carve-out (under threshold, no gate:full label, lightMode enabled).
+      // Declare both explicitly: executionMode so the candidate marker carries
+      // it, and inlineReason so evaluateInlineFanoutMode's light-mode acceptance
+      // clause (non-empty inlineReason) can actually hold — without these the
+      // documented under-threshold recovery path is unreachable (the post is
+      // always refused, even for a 1-file/2-line micro-PR).
+      executionMode: "inline_single_agent",
+      inlineReason: draftGateConfig.requireCi
+        ? "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI green)"
+        : "reconcile-draft-gate: light-mode under-threshold PR, inline verdict (CI optional by config)",
+      findingsSeverityCounts: zeroSeverityCounts(),
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",
@@ -223,7 +266,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       } catch {
       }
     }
-    throw error;
+    throw withFanoutRefusalGuidance(error);
   }
   await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   return {

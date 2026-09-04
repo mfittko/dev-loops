@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideBashGate, decideWriteGuard } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideSubagentStopGuard } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -480,4 +480,246 @@ test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass vi
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// decideSubagentStopGuard (#1619)
+// ---------------------------------------------------------------------------
+
+const WT = "/Users/mfittko/github/dev-loops/tmp/worktrees/dev-loops/issue-1619";
+
+// Mutation anchor: if the guard is reverted (no block on dirty porcelain), this fails. The
+// refusal names LOCAL-COMMIT-BEFORE-EXIT (#1619 AC).
+test("decideSubagentStopGuard blocks a subagent stop with a dirty worktree under tmp/worktrees/, naming LOCAL-COMMIT-BEFORE-EXIT and the dirty paths", () => {
+  const porcelain = [" M packages/core/src/claude/hook-decisions.mjs", "?? .claude/hooks/subagent-stop-uncommitted-guard.mjs"].join("\n");
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  assert.match(d.reason, /hook-decisions\.mjs/);
+  assert.match(d.reason, /subagent-stop-uncommitted-guard\.mjs/);
+});
+
+test("decideSubagentStopGuard allows a clean worktree (empty porcelain)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: "" }).decision, "allow");
+});
+
+test("decideSubagentStopGuard allows a clean worktree (whitespace-only porcelain)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: "   \n  " }).decision, "allow");
+});
+
+test("decideSubagentStopGuard allows a non-string porcelain (git error) — fail safe, allow the stop", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: WT, porcelain: undefined }).decision, "allow");
+});
+
+test("decideSubagentStopGuard is unaffected by a cwd outside tmp/worktrees/ (main checkout)", () => {
+  const d = decideSubagentStopGuard({ cwd: "/Users/mfittko/github/dev-loops", porcelain: " M src/x.mjs" });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideSubagentStopGuard is unaffected by a cwd outside tmp/worktrees/ (arbitrary path)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: "/tmp", porcelain: " M x" }).decision, "allow");
+});
+
+test("decideSubagentStopGuard exempts an interactive session awaiting commit authorization", () => {
+  // Same dirty porcelain + worktree cwd that would otherwise block, but the pending-commit-
+  // authorization exemption (set by the interactive coordination path) allows the stop.
+  const d = decideSubagentStopGuard({
+    cwd: WT,
+    porcelain: " M src/x.mjs\n?? y",
+    pendingCommitAuthorization: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideSubagentStopGuard blocks when pendingCommitAuthorization is false (non-interactive dispatched subagent)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", pendingCommitAuthorization: false });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
+// #1936: the #1786 `orchestratorOwnsCommit` env-var exemption was REMOVED. The "edit here,
+// commit there" split it enabled hard-deadlocked an editing subagent under a task-scoped
+// no-commit instruction: the guard demanded a commit the session then denied, then re-blocked
+// the exit. Editing sub-delegates now commit their own work, so the guard stays the enforcer.
+test("decideSubagentStopGuard ignores a removed orchestratorOwnsCommit flag — no env-var escape (#1936)", () => {
+  // Passing the (now-unused) flag must NOT exempt: a dirty editing dispatch still blocks, so the
+  // only resolution is to commit its own work — never a denied-commit deadlock loop. This is the
+  // mutation anchor for the removed exemption: reintroducing an `orchestratorOwnsCommit` allow
+  // branch would flip this to "allow" and re-open the deadlock seam.
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", orchestratorOwnsCommit: true });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
+test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", () => {
+  assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
+});
+
+// Read-only role exemption (#1925): a judge/review subagent's contract forbids commits, so a
+// dirty tracked edit in its worktree is foreign (orchestrator-owned). The guard must not force
+// the read-only role to commit it, and its message must name the orchestrator as responsible.
+for (const role of ["judge", "review"]) {
+  test(`decideSubagentStopGuard exempts a read-only "${role}" role from committing foreign uncommitted work (#1925)`, () => {
+    const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/gate-fanin.mjs", agentType: role });
+    assert.equal(d.decision, "allow");
+    assert.equal(d.advisory, true);
+    assert.match(d.reason, /ORCHESTRATOR/);
+    assert.match(d.reason, new RegExp(role));
+    // Not re-blocked: the verdict-only role is never told to commit.
+    assert.doesNotMatch(d.reason, /Commit your work before stopping/);
+  });
+}
+
+// Non-goal anchor (#1925) + deadlock-resolution pin (#1936): editing roles and the orchestrator
+// stay enforced (the read-only exemption must not regress into a blanket agentType-based allow),
+// AND the block resolves without a denied-commit deadlock because the actionable escape is to
+// commit the role's OWN work — never a task-scoped no-commit instruction the session then denies.
+for (const role of ["developer", "fixer", "docs", "quality"]) {
+  test(`decideSubagentStopGuard blocks an editing "${role}" role with a dirty worktree and points it at self-commit (#1925 non-goal, #1936)`, () => {
+    const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: role });
+    assert.equal(d.decision, "block");
+    assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    // The resolution is deadlock-free: commit your own work (no orchestrator-owned-commit split).
+    assert.match(d.reason, /Commit your work before stopping/);
+  });
+}
+
+test("decideSubagentStopGuard still blocks a null agentType (main-agent / unknown dispatch) with a dirty worktree (#1925)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: null });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
+test("decideSubagentStopGuard allows a read-only role with a CLEAN worktree without an advisory (#1925)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: "", agentType: "judge" });
+  assert.equal(d.decision, "allow");
+  assert.notEqual(d.advisory, true);
+});
+
+test("decideSubagentStopGuard caps the enumerated dirty paths at 50, reports the full count, and preserves porcelain order", () => {
+  // Descending index order (not ascending/sorted) so the assertions can tell "preserves
+  // porcelain order" apart from "sorts the paths" — git porcelain lists tracked
+  // staged/modified paths before untracked ones, and a sort creeping into the decider would
+  // displace the higher-data-loss-risk entries out of the first 50 shown.
+  const lines = Array.from({ length: 120 }, (_, i) => `?? file-${String(119 - i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(120\):/);
+  assert.match(d.reason, /file-119\.txt/);
+  assert.match(d.reason, /file-070\.txt/);
+  assert.doesNotMatch(d.reason, /file-069\.txt/);
+  assert.match(d.reason, /… and 70 more/);
+  const firstListedPath = d.reason.split("\n")[1].trim();
+  assert.equal(firstListedPath, lines[0], "first listed path must be the first porcelain line verbatim (order preserved, not sorted)");
+});
+
+test("decideSubagentStopGuard lists all paths with no truncation summary at exactly the 50-path cap", () => {
+  const lines = Array.from({ length: 50 }, (_, i) => `?? file-${String(i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(50\):/);
+  assert.match(d.reason, /file-049\.txt/);
+  assert.doesNotMatch(d.reason, /… and/);
+});
+
+test("decideSubagentStopGuard adds a one-more truncation summary at 51 dirty paths (smallest over-cap input)", () => {
+  const lines = Array.from({ length: 51 }, (_, i) => `?? file-${String(i).padStart(3, "0")}.txt`);
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: lines.join("\n") });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /Dirty paths \(51\):/);
+  assert.match(d.reason, /file-049\.txt/);
+  assert.doesNotMatch(d.reason, /file-050\.txt/);
+  assert.match(d.reason, /… and 1 more/);
+});
+
+// ---------------------------------------------------------------------------
+// decideBashGate — the six guard rules enforced at one seam (#1622)
+// ---------------------------------------------------------------------------
+
+test("decideBashGate denies inline interpreters actor-independently on the target repo (OPS-NO-INLINE-INTERPRETER)", () => {
+  const d = decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: TARGET });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /OPS-NO-INLINE-INTERPRETER/);
+  // actor-independent: denied from the main agent too (agentType null)
+  const dMain = decideBashGate({ command: "python3 -c 'print(1)'", repoSlug: TARGET, agentType: null });
+  assert.equal(dMain.decision, "deny");
+  assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
+});
+
+test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
+  assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else" }).decision, "allow");
+});
+
+test("decideBashGate denies sub_issues ad-hoc writes naming SUBISSUE-NO-ADHOC-BYPASS (actor-independent)", () => {
+  const d = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  // a read passes; the sanctioned wrapper passes
+  assert.equal(decideBashGate({ command: "gh api repos/mfittko/dev-loops/issues/5/sub_issues", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/manage-sub-issues.mjs --repo x", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies thread-reply bypasses naming COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", () => {
+  const rest = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", repoSlug: TARGET, agentType: null });
+  assert.equal(rest.decision, "deny");
+  assert.match(rest.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
+  const gql = decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: TARGET, agentType: null });
+  assert.equal(gql.decision, "deny");
+  assert.match(gql.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
+  // graphql resolveReviewThread is scoped to the target repo (cwd)
+  assert.equal(decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/reply-resolve-review-thread.mjs --thread 5", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
+  const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, agentType: null });
+  assert.equal(api.decision, "deny");
+  assert.match(api.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
+  // a bare /copilot comment summon is refused even from the main agent (actor-independent)
+  const summon = decideBashGate({ command: 'gh pr comment 5 --body "/copilot re-review"', repoSlug: TARGET, agentType: null });
+  assert.equal(summon.decision, "deny");
+  assert.match(summon.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
+  assert.equal(decideBashGate({ command: "node scripts/github/request-copilot-review.mjs --pr 5", repoSlug: TARGET }).decision, "allow");
+});
+
+test("decideBashGate denies detached wait tools only from a subagent (COPILOT-FOLLOWUP-WAIT-TOOLS)", () => {
+  const sub = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: "dev-loop" });
+  assert.equal(sub.decision, "deny");
+  assert.match(sub.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  // main agent retains manual wait tooling (behavioral, subagent-only rule)
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: null }).decision, "allow");
+  // off-target subagent passes through
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", agentType: "dev-loop" }).decision, "allow");
+  // the refusal body is not corrupted by a stray concat operator: it names the full deterministic
+  // tool set and the banned detach forms (regression for the #1622 gate hardening round)
+  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, agentType: "dev-loop" }).reason;
+  assert.match(reason, /gh run watch/);
+  assert.match(reason, /nohup\/disown\/tmux\/screen/);
+  assert.doesNotMatch(reason, /NaN/);
+});
+
+test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
+  // bare relative endpoint (resolved against the cwd repo) is denied in the target repo
+  const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  // the same relative write outside the target repo is NOT this repo's bypass
+  assert.equal(decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  // --repo-targeted relative writes to the target repo are denied
+  assert.equal(decideBashGate({ command: "gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", repoSlug: TARGET, agentType: null }).decision, "deny");
+});
+
+test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independently (STOP-HUMAN-MERGE-001)", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: true, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /STOP-HUMAN-MERGE-001/);
+  // refusal holds regardless of gate evidence (the human-merge invariant overrides)
+  const dNoEvidence = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: false, agentType: null });
+  assert.equal(dNoEvidence.decision, "deny");
+  assert.match(dNoEvidence.reason, /STOP-HUMAN-MERGE-001/);
+  // without humanMergeOnly the normal merge gating applies (gatePassed true → allow)
+  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null }).decision, "allow");
+  // non-target repo is unaffected by this repo's humanMergeOnly invariant
+  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
 });

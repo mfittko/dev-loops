@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   isUnderWorktreePath,
@@ -7,6 +10,8 @@ import {
   isMainCheckout,
   parseAllWorktreePaths,
   isListedWorktree,
+  resolveContainingWorktreeRoot,
+  isWorktreeCoreIsolated,
   detectSubagentAvailability,
   DEVLOOPS_SUBAGENT_AVAILABLE_VAR,
 } from "../src/loop/worktree-guard.mjs";
@@ -253,4 +258,87 @@ test("detectSubagentAvailability: defaults to process.env when no arg", () => {
 
 test("DEVLOOPS_SUBAGENT_AVAILABLE_VAR: matches the env var name", () => {
   assert.equal(DEVLOOPS_SUBAGENT_AVAILABLE_VAR, "DEVLOOPS_SUBAGENT_AVAILABLE");
+});
+
+// ---------------------------------------------------------------------------
+// isWorktreeCoreIsolated (#1627)
+// ---------------------------------------------------------------------------
+
+function makeIsolationFixture() {
+  const base = mkdtempSync(path.join(tmpdir(), "wt-core-"));
+  const root = path.join(base, "tmp", "worktrees", "issue-1627");
+  return { base, root };
+}
+
+test("isWorktreeCoreIsolated: false when the core link escapes to the main checkout", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    const realCore = path.join(root, "packages", "core");
+    mkdirSync(realCore, { recursive: true });
+    const mainCore = path.join(base, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainCore, { recursive: true });
+    const scope = path.join(root, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(mainCore, path.join(scope, "core"));
+
+    // The main checkout is the ONLY listed worktree; the fixture root is under
+    // a listed (dev-loop) worktree.
+    const listed = [base, root];
+    assert.equal(isWorktreeCoreIsolated(root, listed), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("isWorktreeCoreIsolated: true when the core link resolves into the worktree's own packages/core", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    const realCore = path.join(root, "packages", "core");
+    mkdirSync(realCore, { recursive: true });
+    const scope = path.join(root, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(realCore, path.join(scope, "core"));
+
+    const listed = [base, root];
+    assert.equal(isWorktreeCoreIsolated(root, listed), true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("isWorktreeCoreIsolated: true for a consumer repo with no packages/core", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    // Consumer repo, no monorepo core — vacuously satisfied even with a link.
+    const listed = [base, root];
+    assert.equal(isWorktreeCoreIsolated(root, listed), true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("isWorktreeCoreIsolated: true when no core link exists (nothing escapes)", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    mkdirSync(path.join(root, "packages", "core"), { recursive: true });
+    const listed = [base, root];
+    assert.equal(isWorktreeCoreIsolated(root, listed), true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("isWorktreeCoreIsolated: true when cwd is not inside a listed worktree", () => {
+  assert.equal(isWorktreeCoreIsolated("/home/user/repo/src", ["/home/user/repo"]), true);
+});
+
+test("resolveContainingWorktreeRoot: resolves the containing worktree root from a nested cwd", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    mkdirSync(path.join(root, "src"), { recursive: true });
+    const listed = [base, root];
+    assert.equal(resolveContainingWorktreeRoot(path.join(root, "src"), listed), realpathSync(root));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

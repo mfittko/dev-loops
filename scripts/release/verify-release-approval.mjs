@@ -1,0 +1,477 @@
+#!/usr/bin/env node
+/**
+ * Verify explicit operator release approval for a STABLE release (fail closed).
+ *
+ * Root cause (#1901): the release runbook gated the release *mechanics* but left
+ * the publish/tag decision to agent judgment once "gates are clean" — a general
+ * "continue" plus a blanket merge authorization was read as transferable release
+ * authority, and the first v1.0.0 cut was tagged and published by a dev-loop
+ * subagent. The operator had to roll it back.
+ *
+ * This check is the fail-closed gate at the release boundary: a STABLE version
+ * (npm dist-tag `latest`) may only proceed when an explicit, per-release
+ * operator approval record exists — an issue comment authored by the operator
+ * (repo owner) stating `approve release v<version>` (or the operator running
+ * the publish commands themselves, which is the operator acting directly and
+ * outside this check's scope). Blanket merge authorizations and generic
+ * "continue" instructions never satisfy it. A prerelease (rc/next/beta/…)
+ * is out of scope here — its publishing flow is unchanged.
+ *
+ * Usage (release.yml / npm-publish.yml):
+ *
+ *   node scripts/release/verify-release-approval.mjs \
+ *     --version "${VERSION}" --repo "${GITHUB_REPOSITORY}"
+ *
+ * `--operator <login>` overrides the operator identity (default: the repo
+ * owner, taken from the `--repo` slug's owner part). Exit 0 when the gate passes (approved or
+ * not applicable), 1 on a named refusal or any gh failure (fail closed — a
+ * flaky/forbidden lookup must never pass the gate), 2 on usage/parse error.
+ *
+ * No third-party/npm dependencies: this script runs in the release workflows
+ * before `npm ci`, but it may import sibling repo scripts (resolve-npm-dist-tag.mjs,
+ * jq-output.mjs).
+ */
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
+
+const USAGE = `Usage: verify-release-approval.mjs --version <semver> --repo <owner/name> [--operator <login>] [--release-commit-date <iso>] [--jq <filter>] [--silent]
+Fail-closed operator-approval gate for STABLE releases (#1901, #1941). A stable
+version requires a top-level issue comment by the operator stating "approve
+release v<version>" — not quoted in a code span / handoff text, not negated, and
+posted AFTER the release commit being tagged (default: git HEAD committer date;
+override with --release-commit-date). Prereleases pass through unchanged. Exit 0
+pass, 1 refusal/gh failure, 2 usage.
+${JQ_OUTPUT_USAGE}`;
+
+function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
+  if (typeof argv1 !== "string" || argv1.length === 0) return false;
+  try {
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(importMetaUrl));
+  } catch {
+    return false;
+  }
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Negating verbs/markers that refuse an otherwise-matching approval phrase.
+ * Natural-language refusals are not always adjacent to the phrase
+ * ("do not want to approve", "never said approve", "cannot in good conscience
+ * approve", "no need to approve", "without approval"), so a fixed
+ * adjacent-form blocklist fails open. A negating marker within the same clause
+ * as the phrase (see negatesApproval) refuses the comment. Fail closed: a
+ * comment that both negates and approves in the same clause is refused — the
+ * operator should post an unambiguous approval. A bare `no` is deliberately
+ * omitted so a trailing "approve release v1.0.0, no further changes needed"
+ * still approves; the specific denial forms `no need (to)` and
+ * `without approval` catch "no need to approve …" without that false refusal.
+ * (`not required` is already covered by the `not` marker.)
+ */
+const NEGATION_MARKER = /\b(?:not|never|cannot|decline[sd]?|refuse[sd]?|reject[sd]?|don['’]?t|won['’]?t|can['’]?t|shouldn['’]?t|mustn['’]?t)\b|no\s+need\b(?:\s+to\b)?|without\s+approval\b/i;
+
+// A sentence/clause boundary: sentence-ending punctuation followed by
+// whitespace. Used to scope the BEFORE scan to the clause that actually
+// contains the approval phrase (so a negation in a prior sentence does not
+// override a clear approval).
+const CLAUSE_SPLIT = /[.!?;]\s+/;
+
+// A hard sentence end (period/exclamation/question, not semicolon/comma) for
+// the AFTER scan: a trailing "approve release …; do not proceed" or
+// "approve release …, do not publish" is a same-sentence retraction and must
+// refuse, while "approve release …. I will not be available" is a separate
+// statement and the approval stands.
+const HARD_SENTENCE_END = /[.!?]\s+/;
+
+/**
+ * Instructional/handoff verbs that make an occurrence of the phrase a REFERENCE
+ * to the approval act rather than the act itself (#1941): "post approve release
+ * v…", "requires a comment stating approve release v…", "the runbook instructs
+ * approve release v…". Scoped to the clause BEFORE the phrase (see
+ * instructsApproval), same mechanism as the negation scan. The real-world
+ * false positives all quoted the phrase in a code span (handled by
+ * stripNonAssertionMarkdown below); this catches the un-quoted handoff form
+ * too. Fail closed: an instructional occurrence never counts as an approval —
+ * the operator posts an unambiguous top-level "approve release v<version>".
+ */
+const INSTRUCTIONAL_MARKER = /\b(?:posts?|posted|posting|stating|states|requires?|required|instruct\w*)\b/i;
+
+/**
+ * Remove the markdown contexts where the approval phrase is being QUOTED or
+ * referenced rather than asserted (#1941, root-cause fix for the fail-open).
+ * Removes, in order: fenced code blocks (backtick/tilde, incl. an unterminated
+ * fence to end-of-text), inline code spans (any backtick form, coarsely — see
+ * the inline-strip note in the body), indented code blocks (4+ spaces / tab
+ * lead), and block-quote lines (`> …`). An agent-authored handoff/summary
+ * comment that quotes the phrase inside any of these is not a genuine top-level
+ * operator approval, so it must not satisfy the gate. Each stripped span becomes
+ * a space so surrounding words never fuse into a false phrase match. The strip
+ * only ever refuses more (fail-closed): it can never expose a quoted phrase as a
+ * genuine one.
+ */
+export function stripNonAssertionMarkdown(body) {
+  let s = String(body ?? "");
+  // Fenced code blocks first (paired ``` / ~~~), then any unterminated fence to
+  // end-of-text — an unterminated fence still means "everything after is code".
+  s = s.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm, " ");
+  s = s.replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, " ");
+  // Inline code spans (#1941 review, Copilot): strip everything from the FIRST
+  // to the LAST backtick on each line, then blank any lone leftover backtick.
+  // This is deliberately coarser than a precise `(`+)…\1` code-span matcher and
+  // strictly more fail-closed: a phrase quoted in ANY backtick form — including
+  // a CommonMark longer-delimiter span whose content itself contains backticks
+  // (`` `x` approve release v… ``), which a precise matcher could leave for the
+  // leftover-backtick blanking to re-expose as prose (a fail-OPEN) — is removed.
+  // The only cost is over-stripping a phrase sandwiched BETWEEN two separate
+  // code spans on one line; that refuses a contrived approval (fail-closed),
+  // never accepts a quoted one. A phrase entirely before the first or after the
+  // last backtick (a genuine assertion with an unrelated inline code span) still
+  // survives.
+  s = s.replace(/`[^\n]*`/g, " ");
+  s = s.replace(/`/g, " ");
+  // Indented code blocks (#1941 review): a line led by 4+ spaces or a tab
+  // renders as a code block on GitHub, so a phrase quoted that way is code, not
+  // a top-level assertion. Blanking such a line is fail-closed-safe: a genuine
+  // one-line "approve release v<version>" is never indented, so this can only
+  // ever refuse a quoted occurrence, never a real approval.
+  s = s.replace(/^(?: {4,}|\t+).*$/gm, " ");
+  // Block-quote lines (`>` at line start, optional leading whitespace).
+  s = s.replace(/^[ \t]*>.*$/gm, " ");
+  return s;
+}
+
+/**
+ * True when a negating marker appears in the SAME clause as the approval
+ * phrase (before) or immediately trailing it in the same sentence (after).
+ * The BEFORE scan is clause-scoped so an intervening-word refusal
+ * ("do not want to approve", "never said approve", "cannot in good conscience
+ * approve") is refused while a negation in a distant prior sentence
+ * ("this is not a prerelease; approve release …") does not override a clear
+ * approval. The AFTER scan catches a same-sentence retraction
+ * ("approve release …; do not proceed") without treating a later separate
+ * statement as a retraction.
+ */
+function negatesApproval(body, pattern) {
+  const m = body.match(pattern);
+  if (!m) return false;
+  const start = m.index;
+  const end = start + m[0].length;
+  const beforeClause = body.slice(0, start).split(CLAUSE_SPLIT).pop() ?? "";
+  if (NEGATION_MARKER.test(beforeClause)) return true;
+  const afterClause = body.slice(end).split(HARD_SENTENCE_END)[0] ?? "";
+  return NEGATION_MARKER.test(afterClause);
+}
+
+/**
+ * True when an instructional/handoff verb governs the phrase (the phrase is
+ * being referenced, not asserted). Clause-scoped to the text BEFORE the phrase,
+ * same mechanism as negatesApproval.
+ */
+function instructsApproval(body, pattern) {
+  const m = body.match(pattern);
+  if (!m) return false;
+  const beforeClause = body.slice(0, m.index).split(CLAUSE_SPLIT).pop() ?? "";
+  return INSTRUCTIONAL_MARKER.test(beforeClause);
+}
+
+/**
+ * A genuine top-level approval assertion: the phrase appears in prose (after
+ * stripping code spans / fenced blocks / block quotes), is not negated in its
+ * clause, and is not governed by an instructional/handoff verb. This is the
+ * single text-genuineness gate the approval decision uses (#1941).
+ */
+function isGenuineApprovalAssertion(body, pattern) {
+  const prose = stripNonAssertionMarkdown(body);
+  return pattern.test(prose) && !negatesApproval(prose, pattern) && !instructsApproval(prose, pattern);
+}
+
+/**
+ * The only accepted approval record: a comment by the operator whose body
+ * states `approve release v<version>` (leading `v` optional, case-insensitive,
+ * whitespace-tolerant). Anything else — a blanket merge authorization, a
+ * generic "continue", an approval for a DIFFERENT version (including a
+ * prerelease of the same X.Y.Z, e.g. `v1.0.0-rc.7` ≠ `v1.0.0`), or a comment
+ * by anyone else — does not match, so the gate fails closed.
+ */
+function approvalPattern(version) {
+  // The trailing boundary refuses version extensions: another digit, a
+  // `.digit` (v1.0.0.1), a `-` prerelease continuation (v1.0.0-rc.7), or any
+  // word character glued to the version. The leading `\b` refuses the
+  // unapprove/disapprove prefixes ("unapprove release …" has no word boundary
+  // before "approve").
+  return new RegExp(`\\bapprove\\s+release\\s+v?${escapeRegExp(version)}(?![\\w-])(?!\\.\\d)`, "i");
+}
+
+/**
+ * Pure gate decision over already-fetched comments.
+ *
+ * A comment satisfies the gate only when ALL hold (fail closed on each, #1941):
+ *  - authored by the operator (case-insensitive login compare)
+ *  - a genuine top-level approval assertion — the phrase is in prose, not
+ *    inside a code span / fenced block / block quote, not negated, and not
+ *    governed by an instructional/handoff verb (isGenuineApprovalAssertion)
+ *  - created strictly AFTER the release commit being tagged (`releaseRef`), so
+ *    an approval carried over from a prior/reverted cut cannot authorize a
+ *    later one. A comment with a missing/unparseable `createdAt` cannot be
+ *    verified as fresh and is refused.
+ *
+ * @param {object} p
+ * @param {string} p.version — SemVer version (no leading `v`)
+ * @param {string} p.operator — operator login (case-insensitive compare)
+ * @param {Array<{author: string, body: string, createdAt?: string}>} p.comments — candidate comments
+ * @param {string} p.releaseRef — ISO timestamp of the release commit being approved
+ * @returns {{ applies: boolean, approved: boolean, refusal: string | null }}
+ */
+export function resolveApprovalState({ version, operator, comments, releaseRef }) {
+  if (typeof version !== "string" || version.trim().length === 0) {
+    throw new Error("version must be a non-empty string");
+  }
+  if (typeof operator !== "string" || operator.trim().length === 0) {
+    throw new Error("operator must be a non-empty string");
+  }
+  const distTag = resolveNpmDistTag(version); // throws on garbage (fail closed)
+  if (distTag !== "latest") {
+    return { applies: false, approved: false, refusal: null };
+  }
+  // A stable release REQUIRES a resolvable release-commit reference: without it
+  // the staleness check cannot run, so fail closed rather than skip it.
+  const releaseEpoch = Date.parse(releaseRef);
+  if (!Number.isFinite(releaseEpoch)) {
+    throw new Error("releaseRef must be a parseable ISO timestamp of the release commit being approved — fail closed");
+  }
+  const pattern = approvalPattern(version);
+  const operatorLower = operator.trim().toLowerCase();
+  const genuine = (Array.isArray(comments) ? comments : []).filter(
+    (c) =>
+      c &&
+      typeof c.author === "string" &&
+      typeof c.body === "string" &&
+      c.author.trim().toLowerCase() === operatorLower &&
+      isGenuineApprovalAssertion(c.body, pattern),
+  );
+  // Post-date: a genuine assertion counts only when its createdAt is parseable
+  // AND strictly after the release commit. Partition the non-approving remainder
+  // so the refusal is accurate (#1941 review, Copilot): a parseable-but-earlier
+  // timestamp is STALE; an absent/unparseable timestamp is UNVERIFIABLE — both
+  // fail closed, but they are distinct operator-facing situations.
+  const stale = [];
+  const unverifiable = [];
+  let approved = false;
+  for (const c of genuine) {
+    const created = Date.parse(c.createdAt);
+    if (!Number.isFinite(created)) unverifiable.push(c);
+    else if (created > releaseEpoch) approved = true;
+    else stale.push(c);
+  }
+  if (approved) {
+    return { applies: true, approved: true, refusal: null };
+  }
+  // Prefer the stale message when any matching approval carried a real,
+  // too-early timestamp (the carried-over/reverted-cut hole); fall back to the
+  // unverifiable message when the only matches lack a parseable created_at.
+  let refusal;
+  if (stale.length > 0) {
+    refusal = `stable release v${version} blocked: the only matching operator approval(s) predate the release commit being tagged (stale). `
+      + `An approval carried over from a prior or reverted cut does NOT authorize this release; `
+      + `the operator (@${operator}) must post a fresh "approve release v${version}" AFTER the current release commit.`;
+  } else if (unverifiable.length > 0) {
+    refusal = `stable release v${version} blocked: a matching operator approval was found but its freshness cannot be verified — the comment has no parseable created_at timestamp, `
+      + `so the gate cannot confirm it post-dates the release commit. Fail closed: the operator (@${operator}) must post a fresh "approve release v${version}" whose timestamp is resolvable.`;
+  } else {
+    refusal = `stable release v${version} blocked: no explicit operator release approval record found. `
+      + `Expected an issue comment by the operator (@${operator}) stating "approve release v${version}" `
+      + `(as a top-level assertion, not quoted in a code span or handoff text, posted after the release commit), `
+      + `or the operator running the publish commands themselves. Blanket merge authorizations and `
+      + `generic continue instructions do NOT satisfy this gate.`;
+  }
+  return { applies: true, approved: false, refusal };
+}
+
+/** Run a bounded `gh` call; throws (fail closed) on any non-zero exit. */
+function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
+  const stdout = runChild(ghCommand, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  return stdout;
+}
+
+/**
+ * Candidate issues: search for issues where the operator commented on text
+ * matching the per-release approval phrase, then verify the AUTHORING comment
+ * exactly (search `commenter:` alone would match any operator comment on an
+ * issue where someone ELSE wrote the phrase — verify the operator authored it).
+ * Bounded to 100 candidates via `per_page=100` (the GitHub search default is
+ * 30, which silently truncates a busy repo before the real approval is seen).
+ * Raw `gh api` output is parsed in-script via `JSON.parse` (not `gh --jq`), so
+ * the gate's decision never depends on jq parsing behavior.
+ */
+function fetchApprovalCandidates({ repo, operator, ghCommand, runChild }) {
+  const searchOut = runGh(
+    ["api", "-X", "GET", "search/issues", "-f", `q=repo:${repo} commenter:${operator} "approve release"`, "-f", "per_page=100"],
+    { ghCommand, runChild },
+  );
+  let candidates = [];
+  try {
+    candidates = (JSON.parse(searchOut)?.items ?? []).map((item) => item?.number).filter((n) => Number.isInteger(n)).slice(0, 100);
+  } catch {
+    throw new Error(`release-approval search returned non-JSON output — fail closed`);
+  }
+  const comments = [];
+  for (const issueNumber of candidates) {
+    const body = runGh(
+      ["api", "repos/" + repo + "/issues/" + issueNumber + "/comments", "--paginate", "--slurp"],
+      { ghCommand, runChild },
+    );
+    try {
+      const parsed = JSON.parse(body);
+      // --slurp wraps every page into one array of page-arrays; a single page
+      // may still arrive flat. Accept all three shapes (array-of-arrays, flat
+      // array, lone object) so a >30-comment tracking issue never fails closed
+      // on a pagination artifact.
+      const collect = (c) => {
+        const author = c?.user?.login;
+        const commentBody = c?.body;
+        if (typeof author === "string" && typeof commentBody === "string") {
+          // created_at is required to enforce the post-date/staleness check
+          // (#1941); a comment without it can never verify as fresh downstream.
+          comments.push({ author, body: commentBody, createdAt: c?.created_at });
+        }
+      };
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (Array.isArray(item)) item.forEach(collect);
+          else collect(item);
+        }
+      } else {
+        collect(parsed);
+      }
+    } catch {
+      throw new Error(`release-approval comment fetch returned non-JSON output — fail closed`);
+    }
+  }
+  return comments;
+}
+
+/**
+ * Resolve the release commit's committer date (ISO) — the reference the
+ * post-date/staleness check compares approval comments against (#1941). Both
+ * release workflows check out the tag commit at HEAD (`fetch-depth: 0`), so
+ * HEAD is the release commit being approved. `--release-commit-date` overrides
+ * it (tests, or a caller that already resolved the tag date). Fail closed: an
+ * unresolvable date throws so the gate cannot silently skip the staleness
+ * check.
+ */
+export function resolveReleaseCommitDate({ override = null, gitCommand = "git", runChild = execFileSync } = {}) {
+  if (typeof override === "string" && override.trim().length > 0) {
+    if (!Number.isFinite(Date.parse(override.trim()))) {
+      throw new Error(`--release-commit-date "${override}" is not a parseable timestamp — fail closed`);
+    }
+    return override.trim();
+  }
+  const out = runChild(gitCommand, ["show", "-s", "--format=%cI", "HEAD"], { encoding: "utf8" });
+  const date = String(out ?? "").trim();
+  if (!Number.isFinite(Date.parse(date))) {
+    throw new Error("could not resolve the release commit date from git HEAD (%cI) — fail closed");
+  }
+  return date;
+}
+
+export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSync, runGit = execFileSync } = {}) {
+  version = version.trim();
+  const distTag = resolveNpmDistTag(version); // throws on garbage -> usage error upstream
+  if (distTag !== "latest") {
+    return { ok: true, applies: false, message: `prerelease v${version} publishes under dist-tag "${distTag}"; the stable-release operator-approval gate does not apply (prerelease flow unchanged).` };
+  }
+  // git resolution uses runGit (default execFileSync), kept distinct from the
+  // gh runChild so an injected gh fake is never mistaken for a git response.
+  const releaseRef = resolveReleaseCommitDate({ override: releaseCommitDate, runChild: runGit });
+  // The operator is the repo owner, which the `--repo` slug already names
+  // (owner/name). Derive it from `--repo` so the gate honors its own `--repo`
+  // argument instead of depending on the CWD's git remote (`gh api repo`), which
+  // fails closed from outside a checkout — or against a different repo than CWD —
+  // even when approval exists.
+  const operatorLogin = (operator ?? repo.split("/")[0]).trim();
+  if (!operatorLogin) {
+    throw new Error("operator login could not be resolved (repo slug has no owner) — fail closed");
+  }
+  // Reject a --operator override that could inject extra GitHub search
+  // qualifiers (spaces, colons, quotes) into `commenter:<login>`.
+  if (!/^[a-zA-Z0-9-]+$/.test(operatorLogin)) {
+    throw new Error(`operator login "${operatorLogin}" is not a valid GitHub login shape — fail closed`);
+  }
+  const comments = fetchApprovalCandidates({ repo, operator: operatorLogin, ghCommand, runChild });
+  const decision = resolveApprovalState({ version, operator: operatorLogin, comments, releaseRef });
+  if (!decision.approved) {
+    return { ok: false, applies: true, refusal: decision.refusal };
+  }
+  return { ok: true, applies: true, message: `operator release approval for v${version} verified (comment by @${operatorLogin}).` };
+}
+
+function parseArgs(argv) {
+  const options = { version: null, repo: null, operator: null, releaseCommitDate: null, jq: undefined, silent: false };
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--version") {
+      options.version = argv[++i] ?? null;
+    } else if (token === "--repo") {
+      options.repo = argv[++i] ?? null;
+    } else if (token === "--operator") {
+      options.operator = argv[++i] ?? null;
+    } else if (token === "--release-commit-date") {
+      options.releaseCommitDate = argv[++i] ?? null;
+    } else if (token === "--jq") {
+      options.jq = argv[++i];
+      if (options.jq == null) usageError("--jq requires a filter");
+    } else if (token === "--silent" || token === "-s") {
+      options.silent = true;
+    } else if (token === "--help" || token === "-h") {
+      process.stdout.write(USAGE + "\n");
+      process.exit(0);
+    } else {
+      usageError(`unknown argument: ${token}`);
+    }
+  }
+  return options;
+}
+
+function usageError(message) {
+  process.stderr.write(`{"ok":false,"error":${JSON.stringify(message)},"usage":${JSON.stringify(USAGE)}}\n`);
+  process.exit(2);
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0) usageError("no arguments: --version and --repo are required");
+  const options = parseArgs(argv);
+  if (!options.version) usageError("--version is required (the workflows always pass it)");
+  if (!options.repo) usageError("--repo <owner/name> is required");
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(options.repo)) usageError(`--repo must be owner/name shape: ${options.repo}`);
+
+  let result;
+  try {
+    result = verifyReleaseApproval({ version: options.version, repo: options.repo, operator: options.operator, releaseCommitDate: options.releaseCommitDate });
+  } catch (err) {
+    // Version parse errors are usage errors; gh/network failures below are
+    // enforcement failures (exit 1). resolveNpmDistTag throws on garbage.
+    if (/not a valid SemVer|non-empty string/.test(String(err?.message))) {
+      usageError(err.message);
+    }
+    const failure = { ok: false, error: `operator-approval check failed closed: ${err?.message ?? err}` };
+    process.exitCode = emitResult(failure, { jq: options.jq, silent: options.silent });
+    process.exit(process.exitCode === 0 ? 1 : process.exitCode);
+  }
+  if (!result.ok) {
+    const failure = { ok: false, error: result.refusal };
+    process.stderr.write(`::error::${result.refusal}\n`);
+    const code = emitResult(failure, { jq: options.jq, silent: options.silent });
+    process.exit(code === 0 ? 1 : code); // a clean jq-false must not mask a refusal
+  }
+  process.exit(emitResult(result, { jq: options.jq, silent: options.silent }));
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  main();
+}

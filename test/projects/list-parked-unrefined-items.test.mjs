@@ -10,7 +10,7 @@ import { main, parseCliArgs } from "../../scripts/projects/list-parked-unrefined
 const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-isolated-"));
 after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
-const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n";
+const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Definition of done\n- [x] All checks pass\n\n## Non-goals\n- none\n";
 const UNREFINED_BODY = "Just some prose describing a problem. No ACs, no DoD.";
 
 // runChild stub: drives list-queue-items (GraphQL) AND the per-issue
@@ -56,6 +56,22 @@ function boardRunChild({ columns = {}, bodies = {}, optionNames = ["Backlog", "N
 
 const run = (child) => main({ repo: "o/r", project: "7" }, { runChild: child, cwd: ISOLATED_CWD });
 
+// Wraps boardRunChild's `gh issue view` branch with a per-issue artificial
+// delay (ms), so within a concurrent chunk the gh calls SETTLE in a different
+// order than the items were listed. Used to prove the bounded-concurrency
+// path stitches results back into input order (index-stable) rather than
+// push-on-settle order.
+function delayedBoardRunChild({ delays = {}, ...opts }) {
+  const base = boardRunChild(opts);
+  return async (cmd, argv, env) => {
+    if (cmd === "gh" && argv[0] === "issue" && argv[1] === "view") {
+      const ms = delays[Number(argv[2])] ?? 0;
+      if (ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    return base(cmd, argv, env);
+  };
+}
+
 describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
   it("returns un-refined issues parked in the park column, with reason + missing", async () => {
     const r = await run(boardRunChild({
@@ -75,6 +91,39 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
       "Definition of done section",
       "linked refinement doc",
     ]);
+  });
+
+  it("reports the actually-missing matrix arm for a #1877 matrix miss (one taxonomy with the enqueue gate)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 55, title: "AC-only (matrix miss)" }] },
+      bodies: { 55: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_dod_checklist");
+    assert.deepEqual(item.missing, ["Definition of done checklist"]);
+  });
+
+  it("reports the actually-missing matrix arm for a DoD-only body (missing_ac_checklist arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 56, title: "DoD-only (matrix miss)" }] },
+      bodies: { 56: "## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_ac_checklist");
+    assert.deepEqual(item.missing, ["Acceptance criteria checklist"]);
+  });
+
+  it("reports the actually-missing matrix arm for a Non-goals miss (missing_explicit_non_goals arm)", async () => {
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 57, title: "No Non-goals" }] },
+      bodies: { 57: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" },
+    }));
+    assert.equal(r.items.length, 1);
+    const [item] = r.items;
+    assert.equal(item.finding, "missing_explicit_non_goals");
+    assert.deepEqual(item.missing, ["explicit Non-goals section"]);
   });
 
   it("excludes refined issues (the fail-safe only parks un-refined ones)", async () => {
@@ -139,7 +188,7 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     const dir = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-parkcol-"));
     try {
       const { writeFileSync } = await import("node:fs");
-      writeFileSync(nodePath.join(dir, ".devloops"), 'queue:\n  board:\n    number: 7\n  nonSuccessStatus: "Parked"\n', "utf-8");
+      writeFileSync(nodePath.join(dir, ".devloops"), 'tracker:\n  board:\n    number: 7\nqueue:\n  nonSuccessStatus: "Parked"\n', "utf-8");
       const child = boardRunChild({
         optionNames: ["Backlog", "Parked", "Next Up", "In Progress", "Done"],
         // The un-refined issue lives ONLY in the renamed park column; if the
@@ -153,5 +202,23 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("preserves input order across concurrency chunks even when gh calls settle out of order (7 items, bound 4)", async () => {
+    // 7 items -> two chunks under the bound-4 limiter (4 then 3). Within EACH
+    // chunk, the first item's gh call is the slowest, so it SETTLES last while
+    // its siblings settle first — if the concurrency stitch ever regressed to
+    // push-on-settle instead of index-stable results[i+j], this item would land
+    // at the end of its chunk instead of its input position.
+    const issues = [1, 2, 3, 4, 5, 6, 7];
+    const columns = { Backlog: issues.map((n) => ({ issueNumber: n, title: `I${n}` })) };
+    const bodies = Object.fromEntries(issues.map((n) => [n, UNREFINED_BODY]));
+    // Chunk 1 = [1,2,3,4]: issue 1 resolves last. Chunk 2 = [5,6,7]: issue 5
+    // resolves last. Actual settle order per chunk: 2,3,4,1 then 6,7,5.
+    const delays = { 1: 30, 2: 0, 3: 5, 4: 10, 5: 20, 6: 0, 7: 5 };
+
+    const r = await run(delayedBoardRunChild({ columns, bodies, delays }));
+
+    assert.deepEqual(r.items.map((i) => i.issueNumber), issues);
   });
 });

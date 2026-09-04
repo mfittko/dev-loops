@@ -46,6 +46,7 @@
 // Downstream (the dev-loop skill) resolves authoritative state from this number;
 // this helper deliberately makes no further decisions.
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main as listQueueItems } from "./list-queue-items.mjs";
@@ -80,8 +81,8 @@ from Backlog.
 Options:
   --repo <owner/name>     Required. Repository to scope the project search.
   --project <number|id>   Project number (integer) or node ID. When omitted,
-                          resolved from .devloops tracker.board (or the
-                          deprecated queue.board) number / title.
+                          resolved from .devloops tracker.board number /
+                          title.
   --help, -h              Show this help.
 
 Output (stdout):
@@ -183,7 +184,7 @@ function collapseToTarget(items) {
     const listed = items.map(describeItem).join(", ");
     return {
       ok: false,
-      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/loop-continue #N\`.`,
+      reason: `${items.length} in-progress board items: ${listed}. Pass an explicit issue/PR to disambiguate, e.g. \`/dev-loops:loop-continue #N\` (or \`/loop-continue #N\` in the dev-loops repo itself).`,
     };
   }
   return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };
@@ -433,7 +434,7 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
   };
 }
 
-async function main(args, { env = process.env, runChild, cwd = process.cwd() } = {}) {
+async function main(args, { env = process.env, runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   // Resolve the in_progress column name through the SAME statusColumns mapping
   // board-sync uses (#1098, #1143): a repo that renamed In Progress gets its
   // configured column queried, not the literal default. Fail CLOSED on a
@@ -466,7 +467,7 @@ function classifyExitCode(err) {
   return 2;
 }
 
-async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, runChild, cwd = process.cwd() } = {}) {
+async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, env = process.env, runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +18,7 @@ test("verify-fresh-review-context exits 0 on first run (fresh context)", async (
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const result = runScript([], { cwd: tmpDir });
+    const result = runScript(["--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.ok, true);
@@ -38,7 +38,7 @@ test("verify-fresh-review-context exits 1 when sentinel already exists", async (
       JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z", pid: 1 }) + "\n",
       "utf8"
     );
-    const result = runScript([], { cwd: tmpDir });
+    const result = runScript(["--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.ok, true);
@@ -58,7 +58,7 @@ test("verify-fresh-review-context --help prints usage and exits 0", async () => 
 test("verify-fresh-review-context creates tmp dir if needed", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
-    const result = runScript([], { cwd: tmpDir });
+    const result = runScript(["--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, true);
@@ -71,11 +71,11 @@ test("verify-fresh-review-context second run in same dir detects contamination",
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
-    const r1 = runScript([], { cwd: tmpDir });
+    const r1 = runScript(["--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r1.status, 0);
     assert.equal(JSON.parse(r1.stdout.trim()).fresh, true);
 
-    const r2 = runScript([], { cwd: tmpDir });
+    const r2 = runScript(["--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r2.status, 1);
     assert.equal(JSON.parse(r2.stdout.trim()).fresh, false);
   } finally {
@@ -88,11 +88,11 @@ test("verify-fresh-review-context --scope isolates parallel reviewers in same CW
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
 
-    const r1 = runScript(["--scope", "angle-coverage"], { cwd: tmpDir });
+    const r1 = runScript(["--scope", "angle-coverage", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r1.status, 0, r1.stderr);
     assert.equal(JSON.parse(r1.stdout.trim()).fresh, true);
 
-    const r2 = runScript(["--scope", "angle-correctness"], { cwd: tmpDir });
+    const r2 = runScript(["--scope", "angle-correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r2.status, 0, r2.stderr);
     assert.equal(JSON.parse(r2.stdout.trim()).fresh, true);
   } finally {
@@ -105,11 +105,11 @@ test("verify-fresh-review-context --scope re-run with same scope detects contami
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
 
-    const r1 = runScript(["--scope", "angle-correctness"], { cwd: tmpDir });
+    const r1 = runScript(["--scope", "angle-correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r1.status, 0);
     assert.equal(JSON.parse(r1.stdout.trim()).fresh, true);
 
-    const r2 = runScript(["--scope", "angle-correctness"], { cwd: tmpDir });
+    const r2 = runScript(["--scope", "angle-correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r2.status, 1);
     assert.equal(JSON.parse(r2.stdout.trim()).fresh, false);
   } finally {
@@ -140,7 +140,7 @@ test("RFC-2: a reviewer seeded with the neutral gate-context bundle is NOT flagg
 
     // First scoped-reviewer run in a fresh session: must be fresh despite the
     // neutral bundle existing on disk.
-    const result = runScript(["--scope", "draft-gate-coverage"], { cwd: tmpDir });
+    const result = runScript(["--scope", "draft-gate-coverage", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, true);
@@ -168,7 +168,7 @@ test("RFC-2: genuine cross-session state bleed (prior reviewer sentinel for the 
       JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z", pid: 1, scope: "draft-gate-coverage" }) + "\n",
       "utf8",
     );
-    const result = runScript(["--scope", "draft-gate-coverage"], { cwd: tmpDir });
+    const result = runScript(["--scope", "draft-gate-coverage", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, false);
@@ -236,21 +236,21 @@ test("head round: same scope across commits passes on each new head, fails close
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
 
     // Round auto-resolves to HEAD; first run fresh, keyed by the full head SHA.
-    const r1 = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    const r1 = runScript(["--scope", "correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r1.status, 0, r1.stderr);
     const out1 = JSON.parse(r1.stdout.trim());
     assert.equal(out1.fresh, true);
     assert.equal(out1.round, git(["rev-parse", "HEAD"]).stdout.trim());
 
     // Same head, same scope -> contamination fail-closed.
-    const r1b = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    const r1b = runScript(["--scope", "correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r1b.status, 1, r1b.stderr);
     assert.equal(JSON.parse(r1b.stdout.trim()).fresh, false);
 
     // New commit -> new head -> fresh again, no manual clear step.
     await writeFile(path.join(tmpDir, "a.txt"), "2", "utf8");
     git(["commit", "-qam", "c2"]);
-    const r2 = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    const r2 = runScript(["--scope", "correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(r2.status, 0, r2.stderr);
     assert.equal(JSON.parse(r2.stdout.trim()).fresh, true);
   } finally {
@@ -272,7 +272,7 @@ test("verify-fresh-review-context --context-path fails closed when the gate-cont
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript(
-      ["--scope", "coverage", "--context-path", "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json"],
+      ["--scope", "coverage", "--context-path", "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json", "--prefix-hash", "a".repeat(64)],
       { cwd: tmpDir }
     );
     assert.equal(result.status, 1, result.stderr);
@@ -291,7 +291,7 @@ test("verify-fresh-review-context --context-path fails closed when the gate-cont
     const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
     await mkdir(path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1"), { recursive: true });
     await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
-    const retry = runScript(["--scope", "coverage", "--context-path", ctxRelPath], { cwd: tmpDir });
+    const retry = runScript(["--scope", "coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(retry.status, 0, retry.stderr);
     const retryOutput = JSON.parse(retry.stdout.trim());
     assert.equal(retryOutput.fresh, true);
@@ -308,7 +308,7 @@ test("verify-fresh-review-context --context-path passes through when the gate-co
     await mkdir(ctxDir, { recursive: true });
     const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
     await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
-    const result = runScript(["--scope", "coverage", "--context-path", ctxRelPath], { cwd: tmpDir });
+    const result = runScript(["--scope", "coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, true);
@@ -329,7 +329,7 @@ test("verify-fresh-review-context --context-path fails closed when the path reso
     await mkdir(ctxDir, { recursive: true });
     const absPath = path.join(ctxDir, "draft_gate-abc1234.json");
     await writeFile(absPath, JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
-    const result = runScript(["--scope", "coverage", "--context-path", absPath], { cwd: tmpDir });
+    const result = runScript(["--scope", "coverage", "--context-path", absPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);
     const output = JSON.parse(result.stdout.trim());
     assert.equal(output.fresh, false);
@@ -346,7 +346,7 @@ test("verify-fresh-review-context --context-path fails closed on a ..-escaping p
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript(
-      ["--scope", "coverage", "--context-path", "../escape/gate-context/draft_gate-abc1234.json"],
+      ["--scope", "coverage", "--context-path", "../escape/gate-context/draft_gate-abc1234.json", "--prefix-hash", "a".repeat(64)],
       { cwd: tmpDir }
     );
     assert.equal(result.status, 1, result.stderr);
@@ -462,14 +462,22 @@ test("--prefix-hash and --prefix-file are mutually exclusive", async () => {
   assert.equal(result.status, 2, result.stderr);
 });
 
-test("without --prefix-hash/--prefix-file, no prefixHash field is recorded (backward compatible)", async () => {
+test("without --prefix-hash/--prefix-file, the run is a usage error (#1618: prefix hash required on every path)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     const result = runScript(["--scope", "coverage"], { cwd: tmpDir });
-    assert.equal(result.status, 0, result.stderr);
-    const output = JSON.parse(result.stdout.trim());
-    assert.equal("prefixHash" in output, false);
+    // #1618 (AC5): a prefix hash is mandatory on every fresh-context reviewer
+    // run, not only --same-head-retry. Before this, a first-run sentinel could
+    // be created with NO recorded prefix hash — a hashless sentinel that the
+    // fan-in never grandfathered. Requiring it at the producer means the fan-in's
+    // count/hash checks (now wired by consolidate-fanin.mjs) have a well-formed
+    // population to verify.
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /--prefix-hash or --prefix-file is required on every fresh-context reviewer run/);
+    assert.match(result.stderr, /GATE-EXEC-BRIEFING-PREFIX/);
+    // No sentinel is created on a usage error.
+    assert.equal(result.stdout.trim(), "");
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -493,7 +501,7 @@ test("head round: a stale pre-round (scope-only) sentinel does NOT block a new h
       JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z", pid: 1, scope: "correctness" }) + "\n",
       "utf8"
     );
-    const result = runScript(["--scope", "correctness"], { cwd: tmpDir });
+    const result = runScript(["--scope", "correctness", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout.trim()).fresh, true);
   } finally {
@@ -567,9 +575,12 @@ test("--pr-body-fix-retry fails closed when the existing sentinel recorded no pr
   try {
     await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
     // Existing sentinel with no prefixHash at all (predates GATE-EXEC-BRIEFING-PREFIX
-    // enforcement, or a caller that never passed --prefix-hash/--prefix-file).
-    const first = runScript(["--scope", "findings-present"], { cwd: tmpDir });
-    assert.equal(first.status, 0, first.stderr);
+    // enforcement). #1618 made a prefix hash mandatory on every CLI run, so a
+    // hashless sentinel can no longer be CREATED via the tool — write it
+    // directly to disk to simulate a legacy hashless sentinel (the --pr-body-fix-retry
+    // refusal on a hashless sentinel is unchanged: never grandfathered in).
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    await writeFile(path.join(tmpDir, "tmp", "checkpoint-context-sentinel-findings-present.json"), JSON.stringify({ scope: "findings-present", createdAt: "legacy" }), "utf8");
 
     const retry = runScript(
       ["--scope", "findings-present", "--prefix-hash", "a".repeat(64), "--pr-body-fix-retry"],
@@ -605,6 +616,155 @@ test("--pr-body-fix-retry on a first run (no existing sentinel) behaves like a n
     // The flag only changes behavior when a collision actually occurs; a plain
     // first run is unaffected and does not report prBodyFixRetry.
     assert.equal("prBodyFixRetry" in output, false);
+    assert.equal("sameHeadRetry" in output, false, "the retry marker never leaks into a first-run output");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Generalized same-head retry (--same-head-retry): the escape hatch covers ANY
+// same-head re-run with unrebuilt briefing bytes — interrupted reviewer,
+// harness crash, or the original PR-body-fix case. --pr-body-fix-retry stays
+// as a deprecated alias with identical semantics.
+// ---------------------------------------------------------------------------
+
+test("--same-head-retry re-admits an interrupted reviewer when the prefix hash matches", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Real gate reviews run at a head-keyed round; exercise that path, not the
+    // scope-only git-unavailable fallback.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "c".repeat(64);
+
+    // Reviewer runs the sentinel, then dies before writing its findings artifact.
+    const first = runScript(["--scope", "interrupted-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    // The re-dispatched reviewer passes with the retry flag and the same hash.
+    const retry = runScript(
+      ["--scope", "interrupted-angle", "--prefix-hash", hash, "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 0, retry.stderr);
+    const output = JSON.parse(retry.stdout.trim());
+    assert.equal(output.fresh, true);
+    assert.equal(output.sameHeadRetry, true);
+    assert.equal(output.prBodyFixRetry, true, "deprecated mirror field kept while callers migrate");
+    assert.equal(output.prefixHash, hash);
+    assert.match(output.round ?? "", /^[0-9a-f]{40}$/, "the retry happened at the head-keyed round, not the scope-only fallback");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--same-head-retry fails closed on hash mismatch and on a hashless sentinel", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Head-keyed round, same as the happy-path retry test.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "d".repeat(64);
+
+    const first = runScript(["--scope", "mismatch-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+
+    const mismatch = runScript(
+      ["--scope", "mismatch-angle", "--prefix-hash", "e".repeat(64), "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(mismatch.status, 1);
+    assert.match(JSON.parse(mismatch.stdout.trim()).reason, /DIFFERENT prefix hash/);
+
+    // Hashless sentinel: #1618 made a prefix hash mandatory on every CLI run,
+    // so a hashless sentinel can no longer be CREATED via the tool — simulate a
+    // legacy/pre-enforcement hashless sentinel by writing it directly to disk,
+    // then retry with one (the same-head-retry refusal on a hashless sentinel
+    // is unchanged: a hashless sentinel is never grandfathered in).
+    const sentinelPath = path.join(tmpDir, "tmp", `checkpoint-context-sentinel-hashless-angle-${git(["rev-parse", "HEAD"]).stdout.trim()}.json`);
+    await writeFile(sentinelPath, JSON.stringify({ scope: "hashless-angle", createdAt: "legacy" }), "utf8");
+    const retry = runScript(
+      ["--scope", "hashless-angle", "--prefix-hash", hash, "--same-head-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(retry.status, 1);
+    assert.match(JSON.parse(retry.stdout.trim()).reason, /recorded no prefix hash/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("--same-head-retry without a prefix hash is a usage error, and the alias emits the new field", async () => {
+  const bare = runScript(["--scope", "findings-present", "--same-head-retry"]);
+  assert.equal(bare.status, 2);
+  assert.match(bare.stderr, /--same-head-retry \(alias --pr-body-fix-retry\) requires/);
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    // Head-keyed round, same as the other retry tests.
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "f".repeat(64);
+    const first = runScript(["--scope", "alias-angle", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    const viaAlias = runScript(
+      ["--scope", "alias-angle", "--prefix-hash", hash, "--pr-body-fix-retry"],
+      { cwd: tmpDir },
+    );
+    assert.equal(viaAlias.status, 0, viaAlias.stderr);
+    const output = JSON.parse(viaAlias.stdout.trim());
+    assert.equal(output.sameHeadRetry, true, "the alias resolves to the same generalized retry");
+    assert.equal(output.prBodyFixRetry, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context reports the validated repo root on fresh runs only", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-root-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const fresh = runScript(["--scope", "root-probe", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    const output = JSON.parse(fresh.stdout.trim());
+    // Without --context-path the reported root is simply the invocation cwd
+    // (unvalidated) — still the path reviewers must feed `git -C <repoRoot>`
+    // in cwd-resetting shells; the locality-guarded variant is exercised by
+    // the --context-path tests above.
+    assert.equal(output.repoRoot, await realpath(tmpDir));
+    const refused = runScript(["--scope", "root-probe", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(refused.status, 1);
+    assert.equal(JSON.parse(refused.stdout.trim()).repoRoot, undefined);
+    // The sanctioned same-head retry (matching prefix hash) is also a fresh
+    // run and must carry the root too.
+    const prefixPath = path.join(tmpDir, "prefix.txt");
+    await writeFile(prefixPath, "invariant prefix bytes", "utf8");
+    const seeded = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath], { cwd: tmpDir });
+    assert.equal(seeded.status, 0, seeded.stderr);
+    const retried = runScript(["--scope", "retry-probe", "--prefix-file", prefixPath, "--same-head-retry"], { cwd: tmpDir });
+    assert.equal(retried.status, 0, retried.stderr);
+    const retryOut = JSON.parse(retried.stdout.trim());
+    assert.equal(retryOut.sameHeadRetry, true);
+    assert.equal(retryOut.repoRoot, await realpath(tmpDir));
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

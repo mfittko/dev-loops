@@ -20,7 +20,20 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, "..");
 const templateRoot = path.join(skillRoot, "templates");
 
+// ARTIFACT-TRACKER-FIRST-NO-DUP (#1628): an issue-keyed worktree
+// (tmp/worktrees/dev-loops/issue-<n>) is by construction a tracker-backed
+// session — the tracker issue is the durable spec-of-record and no duplicate
+// local phase doc should be minted for it. Detect that layout here so
+// initializePhase refuses the durable docs/phases/phase-<n>.md mint while
+// still allowing the ephemeral tmp/phases scaffold.
+const ISSUE_KEYED_WORKTREE_PATTERN = /[\\/]tmp[\\/]worktrees[\\/]dev-loops[\\/]issue-\d+[\\/]?$/u;
+
+export function isTrackerIssueKeyedWorktree(projectRoot) {
+  return ISSUE_KEYED_WORKTREE_PATTERN.test(path.resolve(String(projectRoot)).replace(/[\\/]+$/u, ""));
+}
+
 export async function initializePhase(projectRoot, phase, patch = {}) {
+  const trackerBacked = isTrackerIssueKeyedWorktree(projectRoot);
   const phasePlanArtifact = path.relative(
     path.join(projectRoot, "tmp", "phases", phase),
     path.join(projectRoot, "docs", "phases", `${phase}.md`),
@@ -28,13 +41,25 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
 
   const nextPatch = {
     ...patch,
-    artifacts: [...(patch.artifacts ?? []), ...DEFAULT_PHASE_ARTIFACTS, phasePlanArtifact],
+    artifacts: [
+      ...(patch.artifacts ?? []),
+      ...DEFAULT_PHASE_ARTIFACTS,
+      // Tracker-backed sessions refuse the durable phase-doc mint
+      // (ARTIFACT-TRACKER-FIRST-NO-DUP); the ephemeral tmp/ artifacts are
+      // unaffected and still advertised so manifest.artifacts stays populated.
+      ...(trackerBacked ? [] : [phasePlanArtifact]),
+    ],
   };
 
   const result = await ensurePhaseFiles(projectRoot, phase, nextPatch);
 
   const outputs = [
-    ["phase-doc.md", result.paths.phasePlanPath, { phase }],
+    // Tracker-backed sessions refuse the durable phase-doc mint
+    // (ARTIFACT-TRACKER-FIRST-NO-DUP); the ephemeral tmp/ scaffold below is
+    // unaffected and still allowed.
+    ...(trackerBacked
+      ? []
+      : [["phase-doc.md", result.paths.phasePlanPath, { phase }]]),
     ["phase-variant.md", path.join(result.paths.phaseDir, "variant-a.md"), { phase, variant: "a" }],
     ["phase-variant.md", path.join(result.paths.phaseDir, "variant-b.md"), { phase, variant: "b" }],
     ["merged-phase-plan.md", path.join(result.paths.phaseDir, "merged-plan.md"), { phase }],
@@ -48,6 +73,14 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
   return {
     ...result,
     generated: outputs.map(([, outputPath]) => path.relative(projectRoot, outputPath)),
+    trackerBacked,
+    // Each refusal names the rule it upholds (AC6, #1628). The tracker-backed
+    // durable phase-doc mint is refused by making the caller aware of the rule
+    // it upholds (ARTIFACT-TRACKER-FIRST-NO-DUP) rather than dropping the file
+    // silently.
+    refusals: trackerBacked
+      ? [{ rule: "ARTIFACT-TRACKER-FIRST-NO-DUP", reason: "tracker-backed (issue-keyed) worktree; refusing durable phase-doc mint" }]
+      : [],
   };
 }
 

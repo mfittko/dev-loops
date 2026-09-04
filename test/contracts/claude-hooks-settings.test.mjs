@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
@@ -19,6 +20,13 @@ function runHook(script, payload, env = {}) {
   // the cli-harness-agnostic contract confines those literals to the adapter boundary.
   const childEnv = { ...process.env };
   for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
+  // Strip the one SubagentStop exemption signal the hook still reads so non-exempt tests are
+  // deterministic regardless of host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently
+  // exempt the dirty case). The exempt test explicitly sets it to "1" below, which overrides this.
+  // #1619 review finding. The #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed in
+  // #1936, so the hook no longer reads that var — a leaked host value is inert and needs no strip;
+  // the #1936 "no escape" tests still set it explicitly to prove it grants no exemption.
+  delete childEnv["DEVLOOPS_COMMIT_AUTH_PENDING"];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
@@ -30,10 +38,18 @@ function runHook(script, payload, env = {}) {
   } catch {
     json = null;
   }
-  return { code: res.status, stdout: res.stdout, json };
+  // SubagentStop blocks via exit code 2 + stderr JSON (unlike PreToolUse's stdout JSON), so
+  // surface stderr for those assertions.
+  let stderrJson = null;
+  try {
+    stderrJson = res.stderr.trim() ? JSON.parse(res.stderr) : null;
+  } catch {
+    stderrJson = null;
+  }
+  return { code: res.status, stdout: res.stdout, stderr: res.stderr, json, stderrJson };
 }
 
-test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", () => {
+test(".claude/settings.json is valid JSON and wires the four dev-loop hook registrations", () => {
   const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
   const settings = JSON.parse(raw);
   const pre = settings.hooks.PreToolUse;
@@ -42,11 +58,14 @@ test(".claude/settings.json is valid JSON and wires the three dev-loop hooks", (
   const bashGate = pre.find((h) => h.matcher === "Bash");
   const writeGuard = pre.find((h) => h.matcher === "Edit|Write");
   const postMerge = post.find((h) => h.matcher === "Bash");
+  const subagentStop = settings.hooks.SubagentStop?.find((h) => h.matcher === "*");
 
   // Project hooks reference the scripts under .claude/hooks via ${CLAUDE_PROJECT_DIR} (#824).
   assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-bash-gate\.mjs/);
   assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-write-guard\.mjs/);
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/post-tool-use-merge\.mjs/);
+  assert.ok(subagentStop, "SubagentStop matcher must be registered");
+  assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
 });
 
 test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} (#824)", () => {
@@ -54,15 +73,22 @@ test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} 
   const bashGate = hooks.PreToolUse.find((h) => h.matcher === "Bash");
   const writeGuard = hooks.PreToolUse.find((h) => h.matcher === "Edit|Write");
   const postMerge = hooks.PostToolUse.find((h) => h.matcher === "Bash");
+  const subagentStop = hooks.SubagentStop?.find((h) => h.matcher === "*");
   assert.match(bashGate.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-bash-gate\.mjs/);
   assert.match(writeGuard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-write-guard\.mjs/);
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-merge\.mjs/);
+  assert.ok(subagentStop, "SubagentStop matcher must be registered in hooks.json");
+  assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
 });
 
 test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
   for (const script of ["_hook-io.mjs", "pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
     assert.ok(fs.existsSync(path.join(hooksDir, script)), `missing hook script ${script}`);
   }
+});
+
+test("the SubagentStop uncommitted-work guard hook exists under the plugin root (#1619)", () => {
+  assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-uncommitted-guard.mjs")), "missing subagent-stop-uncommitted-guard.mjs");
 });
 
 test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {
@@ -171,6 +197,33 @@ test("bash-gate hook allows the create-pr.mjs wrapper (e2e)", () => {
   assert.equal(json, null, "the canonical wrapper must pass through");
 });
 
+test("bash-gate hook denies an inline interpreter in the target repo (e2e, #1622 decision seam)", () => {
+  // Regression for the #1622 enforcement-seam finding: the six guard-rule predicates are decided in
+  // decideBashGate, so the real hook deny path (line ~65 short-circuit) must exercise at least one of
+  // them. Reverting the predicate from the early-return short-circuit must fail this test.
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: 'node -e "console.log(1)"' },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured deny for an inline interpreter");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /OPS-NO-INLINE-INTERPRETER/);
+});
+
+test("bash-gate hook denies a raw gh api sub_issues write in the target repo (e2e, #1622)", () => {
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6" },
+    cwd: repoRoot,
+  });
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured deny for a sub_issues write");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /manage-sub-issues/);
+});
+
 test("write-guard hook fails open when enforcement is disabled (default)", () => {
   const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
     tool_name: "Write",
@@ -211,4 +264,166 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
   );
   assert.equal(code, 0);
   assert.equal(json, null, "gitignored tmp/ path must be allowed");
+});
+
+// ---------------------------------------------------------------------------
+// SubagentStop uncommitted-work guard (#1619) — e2e hook script behavior
+// ---------------------------------------------------------------------------
+// The guard fires only under tmp/worktrees/. Build a throwaway git repo there so the hook's
+// real `git status --porcelain` + decider path is exercised end to end (not just the pure
+// decider, which is covered in packages/core/test/claude-hook-decisions.test.mjs). Mutation
+// anchor: revert the guard's block branch and the dirty case stops blocking.
+
+function makeWorktree(slug, dirty) {
+  const dir = path.join(repoRoot, "tmp", "worktrees", `subagent-stop-test-${slug}-${process.pid}`);
+  fs.mkdirSync(dir, { recursive: true });
+  // A fresh `git init` is already a clean worktree (empty `git status --porcelain`). git commit
+  // is intentionally avoided so the test does not depend on a configured git user identity —
+  // CI runners may omit user.name/user.email, which left `committed.txt` staged and made the
+  // "clean" case dirty (the #1619 CI regression). An untracked file is enough to be dirty.
+  spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
+  if (dirty) {
+    fs.writeFileSync(path.join(dir, "uncommitted.txt"), "dirty\n", "utf8");
+  }
+  return dir;
+}
+
+test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/worktrees/ (#1619)", () => {
+  const dir = makeWorktree("dirty", true);
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 2, "dirty worktree must be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    assert.match(stderrJson.reason, /uncommitted\.txt/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook allows a clean worktree under tmp/worktrees/ (#1619)", () => {
+  const dir = makeWorktree("clean", false);
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 0, "clean worktree must stop normally");
+    assert.equal(stderrJson, null, "no block output for a clean worktree");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook is unaffected by a cwd outside tmp/worktrees/ (#1619)", () => {
+  // A cwd that is genuinely NOT under tmp/worktrees/ (os.tmpdir() is outside the repo tree).
+  // The guard short-circuits on isUnderWorktreePath before git even runs, so the stop is allowed
+  // regardless of git state. (repoRoot itself is under tmp/worktrees/ when tests run from a
+  // worktree, so it cannot stand in for the outside case here.)
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-stop-outside-"));
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: outside });
+    assert.equal(code, 0, "cwd outside tmp/worktrees/ must be unaffected");
+    assert.equal(stderrJson, null);
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook exempts an interactive session awaiting commit authorization (#1619)", () => {
+  const dir = makeWorktree("exempt", true);
+  try {
+    const { code, stderrJson } = runHook(
+      "subagent-stop-uncommitted-guard.mjs",
+      { cwd: dir },
+      { DEVLOOPS_COMMIT_AUTH_PENDING: "1" },
+    );
+    assert.equal(code, 0, "pending-commit-authorization session must be exempt");
+    assert.equal(stderrJson, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook stays enforced e2e for an editing dispatch — the removed orchestrator-owned-commit env var grants no escape (#1936)", () => {
+  // #1936: the #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed. Setting it (as a
+  // leaked/stale env var) must NOT exempt a dirty worktree — the "edit here, commit there" split
+  // that deadlocked an editing subagent under a task-scoped no-commit instruction is gone. The
+  // only resolution is to commit the dispatch's own work. Mutation anchor: reintroducing the
+  // env-var allow branch in the hook would flip this exit code back to 0 and re-open the deadlock.
+  const dir = makeWorktree("no-orchestrator-owns-commit-escape", true);
+  try {
+    const { code, stderrJson } = runHook(
+      "subagent-stop-uncommitted-guard.mjs",
+      { cwd: dir },
+      { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "1" },
+    );
+    assert.equal(code, 2, "a dirty worktree must still be refused — the removed env var grants no escape (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/worktrees/ (#1685)", () => {
+  // Every makeWorktree() fixture calls `git init`, so the hook always sees a valid git repo and
+  // the fail-safe-allow catch path (`execFileSync("git", ["status","--porcelain"], { timeout:
+  // 5000 })` throws → porcelain="" → allow the stop) is never exercised e2e. This test creates
+  // the dir with `mkdir` only (no `git init`) OUTSIDE any git repo — so `git status --porcelain`
+  // throws and the catch allows the stop: exit 0 + no block output. A dir under the repo's own
+  // tmp/worktrees/ is nested inside the surrounding git repo, so git status would succeed there
+  // and report the untracked dir as dirty instead of throwing; hosting the non-git dir under
+  // os.tmpdir() (outside every repo, like the existing outside-path test) makes git genuinely
+  // fail while the path still carries a tmp/worktrees/ segment so isUnderWorktreePath stays real.
+  // Non-goal: the fail-safe allow on git error/timeout is the correct behavior — this test pins
+  // it, it does not change it.
+  const dir = path.join(os.tmpdir(), "tmp", "worktrees", `subagent-stop-test-nongit-${process.pid}`);
+  // mkdir only — deliberately NO `git init` (and outside any git repo)
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 0, "non-git dir under tmp/worktrees/ must fail-safe allow the stop (exit 0)");
+    assert.equal(stderrJson, null, "fail-safe-allow path must not emit block output");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node default maxBuffer (#1686)", () => {
+  // With Node's default execFileSync maxBuffer (1MB), `git status --porcelain` throws
+  // ERR_CHILD_PROCESS_STDIO_MAXBUFFER once the output crosses that size, and the catch
+  // turns that into a fail-safe allow — defeating the guard on exactly the worktrees
+  // with the most uncommitted work. The hook raises maxBuffer to 10MB; this test
+  // creates enough long-named untracked files to push porcelain past 1MB and asserts
+  // the guard still blocks. Each fixture file's porcelain line is the `?? ` status prefix
+  // (3 bytes) + the filename + a newline (1 byte); with the 241-byte filename below that's
+  // 245 bytes/line, so ~4600 files (~1.1MB) clears the 1MB bound while real (much shorter)
+  // paths need far more to hit the same bound. Beyond 10MB (~43k+ such long-line paths) the
+  // fail-safe allow is the documented ceiling.
+  const dir = makeWorktree("maxbuffer", false);
+  try {
+    const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
+    const fileCount = 4600;
+    for (let i = 0; i < fileCount; i++) {
+      fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
+    }
+    const porcelain = spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const porcelainBytes = Buffer.byteLength(porcelain, "utf8");
+    assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
+    const dirtyLineCount = porcelain.split("\n").filter((l) => l.trim() !== "").length;
+    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
+    assert.ok(stderrJson, "block reason JSON on stderr");
+    assert.equal(stderrJson.decision, "block");
+    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    // The reason itself stays bounded (the 50-path cap), not merely parseable off stderr —
+    // pins the cap end to end rather than relying on runHook's own maxBuffer as an incidental
+    // proxy for it. The remainder is derived from the actual porcelain line count so a fixture
+    // change (e.g. a different fileCount) cannot silently desync this assertion.
+    const MAX_LISTED_DIRTY_PATHS = 50;
+    const expectedRemainder = dirtyLineCount - MAX_LISTED_DIRTY_PATHS;
+    assert.match(stderrJson.reason, new RegExp(`… and ${expectedRemainder} more`));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

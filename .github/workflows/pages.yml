@@ -33,6 +33,15 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
+          cache: npm
+
+      # build-site.mjs imports @dev-loops/core (state-atlas tables), which only
+      # resolves through the npm-workspace link `npm ci` creates. Skipping the
+      # install broke every deploy once the site build stopped being
+      # built-ins-only. scripts/pages/** may use the bare @dev-loops/core
+      # specifier precisely because this install always precedes the build.
+      - name: Install dependencies
+        run: npm ci
 
       - name: Assemble site/
         run: node scripts/pages/build-site.mjs

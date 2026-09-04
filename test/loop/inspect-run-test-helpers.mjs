@@ -1,9 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import {
   runNode as runNodeHelper,
+  withTempDir as withTempDirHelper,
   writeGhStub as writeGhStubHelper,
   writeJson as writeJsonHelper,
 } from "../_helpers.mjs";
@@ -96,14 +95,7 @@ export async function writeGhStub(tempDir) {
   );
 }
 
-export async function withTempDir(fn) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pi-inspect-run-test-"));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+export const withTempDir = (fn) => withTempDirHelper(fn, { prefix: "pi-inspect-run-test-" });
 
 export function makeCopilotEvidence(state = "waiting_for_copilot_review", { sameHeadCleanConverged = false } = {}) {
   return {

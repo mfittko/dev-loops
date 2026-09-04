@@ -33,6 +33,8 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "copilot-review-state": "scripts/github/probe-copilot-review.mjs",
     "review-threads": "scripts/github/list-review-threads.mjs",
     "gate-coordination": "scripts/loop/detect-pr-gate-coordination-state.mjs",
+    "agent-stall": "scripts/loop/detect-agent-stall.mjs",
+    "size-budget": "scripts/loop/check-size-budget.mjs",
   }),
 
   // Metadata edits.

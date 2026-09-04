@@ -10,6 +10,19 @@ import { parseReplyResolveThreadsCliArgs } from "../../scripts/github/reply-reso
 
 const scriptPath = path.resolve("scripts/github/reply-resolve-review-threads.mjs");
 
+// Guard budget for the "must terminate, no hang" pins (#1012). The regression is
+// an INFINITE hang, so this only needs to sit safely above the honest worst-case
+// terminating time — it is not a performance assertion. The idle path serially
+// cold-starts ~4 node processes (the tool + one gh GraphQL fetch + two gh reply
+// stubs, each a `#!/usr/bin/env node` script) plus a mandatory 500ms idle-probe
+// floor. Under the full parallel `verify` run (8 suites via run-p, each with
+// CPU-count internal test parallelism, no --test-timeout) the box is heavily
+// oversubscribed and each cold-start balloons, so the old 5000ms budget could
+// elapse on a tool that was terminating fine, not hung (issue 1764, recurrence
+// of the 1639 flake class). A generous finite budget keeps the hang coverage
+// (a true infinite hang still fails) while removing the load sensitivity.
+const HANG_GUARD_MS = 30000;
+
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
 function createReviewThreadsPayload(threads) {
@@ -37,6 +50,7 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       pr: 17,
       author: "all",
       message: undefined,
+      messageMap: undefined,
       resolve: false,
     },
   );
@@ -49,8 +63,29 @@ test("parseReplyResolveThreadsCliArgs sets defaults and parses optional flags", 
       pr: 17,
       author: "reviewer-x",
       message: "Fixed in abc1234",
+      messageMap: undefined,
       resolve: true,
     },
+  );
+
+  assert.deepEqual(
+    parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message-map", "tmp/map.json"]),
+    {
+      help: false,
+      repo: "owner/repo",
+      pr: 17,
+      author: "all",
+      message: undefined,
+      messageMap: "tmp/map.json",
+      resolve: false,
+    },
+  );
+});
+
+test("parseReplyResolveThreadsCliArgs rejects --message and --message-map together", () => {
+  assert.throws(
+    () => parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message", "x", "--message-map", "tmp/map.json"]),
+    /--message and --message-map are mutually exclusive/,
   );
 });
 
@@ -61,7 +96,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const missingParsed = JSON.parse(missing.stderr);
   assert.equal(missingParsed.ok, false);
   assert.match(missingParsed.error, /requires both --repo <owner\/name> and --pr <number>/);
-  assert.match(missingParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(missingParsed.hint, "run with --help for usage");
 
   const conflicting = await runNode(
     ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the contract"],
@@ -72,7 +107,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const conflictingParsed = JSON.parse(conflicting.stderr);
   assert.equal(conflictingParsed.ok, false);
   assert.equal(conflictingParsed.error, "Choose exactly one message source: --message <text> or stdin");
-  assert.match(conflictingParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(conflictingParsed.hint, "run with --help for usage");
 
   const emptyMessage = await runNode(
     ["--repo", "owner/repo", "--pr", "17", "--message", "   "],
@@ -83,7 +118,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   const emptyParsed = JSON.parse(emptyMessage.stderr);
   assert.equal(emptyParsed.ok, false);
   assert.equal(emptyParsed.error, "Reply message must contain non-empty text");
-  assert.match(emptyParsed.usage, /reply-resolve-review-threads\.mjs/);
+  assert.equal(emptyParsed.hint, "run with --help for usage");
 });
 
 test("reply-resolve-review-threads replies to matching unresolved threads without resolving by default", async () => {
@@ -778,7 +813,7 @@ test("reply-resolve-review-threads terminates on an idle open stdin pipe with no
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate (hang regression #1012)"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // Intentionally do NOT write or end stdin: an idle, never-EOF pipe.
@@ -818,7 +853,7 @@ test("reply-resolve-review-threads detects a conflicting stdin source promptly o
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate on open-pipe conflict (regression #1012)"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // Write conflicting body but never end the pipe; the conflict must be
@@ -860,7 +895,7 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error("reply-resolve-review-threads did not terminate on whitespace-then-data conflict"));
-      }, 5000);
+      }, HANG_GUARD_MS);
       child.on("error", reject);
       child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
       // First a whitespace-only chunk, then real content — never end the pipe.
@@ -873,6 +908,220 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
     const parsed = JSON.parse(result.stderr);
     assert.equal(parsed.ok, false);
     assert.equal(parsed.error, "Choose exactly one message source: --message <text> or stdin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads --message-map fails closed before any mutation when a matched thread has no map entry and no --message fallback", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-coverage-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, { THREAD_1: "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract." });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    const parsed = JSON.parse(result.stderr);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /--message-map is missing an entry for 1 matched thread\(s\)/);
+    assert.match(parsed.error, /THREAD_2/);
+    assert.equal(parsed.partialProgress, undefined);
+
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(ghLog.length, 1, "only the capture call should have run; no reply/resolve mutation before coverage validation");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads posts a distinct mapped reply body per thread via --message-map", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-distinct-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        assertStdinIncludes: ['"body":"Fixed the null check in file-a.mjs in 93cd7f8."'],
+        stdout: '{"id":2001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2001"}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
+        assertStdinIncludes: ['"body":"Fixed the off-by-one in file-b.mjs in 93cd7f8."'],
+        stdout: '{"id":2002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2002"}\n',
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, {
+      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
+    });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 2);
+    assert.equal(parsed.repliedThreadCount, 2);
+    assert.deepEqual(parsed.results.map((r) => r.threadId).sort(), ["THREAD_1", "THREAD_2"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads --message-map --resolve pins true matched/replied/resolved counts across a multi-thread run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-resolve-counts-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_2",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+          {
+            id: "THREAD_3",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_303", databaseId: 303, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
+        stdout: '{"id":3001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3001"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_1"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_1","isResolved":true}}}}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
+        stdout: '{"id":3002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3002"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_2"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_2","isResolved":true}}}}\n',
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/303/replies"],
+        stdout: '{"id":3003,"html_url":"https://github.com/owner/repo/pull/17#discussion_r3003"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_3"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_3","isResolved":true}}}}\n',
+      },
+      {
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_1", isResolved: true, comments: { nodes: [] } },
+          { id: "THREAD_2", isResolved: true, comments: { nodes: [] } },
+          { id: "THREAD_3", isResolved: true, comments: { nodes: [] } },
+        ]),
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, {
+      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
+      THREAD_3: "Fixed the missing await in file-c.mjs in 93cd7f8.",
+    });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath, "--resolve"],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.matchedThreadCount, 3);
+    assert.equal(parsed.repliedThreadCount, 3);
+    assert.equal(parsed.resolvedThreadCount, 3);
+    assert.equal(parsed.results.length, 3);
+    assert.equal(parsed.matchedThreadCount, parsed.results.length);
+    assert.equal(parsed.repliedThreadCount, parsed.results.length);
+    assert.equal(parsed.resolvedThreadCount, parsed.results.length);
+    assert.ok(parsed.results.every((entry) => entry.resolved === true));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads sanitizes Copilot summon tokens in --message-map bodies exactly like --message", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-map-sanitize-"));
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          {
+            id: "THREAD_1",
+            isResolved: false,
+            comments: { nodes: [{ id: "PRRC_node_401", databaseId: 401, body: "note", author: { login: "Copilot", __typename: "Bot" } }] },
+          },
+        ]),
+      },
+      {
+        assertArgs: ["repos/owner/repo/pulls/17/comments/401/replies"],
+        assertStdinIncludes: ['"body":"Addressed `@copilot`\'s note in 93cd7f8."'],
+        stdout: '{"id":2301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2301"}\n',
+      },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, { THREAD_1: "Addressed @copilot's note in 93cd7f8." });
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

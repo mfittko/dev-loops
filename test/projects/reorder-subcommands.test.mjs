@@ -344,8 +344,7 @@ describe("reorder — legacy flag form", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // resolveProjectItem (number)
-      { payload: getItemsByContentResponse(items) }, // before snapshot
+      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -357,7 +356,15 @@ describe("reorder — legacy flag form", () => {
     assert.ok(result.ok);
     assert.strictEqual(result.dryRun, true);
     assert.strictEqual(result.mutations.length, 1);
-    assert.ok(Array.isArray(result.before), "before snapshot present in legacy dry-run");
+    assert.strictEqual(result.mutations[0].variables.itemId, "PVTI_b");
+    assert.deepStrictEqual(result.before, [
+      { itemId: "PVTI_b", issueNumber: 630, prNumber: null, status: "Next Up" },
+    ]);
+    // Only ONE fetch-all-items call (no separate resolve + snapshot fetch).
+    assert.strictEqual(
+      runChild.calls.filter((args) => args.some((a) => typeof a === "string" && a.startsWith("query="))).length,
+      3,
+    );
     assert.strictEqual(countMutations(runChild.calls), 0);
   });
 });

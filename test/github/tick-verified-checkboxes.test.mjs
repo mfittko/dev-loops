@@ -8,22 +8,9 @@ import {
   parseTickVerifiedCliArgs,
   runCli,
 } from "../../scripts/github/tick-verified-checkboxes.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
-function stubGh(responses) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const resp = responses.shift();
-    if (!resp) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: resp.code ?? 0, stdout: resp.stdout ?? "", stderr: resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (responses) => makeGhStub(responses);
 
 function bodyJson(body) {
   return { stdout: `${JSON.stringify({ body })}\n` };
@@ -84,6 +71,25 @@ test("tickVerifiedCheckboxes: preserves indentation and */+ bullets", () => {
   const body = "  * [ ] Alpha\n    + [ ] Beta\n";
   const out = tickVerifiedCheckboxes(body, ["Alpha", "Beta"]);
   assert.equal(out.body, "  * [x] Alpha\n    + [x] Beta\n");
+});
+
+// #1877 round-1 grammar parity: the extractor (parseChecklistItems in
+// packages/core/src/loop/issue-refinement-artifact.mjs) accepts ordered
+// `N.`/`N)` and blockquote-nested forms; the tick tool must flip every form
+// the extractor surfaces, or a genuinely-verified ordered-form box stays
+// unchecked and permanently blocks the deterministic pre-approval check.
+test("tickVerifiedCheckboxes: flips ordered N./N) and blockquote-nested forms (extractor grammar parity)", () => {
+  const body = "1. [ ] Alpha\n2) [ ] Beta\n> - [ ] Gamma\n> > - [ ] Delta\n";
+  const out = tickVerifiedCheckboxes(body, ["Alpha", "Beta", "Gamma", "Delta"]);
+  assert.equal(out.body, "1. [x] Alpha\n2) [x] Beta\n> - [x] Gamma\n> > - [x] Delta\n");
+  assert.deepEqual(out.flipped, ["Alpha", "Beta", "Gamma", "Delta"]);
+  assert.deepEqual(out.unmatched, []);
+});
+
+test("tickVerifiedCheckboxes: indented ordered forms flip byte-stably (indent, marker, and CRLF preserved)", () => {
+  const body = "  1. [ ] Alpha\r\n";
+  const out = tickVerifiedCheckboxes(body, ["Alpha"]);
+  assert.equal(out.body, "  1. [x] Alpha\r\n");
 });
 
 test("tickVerifiedCheckboxes: tolerates uppercase [X] as already-checked", () => {

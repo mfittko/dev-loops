@@ -2,10 +2,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { readExistingCheckpoint } from "./_checkpoint-io.mjs";
 import { loadCopilotEvidence, loadReviewerEvidence } from "./_loop-evidence.mjs";
 import { interpretOuterLoopState } from "@dev-loops/core/loop/conductor-routing";
@@ -147,18 +148,6 @@ export function parseInspectRunCliArgs(argv) {
   }
   return options;
 }
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
-}
 function normalizeTimelineReviewRequestEvents(payload) {
   const events = Array.isArray(payload) ? payload : [];
   return events
@@ -210,9 +199,8 @@ async function fetchCopilotLoopIterations({ repo, pr, snapshot }, { env, ghComma
   if (Array.isArray(reviewsPayload) && reviewsPayload.length >= 100) degradedReasons.push("reviews_page_cap");
   if (Array.isArray(reviewCommentsPayload) && reviewCommentsPayload.length >= 100) degradedReasons.push("review_comments_page_cap");
   if (Array.isArray(commitsPayload) && commitsPayload.length >= 100) degradedReasons.push("commits_page_cap");
-  if (reviewThreadsPayload?.data?.repository?.pullRequest?.reviewThreads?.pageInfo?.hasNextPage) {
-    degradedReasons.push("review_threads_has_next_page");
-  }
+  // Review threads carry no page-cap reason: fetchGithubReviewThreadsPayload
+  // paginates the full connection, so the source is always complete.
   return summarizeCopilotLoopIterations({
     reviewRequestEvents: normalizeTimelineReviewRequestEvents(timelinePayload),
     reviews: normalizeReviewPayload(reviewsPayload),

@@ -152,6 +152,98 @@ function collapseWhitespace(value) {
   return String(value).replace(/\s+/gu, " ").trim();
 }
 
+// Entity-encode the two literal delimiters a machine-artifact marker opens/closes
+// on (see packages/core/src/github/copilot-helpers.mjs's isGateMachineArtifactBody)
+// so a free-text field can never quote one at column 0 of a rendered verdict comment
+// and get the whole comment mistaken for a machine artifact by the shared summarizers.
+// Hand-copied from scripts/github/upsert-checkpoint-verdict.mjs's
+// encodeMachineArtifactMarkerDelimiters — this fallback is zero-dep and cannot import it.
+// ISSUE/PR-ID GUARD (zero-dep inline copy of packages/core/src/github/comment-id-guard.mjs,
+// which this fallback cannot import — it ships in the plugin without @dev-loops/core). A
+// generated gate verdict body must never carry a raw `#<digits>` token: public comment
+// surfaces auto-link a bare `#<digits>` to that issue/PR, leaking internal cross-references.
+// Fail-closed: refuse to POST rather than strip. The full helper offers an
+// allowed-refs escape for deliberate cross-references; this degraded fallback
+// deliberately omits it — an emergency posting path should stay maximally
+// strict, and a body needing a cross-reference can use the full helper.
+// A match is excluded only when it forms a well-formed HTML numeric character
+// reference — preceded by `&` AND immediately followed by `;` (e.g. `&#91;`,
+// the entity-encoded form of `[`), bounded at cmark-gfm's 8 digits (a longer
+// wrapped run is not decoded, renders literally, and must refuse). Extraction
+// mirrors the shared copy's decode-aware behavior: the body is also scanned
+// after a single renderer-like entity decode (numeric references at the same
+// 8-digit bound, plus the named hash entity; undecodable references become
+// the replacement character as on GitHub; named case-variants decoded as
+// deliberate over-refusal). The entity exclusion applies only to the raw
+// scan — in decoded text the renderer's one decode is spent, so an
+// ampersand-wrapped assembled id refuses rather than hides.
+const ISSUE_PR_ID_RE = /#(\d{1,9})/gu;
+const DECODABLE_ENTITY_RE = /&(?:#(?:\d{1,8}|x[0-9a-f]{1,8})|num);/giu;
+function decodeRenderedText(body) {
+  return body.replace(DECODABLE_ENTITY_RE, (entity) => {
+    const inner = entity.slice(1, -1).toLowerCase();
+    if (inner === "num") return "#";
+    const code = inner[1] === "x" ? Number.parseInt(inner.slice(2), 16) : Number.parseInt(inner.slice(1), 10);
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return "�";
+    }
+  });
+}
+function isNumericCharacterReference(body, match) {
+  return match[1].length <= 8
+    && body[match.index - 1] === "&"
+    && body[match.index + match[0].length] === ";";
+}
+function collectBareIds(text, found, { excludeEntities }) {
+  for (const m of text.matchAll(ISSUE_PR_ID_RE)) {
+    if (excludeEntities && isNumericCharacterReference(text, m)) continue;
+    found.push(m[1]);
+  }
+}
+function guardFallbackBodyNoIssuePrIds(body, ctx) {
+  if (typeof body !== "string") return body;
+  const found = [];
+  collectBareIds(String(body), found, { excludeEntities: true });
+  const decoded = decodeRenderedText(String(body));
+  if (decoded !== String(body)) collectBareIds(decoded, found, { excludeEntities: false });
+  if (found.length > 0) {
+    const unique = [...new Set(found)].join(", #");
+    throw new Error(
+      `post-gate-verdict-fallback refused to post ${ctx}: rendered gate verdict body contains raw ` +
+        `issue/PR id reference(s) #${unique}. Bare #digits in generated comment bodies violate ` +
+        `the no-ids-in-comments rule (public leakage). Reword the findings summary / next action ` +
+        `to avoid a raw #<digits>.`,
+    );
+  }
+  return body;
+}
+
+function encodeMachineArtifactMarkerDelimiters(value) {
+  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+}
+
+// Blockquote-prefix every continuation line (2nd line onward) of the
+// newline-preserving findings summary (--findings-file content) before it is
+// spliced into the rendered comment body. The shared field parser
+// (packages/core's parseGateReviewCommentFields, via stripGateCommentMarkdown)
+// trims each line and strips `#`/`**` but NOT a leading "> ", so a
+// reviewer-controlled line inside the file — e.g. "Execution mode:
+// fanout_fanin" or "Next action: <spoof>" at column 0 — can never reach
+// column 0 of its own logical line and match a field regex. Applied AFTER
+// truncation/marker-delimiter-encoding so the blockquote markers never count
+// against the field's length budget or get re-encoded. Hand-copied from
+// scripts/github/upsert-checkpoint-verdict.mjs's blockquoteContinuationLines —
+// this fallback is zero-dep and cannot import it.
+function blockquoteContinuationLines(value) {
+  const lines = String(value).split(/\r?\n/u);
+  if (lines.length <= 1) {
+    return value;
+  }
+  return [lines[0], ...lines.slice(1).map((line) => `> ${line}`)].join("\n");
+}
+
 function smartTruncate(value, limit) {
   const text = String(value);
   if (text.length <= limit) {
@@ -239,10 +331,16 @@ export function parsePostGateVerdictFallbackCliArgs(argv, { parseError } = {}) {
       continue;
     }
     if (token === "--next-action") {
-      options.nextAction = normalizeRequiredText(
-        requireOptionValue(args, "--next-action", parseErr),
-        "--next-action",
-        parseErr,
+      // collapseWhitespace (not just trim) for parity with the full helper's
+      // normalizeRequiredText: without it this field alone would preserve
+      // internal newlines, letting a caller-supplied --next-action carry an
+      // embedded "Execution mode: fanout_fanin" (or similar) line at column 0.
+      options.nextAction = collapseWhitespace(
+        normalizeRequiredText(
+          requireOptionValue(args, "--next-action", parseErr),
+          "--next-action",
+          parseErr,
+        ),
       );
       continue;
     }
@@ -295,7 +393,11 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
-  const summary = smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH);
+  const summary = blockquoteContinuationLines(
+    encodeMachineArtifactMarkerDelimiters(
+      smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH),
+    ),
+  );
   const lines = [
     `### Gate review: \`${gate}\``,
     "",
@@ -314,7 +416,7 @@ export function renderFallbackGateReviewCommentBody({
     "",
     `**Findings summary:** ${summary}`,
     "",
-    `**Next action:** ${nextAction}`,
+    `**Next action:** ${encodeMachineArtifactMarkerDelimiters(String(nextAction ?? ""))}`,
   );
   return lines.join("\n");
 }
@@ -352,6 +454,9 @@ export async function postGateVerdictViaGh({
   spawnImpl = defaultSpawn,
 }) {
   return new Promise((resolve, reject) => {
+    // Fail-closed id guard applied immediately before the POST: refuse to emit
+    // a rendered body that carries any raw #<digits> (see guardFallbackBodyNoIssuePrIds).
+    guardFallbackBodyNoIssuePrIds(body, "gate verdict comment");
     const payload = JSON.stringify({ body });
     const child = spawnImpl(
       ghCommand,

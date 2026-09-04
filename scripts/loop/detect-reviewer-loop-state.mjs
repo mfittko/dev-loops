@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import {
   interpretReviewerLoopState,
   normalizeReviewerSnapshot,
@@ -115,18 +117,6 @@ export function parseDetectReviewerCliArgs(argv) {
   }
   return options;
 }
-async function runGhJson(args, { env, ghCommand }) {
-  const result = await runChild(ghCommand, args, env);
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
-}
 async function fetchPrView({ repo, pr }, deps) {
   const result = await runChild(
     deps.ghCommand,
@@ -152,9 +142,6 @@ function isReviewInScope(review, reviewerLogin) {
     ? review.user.login
     : (typeof review?.author?.login === "string" ? review.author.login : "");
   return login.toLowerCase() === reviewerLogin.toLowerCase();
-}
-function isSubmittedReviewState(state) {
-  return ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"].includes(state);
 }
 function pickLatestById(items) {
   if (!Array.isArray(items) || items.length === 0) return null;
@@ -184,7 +171,7 @@ async function fetchReviewState({ repo, pr, reviewerLogin }, deps) {
     scoped.filter((review) => String(review?.state || "").toUpperCase() === "PENDING"),
   );
   const submittedReview = pickLatestById(
-    scoped.filter((review) => isSubmittedReviewState(String(review?.state || "").toUpperCase())),
+    scoped.filter((review) => SUBMITTED_REVIEW_STATES.has(String(review?.state || "").toUpperCase())),
   );
   return {
     draftReviewPosted: Boolean(pendingReview),

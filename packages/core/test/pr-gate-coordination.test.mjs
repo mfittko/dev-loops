@@ -345,6 +345,50 @@ test("#1190: maxCopilotRounds: 0 (Copilot review disabled) is exempt from the ou
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+test("issue 1771: internal_only READY_TO_REREQUEST_REVIEW with no Copilot convergence point still enters pre-approval directly", () => {
+  // The suppression signal (handoff: run pre_approval_gate directly) and the
+  // gate-boundary evaluator must agree. Before the fix this combination —
+  // internal_only, but sameHeadCleanConverged false and no round cap — forced a
+  // REREQUEST_COPILOT_REVIEW for a convergence point that will never exist,
+  // which the verdict poster then refused as an illegal transition.
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "requested",
+    reviewMode: "internal_only",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+});
+
+test("issue 1771 non-goal: a non-suppressed external-review PR in the same no-convergence state still re-requests Copilot, and the refusal names the propagation wait", () => {
+  // Same lifecycle state and missing convergence point, but reviewMode is null
+  // (a normal external-review PR). The guard is unchanged for it: it must still
+  // re-request Copilot, never skip to pre-approval. The refusal reason names the
+  // just-landed-round propagation wait (AC3's "names the propagation wait").
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "requested",
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /may not be visible to the evaluator yet|propagation wait/i);
+});
+
 test("draft gate with crediblyGreen CI routes to WAIT_FOR_CI — unconfirmed CI is not a hard block", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
@@ -1907,6 +1951,97 @@ test("draft PR is blocked when refinement artifact is missing on linked issue (#
   assert.equal(result.refinementArtifact?.linkedIssue, 532);
 });
 
+// #1877: the draft gate is the unconditional backstop for the enqueue gate's
+// full-matrix floor, so its blocked reason must use the SAME finding taxonomy
+// and name the actually-missing matrix arm — an AC-only linked issue is a
+// missing_dod_checklist matrix miss, not "no artifact" (the stale generic
+// wording would misdirect the fix and drift from QUEUE-ENQUEUE-REFINEMENT-
+// GATE / ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR guidance).
+test("draft PR blocked reason names the missing matrix arm for a #1877 AC-only linked issue (missing_dod_checklist)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 900,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 900,
+      specSource: "linked_issue",
+      source: "issue-body-ac",
+      reason: "Issue body carries an Acceptance criteria checklist but no Definition of done checklist; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_dod_checklist",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(result.refinementArtifact?.status, "missing");
+  assert.match(result.reason, /#900/);
+  assert.match(result.reason, /incomplete refinement matrix/);
+  assert.match(result.reason, /Definition of done checklist/);
+  assert.match(result.reason, /finding=missing_dod_checklist/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
+test("draft PR blocked reason names the missing matrix arm for a #1877 DoD-only linked issue (missing_ac_checklist)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 901,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 901,
+      specSource: "linked_issue",
+      source: "issue-body-dod",
+      reason: "Issue body carries a Definition of done checklist but no Acceptance criteria checklist; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_ac_checklist",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.match(result.reason, /Acceptance criteria checklist/);
+  assert.match(result.reason, /finding=missing_ac_checklist/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
+test("draft PR blocked reason names the missing matrix arm for a #1877 AC+DoD linked issue with no Non-goals (missing_explicit_non_goals)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 902,
+    currentHeadSha: "abc1234567",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    refinementArtifact: {
+      status: "missing",
+      linkedIssue: 902,
+      specSource: "linked_issue",
+      source: "issue-body-ac",
+      reason: "Issue body carries the Acceptance criteria and Definition of done checklists but no explicit Non-goals section; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
+      finding: "missing_explicit_non_goals",
+    },
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(result.refinementArtifact?.status, "missing");
+  assert.match(result.reason, /#902/);
+  assert.match(result.reason, /incomplete refinement matrix/);
+  assert.match(result.reason, /explicit Non-goals section/);
+  assert.match(result.reason, /finding=missing_explicit_non_goals/);
+  assert.doesNotMatch(result.reason, /no refinement artifact/);
+});
+
 test("draft PR is not blocked when refinement artifact is present (#532)", () => {
   const result = evaluatePrGateCoordination({
     pr: 532,
@@ -2515,7 +2650,7 @@ test("draft PR with a WIP title is NOT blocked by the title guard (#842 AC2 — 
 });
 
 // UI e2e auto-scoping precondition (#976) — path-triggered + fail-closed.
-test("UI e2e: rendered-artifact change with passing coverage does not block", () => {
+test("UI e2e: rendered-artifact change with passing coverage + designer evidence does not block", () => {
   const result = evaluatePrGateCoordination({
     pr: 11,
     currentHeadSha: "abc123456789",
@@ -2524,11 +2659,15 @@ test("UI e2e: rendered-artifact change with passing coverage does not block", ()
     loopDisposition: DISPOSITION.ACTION_REQUIRED,
     changedFiles: ["docs/presentations/introducing-dev-loops.html"],
     uiE2ePassed: true,
+    designerReviewEvidence: [
+      { artifact: "docs/presentations/introducing-dev-loops.html", outcome: "ui_review_satisfied" },
+    ],
     mergeable: "MERGEABLE",
     draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
   });
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 });
 
@@ -2578,6 +2717,64 @@ test("UI e2e fail-closed: registered artifact without passing coverage blocks", 
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_UI_E2E_SUITE);
   assert.match(result.reason, /not passed for this head/);
+});
+
+// Designer/vision recorded-evidence precondition (#1443, ADR 0041 UI half) —
+// path-triggered + fail-closed, an independent seam alongside UI e2e scoping.
+test("designer review: rendered-artifact change w/ e2e passing but NO recorded evidence blocks", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    mergeable: "MERGEABLE",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DESIGNER_REVIEW_SCOPING);
+  assert.match(result.reason, /Designer\/vision review evidence is required/);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
+test("designer review: recorded evidence present but unsatisfied outcome blocks", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    designerReviewEvidence: [
+      { artifact: "docs/presentations/introducing-dev-loops.html", outcome: "continue_ui_fix_loop" },
+    ],
+    mergeable: "MERGEABLE",
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.match(result.reason, /not satisfied/);
+});
+
+test("designer review: light/spike relaxed-gate carve-out exempts the requirement", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 11,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    changedFiles: ["docs/presentations/introducing-dev-loops.html"],
+    uiE2ePassed: true,
+    designerReviewExempt: true,
+    ciStatus: "success",
+    mergeable: "MERGEABLE",
+  });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECORD_DESIGNER_REVIEW);
+  assert.notEqual(result.gateBoundary, PR_CHECKPOINT.DESIGNER_REVIEW_SCOPING);
+  // The designer carve-out lets the draft flow continue to its normal next action.
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
 });
 
 test("preApproval requireCi:false + zero-check CI (none) reaches the pre_approval boundary instead of waiting", () => {

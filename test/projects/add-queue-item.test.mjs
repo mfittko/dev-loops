@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/projects/add-queue-item.mjs";
@@ -110,7 +110,7 @@ function issueBodyResponse(body) {
 }
 
 function refinedIssueBodyResponse() {
-  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n");
+  return issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n");
 }
 
 function unrefinedIssueBodyResponse() {
@@ -516,8 +516,15 @@ describe("add-queue-item", () => {
   });
 
   describe("error paths — API errors", () => {
+    // A gh CLI/GraphQL failure on the user probe now falls through to the org
+    // probe (#1949); when both fail the same way (e.g. a systemic auth
+    // failure), resolveOwner fails closed with NO_USER_ID and preserves the
+    // underlying org-probe error via `cause`.
     it("throws on gh CLI failure", async () => {
-      const responses = [{ error: "gh: authentication required" }];
+      const responses = [
+        { error: "gh: authentication required" },
+        { error: "gh: authentication required" },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1", item: 10 },
@@ -525,12 +532,16 @@ describe("add-queue-item", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GH_API_ERROR");
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GH_API_ERROR");
       }
     });
 
     it("throws on GraphQL errors", async () => {
-      const responses = [{ payload: { errors: [{ message: "Could not resolve" }] } }];
+      const responses = [
+        { payload: { errors: [{ message: "Could not resolve" }] } },
+        { payload: { errors: [{ message: "Could not resolve" }] } },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1", item: 10 },
@@ -538,7 +549,8 @@ describe("add-queue-item", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GRAPHQL_ERROR");
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GRAPHQL_ERROR");
       }
     });
   });
@@ -733,7 +745,7 @@ describe("add-queue-item", () => {
     }
 
     it("main() lands --next-up in the overridden statusColumns.next_up column (\"Todo\")", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -754,7 +766,7 @@ describe("add-queue-item", () => {
     });
 
     it("main() accepts --next-up together with an agreeing --column \"Todo\" under the same override", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -775,7 +787,7 @@ describe("add-queue-item", () => {
     });
 
     it("main() rejects --next-up + the OLD literal --column \"Next Up\" once next_up is renamed to \"Todo\"", async () => {
-      await withTempCwd('queue:\n  board:\n    number: 1\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
+      await withTempCwd('tracker:\n  board:\n    number: 1\nqueue:\n  statusColumns:\n    next_up: "Todo"\n', async (cwd) => {
         await assert.rejects(
           () =>
             main(
@@ -805,7 +817,7 @@ describe("add-queue-item", () => {
     it("main() with an override-free .devloops still resolves --next-up to the default \"Next Up\" (hermetic cwd)", async () => {
       // Hermetic: explicit empty-config temp cwd so this can't break if the real
       // repo's .devloops ever gains a next_up override.
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
@@ -893,14 +905,14 @@ describe("add-queue-item", () => {
       assert.equal(result.refinement.refined, true);
     });
 
-    it("lands a DoD-only refined issue in Next Up untouched", async () => {
+    it("lands a fully-refined (AC+DoD matrix) issue in Next Up untouched (#1877)", async () => {
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: issueBodyResponse("## Definition of done\n\n- [ ] DoD1\n") },
+        { payload: issueBodyResponse("## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- None.\n") },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -914,13 +926,20 @@ describe("add-queue-item", () => {
     });
 
     it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
+      // #1866: the enqueue gate now verifies the linked refinement doc resolves
+      // (existsSync, cwd-relative) — create the referenced doc first. Cleanup
+      // runs in a finally block so a failed assertion never leaks the fixture.
+      const refinementDoc = "tmp/refinement/10-plan.md";
+      mkdirSync("tmp/refinement", { recursive: true });
+      writeFileSync(refinementDoc, "# Plan\n", "utf-8");
+      try {
       const responses = [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         { payload: emptyItemsResponse() },
         { payload: resolveIssueResponse("I_kwDO_10") },
-        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n") },
+        { payload: issueBodyResponse("## Plan\n\nSee tmp/refinement/10-plan.md for details.\n\n## Non-goals\n\n- None.\n") },
         { payload: addItemResponse("PVTI_new") },
         { payload: updateFieldResponse() },
       ];
@@ -931,6 +950,10 @@ describe("add-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement.refined, true);
+      } finally {
+        rmSync(refinementDoc, { force: true });
+        rmSync("tmp/refinement", { recursive: true, force: true });
+      }
     });
 
     it("skips the gate for a non-pickup target column (default Backlog)", async () => {
@@ -1071,7 +1094,7 @@ describe("add-queue-item", () => {
     });
 
     it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -1081,7 +1104,7 @@ describe("add-queue-item", () => {
     });
 
     it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -1092,7 +1115,7 @@ describe("add-queue-item", () => {
 
     it("runCli: explicit --project wins over .devloops", async () => {
       const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         // Only project #9 is returned; if .devloops (#1) had won, resolution would 404.
         await runCli(["--repo", "mfittko/dev-loops", "--project", "9", "--item", "10"], {
           env: {}, cwd, runChild: mockRunChild(addResponses(other)),

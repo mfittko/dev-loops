@@ -29,7 +29,7 @@ Each machine's snapshot-to-state mapping is defined in its owner doc (see the Ov
 [Copilot Loop State Graph](./copilot-loop-state-graph.md) and
 [Reviewer Loop State Graph](./reviewer-loop-state-graph.md)), both bundled sibling docs under `skills/docs/`.
 
-For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-story-pr-contract.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
+For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-first-loop-state.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
 
 ## Key guarantees from the state machine
 
@@ -166,6 +166,8 @@ Follow the PR description contract (see [Agent Instructions](../../AGENTS.md) if
 
 Checkbox rule: acceptance criteria, definition-of-done items, and any task list must be rendered as real GitHub markdown checkboxes inside list items (`- [ ]` / `- [x]`, also `* [ ]` / `* [x]`). Do not wrap checkbox markers (e.g. `[x]`) in backticks. Do not place checkbox markers inside table cells — task lists are not interactive there even with a leading `- `.
 
+Mechanically enforced (issue #1863): a draft PR that closes one or more issues cannot leave draft (`gh pr ready` / `ready-for-review.mjs`) while its OWN body is missing Acceptance criteria checklist items, Definition of done checklist items, an explicit Non-goals section, or a `Closes #N`/`Fixes #N` reference — `validateTrackerBackedPrBodySpec` (`@dev-loops/core/loop/issue-refinement-artifact`, reusing `validatePrBodySpec`) fails closed at the draft-exit boundary, independent of any reviewer's soft judgment. A linked issue that already carries its own acceptance criteria does not substitute for this: the PR body is the portable spec-of-record a tracker-agnostic consumer reads.
+
 <!-- rule: OPS-DRAFT-FIRST-PR -->
 `OPS-DRAFT-FIRST-PR`: New PRs in this workflow MUST always be opened as **draft** PRs — mechanically enforced by the `create-pr.mjs` wrapper below, which is unconditionally draft-only and rejects `--ready`. Agents MUST NOT create a fresh PR directly in ready-for-review state; `gh pr ready` (via the `ready-for-review.mjs` wrapper) is the only path out of draft, gated on clean draft-gate evidence. This rule owns the draft-first mechanism itself; [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata) owns the tracker-facing "PR MUST start as a draft" metadata expectation. The draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is even eligible.
 
@@ -232,6 +234,6 @@ A watcher sleeping between polls is expected behavior, not a blocker.
 <!-- rule: OPS-NO-INLINE-INTERPRETER -->
 `OPS-NO-INLINE-INTERPRETER`: Coordinator and agent flows MUST NOT invoke an inline interpreter (`node -e`/`node --eval`, `python3 -c`, `python3 - <<EOF` heredocs, or equivalent) to (a) parse any dev-loops tool output, or (b) mutate repository files. Sanctioned paths: a tool's `--jq`/`--silent` output flags (or `gh ... --jq`) for (a); the editor/patch tools, or `gh ... --body-file` composed from a `--jq` read, for (b). This rule applies to ALL repos using the dev-loop workflow, not just the source repo.
 
-Post-watch read pattern: after a probe/watch settles, do not parse its output — re-read state via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>` and, for thread bodies/ids, `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` (see [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) Step 6).
+Post-watch read pattern: after a probe/watch settles, do not parse its output — re-read state via `detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`; read the unresolved thread bodies via `capture-review-threads.mjs --repo <owner/name> --pr <number> --unresolved --bodies` (the canonical working-set read, bodies pre-joined per thread) and the thread/comment ids for reply-resolve via `list-review-threads.mjs --repo <owner/name> --pr <number> --unresolved-only` (see [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) Step 6).
 
 If the polling interval is 1 minute, do not treat silence shorter than one full poll interval as suspicious, and do not configure needs-attention thresholds close to a few seconds for this loop.

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { readFile } from "node:fs/promises";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
   parsePrNumber,
@@ -13,14 +14,25 @@ import {
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] [--message <text>] [--resolve]
+const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] ((--message <text> | stdin) | --message-map <path>) [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
+A message source is always required, in one of two mutually exclusive modes:
+  - single shared body for every matched thread: --message <text>, or the same text piped
+    via stdin (exactly one of the two, never both)
+  - per-thread bodies: --message-map <path> — stdin is never read in this mode
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
   --author <login>      Match threads containing a comment from this author (default: all)
-  --message <text>      Reply body text; provide exactly one message source via --message or stdin
+  --message <text>      Shared reply body text for every matched thread; provide exactly one
+                        message source via --message or stdin (not both). Mutually exclusive
+                        with --message-map.
+  --message-map <path>  JSON file mapping threadId -> distinct reply body for that thread. Every
+                        matched thread must have an entry here, or the run fails closed (listing
+                        the unmapped thread ids) before any reply or resolve mutation is sent.
+                        Stdin is never read in this mode: the map is the complete message source.
+                        Mutually exclusive with --message.
   --resolve             Resolve each matched thread after the reply succeeds
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "author": "all", "resolve": true,
@@ -46,6 +58,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       pr: { type: "string" },
       author: { type: "string" },
       message: { type: "string" },
+      "message-map": { type: "string" },
       resolve: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -59,6 +72,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
     pr: undefined,
     author: "all",
     message: undefined,
+    messageMap: undefined,
     resolve: false,
   };
   for (const token of tokens) {
@@ -88,6 +102,14 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       options.message = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "message-map") {
+      const messageMap = requireTokenValue(token, parseError).trim();
+      if (messageMap.length === 0) {
+        throw parseError("--message-map requires a non-empty path");
+      }
+      options.messageMap = messageMap;
+      continue;
+    }
     if (token.name === "resolve") {
       options.resolve = true;
       continue;
@@ -100,6 +122,9 @@ export function parseReplyResolveThreadsCliArgs(argv) {
   }
   if (options.author.length === 0) {
     throw parseError("--author must contain non-empty text");
+  }
+  if (options.message !== undefined && options.messageMap !== undefined) {
+    throw parseError("--message and --message-map are mutually exclusive; pass only one");
   }
   try {
     parseRepoSlug(options.repo);
@@ -172,6 +197,12 @@ function readStdinConflictProbe(stdin, timeoutMs) {
   });
 }
 
+// Returns undefined in --message-map mode: the map is the complete message
+// source for every matched thread (the coverage check, run after capture,
+// fails closed on any matched thread the map does not cover), and stdin is
+// never read or probed in that mode. --message and --message-map are already
+// mutually exclusive by the time this runs (parseReplyResolveThreadsCliArgs),
+// so the --message branch below never sees a map alongside it.
 async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
   if (typeof options.message === "string") {
     if (stdin.isTTY) {
@@ -189,6 +220,9 @@ async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
     }
     return options.message;
   }
+  if (options.messageMap !== undefined) {
+    return undefined;
+  }
   if (stdin.isTTY) {
     throw parseError("Choose exactly one message source: --message <text> or stdin");
   }
@@ -197,6 +231,30 @@ async function resolveMessageInput(options, { stdin = process.stdin } = {}) {
     throw parseError("Reply message must contain non-empty text");
   }
   return stdinText;
+}
+async function loadMessageMap(mapPath) {
+  let raw;
+  try {
+    raw = await readFile(mapPath, "utf8");
+  } catch (error) {
+    throw new Error(`Cannot read --message-map "${mapPath}": ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`--message-map "${mapPath}" must contain valid JSON`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`--message-map "${mapPath}" must contain a JSON object mapping threadId to reply body`);
+  }
+  for (const [threadId, body] of Object.entries(parsed)) {
+    if (typeof body !== "string") {
+      throw new Error(`--message-map "${mapPath}" entry "${threadId}" must be a string reply body`);
+    }
+    validateResolutionMessage(body);
+  }
+  return parsed;
 }
 function commentRecencyValue(comment) {
   if (typeof comment?.databaseId === "string" && /^\d+$/.test(comment.databaseId)) {
@@ -230,11 +288,17 @@ function selectNewestMatchingComment(parsed, threadId, author) {
     return latest;
   }, null);
 }
+// Single predicate for "does this messageMap carry an entry for this thread",
+// shared by the coverage check and the body-selection lookup in runCli below
+// (both need the exact same hasOwnProperty test against a possibly-null map).
+function hasMessageMapEntry(messageMap, threadId) {
+  return messageMap !== null && Object.prototype.hasOwnProperty.call(messageMap, threadId);
+}
 export function planBatchReplyTargets(parsed, author) {
-  const unresolvedThreads = parsed.threads.filter((thread) => !thread.isResolved);
+  const eligibleThreads = parsed.threads.filter((thread) => !thread.isResolved);
   const matchedTargets = [];
   let skippedThreadCount = 0;
-  for (const thread of unresolvedThreads) {
+  for (const thread of eligibleThreads) {
     const comment = selectNewestMatchingComment(parsed, thread.id, author);
     if (comment === null) {
       skippedThreadCount += 1;
@@ -312,13 +376,32 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
+  const messageMap = options.messageMap === undefined ? null : await loadMessageMap(options.messageMap);
   const message = await resolveMessageInput(options, { stdin });
-  validateResolutionMessage(message);
+  if (typeof message === "string") {
+    validateResolutionMessage(message);
+  }
   const parsed = await captureParsedReviewThreads(
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   );
   const { matchedTargets, skippedThreadCount } = planBatchReplyTargets(parsed, options.author);
+  if (messageMap !== null) {
+    // Pure --message-map mode: every matched thread MUST have an entry, or the
+    // run fails closed before any reply/resolve mutation is sent — there is no
+    // --message fallback for an unmapped thread.
+    const unmappedThreadIds = matchedTargets
+      .map((target) => target.threadId)
+      .filter((threadId) => !hasMessageMapEntry(messageMap, threadId));
+    if (unmappedThreadIds.length > 0) {
+      throw new Error(
+        `--message-map is missing an entry for ${unmappedThreadIds.length} matched thread(s): ${unmappedThreadIds.join(", ")}`,
+      );
+    }
+  }
+  const resolveBodyForThread = (threadId) => (
+    hasMessageMapEntry(messageMap, threadId) ? messageMap[threadId] : message
+  );
   if (matchedTargets.length === 0) {
     process.exitCode = emitResult(createSuccessPayload({
       repo: options.repo,
@@ -350,7 +433,7 @@ export async function runCli(
           pr: options.pr,
           commentId: target.commentId,
           threadId: target.threadId,
-          body: message,
+          body: resolveBodyForThread(target.threadId),
           resolve: options.resolve,
           validatedSnapshot: parsed,
         },

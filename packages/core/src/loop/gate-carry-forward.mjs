@@ -57,7 +57,10 @@ import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifie
  * @type {Record<string, string[]>}
  */
 const KIND_TO_CATEGORIES = {
-  docs: ["DOCS_ONLY"],
+  // #1442: a docs file is PROSE_PRESENT when it lands on the prose surface, so
+  // deslop's carry-forward surface is the `docs` kind (a non-docs delta never
+  // re-runs a clean deslop verdict).
+  docs: ["DOCS_ONLY", "PROSE_PRESENT"],
   config: ["CONFIG_ONLY"],
   test: ["TEST_ONLY"],
   ci: ["CI_ONLY"],
@@ -108,6 +111,14 @@ const ANGLE_SURFACE_KINDS = (() => {
 
 /**
  * Resolve an angle's declared review surface (the pure angle -> surface mapping).
+ * `angle` is matched trim+lowercase against ALL THREE lookups below (the
+ * hardcoded ALWAYS_INCLUDE set, the caller-supplied `alwaysRerun` set, and the
+ * `kinds` map) — deliberately: this makes a case/whitespace-drifted name (e.g.
+ * "Correctness", "PR-Description") resolve the SAME surface as its canonical
+ * form, rather than falling through to `{ kind: "unknown" }`. That is a
+ * decision-affecting default: a case-drifted MAPPED angle now becomes
+ * carry-forward-eligible (via `resolveAngleCarryForward`) where an unnormalized
+ * lookup would have fail-closed it as unknown.
  *
  * - ALWAYS_INCLUDE angles (gate-evidence, renderer-security, pr-description) plus
  *   any explicit alwaysRerun angle -> `{ kind: "always" }`. These review a surface
@@ -122,10 +133,18 @@ const ANGLE_SURFACE_KINDS = (() => {
  * @returns {AngleReviewSurface}
  */
 export function angleReviewSurface(angle, { alwaysRerun } = {}) {
-  const name = typeof angle === "string" ? angle.trim() : "";
+  // Normalized ONCE here (trim+lowercase) so every caller — the hardcoded
+  // ALWAYS_INCLUDE check below, the configured alwaysRerun match, and the
+  // kinds lookup — agrees on one predicate regardless of whether the caller
+  // pre-lowercases (consolidate-fanin.mjs does; write-gate-context.mjs's
+  // mandatory-angle refusal does not, and must not have to).
+  const name = typeof angle === "string" ? angle.trim().toLowerCase() : "";
   if (name.length === 0) return { kind: "unknown" };
   if (ALWAYS_INCLUDE.has(name)) return { kind: "always" };
-  if (alwaysRerun && new Set(alwaysRerun).has(name)) return { kind: "always" };
+  if (alwaysRerun) {
+    const normalized = new Set([...alwaysRerun].map((entry) => String(entry).trim().toLowerCase()));
+    if (normalized.has(name)) return { kind: "always" };
+  }
   const kinds = ANGLE_SURFACE_KINDS.get(name);
   if (!kinds || kinds.size === 0) return { kind: "unknown" };
   return { kind: "kinds", kinds: new Set(kinds) };
@@ -155,8 +174,11 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
 // reviewed surface. A clean verdict produced under the OLD config cannot
 // carry across such a delta, and a converged Copilot round cannot be treated
 // as still-converged either. classifyFile correctly reports these as
-// "config"; this predicate is the carry-forward-specific override.
-const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+)$/;
+// "config"; this predicate is the carry-forward-specific override. The
+// shipped defaults file is in this class too: it is the layer that ships the
+// angle pool and reviewer prompts, so a delta touching it must never be
+// carried across or reviewed under a reduced diff-class tier.
+const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
 export function isDevLoopConfigSourcePath(filePath) {
   if (typeof filePath !== "string") return false;
   // Normalize Windows separators like classifyFile does, so a

@@ -1,7 +1,10 @@
 name: Create GitHub Release
 
-# Tagging is the only manual release step. Pushing a "v*" tag creates the
-# GitHub Release, then dispatches npm-publish.yml explicitly: releases
+# Tagging is the only manual release step for prereleases; a stable release
+# also requires the operator "approve release v<version>" comment first (see
+# "Operator release approval gate" in skills/docs/release-runbook.md). Pushing
+# a "v*" tag creates the GitHub Release, then dispatches npm-publish.yml
+# explicitly: releases
 # created with GITHUB_TOKEN never fire `on: release`, so event chaining
 # alone silently skips npm publishing (#1187). workflow_dispatch is the
 # documented GITHUB_TOKEN exception.
@@ -16,6 +19,9 @@ jobs:
     permissions:
       contents: write
       actions: write
+      # #1901: the approval gate reads issue search + issue comments via
+      # GITHUB_TOKEN; explicit permissions default missing scopes to none.
+      issues: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -42,14 +48,32 @@ jobs:
             exit 1
           fi
 
-      # Root cause of #1033: fail the release if root `dev-loops` ships an
-      # `@dev-loops/core` dependency whose major.minor differs from the version
-      # being released (e.g. dev-loops@0.6.2 carrying @dev-loops/core@^0.2.6).
-      # node-builtins-only, so it runs without `npm ci`.
-      - name: Assert @dev-loops/core dependency is in lockstep with the release
+      # Root cause of #1033 (+ #1886 prerelease drift): fail the release if the
+      # root `dev-loops` manifest's `@dev-loops/core` dependency (full version,
+      # including the prerelease token) or the committed `package-lock.json`
+      # version fields are out of lockstep with the version being released
+      # (e.g. dev-loops@0.6.2 carrying @dev-loops/core@^0.2.6; rc.7 shipping a
+      # lockfile still pinned to rc.6). node-builtins-only, so it runs without
+      # `npm ci`.
+      - name: Assert manifest and lockfile are in lockstep with the release
         run: |
           node scripts/release/assert-core-dependency-version.mjs \
             --release-version "${{ steps.version.outputs.version }}"
+
+      # #1901: cutting a STABLE tag is a gated release decision, not an agent
+      # judgment call. The check fails closed (no Release, no npm-publish
+      # dispatch) unless an explicit per-release operator approval record
+      # exists (an issue comment by the repo owner stating
+      # "approve release v<version>"); blanket merge authorizations and
+      # generic continue instructions never satisfy it. Prereleases pass
+      # through unchanged (the gate applies to stable releases only).
+      - name: Assert operator release approval (stable releases)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/verify-release-approval.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}"
 
       - name: Skip if release already exists (idempotent)
         id: exists

@@ -1,7 +1,7 @@
 ---
 name: "dev-loop"
 description: "Use as the single public workflow entrypoint. Route from canonical current state to the deterministic internal strategy, preferring GitHub-first paths and only using local phase implementation when explicitly requested. Keywords: dev-loop, public entrypoint, route workflow, continue dev loop."
-tools: Read, Grep, Glob, Bash, Agent, TodoWrite
+tools: Read, Grep, Glob, Bash, Edit, Write, Agent
 ---
 <!-- GENERATED from agents/dev-loop.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
@@ -23,7 +23,7 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 
 **Construction sequence:**
 
-1. Run the deterministic startup resolver to produce the authoritative state bundle: `npx dev-loops@1.0.0-rc.4 loop startup --issue <n>` for issues, or `npx dev-loops@1.0.0-rc.4 loop startup --pr <n>` for PRs.
+1. Run the deterministic startup resolver to produce the authoritative state bundle: `npx dev-loops@1.0.1 loop startup --issue <n>` for issues, or `npx dev-loops@1.0.1 loop startup --pr <n>` for PRs.
 2. Pass the resolver output, resolved settings (merged from `.devloops` and `.pi/dev-loop/defaults.yaml`), and current gate state to `buildDevLoopHandoffEnvelope()`.
 3. **Validate the envelope** with `validateHandoffEnvelope()` before consuming any field. If validation returns `ok: false`, reject the handoff with the structured error — do not load requiredReads, do not execute nextAction, do not delegate.
 4. Read the envelope as the first artifact.
@@ -63,6 +63,7 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
 - No child subagent spawning beyond assigned fanout work.
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
+- Awaiting a nested child this run dispatched (a judge, a fixer, or a single reviewer): join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Never sleep-poll for it, and never end the turn to await it — see `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract.
 
 ## Output
 

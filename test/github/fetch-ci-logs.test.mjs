@@ -6,24 +6,11 @@ import {
   fetchCiLogs,
   runCli,
 } from "../../scripts/github/fetch-ci-logs.mjs";
+import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 // Stub gh by matching the leading subcommand of each invocation. Each matcher is
 // { match: (args)=>bool, resp: { code, stdout, stderr } }.
-function stubGh(matchers) {
-  const calls = [];
-  const run = async (_cmd, args) => {
-    calls.push(args);
-    const m = matchers.find((x) => x.match(args));
-    if (!m) throw new Error(`Unexpected gh call: ${args.join(" ")}`);
-    return { code: m.resp.code ?? 0, stdout: m.resp.stdout ?? "", stderr: m.resp.stderr ?? "" };
-  };
-  return { run, calls };
-}
-
-function captureStream() {
-  let data = "";
-  return { write: (s) => { data += s; }, get: () => data };
-}
+const stubGh = (matchers) => makeGhStub(matchers);
 
 const isPrView = (a) => a[0] === "pr" && a[1] === "view";
 const isRunList = (a) => a[0] === "run" && a[1] === "list";

@@ -162,8 +162,13 @@ function shouldIgnoreRawTarget(rawTarget) {
   return false;
 }
 
-export function extractRelativeMarkdownLinks(content) {
-  const links = [];
+// Shared fence-aware line walk: yields the 1-based line number and raw
+// (untrimmed) text of every line that is not a fenced code block delimiter
+// and not inside a fenced code block. Link parsing (`iterateMarkdownLinkMatches`
+// below, used by the broken-link checker and the docs-reference contract
+// test's anchor extractor) and the contract test's heading-id extraction both
+// build on this single walk so the fence-tracking logic exists exactly once.
+export function* iterNonFencedLines(content) {
   const lines = content.split(/\r?\n/);
   let activeFence = null;
 
@@ -190,23 +195,64 @@ export function extractRelativeMarkdownLinks(content) {
       continue;
     }
 
-    for (const match of line.matchAll(LINK_PATTERN)) {
-      const rawTarget = normalizeLinkTarget(match[1] ?? "");
-      if (shouldIgnoreRawTarget(rawTarget)) {
-        continue;
-      }
+    yield { line: index + 1, text: line };
+  }
+}
 
-      links.push({
-        line: index + 1,
-        rawTarget,
-      });
+function* iterateMarkdownLinkMatches(content) {
+  for (const { line, text } of iterNonFencedLines(content)) {
+    for (const match of text.matchAll(LINK_PATTERN)) {
+      yield { line, rawTarget: normalizeLinkTarget(match[1] ?? "") };
     }
+  }
+}
+
+export function extractRelativeMarkdownLinks(content) {
+  const links = [];
+
+  for (const { line, rawTarget } of iterateMarkdownLinkMatches(content)) {
+    if (shouldIgnoreRawTarget(rawTarget)) {
+      continue;
+    }
+
+    links.push({ line, rawTarget });
   }
 
   return links;
 }
 
-async function collectMarkdownFiles(repoRoot) {
+// Extracts every markdown link whose target carries a `#fragment` — a
+// same-doc anchor (`(#section)`) or a cross-file anchor
+// (`(other.md#section)`) — for the docs-reference contract test's dangling-
+// anchor check. Deliberately keeps fragment-only targets that
+// `extractRelativeMarkdownLinks`/`shouldIgnoreRawTarget` drop (those exist to
+// check FILE targets, not anchors) and skips external/protocol targets
+// (`https:`, `mailto:`, ...), which no offline check can resolve.
+export function extractAnchorLinks(content) {
+  const links = [];
+
+  for (const { line, rawTarget } of iterateMarkdownLinkMatches(content)) {
+    if (rawTarget.length === 0 || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(rawTarget)) {
+      continue;
+    }
+
+    const hashIndex = rawTarget.indexOf("#");
+    if (hashIndex === -1) {
+      continue;
+    }
+
+    const fragment = rawTarget.slice(hashIndex + 1);
+    if (fragment.length === 0) {
+      continue;
+    }
+
+    links.push({ line, pathPart: rawTarget.slice(0, hashIndex), fragment });
+  }
+
+  return links;
+}
+
+export async function collectMarkdownFiles(repoRoot) {
   const collected = new Set();
 
   async function walkDirectory(absoluteDir, repoRelativeDir) {
@@ -371,7 +417,7 @@ async function buildCandidateIndex(repoRoot) {
   return candidates;
 }
 
-function isInsideRepoRoot(repoRoot, candidatePath) {
+export function isInsideRepoRoot(repoRoot, candidatePath) {
   const relative = path.relative(repoRoot, candidatePath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
@@ -565,6 +611,12 @@ async function main() {
     process.stderr.write(`${formatBrokenLinkReport(result.brokenLinks)}\n`);
     process.exitCode = 1;
   } catch (error) {
+    // Deliberately out of formatCliError's scope: this tool's error output is
+    // human-readable TEXT (a message + the full usage body), not the JSON
+    // { ok, error, hint } envelope — AC5's short-error contract targets
+    // JSON-emitting gate CLIs specifically, and forcing this into JSON would
+    // break its plain-text consumers for no token saving (nothing here parses
+    // stderr as JSON).
     if (error instanceof Error && "usage" in error && typeof error.usage === "string") {
       process.stderr.write(`${error.message}\n\n${error.usage}\n`);
       process.exitCode = 2;

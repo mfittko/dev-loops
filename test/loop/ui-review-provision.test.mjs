@@ -133,6 +133,54 @@ function baseSeams(root, overrides = {}) {
   };
 }
 
+// ensureWorktree's `branch` is a branch to CREATE off the default base when no
+// such local branch exists, so the default `pr-<n>` yielded a worktree sitting on
+// origin/main while provision returned ok:true — every later stage then reviewed
+// the base branch as if it were the PR head. The pin must be authoritative.
+test("pinPrHead: a pin failure stops the route with a must-fix finding (never reviews an unpinned ref)", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let booted = false;
+  const { seams } = baseSeams(root, {
+    pinPrHead: async () => ({ ok: false, detail: "refs/pull/9/head not found on origin" }),
+    bootApp: async () => { booted = true; return { pid: 1, detail: "spawned" }; },
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.stopReason, /cannot pin PR head: refs\/pull\/9\/head not found on origin/);
+  assert.equal(result.findings[0].kind, "pr-head-unpinned");
+  assert.equal(result.findings[0].severity, "must-fix");
+  assert.equal(booted, false, "must not boot an app on an unverified ref");
+});
+
+test("pinPrHead: the resolved head SHA is recorded on the envelope and logged", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  const { seams, logs } = baseSeams(root, {
+    pinPrHead: async () => ({ ok: true, sha: "deadbeef", detail: "detached at refs/pull/9/head" }),
+    probe: async () => true,
+  });
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.headSha, "deadbeef");
+  assert.ok(logs.some((l) => /pinned to PR head deadbeef/.test(l)));
+});
+
+test("pinPrHead: an absent seam leaves the ref unverified and says so out loud", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  const { seams, logs } = baseSeams(root, { probe: async () => true });
+  delete seams.pinPrHead;
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.headSha, null);
+  assert.ok(logs.some((l) => /UNVERIFIED/.test(l)), "an unpinned ref must never be silent");
+});
+
 test("parseUiReviewProvisionCliArgs: requires --repo-root and --pr", () => {
   assert.throws(() => parseUiReviewProvisionCliArgs(["--pr", "5"]), /repo-root/);
   assert.throws(() => parseUiReviewProvisionCliArgs(["--repo-root", "/r"]), /--pr/);

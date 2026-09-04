@@ -10,8 +10,8 @@ import {
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
+import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -21,9 +21,35 @@ import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
+import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
+import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+// Gate-coordination terminal stop actions where the dev-loop run is completing or
+// stopping (success OR stop). The runner-coordination lock is auto-released at these
+// boundaries so a fresh re-dispatch on the same PR acquires the lock without a
+// takeover (#1632). The Copilot-loop terminal release in `loop handoff` (#1128)
+// only covers Copilot-loop terminal states (CLEAN_CONVERGED / BLOCKED / DONE); a
+// merge-ready PR that is NOT in a Copilot-loop terminal state (e.g. an
+// internal-only PR at `pr_ready_no_feedback`, or a local-implementation gate
+// drive that stops at the approval checkpoint without a terminal handoff) would
+// otherwise hold a stale claim until the 30-min TTL. This set is the
+// gate-coordination counterpart: it fires at every run-completion/stop boundary
+// the agent reaches via this detector. `releaseAsyncRunnerOwnership` is
+// env-aware (no-op without DEVLOOPS_RUN_ID) and best-effort/non-fatal, so it is
+// safe for the conductor (polls all PRs with no run id) and read-only
+// inspections — it only ever clears a claim THIS run owns.
+export const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
+  PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+  PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+  PR_CHECKPOINT_ACTION.REPORT_DONE,
+  PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+]);
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
 Determine which PR gate/transition is legal next for a pull request.
@@ -37,6 +63,21 @@ Optional:
                   refinement.maxCopilotRounds) instead of using
                   refinement.maxCopilotRounds alone. refinement.maxCopilotRounds:
                   0 still disables Copilot rounds even with --lightweight.
+  --spike          This PR is a spike run: relax the required designer/vision
+                  recorded-evidence check like the other relaxed-gate
+                  carve-outs (#1443).
+  --designer-review-evidence <path>
+                  Path to the designer/vision loop's recorded evidence JSON
+                  (the existing outcome + artifact bundle, no new schema).
+                  Surfaces the recorded evidence so AC1's pass branch is
+                  reachable (#1443) — a rendered-HTML diff with satisfied
+                  recorded evidence passes; without recorded evidence it blocks.
+  --expected-issue <n>  Declare the tracker issue this PR is expected to close
+                  (ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS, #1628). For a draft PR
+                  with no linked issue this switches the body-spec validation
+                  from issue-less mode to expectedIssue mode, so a dropped
+                  \`Closes #N\` surfaces missing_closing_issue_reference instead
+                  of validating clean as an issue-less body.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -72,7 +113,7 @@ Output (stdout, JSON):
       "status": "present",
       "specSource": "linked_issue",
       "reason": "...",
-      "finding": null
+      "finding": "missing_refinement_artifact" | "missing_dod_checklist" | "missing_ac_checklist" | "missing_explicit_non_goals" | null
     },
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
@@ -96,6 +137,9 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     lightweight: false,
+    expectedIssue: undefined,
+    designerReviewEvidence: undefined,
+    spike: false,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -104,6 +148,9 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       lightweight: { type: "boolean" },
+      spike: { type: "boolean" },
+      "expected-issue": { type: "string" },
+      "designer-review-evidence": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -133,6 +180,18 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       options.lightweight = true;
       continue;
     }
+    if (token.name === "spike") {
+      options.spike = true;
+      continue;
+    }
+    if (token.name === "expected-issue") {
+      options.expectedIssue = parsePositiveInteger(requireTokenValue(token, parseError), "--expected-issue", parseError);
+      continue;
+    }
+    if (token.name === "designer-review-evidence") {
+      options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -145,13 +204,6 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-function parseRequestedReviewersPayload(text) {
-  const payload = parseJsonText(text, { label: "gh requested reviewers" });
-  const users = Array.isArray(payload?.users) ? payload.users : [];
-  return {
-    requested: users.some((user) => isCopilotLogin(user?.login)),
-  };
 }
 export function parseGitStatusConflictFiles(text) {
   if (typeof text !== "string" || text.length === 0) {
@@ -175,18 +227,6 @@ export function parseGitStatusConflictFiles(text) {
     }
   }
   return conflictFiles;
-}
-async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  const result = await runChild(
-    ghCommand,
-    ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseRequestedReviewersPayload(result.stdout);
 }
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
@@ -254,6 +294,89 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
   });
 }
 
+// Designer/vision recorded evidence for the touched rendered artifacts (#1443,
+// ADR 0041 UI half). Reuses the loop's existing outcome + artifact-bundle
+// record. The evidence source is the loop's recorded review outcome; absent any
+// recorded record this returns null, which the evaluator treats as missing and
+// fails closed for a rendered-artifact change (the required evidence must be
+// recorded). Light/spike carve-outs (designerReviewExempt) relax this.
+//
+// NOTE: the designer/vision loop currently records its outcome in its review
+// artifact, not a gate-detectable marker; this derivation defaults to null so
+// a rendered-artifact change without recorded evidence blocks. When the loop
+// gains a deterministic recorder, surface it here.
+export function deriveUiDesignerReviewEvidence(recordedEvidence, changedFiles) {
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // the loop records its outcome + artifact bundle, and the gate consumes that
+  // recorded evidence here via the --designer-review-evidence read seam. Absent
+  // recorded evidence, returns null (fails closed) so a rendered-artifact change
+  // without recorded evidence blocks; when recorded evidence is supplied with a
+  // satisfied recorded outcome, the required check passes (AC1). changedFiles is
+  // retained for forward-compat with a deterministic per-artifact recorder.
+  return recordedEvidence ?? null;
+}
+
+// Load the loop's recorded designer/vision evidence from a JSON file passed via
+// the --designer-review-evidence read seam. Returns null when the path is absent
+// (nothing recorded -> the evaluator fails closed); throws on an unreadable or
+// malformed file rather than silently treating it as absent.
+export async function loadRecordedDesignerEvidence(evidencePath) {
+  if (!evidencePath || typeof evidencePath !== "string" || evidencePath.length === 0) {
+    return null;
+  }
+  const text = await readFile(evidencePath, "utf8");
+  const parsed = JSON.parse(text);
+  // Reject a JSON value whose type cannot describe recorded evidence. A bare
+  // string/number/boolean parses fine but would surface downstream as a
+  // misleading "missing evidence" gate failure; report the malformed type
+  // directly instead of silently falling through to a confusing verdict.
+  if (parsed !== null && typeof parsed !== "object") {
+    throw new Error(
+      `--designer-review-evidence file must contain a JSON object or array, got ${typeof parsed}`,
+    );
+  }
+  return parsed;
+}
+
+// Total changed lines across a PR's changed files (additions + deletions),
+// mirroring the canonical light-mode line dimension (resolveGateDispatchMode's
+// scope.linesChanged). Returns 0 when no line data is available.
+export function countPrChangedLines(prData) {
+  const files = Array.isArray(prData?.files) ? prData.files : [];
+  let total = 0;
+  for (const f of files) {
+    const additions = Number(f?.additions);
+    const deletions = Number(f?.deletions);
+    total += (Number.isFinite(additions) ? additions : 0) + (Number.isFinite(deletions) ? deletions : 0);
+  }
+  return total;
+}
+
+// Whether a light/spike relaxed-gate carve-out exempts the required
+// designer/vision recorded-evidence check (#1443). Mirrors the existing
+// relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// or a change under the configured light-mode threshold (files AND lines)
+// exempts. When changed-lines data is unavailable the line dimension is
+// treated as within threshold, preserving files-only behavior for callers
+// that lack it.
+export function deriveUiDesignerReviewExempt({
+  lightweight = false,
+  spike = false,
+  changedFiles = [],
+  changedLines,
+  config = {},
+} = {}) {
+  if (lightweight || spike) return true;
+  const threshold = resolveLightMode(config);
+  if (!threshold) return false;
+  const filesExempt = Array.isArray(changedFiles) && changedFiles.length <= threshold.maxFiles;
+  if (!filesExempt) return false;
+  if (typeof changedLines === "number" && Number.isFinite(changedLines)) {
+    return changedLines <= threshold.maxLines;
+  }
+  return true;
+}
+
 // Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
 // Umbrella PRs legitimately close multiple issues (#1052), so the refinement
 // guard resolves against every one of them, not just a unique single ref.
@@ -311,7 +434,7 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 // `specSource` here (linked_issue|pr_body|plan_file) is a distinct enum from
 // handoff-envelope.mjs's CANONICAL_SPEC_SOURCE (phase_doc|pr_body): same field
 // name, different object, different value space — never conflate the two.
-async function resolveNoIssueRefinementArtifact(body) {
+async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
   const { detectIssueRefinementArtifact, validatePrBodySpec } = await import("@dev-loops/core/loop/issue-refinement-artifact");
   const planDocMatch = PLAN_FILE_PROMOTION_DOC_PATH_PATTERN.exec(body);
   if (planDocMatch) {
@@ -367,36 +490,85 @@ async function resolveNoIssueRefinementArtifact(body) {
       finding: "missing_refinement_artifact",
     };
   }
-  const specResult = validatePrBodySpec({ body, issueLess: true });
+  const specResult = Number.isInteger(expectedIssue)
+    ? validatePrBodySpec({ body, expectedIssue })
+    : validatePrBodySpec({ body, issueLess: true });
   if (specResult.ok) {
     return {
       status: "present",
-      linkedIssue: null,
-      linkedIssues: [],
+      linkedIssue: expectedIssue,
+      linkedIssues: expectedIssue ? [expectedIssue] : [],
       specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
       acItems: specResult.acItems,
       dodItems: specResult.dodItems,
       sections: specResult.sections,
-      reason: "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
+      reason: Number.isInteger(expectedIssue)
+        ? `Refinement artifact present via the PR body itself for tracker-backed issue #${expectedIssue} (validate-pr-body-spec clean).`
+        : "Refinement artifact present via the PR body itself (issue-less lightweight PR-body-as-spec; validate-pr-body-spec --no-issue clean).",
       finding: null,
     };
   }
+  const reason = Number.isInteger(expectedIssue)
+    ? `PR body fails the tracker-backed spec-of-record validation for expected issue #${expectedIssue} (validate-pr-body-spec: ${specResult.errors.map((e) => e.code).join(", ")}).`
+    : `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
   return {
     status: "missing",
     linkedIssue: null,
     linkedIssues: [],
     specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY,
-    reason: `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`,
+    reason,
     finding: "missing_refinement_artifact",
   };
 }
 
-export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+// Fetch and evaluate every closing-referenced issue. An umbrella PR's scope is
+// refined if AT LEAST ONE linked issue carries a refinement artifact. Shared
+// by the draft/closed/merged enforcement path AND the ready-PR informational
+// path so the two never drift on what counts as a fetched/evaluated artifact.
+// The ready-PR path reuses the SAME evaluated results to surface the
+// spec-of-record's AC data (acItems/uncheckedAcItems) for the pre_approval_gate
+// unticked-AC check (#1621) without re-deriving it.
+async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild }) {
+  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+  // #1866 follow-up: anchor linked refinement doc resolution to the repo root,
+  // never the ambient cwd — cwd is untrusted in this script (children run with
+  // cwd: repoRoot) and a subdirectory invocation would false-block refined
+  // issues whose tmp/refinement/*.md docs resolve only from the root.
+  const docAnchor = resolveRepoRoot(process.cwd());
+  const evaluated = [];
+  for (const issue of linkedIssues) {
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+    if (body === null) {
+      evaluated.push({ issue, artifact: null });
+      continue;
+    }
+    // #1866: a linked refinement doc satisfies the artifact check only when it
+    // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
+    // anchored to the repo root (see docAnchor above).
+    evaluated.push({
+      issue,
+      artifact: detectIssueRefinementArtifact({
+        body,
+        issueNumber: issue,
+        resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+      }),
+    });
+  }
+  const refinedIssues = evaluated
+    .filter((e) => e.artifact && e.artifact.hasACs === true)
+    .map((e) => e.issue);
+  const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
+  const firstFetched = evaluated.find((e) => e.artifact !== null);
+  const allFailed = evaluated.every((e) => e.artifact === null);
+  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed };
+}
+
+export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
     if (prDraft) {
       const body = typeof prData?.body === "string" ? prData.body : "";
-      return resolveNoIssueRefinementArtifact(body);
+      return resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
     }
     return {
       status: "unknown",
@@ -406,31 +578,87 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     };
   }
   const scopeLabel = linkedIssues.map((n) => `#${n}`).join(", ");
+  const isUmbrella = linkedIssues.length > 1;
   if (!prDraft && !prClosed && !prMerged) {
-    return {
+    // Ready PR: the refinement ENFORCEMENT (missing_refinement_artifact) is a
+    // draft-gate boundary, so the status stays "unknown" and no finding is
+    // recorded. But the linked issue's AC data is also the spec-of-record for
+    // the pre_approval_gate unticked-AC check (ACCEPT-CRITERIA-VERIFY-AND-
+    // REFLECT, #1621), so fetch the linked issue bodies and surface
+    // acItems/uncheckedAcItems alongside the unknown status — the
+    // pre_approval_gate refuses a `clean` verdict while unticked AC items
+    // remain, reading exactly this field. `_onlyEnforcedWhenDraft: false`
+    // keeps the draft-gate missing-enforcement off for ready PRs.
+    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+      await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
+    const base = {
       status: "unknown",
       linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : null,
       linkedIssues,
-      reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement check is a draft-gate boundary and the PR is not draft, so the check is informational only and does not fetch issue bodies.`,
+      specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
+      refinedIssues,
+      _onlyEnforcedWhenDraft: false,
+    };
+    // #1877: the PR body's own AC/DoD checklist is the derived, self-contained
+    // checklist mirroring the issue matrix. Surface its unchecked boxes so the
+    // pre_approval_gate can fail closed on ANY open acceptance criterion in the
+    // PR body itself (completeness check), independent of the spec-of-record
+    // unticked-AC read above (#1621). Sections absent from the body contribute
+    // no items — the draft-exit validateTrackerBackedPrBodySpec check (#1863)
+    // owns requiring the sections to exist. Computed BEFORE the allFailed early
+    // return: the extractor is pure and its only input (prData.body) is already
+    // in hand, so the #1877 block must not be hostage to a linked-issue fetch
+    // failure (#1621's "cannot verify what it cannot read" covers the
+    // spec-of-record check, not this one).
+    const { extractPrBodyUncheckedChecklistItems } = await import("@dev-loops/core/loop/issue-refinement-artifact");
+    const prBody = typeof prData?.body === "string" ? prData.body : "";
+    const prBodyUnchecked = extractPrBodyUncheckedChecklistItems({ body: prBody });
+    const prBodyUncheckedFields = {
+      prBodyUncheckedAcItems: prBodyUnchecked.uncheckedAcItems,
+      prBodyUncheckedDodItems: prBodyUnchecked.uncheckedDodItems,
+    };
+    if (allFailed) {
+      return {
+        ...base,
+        ...prBodyUncheckedFields,
+        reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
+      };
+    }
+    const a = (firstPresent ?? firstFetched).artifact;
+    // Union the spec-of-record AC data across EVERY successfully-fetched linked
+    // issue, not just the first present one: an umbrella PR closing several
+    // refined issues must refuse a clean pre_approval_gate while ANY sibling
+    // issue still has an unticked AC (ACCEPT-CRITERIA-VERIFY-AND-REFLECT, #1621).
+    // Reporting only the first-present issue's uncheckedAcItems would let a PR
+    // whose first-linked issue is fully ticked pass clean while a later sibling
+    // still has open ACs. The first-present artifact still anchors the single-
+    // value fields (source/sections/linkedDoc/reason) for shape parity with the
+    // draft branch.
+    const fetchedArtifacts = evaluated
+      .filter((e) => e.artifact !== null)
+      .map((e) => e.artifact);
+    // Dedupe by text (an AC repeating across sibling issues is the same AC) so an
+    // umbrella PR with two issues sharing an AC wording does not double-count.
+    const dedupe = (arr) => [...new Set(arr)];
+    const unionUnchecked = dedupe(fetchedArtifacts.flatMap((x) => x.uncheckedAcItems ?? []));
+    const unionAc = dedupe(fetchedArtifacts.flatMap((x) => x.acItems ?? []));
+    const unionDod = dedupe(fetchedArtifacts.flatMap((x) => x.dodItems ?? []));
+    return {
+      ...base,
+      linkedIssue: (firstPresent ?? firstFetched).issue,
+      source: a.source,
+      acItems: unionAc.length > 0 ? unionAc : a.acItems,
+      uncheckedAcItems: unionUnchecked,
+      dodItems: unionDod.length > 0 ? unionDod : a.dodItems,
+      ...prBodyUncheckedFields,
+      sections: a.sections,
+      linkedDoc: a.linkedDoc,
+      reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft, so the check is informational only. The spec-of-record AC data is fetched for the pre_approval_gate unticked-AC precondition (#1621).`,
+      finding: null,
     };
   }
-  const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-  // Fetch and evaluate every closing-referenced issue. An umbrella PR's scope
-  // is refined if AT LEAST ONE linked issue carries a refinement artifact.
-  const evaluated = [];
-  for (const issue of linkedIssues) {
-    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-    if (body === null) {
-      evaluated.push({ issue, artifact: null });
-      continue;
-    }
-    evaluated.push({ issue, artifact: detectIssueRefinementArtifact({ body, issueNumber: issue }) });
-  }
-  const refinedIssues = evaluated
-    .filter((e) => e.artifact && e.artifact.hasACs === true)
-    .map((e) => e.issue);
-  const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
-  const isUmbrella = linkedIssues.length > 1;
+  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+    await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
 
   if (firstPresent) {
     const a = firstPresent.artifact;
@@ -442,6 +670,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       refinedIssues,
       source: a.source,
       acItems: a.acItems,
+      uncheckedAcItems: a.uncheckedAcItems ?? [],
       dodItems: a.dodItems,
       sections: a.sections,
       linkedDoc: a.linkedDoc,
@@ -458,7 +687,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // Note: `finding`/`missing` here is only enforced by the gate when the PR is
   // draft (`_onlyEnforcedWhenDraft`); closed/merged PRs surface it informationally.
   const firstEvaluated = evaluated[0];
-  const allFailed = evaluated.every((e) => e.artifact === null);
   if (allFailed) {
     // Preserve prior single-issue semantics: draft → missing, else unknown.
     if (prDraft) {
@@ -484,7 +712,6 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   // refined. Report against the first successfully-fetched (non-null) issue —
   // `evaluated[0]` may be a failed fetch: it still retains its `issue` field but
   // has `artifact: null` (body fetch / artifact detection failed for that issue).
-  const firstFetched = evaluated.find((e) => e.artifact !== null);
   const first = firstFetched.artifact;
   return {
     status: "missing",
@@ -494,13 +721,21 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     refinedIssues,
     source: first.source,
     acItems: first.acItems,
+    uncheckedAcItems: first.uncheckedAcItems ?? [],
     dodItems: first.dodItems,
     sections: first.sections,
     linkedDoc: first.linkedDoc,
     reason: isUmbrella
       ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
       : first.reason,
-    finding: "missing_refinement_artifact",
+    // #1877: thread the detector's per-finding taxonomy through (an AC-only
+    // linked issue is a missing_dod_checklist matrix miss, not a bare
+    // artifact miss) so the draft gate — the unconditional backstop for the
+    // enqueue gate's full-matrix floor — surfaces the same finding vocabulary
+    // and guidance naming the actually-missing arm. The umbrella arm keeps the
+    // generic finding: the first evaluated issue is not necessarily the one
+    // whose specific matrix arm is missing across the umbrella's scope.
+    finding: isUmbrella ? "missing_refinement_artifact" : (first.finding ?? "missing_refinement_artifact"),
     _onlyEnforcedWhenDraft: prDraft === true,
   };
 }
@@ -520,6 +755,38 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
   }
   return parseGitStatusConflictFiles(result.stdout);
 }
+// Operator-authorized post-convergence suppression (#1441): a prior EXPLICIT
+// run of withdraw-copilot-review-request.mjs recorded a marker, scoped to an
+// exact head, after withdrawing a stranded request on a head that has advanced
+// past Copilot's last submitted review with a provable pure doc/prose delta
+// since then. Never derived from live snapshot facts alone — the marker only
+// exists because a human ran that withdrawal — and re-verified live here
+// (rather than trusting the marker's stored reason) as defense in depth. Any
+// further push changes the current head, the marker no longer matches, and
+// this resolves to false — the normal round-reopening behavior applies exactly
+// as before.
+export async function resolvePostConvergenceReviewSuppressed({ repo, pr, currentHeadSha, snapshot, prData }, runtime = {}) {
+  if (snapshot.copilotReviewRequestStatus !== "none" || snapshot.unresolvedThreadCount !== 0) {
+    return false;
+  }
+  const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, runtime);
+  if (!marker || marker.headSha !== currentHeadSha) {
+    return false;
+  }
+  // Re-derive the compare BASE live too, not just the classification below —
+  // defense in depth against a stale or hand-edited marker whose
+  // lastReviewedHeadSha no longer names Copilot's actual last submitted
+  // review. A marker that disagrees with the live value must not suppress.
+  const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
+  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
+    return false;
+  }
+  const reverified = await classifyDeltaSinceLastReview(
+    { repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+    runtime,
+  );
+  return reverified.carryForward === true;
+}
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
@@ -528,7 +795,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
-  const requestedReviewers = await fetchRequestedReviewers(options, runtime);
+  // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
+  // to preserve the gh call order existing tests expect; the reconciliation (timeline
+  // fetch) is deferred to after reviewSummary is computed (#1588).
+  const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
   const gateEvidence = await detectCheckpointEvidence(options, runtime);
@@ -542,9 +812,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
-  const reviewRequestStatus = requestedReviewers.requested
-    ? "requested"
-    : (reviewSummary.hasPendingReviewOnCurrentHead ? "already-requested" : "none");
+  const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
+    { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
+    runtime,
+  );
   const snapshot = buildSnapshotFromPrFacts({
     prData,
     prNumber: options.pr,
@@ -601,7 +872,11 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const isClosed = String(prData?.state || "").toUpperCase() === "CLOSED";
   const isMerged = String(prData?.state || "").toUpperCase() === "MERGED";
   const refinementArtifact = await loadRefinementArtifact(
-    { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged },
+    { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged, expectedIssue: options.expectedIssue },
+    runtime,
+  );
+  const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
+    { repo: options.repo, pr: options.pr, currentHeadSha, snapshot, prData },
     runtime,
   );
   return {
@@ -618,6 +893,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     disposition,
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
+    postConvergenceReviewSuppressed,
   };
 }
 
@@ -658,6 +934,8 @@ export function buildGateCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   postConvergenceSignificantChange,
+  designerReviewExempt = false,
+  designerReviewEvidence = null,
 }) {
   return {
     repo: context.repo,
@@ -673,6 +951,12 @@ export function buildGateCoordinationEvaluatorInput({
     // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
     changedFiles: extractChangedFiles(context.prData),
     uiE2ePassed: deriveUiE2ePassed(context.prData),
+    // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half):
+    // path-triggered + fail-closed, modeled on the UI e2e precondition above.
+    // The recorded evidence flows through the --designer-review-evidence read
+    // seam (AC1's reachable pass branch); absent it, fails closed (null).
+    designerReviewEvidence: deriveUiDesignerReviewEvidence(designerReviewEvidence ?? null, extractChangedFiles(context.prData)),
+    designerReviewExempt,
     lifecycleState: context.interpretation.state,
     loopDisposition: context.disposition.loopDisposition,
     ciStatus: context.snapshot?.ciStatus ?? null,
@@ -683,6 +967,9 @@ export function buildGateCoordinationEvaluatorInput({
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    // Operator-authorized post-convergence suppression (#1441): see
+    // resolvePostConvergenceReviewSuppressed above for how this is verified.
+    postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
     // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
@@ -720,6 +1007,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount,
     maxCopilotRounds,
   });
+  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
+  // load the loop's recorded evidence (if the operator supplied
+  // --designer-review-evidence) so AC1's pass branch is reachable end-to-end;
+  // absent it, the evaluator fails closed (a rendered-artifact change blocks
+  // until recorded evidence is supplied).
+  const designerReviewEvidence = await loadRecordedDesignerEvidence(options.designerReviewEvidence);
   const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
     {
       repo: context.repo,
@@ -738,6 +1031,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftGateConfig,
     preApprovalGateConfig,
     postConvergenceSignificantChange,
+    designerReviewExempt: deriveUiDesignerReviewExempt({
+      lightweight: options.lightweight,
+      spike: options.spike === true,
+      changedFiles: extractChangedFiles(context.prData),
+      changedLines: countPrChangedLines(context.prData),
+      config,
+    }),
+    designerReviewEvidence,
   }));
   // Copilot review request guard (#613): When Copilot has reviewed the PR
   // but no formal review request was made, block pre-approval gate entry.
@@ -841,6 +1142,23 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability (#560)
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // Auto-release the runner-coordination lock at gate-coordination terminal stop
+  // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
+  // (#1632: success-or-stop release vs 30-min TTL; env-aware, best-effort,
+  // fail-closed competitor preserved).
+  if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
+    const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
+    try {
+      await releaseImpl({
+        repo: options.repo,
+        pr: options.pr,
+        env: runtime.env ?? process.env,
+        cwd: repoRoot,
+      });
+    } catch {
+      // Best-effort: a release failure must never block gate-coordination detection.
+    }
+  }
   return result;
 }
 async function main() {

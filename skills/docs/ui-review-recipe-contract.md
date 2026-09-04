@@ -1,12 +1,12 @@
 # UI-Review Run/Auth Recipe Contract
 
-The `/loop-review-ui` command reviews a pull request by proving the change in
+The `/dev-loops:loop-review-ui` command (or `/loop-review-ui` in the dev-loops repo itself) reviews a pull request by proving the change in
 the **running app** from an isolated worktree, rather than reading the diff
 alone. To do that, the loop has to know how to boot your app, how to log in as
 the change's target role, and which UI flows to drive. None of that is
 hard-coded — every project declares its own recipe.
 
-This doc is the contract a **consuming repo** satisfies so `/loop-review-ui`
+This doc is the contract a **consuming repo** satisfies so `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself)
 can run against it. All keys below exist in the shipped config schema
 (`packages/core/src/config/config.mjs`) and are enforced at load time. A
 docs-accuracy test (`test/docs/ui-review-recipe-doc.test.mjs`) fails CI if the

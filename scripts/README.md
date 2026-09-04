@@ -54,11 +54,12 @@ Supported inputs:
 
 Optional:
 - `--output <path>` writes the same success JSON emitted on stdout
+- `--unresolved --bodies` (only valid together) selects the fix-loop working-set view: only unresolved threads, each as `{ threadId, path, line, isOutdated, bodies: [...] }` with comment bodies joined in thread order; the `comments[]` array is absent in this mode
 
 Contract:
-- live capture loads review threads from all reviewers; no author filter is applied
+- live capture loads review threads from all reviewers; no author filter is applied, and pagination walks past 100 threads
 
-Success output shape:
+Success output shape (default mode):
 - `{ "ok": true, "source": { ... }, "summary": { ... }, "threads": [...], "comments": [...] }`
 - normalized `comments[]` preserve both the GraphQL comment node id (`id`) and the REST-safe numeric review-comment id (`databaseId`) when available
 - normalized `threads[]` include `commentDatabaseIds` and `actionableCommentDatabaseIds` so follow-up helpers can pair `--comment-id` and `--thread-id` from the same fresh snapshot
@@ -82,7 +83,7 @@ Contract:
 - rejects `--ready` before invoking `gh`; use `gh pr ready` later after draft-gate approval
 - forwards every other argument to `gh pr create` unchanged and in order
 - preserves the underlying `gh pr create` stdout, stderr, and exit code without wrapping success output
-- stays intentionally narrow: this is the prevention layer for draft-first creation, while `scripts/github/reconcile-draft-gate.mjs` remains the separate recovery path for already-open non-draft PRs
+- stays intentionally narrow: this is the prevention layer for draft-first creation, while `scripts/github/reconcile-draft-gate.mjs` remains the separate recovery path for already-open non-draft PRs — that recovery only completes for a PR under the light-mode threshold (it posts an inline verdict); a larger PR must convert to draft and run the real fan-out gate instead
 
 Failure behavior:
 - wrapper-owned validation failures emit `{ "ok": false, "error": "...", "usage": "..." }` on stderr and exit non-zero
@@ -106,6 +107,7 @@ Contract:
 - enforces a round cap (default: 5, configurable via `maxCopilotRounds` in settings); clean round-cap PRs with new commits, resolved threads, and green current GitHub CI automatically re-open for a normal re-request, while `--force-rerequest-review` remains the operator override for other new-commit cases
 - should be paired with a fresh unresolved-thread check after Copilot posts again; requesting review alone does not complete the loop
 - verifies the result through `gh api repos/<owner>/<name>/pulls/<pr>/requested_reviewers`
+- the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the `gh pr edit` request itself is issued exactly once and never re-issued per probe. A verification read that throws (transient gh failure) also consumes a scheduled retry instead of failing immediately; only a throw on the final attempt propagates, as the raw underlying error
 - does **not** rely on `gh pr view --json reviewRequests`, which can be incomplete for Copilot reviewer state
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 
@@ -214,9 +216,9 @@ Usage:
 
 Contract:
 - runs four deterministic checkers:
-  - `prose-linkage-detector` (forbidden prose parent/child/dependency markers + missing API links)
+  - `prose-linkage-detector` (forbidden prose parent/child/dependency markers + missing API links + duplicate child checklists)
   - `scope-boundary-cross-checker` (mutual-exclusion gaps + duplicate sibling ownership)
-  - `refinement-completeness-checker` (AC/DoD/non-goals/matrix presence)
+  - `refinement-completeness-checker` (AC/DoD/non-goals/matrix presence + explicit scope boundary)
   - `tree-integrity-validator` (parent links, orphan detection, cycles, max depth 3)
 - online mode (`--issue`) walks GitHub sub-issues API from the root issue
 - offline mode (`--input`) validates a local refinement tree JSON snapshot
@@ -286,16 +288,18 @@ Required:
 
 Optional:
 - `--author <login>` (default `all`)
-- exactly one message source: `--message <text>` or stdin
+- `--message <text>` or stdin: the single shared reply body for every matched thread. Mutually exclusive with `--message-map`
+- `--message-map <path>`: a JSON file mapping threadId to that thread's distinct reply body, so each thread's resolving reply names the change that fixed it. Every matched thread must have an entry, or the run fails closed listing the unmapped thread ids before any mutation; stdin is never read in this mode. Mutually exclusive with `--message`
 - `--resolve`
 
 Contract:
 - captures one authoritative review-thread snapshot via `capture-review-threads.mjs`
 - filters to unresolved threads containing at least one comment by the selected author
 - chooses the newest matching author-authored comment in each matched thread as the REST reply target
+- with `--message-map`, validates full coverage of every matched thread before sending any reply/resolve mutation, and fails closed listing the unmapped thread ids otherwise
 - processes matched threads sequentially in deterministic snapshot order
 - reuses the shared single-thread reply/resolve primitives instead of duplicating GitHub mutation logic
-- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any targeted thread remains unresolved
+- with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any newly-targeted thread remains unresolved
 - zero-match runs are deterministic no-ops with success JSON
 
 Success output shape:
@@ -365,33 +369,6 @@ Contract:
 Success output shape:
 - `{ "ok": true, "repo": "owner/name", "issue": 59, "state": "...", "prNumber": 79|null, "prUrl": "..."|null, "headBranch": "..."|null, "authorLogin": "Copilot"|null, "isDraft": true|false|null, "changedFiles": 0|null, "commitCount": 1|null, "soleCommitHeadline": "Initial plan"|null, "sessionActivity": "active"|"concluded"|"idle"|null, "sessionRunId": 123|null, "sessionRunName": "..."|null, "sessionRunStatus": "..."|null, "sessionRunConclusion": string|null, "sessionRunCreatedAt": "..."|null, "sessionConfidence": "high"|null }`
 
-### `scripts/loop/run-conductor-cycle.mjs`
-
-Poll all open PRs, detect gate state, and emit an ordered action queue.
-
-Output `actions[]` entries include:
-- `requiresSubagent`
-- `requiresApproval`
-- `handoffContract` with:
-  - `ownership`
-  - `stopBoundary`
-  - `resumePolicy`
-
-The handoff contract is recorded on each action so parent, child, and resume
-actions can share one explicit stop/resume boundary.
-
-Contract values:
-- `ownership`: `subagent`, `parent`, `human`, or `terminal`
-- `stopBoundary`: `subagent_exit`, `watch_boundary`, `approval_boundary`,
-  `merge_boundary`, `conflict_boundary`, or `terminal_boundary`
-- `resumePolicy`: `resume_after_subagent_exit`,
-  `resume_after_state_refresh`, `resume_after_human_approval`,
-  `resume_after_merge_authorization`, `manual_attention`, or `none`
-
-`run-conductor-cycle.mjs` emits the contract-boundary values above. The parser
-also accepts `PR_CHECKPOINT` values when reading recorded artifacts so older
-recorded handoff notes can still be validated fail-closed.
-
 ### `scripts/loop/conductor-monitor.mjs`
 
 Aggregate the current Copilot-loop status for every open PR in one repository.
@@ -401,6 +378,7 @@ Required:
 
 Optional:
 - `--auto-resume` — inspect documented pi-subagents async/session artifacts on disk, detect orphaned open PR follow-up runs, and emit deterministic resume plans without executing `subagent({ action: "resume" })`
+- `--skip-status-check` — skip the cheap GitHub-status pre-flight that gates `--auto-resume` (also skipped via `DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1`). The pre-flight curls the GitHub status API and bails before listing PRs when GitHub is degraded, so an auto-resume schedule firing during a GitHub outage costs near-zero instead of burning a dev-loop startup (#1633).
 
 Contract:
 - lists all open PRs via `gh pr list --state open --limit 1000` to avoid GitHub CLI default truncation
@@ -421,10 +399,12 @@ Contract:
 - matches exited runs to open PRs only by PR number parsed from artifact text; branch names, issue numbers, or worktree paths alone are never sufficient identity
 - fail-closes to `needsManualAttention` when PR identity, artifact state, or resume inputs are missing, contradictory, or ambiguous
 - `--auto-resume` remains single-shot only; it does not poll, sleep, watch, or execute the resume itself
+- when `--auto-resume` is present and the status check is not skipped, a degraded GitHub status (anything other than `good`) bails with `queueStatus: "github_degraded"`, `githubDegraded: true`, a `githubStatus: { status, detail }` field, and zero resume plans, so the auto-resume schedule never dispatches a dev-loop run during an outage (#1633); a status-endpoint fetch error is fail-open (the normal `listOpenPrs` flow is the backstop)
+- `DEVLOOPS_GITHUB_STATUS_URL` overrides the GitHub status endpoint (default `https://api.github.com/status`); `DEVLOOPS_SKIP_GITHUB_STATUS_CHECK=1` skips the pre-flight entirely
 
 Success output shape:
 - default:
-  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
+  - `{ "ok": true, "repo": "owner/name", "checkedAt": "...", "prCount": 2, "queueStatus": "queue_complete"|"monitoring"|"attention_needed"|"github_degraded", "needsAttentionCount": 0, "summary": { "waiting": 0, "needsAttention": 0, "blocked": 0, "done": 0 }, "prs": [...] }`
 - with `--auto-resume`:
   - adds
     `{ "autoResumeRequested": true, "orphanedPrCount": 1, "resumePlanCount": 1, "manualAttentionCount": 0, "resumePlans": [...], "needsManualAttention": [...] }`
@@ -526,6 +506,44 @@ State path:
 Integration notes:
 - `copilot-pr-handoff.mjs` uses this surface for async run ownership checks
 - `detect-checkpoint-evidence.mjs` uses strict ownership assertion before async merge-time gate evaluation
+
+Release-on-death & dead-claim supersession (#1706):
+- A run that ends without an explicit `release` still must not leave a leaky lock that blocks the
+  next legitimately-dispatched run. `_pr-runner-coordination.mjs` exposes an exit-signal record
+  (`recordExitSignalForRunner`) plus a process-exit sweep (`releaseRunClaimsOnExit`) that the
+  headless dev-loop driver invokes after its spawned run terminates (completed/killed/timed out/
+  crashed).
+- `ensureAsyncRunnerOwnership(..., { supersedeStale: true })` — used by `copilot-pr-handoff` — takes
+  over a competing claim whose owning run is **confirmed dead** (exit signal recorded) or past the
+  stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
+  leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
+  only confirmed-dead or stale claims are superseded.
+- Anti-trap: a fresh heartbeat on a runner-coordination claim/lock is not proof of a live driver. The
+  claim may be held by a completed/control run that claimed at takeover then ended without releasing,
+  yet the heartbeat still reads fresh — which this rc.6 drive saw as repeated false "live owner /
+  standing down" stalls. LIVE means a subagent run verified via `subagent status` (a harness command,
+  not a repo script or CLI) showing an actively-updating `EXECUTING` child (a workflow child active
+  now with a recent update). Before any stand-down or dispatch decision, confirm real execution via
+  `subagent status`; never trust the claim heartbeat alone. Only genuinely-executing runs count as a
+  live owner.
+
+### `scripts/loop/detect-agent-stall.mjs`
+
+Agent-level stall probe (#1669). Detects whether a dev-loop child has stalled — no turn progress for
+N minutes with no pending supervisor request — without falsely bailing a sanctioned long watch (an
+active tool call that heartbeats its runner claim).
+
+Required: `--repo <owner/name>`
+
+Optional: `--pr <n>` (read sanctioned-watch heartbeat from runner-coordination state), `--status <path>`
+(until `status.json` `lastActivityAt`/`lastUpdate`), `--session <path>` (session.jsonl mtime when no
+`--status`), `--threshold-min <n>` (default 5), `--pending-request`, `--pending-marker <path>`,
+`--run-id <id>`, `--cwd <path>`, `--last-action <text>`.
+
+Verdict statuses: `stalled` | `not_stalled` | `no_evidence`. Emits a structured verdict plus a
+recovery brief for a fresh-context dispatch. Pure detector lives in
+`@dev-loops/core/loop/agent-stall`; config surface is `workflow.stallDetection`. See
+`skills/docs/agent-stall-detection.md`.
 
 ### `scripts/loop/run-watch-cycle.mjs`
 

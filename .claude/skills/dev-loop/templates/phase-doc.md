@@ -16,6 +16,12 @@ Planning
 
 ## Definition of done
 
+## Size estimate
+
+- Estimated logic LOC:
+- Tier: default
+- Oversize: n/a
+
 ## Validation approach
 
 ## Durable decisions

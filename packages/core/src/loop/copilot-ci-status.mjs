@@ -144,24 +144,35 @@ export function normalizeStatusCheckRollupStatus(rollup) {
 /**
  * Summarize the GitHub check-runs API payload for one head SHA.
  *
+ * `allQueued` is the zero-allocation stall signal (#1631): true when at least one
+ * check-run is present AND every one is still in the `queued` status — i.e. no
+ * runner has been allocated to any job (no job picked up / in_progress / completed).
+ * The CI watcher uses it to bail early on a stuck GitHub Actions queue instead
+ * of burning the full watch budget.
+ *
  * @param {object} payload
- * @returns {{ status: "success"|"failure"|"pending"|"none", unsupportedCompleted: boolean, failureDetails?: Array<string> }}
+ * @returns {{ status: "success"|"failure"|"pending"|"none", unsupportedCompleted: boolean, allQueued: boolean, failureDetails?: Array<string> }}
  */
 export function summarizeHeadScopedCheckRunsSignal(payload) {
   const runs = Array.isArray(payload?.check_runs) ? payload.check_runs : [];
   if (runs.length === 0) {
-    return { status: "none", unsupportedCompleted: false };
+    return { status: "none", unsupportedCompleted: false, allQueued: false };
   }
 
   let hasPending = false;
   let hasFailure = false;
   let hasSuccess = false;
   let hasUnsupportedCompleted = false;
+  let allQueued = true; // every run is status "queued" (zero runner allocation)
   const failureDetails = [];
 
   for (const run of runs) {
     const status = typeof run?.status === "string" ? run.status.toUpperCase() : "";
     const conclusion = typeof run?.conclusion === "string" ? run.conclusion.toUpperCase() : "";
+
+    if (status !== "QUEUED") {
+      allQueued = false;
+    }
 
     if (status !== "COMPLETED") {
       hasPending = true;
@@ -183,11 +194,11 @@ export function summarizeHeadScopedCheckRunsSignal(payload) {
     hasUnsupportedCompleted = true;
   }
 
-  if (hasFailure) return { status: "failure", unsupportedCompleted: hasUnsupportedCompleted, failureDetails };
-  if (hasPending) return { status: "pending", unsupportedCompleted: hasUnsupportedCompleted, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
-  if (hasUnsupportedCompleted) return { status: "none", unsupportedCompleted: true, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
-  if (hasSuccess) return { status: "success", unsupportedCompleted: false, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
-  return { status: "none", unsupportedCompleted: false, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
+  if (hasFailure) return { status: "failure", unsupportedCompleted: hasUnsupportedCompleted, allQueued, failureDetails };
+  if (hasPending) return { status: "pending", unsupportedCompleted: hasUnsupportedCompleted, allQueued, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
+  if (hasUnsupportedCompleted) return { status: "none", unsupportedCompleted: true, allQueued, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
+  if (hasSuccess) return { status: "success", unsupportedCompleted: false, allQueued, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
+  return { status: "none", unsupportedCompleted: false, allQueued, failureDetails: failureDetails.length > 0 ? failureDetails : undefined };
 }
 
 /**

@@ -3,9 +3,11 @@ import test, { describe } from "node:test";
 
 import {
   refinePlanFileInPlace,
+  validatePhaseSizeEstimate,
   PLAN_FILE_REFINE_STOP,
   DOCS_GRILL_FINDINGS_HEADING,
   COVERAGE_MATRIX_HEADING,
+  SIZE_ESTIMATE_HEADING,
 } from "../src/loop/plan-file-refine-contract.mjs";
 import { PLAN_FILE_INTAKE_STATE } from "../src/loop/plan-file-intake-contract.mjs";
 
@@ -30,6 +32,7 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
+  sizeEstimate: { logicLoc: 90, tier: "default" },
   grillDispositions: [
     { kind: "drift", summary: "claim X contradicts contract Y", disposition: "record_finding" },
     { kind: "cosmetic", summary: "typo in heading", disposition: "ignore_cosmetic" },
@@ -54,6 +57,7 @@ describe("refinePlanFileInPlace", () => {
     // Refined plan carries every refinement section in place.
     assert.match(result.refinedMarkdown, /^## Acceptance criteria$/mu);
     assert.match(result.refinedMarkdown, /^## Definition of done$/mu);
+    assert.match(result.refinedMarkdown, new RegExp(`^## ${SIZE_ESTIMATE_HEADING}$`, "mu"));
     assert.match(result.refinedMarkdown, new RegExp(`^## ${COVERAGE_MATRIX_HEADING}$`, "mu"));
     assert.match(result.refinedMarkdown, new RegExp(`^## ${DOCS_GRILL_FINDINGS_HEADING}$`, "mu"));
     // Base sections survive untouched.
@@ -147,6 +151,43 @@ describe("refinePlanFileInPlace", () => {
     }
   });
 
+  test("fail closed: missing size estimate", () => {
+    const payload = { ...PAYLOAD, sizeEstimate: undefined };
+    const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "missing_size_estimate");
+    assert.equal(result.refinedMarkdown, undefined);
+  });
+
+  test("fail closed: an over-softLoc size estimate with no oversizeJustification (prompts a seam search)", () => {
+    const payload = { ...PAYLOAD, sizeEstimate: { logicLoc: 900, tier: "default" } };
+    const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload, sizeSoftLoc: 400 });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "size_estimate_oversize_not_justified");
+    assert.equal(result.refinedMarkdown, undefined);
+  });
+
+  test("a cohesive over-softLoc size estimate with oversizeJustification proceeds and records the note", () => {
+    const payload = {
+      ...PAYLOAD,
+      sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam to split on" },
+    };
+    const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload, sizeSoftLoc: 400 });
+    assert.equal(result.ok, true);
+    assert.equal(result.sizeEstimate.overBudget, true);
+    assert.equal(result.sizeEstimate.oversizeNote, "one cohesive migration; no clean seam to split on");
+    assert.match(result.refinedMarkdown, /- Estimated logic LOC: 900/u);
+    assert.match(result.refinedMarkdown, /- Oversize: justified — one cohesive migration; no clean seam to split on/u);
+  });
+
+  test("an under-softLoc size estimate needs no justification and records n\\/a", () => {
+    const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload: PAYLOAD, sizeSoftLoc: 400 });
+    assert.equal(result.ok, true);
+    assert.equal(result.sizeEstimate.overBudget, false);
+    assert.equal(result.sizeEstimate.oversizeNote, null);
+    assert.match(result.refinedMarkdown, /- Oversize: n\/a \(within default tier's softLoc budget of 400\)/u);
+  });
+
   test("fail closed: a grill disposition that is missing/invalid fails the grill", () => {
     // The CLI classifies findings and passes dispositions in; an unclassifiable
     // finding arrives with a null disposition, which must fail the grill closed.
@@ -175,5 +216,78 @@ describe("refinePlanFileInPlace", () => {
     assert.equal(result.ok, false);
     assert.equal(result.reason, "section_body_contains_heading");
     assert.equal(result.refinedMarkdown, undefined);
+  });
+
+  test("fail closed: a top-level heading smuggled into the oversize justification", () => {
+    const result = refinePlanFileInPlace({
+      ...newPlanFacts(BASE_PLAN),
+      payload: {
+        ...PAYLOAD,
+        sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "ok\n## Sneaky inner heading\nmore" },
+      },
+      sizeSoftLoc: 400,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "section_body_contains_heading");
+    assert.equal(result.refinedMarkdown, undefined);
+  });
+});
+
+describe("validatePhaseSizeEstimate (pure)", () => {
+  test("under-threshold estimate needs no justification", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 100, tier: "default" }, 400);
+    assert.equal(result.ok, true);
+    assert.equal(result.overBudget, false);
+    assert.equal(result.oversizeNote, null);
+  });
+
+  test("tier defaults to \"default\" when omitted", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 100 }, 400);
+    assert.equal(result.ok, true);
+    assert.equal(result.tier, "default");
+  });
+
+  test("over-threshold estimate without justification fails closed", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 500, tier: "default" }, 400);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "size_estimate_oversize_not_justified");
+  });
+
+  test("over-threshold estimate with a blank justification still fails closed", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 500, oversizeJustification: "   " }, 400);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "size_estimate_oversize_not_justified");
+  });
+
+  test("over-threshold estimate with a justification passes and carries the note", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 500, oversizeJustification: "cohesive, no seam" }, 400);
+    assert.equal(result.ok, true);
+    assert.equal(result.overBudget, true);
+    assert.equal(result.oversizeNote, "cohesive, no seam");
+    assert.match(result.body, /Oversize: justified — cohesive, no seam/u);
+  });
+
+  test("missing estimate fails closed", () => {
+    assert.equal(validatePhaseSizeEstimate(undefined).ok, false);
+    assert.equal(validatePhaseSizeEstimate(undefined).reason, "missing_size_estimate");
+    assert.equal(validatePhaseSizeEstimate(null).reason, "missing_size_estimate");
+  });
+
+  test("non-integer or negative logicLoc fails closed", () => {
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: 1.5 }).reason, "invalid_size_estimate_loc");
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: -1 }).reason, "invalid_size_estimate_loc");
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: "100" }).reason, "invalid_size_estimate_loc");
+  });
+
+  test("an unrecognized tier fails closed", () => {
+    const result = validatePhaseSizeEstimate({ logicLoc: 100, tier: "t2" }, 400);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "invalid_size_estimate_tier");
+  });
+
+  test("falls back to the default softLoc when no threshold is passed", () => {
+    // 400 is check-size-budget.mjs's own DEFAULT_TIER_DEFAULTS.softLoc — same vocabulary/threshold.
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: 400 }).overBudget, false);
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: 401 }, undefined).ok, false);
   });
 });

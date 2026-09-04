@@ -162,13 +162,11 @@ test("loadInternalPathPatterns skips missing internalPathPatterns key", async ()
 // Auto-detect via spawned process (cwd = temp repo)
 // ---------------------------------------------------------------------------
 
-test("loadInternalPathPatterns auto-detects overrides.yaml via spawned process", async () => {
+test("loadInternalPathPatterns auto-detects .devloops via spawned process", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     await mkdir(path.join(tempDir, ".git"));
-    const piDir = path.join(tempDir, ".pi", "dev-loop");
-    await mkdir(piDir, { recursive: true });
-    await writeFile(path.join(piDir, "overrides.yaml"), "internalPathPatterns:\n  - \"^custom/\"\n  - \"^internal/\"\n");
+    await writeFile(path.join(tempDir, ".devloops"), "internalPathPatterns:\n  - \"^custom/\"\n  - \"^internal/\"\n");
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"],
@@ -185,7 +183,7 @@ test("loadInternalPathPatterns auto-detects overrides.yaml via spawned process",
   }
 });
 
-test("loadInternalPathPatterns prefers settings.yaml over overrides.yaml via spawned process", async () => {
+test("loadInternalPathPatterns ignores removed legacy .pi/dev-loop settings/overrides paths (removed #1701)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-internal-"));
   try {
     await mkdir(path.join(tempDir, ".git"));
@@ -196,14 +194,18 @@ test("loadInternalPathPatterns prefers settings.yaml over overrides.yaml via spa
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"],
-        stdout: "good/foo.mjs\n",
+        // A consumer-facing path that WOULD match the shipped-default internal
+        // patterns' siblings: if the legacy patterns ("^bad/", "^good/") were
+        // ever auto-detected again, "bad/foo.mjs" would classify internalOnly
+        // — so internalOnly=false here proves the legacy patterns did NOT load.
+        stdout: "bad/foo.mjs\n",
       },
     ]);
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
     assert.equal(result.code, 0);
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.internalOnly, true);
+    assert.equal(output.internalOnly, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

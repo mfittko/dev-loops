@@ -22,12 +22,16 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 ## Startup procedure
 
+**Review intent short-circuit (issue #1850):** A plain review request against a PR ("review PR #N", "review this PR") is NOT a continue/fix/merge request. Recognize review intent BEFORE resolving authoritative state below, and dispatch straight to the standalone [Review Skill](../review/SKILL.md) (`/dev-loops:loop-review <pr>`, or `/loop-review <pr>` in the dev-loops repo itself) — never run `loop startup`/`resolve-dev-loop-startup.mjs` for this route. The review route is read-only (no branch push, no fix commit, no merge, no board move, no assignee claim) and ownership-exempt by construction: it is not one of the routing evaluator's strategies, so `STRATEGY_OWNERSHIP_GATE` never applies to it and it runs on a PR owned by anyone, or by no one — see [Single-contributor ownership gate](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup). Any other request (continue the loop, fix findings, merge, watch) proceeds through the ordinary startup procedure below, which still enforces the ownership gate exactly as before.
+
 <!-- pi-only -->
 ### Main agent (read-only)
 
 The main agent must **always** dispatch the `dev-loop` async subagent for any dev-loop work.
 Do not run `dev-loops loop startup` or any startup resolver in the main agent.
 For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs an async run-id marker: the Pi runtime injects `PI_SUBAGENT_RUN_ID` into each async subagent's child env, or the main agent mints and propagates the neutral `DEVLOOPS_RUN_ID` before dispatch; under the Claude Code harness the requirement is relaxed automatically (no marker needed). The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
+
+After dispatching the async subagent in an interactive session, return control to the user — do NOT call `subagent_wait` to block on completion. Pi wakes the session on completion or needs-attention. The only exception is **run-to-completion** (the user explicitly asked for results reported back before continuing, or a skill must finish in one turn). Calling `subagent_wait` merely to wait freezes the interactive session for the full run duration and defeats async dispatch; the Pi platform default already says return control. This reinforces that default for the `dev-loop` dispatch pattern specifically. See [Async dispatch posture](../docs/main-agent-contract.md#async-dispatch-posture-pi) in the Main Agent Contract.
 <!-- /pi-only -->
 
 ### Resolve authoritative state
@@ -47,11 +51,13 @@ NEVER fall back to `find /` or any unbounded filesystem walk to locate the CLI �
 
 Resolve authoritative state via the startup resolver (`node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `node <dev-loops-package-root>/cli/index.mjs loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
-**Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` and injects the state. When the checkpoint is `missing` and the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, the resolver returns `needs_reconcile`. Complete or explicitly skip the retrospective before starting.
+**Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` (resolved from the repo's main checkout, not cwd-relative, so a worktree and the main checkout always see the same file) and, when the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, also checks local git ancestry between the checkpoint's recorded `identity.mergeCommit` and the base branch — a `complete`/`skipped` record is treated as `missing` once anything has merged since that recorded commit (or the commit cannot be resolved locally at all), so a stale record can never satisfy a newer cycle. When the resulting state is `missing`, the resolver returns `needs_reconcile`. Complete or explicitly skip the retrospective before starting, carrying the cycle identity via `checkpoint-contract.mjs --repo`/`--pr`/`--merge-commit` (required for `complete`/`skipped`) and — for `complete` — the fresh-context provenance via `--retro-context fresh --record-source <path>` (mandatory per `RETRO-FRESH-CONTEXT-MANDATORY`; an inline self-authored retro fails the checkpoint).
 
 **Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `node <dev-loops-package-root>/cli/index.mjs loop handoff --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
 
 **Worktree cwd (mandatory):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
+
+A shell's working directory can reset to the primary checkout **silently** — after a subprocess run, or when a `cd` inside a compound command does not persist into the next one. A relative-path `git add && git commit && git push` that runs after such a reset executes in the primary checkout on the default branch, landing the change straight on the remote and skipping the PR flow. `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) is the owned rule mandating `git -C <absolute-worktree-path> …` and absolute paths for exactly this reason — every mutating flow follows it, not just this skill's own. `ensure-worktree` best-effort installs `pre-commit`/`pre-merge-commit`/`pre-push` guards as defense-in-depth against the same slip — it is not a substitute; see [Default-branch guard](../docs/worktree-guidance.md#default-branch-guard) for the guard's behavior, its no-op paths, and the `DEVLOOPS_ALLOW_MAIN=1` override.
 
 **Worktree fetch (mandatory):** Always run `git fetch origin` before creating or reusing any worktree.
 
@@ -118,6 +124,16 @@ Use the fallback poster only when the full helper cannot be reached:
 
 When `@dev-loops/core` is available again, switch back to the full helper. The fallback poster is a degraded path, not a permanent replacement.
 
+### Stale-installed-CLI: prefer worktree-source verdict/ledger tooling (#1661)
+
+Before posting a `pre_approval_gate` (or `draft_gate`) verdict, resolve which layout the verdict/ledger tooling should run from via the deterministic helper (issue #1661):
+
+```sh
+node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
+```
+
+When `preferredSource` is `worktree` (installed dev-loops CLI older than the current source/worktree), run `upsert-checkpoint-verdict.mjs`, `write-gate-findings-log.mjs`, and `detect-checkpoint-evidence.mjs` from the worktree/source `scripts/` layout — the stale installed CLI lacks the gate-evidence CI exclusion and would otherwise block verdict posting on `WAITING_FOR_CI`. When `installed`, use the resolved skill-scripts (installed) layout as usual. The copilot-pr-followup skill's [Skill asset path resolution](../copilot-pr-followup/SKILL.md#skill-asset-path-resolution) owns the full rule; this is the entrypoint pointer.
+
 ## Read-only info shortcut
 
 Info/handoff requests can be served directly via `node <dev-loops-package-root>/cli/index.mjs loop info` (read-only; no full dev-loop run required):
@@ -126,6 +142,9 @@ Info/handoff requests can be served directly via `node <dev-loops-package-root>/
 - `node <dev-loops-package-root>/cli/index.mjs loop info --issue <n> --json` — machine-readable JSON output
 
 ## Reading tool output (token-economical convention)
+
+<!-- rule: BASE-JQ-OUTPUT-GUARANTEE -->
+`BASE-JQ-OUTPUT-GUARANTEE`: every operator-facing JSON-result dev-loops command MUST accept `--jq`/`--silent` through the single shared emit path (`scripts/lib/jq-output.mjs`), enforced by the `jq-output-base-guarantee` contract test.
 
 When you need a fact from a dev-loops JSON-emitting script, climb this ladder and stop at the first rung that answers the question — never read more output than you need:
 
@@ -142,6 +161,8 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
    - PR facts read (branch/state/mergeStateStatus/head SHA/etc.) → `scripts/github/view-pr.mjs --repo <o/r> --pr <n> [--json <fields>]`, **never raw `gh pr view`**. (For composite loop-routing/CI facts prefer `loop info --pr`; this is the thin field-read counterpart.)
    - PR edit (title/body/assignee/milestone) → `scripts/github/edit-pr.mjs --repo <o/r> --pr <n> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]`, **never raw `gh pr edit`**. Returns `{ ok, repo, pr, edited }`.
    - PR checks/status → `scripts/github/probe-ci-status.mjs --repo <o/r> --pr <n> --timeout-ms 0` for a single live combined-CI check, **never raw `gh pr checks`**. (Provider-agnostic; drop the `--timeout-ms 0` to block-wait.)
+   - Post-drive gate-evidence audit (does the PR have its posted draft_gate + pre_approval_gate verdicts?) → `scripts/github/audit-gate-evidence.mjs --repo <o/r> --pr <n>` (**never raw issue-comment reads**); it scans BOTH verdict surfaces (PR reviews + issue comments, see GATE-EVIDENCE-AUDIT-TWO-SURFACES), so a verdict posted only as a PR review is never reported missing (#1729).
+   - Reconcile a stuck `gate-evidence` required status at merge-readiness → `scripts/github/reconcile-gate-evidence-status.mjs --repo <o/r> --pr <n>`. Run it right after the post-drive audit and before the human-approval/merge checkpoint. When the current-head verdict evidence is satisfied but the `gate-evidence` commit status is stuck non-green (a `cancel-in-progress`-cancelled or read-after-write-raced verdict-post re-fire, issue #1935), it re-fires the run so the status flips to `success` without a manual `gh run rerun`. Fail-closed: when the evidence is genuinely missing it re-fires nothing (ADR 0057, see [Merge Preconditions](../docs/merge-preconditions.md)).
 
    These accept the same `--jq`/`--silent` output flags as every other JSON-emitting script (base-CLI guarantee) — including `probe-ci-status.mjs`, watch-shaped as it is.
 5. **NEVER `| python3` or `node -e`** to parse tool JSON. If a field you need is missing from a script's output, add it to the script (or its concise mode), not an inline parser.
@@ -156,6 +177,44 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 
 **Bounded async task contract:** Break work into discrete tasks with clear inputs, explicit outputs, bounded scope. No shell polling — use `run-watch-cycle.mjs` or `gh run watch`. Fan-out reviewer waits (gate sub-loops or any Agent-tool fan-out) follow `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md): await completion via the harness notification or the reviewer's findings artifact at its deterministic path and join via the sanctioned fan-in CLI (`dev-loops gate consolidate-fanin`) — never transcript-tail, `node -e`/`python3`-parse tool JSON, or `sleep`-poll.
 
+**Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call:
+
+```sh
+dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
+  --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> --jq '.severityCounts'
+```
+
+**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
+durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>`), dispatch
+the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
+linked issue's AC/DoD/non-goals, the PR's declared scope, and the prior-round judge ledgers — and
+await its verdict artifact at `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`
+(its only write). Then run the deterministic bridge to derive the fixer's act list for Phase 4:
+
+```sh
+dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path>
+```
+
+The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a `judge-pass` fail-closed
+(stale verdict head, malformed verdict, out-of-range index, undisposed finding) means re-run the judge at
+the current head, never a silent severity-only fallback on a wired gate. See Gate Review Sub-Loop Contract
+Phase 3.5.
+
+The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md), [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) Phase 3) remain authoritative for the full refusal list and fail-closed cases; this inline emphasis exists so the sanctioned path is visible at the point of dispatch without following a link. A subagent that skipped the cross-ref and hand-rolled `Promise.all` + transcript-tailing burned ~189k tokens and had to be interrupted and restarted fresh — do not repeat that.
+
+**Bounded test runs (enforced — #1650):** Every `node --test` / `npm test` invocation an agent launches directly on a suite containing gh-mocking tests MUST be bounded by a hard timeout: `timeout 90 node --test <file>` (or wrap the run in `timeout`). Never invoke an unbounded `node --test` / `npm test` on such a suite. (Piping through `head` is NOT a substitute — it bounds output lines, not execution time; a hung test producing no output is never killed.) Failure mode: a gh-mocking test that hangs on a real `gh`/run-id call blocks the whole drive — #1526 stalled 65+ seconds on `upsert-checkpoint-verdict.test.mjs`, and a retrospective subagent hit the same hang re-running the gate suites. (#1639 stabilizes the environmental suites themselves; this guardrail bounds the run so a single hung test cannot stall a drive.) `npm run verify` already bounds its suites; this applies to ad-hoc / per-file test runs an agent launches directly.
+
+**Bounded Copilot/CI watch (enforced — #1660):** Copilot/CI watches an agent launches directly MUST be bounded — use `dev-loops gate probe-copilot --timeout-ms 300000` (5min) + re-check, or `timeout 600 <cmd>` — never an unbounded 30min+ blocking watch. Failure mode: `copilot-pr-handoff.mjs` emits a 30min default wait (`COPILOT_REVIEW_WAIT_TIMEOUT_MS = 1,800,000`); #1537 hung 55min and #1525 hung 20min on unbounded watches, each requiring interrupt+resume. Always pass an explicit bounded timeout on probe/watch commands; re-check on timeout rather than blocking.
+
+**Bounded, exhaustively (dispatch discipline, #1907):** the two guardrails above name the two most-hit failure modes, not the boundary of the rule — every `bash` call this agent launches directly is `timeout`-bounded (or issued through a wrapper that already bounds itself), and every watch/probe carries an explicit `--timeout-ms` (or equivalent bounded flag); an unbounded blocking call is never sanctioned regardless of which command it wraps.
+
+**Gate fan-out dispatch discipline (bounded-parallel default, #1907):** gate fan-out is bounded-parallel by DEFAULT — up to `gates.fanout.maxConcurrent` dispatch units per wave via blocking joins; `gates.fanout.sequential: true` is the documented load fallback for a SIGTERM-prone environment, never the default. A transient dispatch failure (429/5xx) retries the same unit with exponential backoff; a hard 4xx (e.g. `402`) escalates to the supervisor/operator immediately instead of retrying into the same wall; provider choice stays a per-dispatch decision (`STICKY-PROVIDER-PIN`). Post-merge, the only remaining steps are the main-green check, one board-move attempt, and the final report — never re-running consolidation machinery whose artifacts already exist. Owning rules: `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`, `GATE-EXEC-DISPATCH-RETRY-BACKOFF`, `GATE-EXEC-END-OF-RUN-CONTRACT` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); `STICKY-PROVIDER-PIN` in [Anti-patterns](../docs/anti-patterns.md).
+
+**Blocking join for a nested single-child step, never sleep-poll (#1907):** when this run's turn is awaiting a nested child IT dispatched — a judge, a fixer, or a single reviewer — join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Do not sleep-poll for it and do not end the turn to await it (observed failure: repeated 180/240/300s sleep loops). This is the actionable alternative behind `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../docs/anti-patterns.md); see [dev-loop agent — Subagent delegation](../../agents/dev-loop.md#subagent-delegation) for the agent-contract pin of the same rule.
+
+**Agent-level stall → auto-fresh-dispatch (#1669):** When a dev-loop child shows no turn progress for `workflow.stallDetection.thresholdMinutes` (default 5) with no pending supervisor request, auto-bail to a fresh-context dispatch (carrying worktree state + a recovery brief) instead of waiting through a manual interrupt+resume. Distinguish a TRUE stall (no turn progress) from a SANCTIONED long watch (an active bash/subagent tool call that heartbeats its runner claim) — a fresh runner-coordination heartbeat exempts a run from stall. Detector + probe: `node scripts/loop/detect-agent-stall.mjs --repo <owner/name> [--pr <n>] [--status <path>]`. See [Agent-level stall detection](../docs/agent-stall-detection.md). Interrupt+resume remains the manual fallback.
+
 **Round-cap budget check (enforced):** After every watch cycle, fix pass, or reply-resolve, check whether completed Copilot review rounds have reached the resolved round cap (`refinement.maxCopilotRounds`, default 5; light-dispatched PRs resolve the lower `resolveEffectiveCopilotRoundCap`, default 1 — owned by `COPILOT-FOLLOWUP-ROUND-CAP`). Stop re-requesting Copilot review when the limit is reached **within that review cycle**. Exception: the post-convergence new-cycle re-request carve-out (a converged loop that later takes significant post-convergence changes on a newer head opens a new cycle even if the previous one hit the cap) is owned by `COPILOT-FOLLOWUP-ROUND-CAP`. Read these gate-cadence facts via the token-economical convention above (`run-watch-cycle.mjs --concise`, or `--jq`/`--silent` for a single field/predicate) — never `| python3` or `node -e`.
 
 ## Shorthand issue-based auto trigger contract
@@ -169,7 +228,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 Headless/`--auto` only. The enqueue refinement gate never lets an un-refined issue reach the pickup column: in `--auto` mode `add-queue-item.mjs` diverts it to the non-pickup park column with a recorded reason (`refined:false, diverted:true, parkedColumn, reason`), and it deliberately does NOT grill — synthesizing the missing artifact is this orchestrator's job, never the coordinator script's (keeps `OPS-NO-INLINE-INTERPRETER` clean). So a headless auto session that finds the pickup source empty may still have parked issues awaiting refinement. Before idling, run this bounded sub-loop (skip it entirely for interactive runs and for a specific `--issue`/`--pr` target):
 
 1. **Discover (deterministic, no LLM).** List parked un-refined issues via `node <dev-loops-package-root>/cli/index.mjs queue parked-unrefined --repo <owner/name>` (project auto-resolved from `.devloops`; add `--jq`/`--silent` per the token-economical convention). It reads the park column and runs the same refinement-completeness check as the enqueue gate; each item carries `{ issueNumber, reason, missing }`. Empty list → nothing to refine; proceed to the normal fail-closed idle. Iterate the returned items in **ascending `issueNumber` order**, and attempt each **at most once per session** (steps 2–4). This is what bounds the sub-loop: one grill attempt per discovered item, then idle.
-2. **Auto-refine (the LLM step, here in the orchestrator).** For each discovered item, in order, run `/loop-grill <issueNumber> --auto` (the `loop-grill` skill synthesizes AC/DoD/Non-goals into the issue body — do not re-implement grilling, and never move it into a coordinator script).
+2. **Auto-refine (the LLM step, here in the orchestrator).** For each discovered item, in order, run `/dev-loops:loop-grill <issueNumber> --auto` (or `/loop-grill <issueNumber> --auto` in the dev-loops repo itself) (the `loop-grill` skill synthesizes AC/DoD/Non-goals into the issue body — do not re-implement grilling, and never move it into a coordinator script).
 3. **Promote via the sanctioned move.** After a `grill-clean` verdict the issue is refined — confirmed by the same completeness check the enqueue gate runs (`detectIssueRefinementArtifact`), so this move admits exactly what the gate would. The item is already on the board in the park column, so **move** it into the pickup column with `node <dev-loops-package-root>/cli/index.mjs queue move --repo <owner/name> --item <issueNumber> --to-column "<pickup column>"` (the configured Next Up column). Do NOT use `add-queue-item` here: it is an idempotent no-op for an already-present item and cannot promote it. Then continue to the next discovered item.
 4. **Fail-safe (unrefinable → leave parked, do not re-attempt).** If grilling cannot produce a usable artifact (`N unresolved items`, or the body still lacks AC/DoD/linked-doc), do NOT move the issue into the pickup column. It is already in the park column where discovery found it, so **leave it there** — no move, no re-enqueue — and surface the `reason` from the step-1 discovery output for a human. **Advance to the next discovered item — do NOT re-grill an item already attempted this session**, so a permanently-unrefinable issue can neither spin the loop nor starve the refinable items behind it. Never hand-move an item into the pickup column that grilling could not refine.
 

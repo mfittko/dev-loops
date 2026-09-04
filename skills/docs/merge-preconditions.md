@@ -50,13 +50,16 @@ Before merge, ALL of the following MUST hold:
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
 4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule
 5. ✅ All review threads resolved
-6. ✅ Explicit merge authorization from operator
+6. ✅ Merge authorization from the operator — explicit for the active scope, or a recorded standing authorization (see [Merge authorization](#merge-authorization))
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
-8. ✅ PR **title** free of merge-blocking markers — `WIP`, `[WIP]`, `DRAFT`, `DO NOT MERGE`, `🚧` (case-insensitive)
+8. ✅ PR **title** free of merge-blocking markers — see [Title markers](#title-markers) for the exact constructions that count
+9. ✅ Size-budget human-approval requirement satisfied for an escalated/T1 PR — see [Size-budget merge gate](#size-budget-merge-gate-issue-1480)
 
-> Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
+> Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. The release fires both at Copilot-loop terminal states (`loop handoff`, #1128) and at gate-coordination terminal stops (`detect-pr-gate-coordination-state` — approval checkpoint / merge-ready / done / blocked, #1632), so a run that stops at the approval checkpoint without a Copilot-loop terminal state still releases immediately. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
-> Stranded Copilot review request (human-only): a review requested on a head that already carries Copilot's own clean submitted review is never delivered — Copilot does not re-engage a change it effectively approved — so below the round cap the loop waits indefinitely and `pre_approval_gate` cannot post. (At the cap the loop already routes to `round_cap_clean_fallback`, so the gate is not blocked and there is nothing to unstick.) Withdraw it explicitly with `node <resolved-skill-scripts>/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> --reason <why>`. It withdraws only when a request is pending (no request is an exit-0 no-op) and refuses outright unless Copilot has already submitted a review and no unresolved threads remain, and it verifies the withdrawal took effect — so prefer it over a raw `gh pr edit --remove-reviewer`, which has none of those guards. This is an operator judgement about a model's behavior: it is deliberately NOT in the sanctioned-command set and an agent must not invoke it. It also does not help when the head has advanced past the last review (the loop simply re-requests) — that case is tracked in issue 1441.
+> Stranded Copilot review request (human-only): a review requested on a head that already carries Copilot's own clean submitted review is never delivered — Copilot does not re-engage a change it effectively approved — so below the round cap the loop waits indefinitely and `pre_approval_gate` cannot post. (At the cap the loop already routes to `round_cap_clean_fallback`, so the gate is not blocked and there is nothing to unstick.) Withdraw it explicitly with `node <resolved-skill-scripts>/github/withdraw-copilot-review-request.mjs --repo <owner/name> --pr <number> --reason <why>`. It withdraws only when a request is pending (no request is an exit-0 no-op) and refuses outright unless Copilot has already submitted a review and no unresolved threads remain, and it verifies the withdrawal took effect — so prefer it over a raw `gh pr edit --remove-reviewer`, which has none of those guards. This is an operator judgement about a model's behavior: it is deliberately NOT in the sanctioned-command set and an agent must not invoke it.
+>
+> Head-advanced sibling case (issue 1441): the loop converged, the round's threads were reply-resolved on a NEW head, so `copilotReviewOnCurrentHead` is false. Withdrawing alone would just make the loop re-request Copilot on that head and strand again. The tool covers this too, but only when the delta since Copilot's last SUBMITTED review is provably a pure doc/prose bump (the same fail-closed classifier `request-copilot-review.mjs` already trusts at the round cap) — any code/test/config/CI or unclassifiable delta, a non-linear advance, or an unavailable compare still refuses, exactly as before. On success it records an operator-authorized suppression marker scoped to that exact head (`scripts/loop/_post-convergence-review-suppression.mjs`); `request-copilot-review.mjs` and the gate coordinator (`evaluatePrGateCoordination`'s `postConvergenceReviewSuppressed` input) both honor that marker so the round is not forced open again and `pre_approval_gate` can post. Any further push changes the head and invalidates the marker.
 
 ### Items 3 and 4 apply to every path, not just the dev-loop tooling
 
@@ -69,28 +72,61 @@ practice:
   dev-loop tooling calls before merging.
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
-  GitHub's own token for every non-draft PR, re-firing on push, ready-for-review,
-  a submitted review, a standalone review comment, and a created/edited PR issue
+  GitHub's own token for every non-draft PR. It is **pre-merge-only** (#1702):
+  `synchronize` (a development push) is NOT a trigger, so a dev push never
+  starts/leaves a blocking gate-evidence run — the check materializes only at a
+  pre-merge/verdict point: PR opened/reopened, `ready_for_review`, a submitted
+  or edited review, a standalone review comment, and a created/edited PR issue
   comment that starts with the gate-comment marker (`### Gate review:`) from a
-  trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`) — so a newly-opened
-  unresolved thread re-evaluates the check instead of leaving a SHA-pinned
-  green stale on the thread axis, and posting a gate verdict itself
-  re-evaluates the check instead of leaving a stale pre-verdict
-  `pending`/`failure` blocking a satisfied PR (`created` for each verdict on a
-  new head — the upsert creates a fresh comment per head; `edited` for a
-  same-head verdict update or a manual recovery edit). Evaluation always runs the DEFAULT BRANCH's
+  trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A run always posts a
+  **definitive** status (success/failure, never `pending`) to the current head's
+  resolved SHA, for two reasons: a newly-opened unresolved thread re-evaluates
+  the check instead of leaving a SHA-pinned green stale on the thread axis, and
+  a clean verdict cannot leave a stale pre-verdict `pending` blocking a
+  satisfied PR (#1702) — `not_established` (no clean verdict for the current
+  head yet) is a fail-closed `failure` that the next verdict-post re-fires to
+  `success`. The verdict is a PR
+  REVIEW (`GATE-COMMENT-SINGLE-SURFACE`): a new round's review fires
+  `pull_request_review [submitted]`, and a same-head verdict correction (the
+  upsert's in-place `PUT`) fires `pull_request_review [edited]`; the
+  issue-comment arm covers only legacy verdicts and the zero-dep fallback
+  poster. Evaluation always runs the DEFAULT BRANCH's
   detector (trusted code; the resolved PR head SHA is only the status target).
-  Recovery for a lost/failed run when the verdict comment already exists: edit
-  that comment by its id (`scripts/github/edit-comment.mjs --comment-id <id>`)
-  — the `edited` event re-fires the check. `gh run rerun` is NOT a recovery
-  path (it replays the stale original event payload). (There is no `pull_request_review_thread` Actions
+  Recovery for a lost/failed run when the verdict already exists and is
+  correct: re-run the round's verdict post with a corrected field (the upsert
+  PUTs the review in place and `edited` re-fires the check), post the next
+  round's verdict review, or — where the full toolchain is unavailable — the
+  zero-dep fallback poster's issue comment re-fires via the issue_comment
+  arm. An identical same-head rerun is a deliberate no-op and does not
+  re-fire. `gh run rerun` is not a native re-fire path (it replays the stale
+  original event payload), but it IS the sanctioned recovery for one specific
+  stuck state (issue #1935, ADR 0057): the verdict-post re-fire was CANCELLED by
+  the job's `cancel-in-progress` concurrency (a superseding review/comment event
+  landed right after it) or evaluated before the just-posted verdict was
+  API-visible, so the required status stayed `failure` on the current head even
+  though a clean current-head verdict now exists, and no further event re-fired
+  it — the merge stays `UNSTABLE`. Because the loop excludes `gate-evidence` from
+  its own CI convergence wait (`LOOP_DERIVED_CI_CHECK_NAMES`), nothing heals this
+  automatically. `scripts/github/reconcile-gate-evidence-status.mjs --repo <o/r>
+  --pr <n>` closes it deterministically at merge-readiness: it reads the
+  authoritative evidence the same way this check does
+  (`detect-checkpoint-evidence --skip-fanout-ledger-check`) and the current-head
+  `gate-evidence` status, and when the evidence is genuinely satisfied but the
+  status is stuck non-green it re-fires the run that posted the stale status
+  (`gh run rerun <id>`, id parsed from the status `target_url`). The head has not
+  moved at merge-readiness, so the replayed payload targets the correct SHA and
+  the rerun re-evaluates LIVE (now-satisfied) evidence to `success`. It is
+  fail-closed and test-pinned: when the evidence is genuinely NOT satisfied it
+  re-fires nothing, so a real "verdict missing" head keeps failing closed. The
+  reconcile never posts a status itself — it only re-triggers the trusted-base CI
+  run. (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
   comment, both of which do re-fire. One narrow residual remains: a bare
   "Unresolve conversation" UI action on an already-resolved thread, with no
   accompanying review or comment, fires only that non-triggerable event and so
   does not re-fire the check — bounded by the maintainer-gated merge, and
-  re-caught on the next push, review, or comment.) The `gate-evidence`
+  re-caught on the next review or comment.) The `gate-evidence`
   context itself is always an explicit commit status posted to the resolved PR
   head SHA (not the triggering job's own check-run, which for
   review and comment event types would land on the wrong commit — the base
@@ -98,9 +134,9 @@ practice:
   a direct GitHub API call (MCP/REST, web UI, a raw `gh` invocation outside the
   hook) skips the client-side path entirely but still cannot merge without a
   green `gate-evidence` check **once branch protection on `main` requires it**.
-  Until an operator adds it to branch protection, the check runs and reports on
-  every non-draft PR but does **not** yet block merge — it is reporting-only in
-  that window.
+  Until an operator adds it to branch protection, the check runs and reports at
+  pre-merge/verdict points on every non-draft PR but does **not** yet block
+  merge — it is reporting-only in that window.
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
@@ -130,7 +166,35 @@ Documented pattern — **write, verify, then merge alone**:
 
 The PR title is a contract surface, so a merge-blocking marker in the title is enforced
 deterministically (`findBlockingTitleMarkers` in `@dev-loops/core/loop/pr-title-markers`), not
-just reviewed:
+just reviewed. `WIP` and `DRAFT` only count as blocking when the title uses one of four
+sanctioned constructions — a genuine status claim, not a plain word match:
+
+- bracketed: `[WIP]`, `[draft]`
+- parenthesized: `(wip)`, `(DRAFT)`
+- colon-suffixed: `WIP: add feature`, `draft: new module`
+- standalone (the entire title, nothing else): `WIP`, `draft`
+
+A hyphen, underscore, or space joining the marker word into a compound noun phrase names a
+component instead of asserting status, and is exempt from every construction —
+`draft-gate`, `draft_gate`, `draft gate`, `wip-branch` never flag; nor does a conventional-commit
+scope that happens to share the marker word, e.g. `fix(draft): support x`. `DO NOT MERGE` and `🚧` (anywhere in the title) are matched directly rather than through the
+four constructions. Only whitespace joins the words of `DO NOT MERGE`, so hyphen- or
+underscore-joined spellings such as `do-not-merge` do not flag — case-insensitive throughout.
+
+A dash-set-off trailing tag (`Fix login flow — WIP`) is deliberately not a construction: no
+dash-based rule closes the tag without also reopening the compound-noun false positive for a
+different dash character, so it stays unflagged; `WIP:`/`DRAFT:` remains one keystroke away.
+
+The bracket/paren/colon constructions require their opening delimiter to sit at the start of the
+title or right after whitespace — never directly after a letter, `/`, or `-`. This anchoring is
+what exempts a conventional-commit scope, a path segment, and a scoped label from matching, and it
+is also why a marker preceded by other punctuation with no space (`Fix bug,(draft)`,
+`Fix login(wip)`) stays unflagged: the anchor is whitespace-only, not punctuation-only. The colon
+construction additionally requires the colon to close the tag — followed by whitespace or
+end-of-title, never another character — so `draft:latest` and `wip:branch` read as an identifier,
+not a status claim.
+
+This is enforced at two points:
 
 - At the **draft → ready-for-review** transition: `ready-for-review` refuses `gh pr ready` while the
   title carries a marker.
@@ -142,9 +206,28 @@ A marker is allowed only while the PR is still in draft; it must be removed befo
 
 ## Merge authorization
 
-- Merge authorization MUST be explicit for the active issue/PR scope
+- Merge authorization MUST be explicit for the active issue/PR scope, OR supplied by a recorded standing authorization (below)
 - `"Merge authorized if gates green"` is valid explicit authorization
-- Implied approval from prior turns MUST NOT be treated as sufficient
+- Implied approval from prior turns MUST NOT be treated as sufficient; only a recorded standing authorization carries across scopes
+
+### Recorded standing authorization (ADR 0050)
+
+An operator MAY record a standing merge authorization that applies to every PR whose
+full gate pipeline passes: clean `draft_gate` and `pre_approval_gate` verdicts at the
+current head, zero unresolved review threads, a green gate-evidence audit, and green CI.
+A standing authorization is valid only when all of the following hold:
+
+- the repo config sets `autonomy.humanMergeOnly: false` (the config alone authorizes nothing)
+- the authorization is recorded in a durable artifact (an accepted decision record naming
+  the condition), not only in a chat turn
+- the gate pass is complete at the current head; a gate-incomplete PR stays unauthorized
+
+Absent a recorded standing authorization, the per-scope explicit rule above governs.
+
+A standing authorization is surfaced through the same per-run authorization signal the
+rest of the loop already consumes (`resolveEffectiveMergeAuthorized`); sibling contracts
+that require "explicit merge authorization for the active scope" are satisfied by that
+signal and need no separate carve-out.
 
 ### `autonomy.humanMergeOnly` — fixed human-only merge (non-overridable)
 
@@ -162,6 +245,37 @@ human action and this authorization step is **non-overridable**:
 
 This makes human-gated merge an enforced repo invariant, not a per-run default an
 explicit instruction can unlock.
+
+### Size-budget merge gate (issue #1480)
+
+An escalated or T1 PR (the `gates.size` outcome recorded on the `pre_approval_gate`
+verdict — see [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
+needs a **human APPROVED review** and **zero unresolved CHANGES_REQUESTED** before
+merge, regardless of any standing merge authorization above. A Copilot-clean verdict
+alone is never sufficient for these PRs — pairing with, not replacing, the ordinary
+merge-authorization rule.
+
+- The pure decision (`resolveSizeBudgetHumanApprovalRequired`,
+  `@dev-loops/core/loop/size-budget-merge-gate`) requires human approval when the
+  recorded size-budget `outcome` is `escalate` or `block`, OR the PR touches the T1
+  tier (a T1 file is in the diff) — a plain `pass` outcome with no T1 slice carries no
+  size-imposed requirement at all.
+- "Human APPROVED" is derived from the raw PR reviews (`resolveHumanReviewDecision`,
+  same module), NOT GitHub's own aggregate `reviewDecision` field: a review authored
+  by the Copilot bot login is excluded before the decision is computed, so Copilot's
+  own approval can never satisfy this gate. Any other login's latest submitted review
+  being `APPROVED`, with no other human login's latest review left at
+  `CHANGES_REQUESTED`, satisfies it.
+- **Fail-closed**: absent or unreadable size-budget evidence (a `pre_approval_gate`
+  verdict posted without the `**Size-budget outcome/T1 slice**` fields — see
+  `detect-checkpoint-evidence.mjs`), an unreadable T1-touch signal, an unknown review
+  decision, or a nonzero/unreadable unresolved-CHANGES_REQUESTED count all require
+  human approval — never treated as a silent pass.
+- `resolveLifecycleState` (`@dev-loops/core/loop/lifecycle-state`) consults this gate
+  IN ADDITION TO `resolveEffectiveMergeAuthorized`: when it is required, the lifecycle
+  parks at `pre_approval_gate` (the existing human-approval handoff) instead of
+  advancing to `merge`, even under a standing authorization. The agent must not run
+  `gh pr merge` for such a PR until a human review satisfies it.
 
 ### `approval` — offer to assign a human at the handoff (opt-in)
 
@@ -202,14 +316,18 @@ human(s).
 
 ## Post-merge
 
+- Fast-forward the main checkout's local `main` to `origin/main` (#1596): resolve the main (primary) checkout via `git worktree list` (first entry) from the current cwd, then run `git -C <main-checkout> fetch origin main && [ "$(git -C <main-checkout> rev-parse --abbrev-ref HEAD)" = main ] && git -C <main-checkout> merge --ff-only origin/main` (best-effort, `|| true`). The post-merge hooks (Pi `post-merge-update`, Claude `post-tool-use-merge`) also run this automatically; the explicit step makes it deterministic for the dev-loop's own merges. The merge only advances `main` when the main checkout is on `main` (the normal state); a main checkout not on `main` should be reconciled manually first. `--ff-only` refuses a diverged main without rewriting history — a diverged main checkout warns and continues, never blocking. Read-only gate scripts (`probe-ci-status.mjs`, `detect-copilot-loop-state.mjs`, …) run from the main checkout, so a stale local `main` made them execute pre-merge code (re-introducing the CI-wait stall every PR).
+- Verify all main-push workflows are green at the merge commit (`docs/decisions/0050-agent-merge-on-full-gate-pass.md` names this a load-bearing post-merge duty): `node scripts/github/probe-ci-status.mjs --repo <owner/name> --commit <merge-commit-oid> --timeout-ms <n>` is the sanctioned commit-scoped read — it combines the most-recent 100 GitHub Actions workflow runs for that commit (any failure → `failure`, any run still queued/in_progress → `pending`, otherwise `success`) and block-waits up to `--timeout-ms` for the runs to settle. This replaces an ad hoc `gh run list --commit <oid>` + hand-rolled poll, which bypasses the standard `--jq`/`--silent` output contract.
 - Sync the merged item's board Status to Done (issue #1458), run BEFORE worktree removal below:
-  `node scripts/github/post-merge-board-sync.mjs --repo <owner/name> --pr <number> --issue <linked-issue> || true`
-  (omit `--issue` when the merged PR is itself the queue item; the `|| true` masks the residual usage-error exits the
-  same way the archive step's does). Resolves the board from `.devloops`
-  (`tracker.board`/`queue.board`) relative to `cwd` — there is no `--repo-root` flag — using local `gh` auth, so it
-  must run from the main checkout: the next step removes the worktree, leaving it with no cwd. Best-effort and NON-FATAL on a parsed
-  invocation: a board that is not configured, an item not on the board, or any API failure logs a warning to stderr
-  and exits 0 instead of failing the merge; a usage/argument error still exits 1 and an invalid `--jq` filter exits 2.
+  `dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true`
+  (omit `--item` when the merged PR is itself the queue item — an unfilled/empty `--item` falls back to `--pr`; the
+  `|| true` masks the residual usage-error exits the same way the archive step's does). `--logical-column done`
+  resolves the Done column through `queue.statusColumns`, so a board that renamed Done still converges. Resolves the
+  board from `.devloops` (`tracker.board`) relative to `cwd` — there is no `--repo-root` flag — using
+  local `gh` auth, so it must run from the main checkout: the next step removes the worktree, leaving it with no cwd.
+  Best-effort and NON-FATAL on a parsed invocation: a board that is not configured, an item not on the board, or any
+  API failure exits 0 with a JSON result describing the skip instead of failing the merge; a usage/argument error
+  still exits 1 and an invalid `--jq` filter exits 2.
 - Remove merged worktree (canonical, `WORKTREE-CLEANUP`): `node scripts/loop/cleanup-worktree.mjs --repo-root <main> (--issue <n> | --pr <n>)`.
   See [Worktree usage guidance](./worktree-guidance.md#post-merge-cleanup).
 - Archive long-done queue items (operator-induced, NOT a cron): `node scripts/projects/archive-done-items.mjs --repo <owner/name> || true`.
@@ -217,7 +335,7 @@ human(s).
   board items whose issue/PR has been closed at least that long. Best-effort: run it as a standard post-merge step but ignore
   any non-zero exit (a successful run that finds nothing to archive exits 0; a board/config-resolution/API error exits
   non-zero, which the `|| true` masks) — a failure here must never block merge completion. See
-  [projects queue usage](./projects-queue-usage.md).
+  [Projects Queue Contract](./projects-queue-contract.md#archiving-completed-items).
 - Clean up stale branches
 
 ## Cross-references

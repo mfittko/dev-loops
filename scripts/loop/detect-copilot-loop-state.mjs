@@ -31,6 +31,7 @@ import {
   LOOP_DERIVED_CI_CHECK_NAMES,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
@@ -162,50 +163,6 @@ async function fetchPrView({ repo, pr }, { env, ghCommand, runChild = defaultRun
     throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
   }
   return payload;
-}
-async function fetchCopilotRequested({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
-  const result = await runChild(
-    ghCommand,
-    ["api", `repos/${repo}/pulls/${pr}/requested_reviewers`],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  let payload;
-  try {
-    payload = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${result.stdout.trim() || "<empty>"}`);
-  }
-  const users = Array.isArray(payload?.users) ? payload.users : [];
-  return users.some((user) => isCopilotLogin(user?.login));
-}
-async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
-  const result = await runChild(
-    ghCommand,
-    ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",
-      '.[] | select(.event == "review_requested") | select(.requested_reviewer.login != null) | {login: .requested_reviewer.login, created_at: .created_at}'],
-    env,
-  );
-  if (result.code !== 0) {
-    return null;
-  }
-  let latestAt = null;
-  for (const line of result.stdout.trim().split("\n")) {
-    if (!line) continue;
-    try {
-      const event = JSON.parse(line);
-      if (isCopilotLogin(event?.login)) {
-        if (latestAt === null || event.created_at > latestAt) {
-          latestAt = event.created_at;
-        }
-      }
-    } catch {
-    }
-  }
-  return latestAt;
 }
 function extractPrVisibleCheckNames(statusCheckRollup) {
   if (!Array.isArray(statusCheckRollup)) return [];
@@ -389,29 +346,10 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   // that would turn it green.
   const fallbackDerivation = deriveLoopCiStatusFromRollup(prData.statusCheckRollup);
   const fallbackCiStatus = fallbackDerivation.status;
-  let copilotReviewRequestStatus;
-  if (reviewRequestStatusOverride !== undefined) {
-    copilotReviewRequestStatus = reviewRequestStatusOverride;
-  } else if (reviewSummary.hasPendingReviewOnCurrentHead) {
-    copilotReviewRequestStatus = "requested";
-  } else {
-    const copilotRequested = await fetchCopilotRequested({ repo, pr }, { env, ghCommand, runChild });
-    if (!copilotRequested) {
-      copilotReviewRequestStatus = "none";
-    } else if (!reviewSummary.hasSubmittedReviewOnCurrentHead) {
-      copilotReviewRequestStatus = "requested";
-    } else {
-      const latestRequestAt = await fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild });
-      const latestReviewAt = reviewSummary.latestSubmittedReviewOnCurrentHeadAt;
-      if (latestRequestAt !== null && latestReviewAt !== null && latestRequestAt > latestReviewAt) {
-        copilotReviewRequestStatus = "requested";
-      } else if (latestRequestAt === null) {
-        copilotReviewRequestStatus = "requested";
-      } else {
-        copilotReviewRequestStatus = "none";
-      }
-    }
-  }
+  const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
+    { repo, pr, reviewSummary, reviewRequestStatusOverride },
+    { env, ghCommand, runChild },
+  );
   let unresolvedThreadCount = 0;
   let actionableThreadCount = 0;
   let lastCopilotRoundMaxSignal = null;

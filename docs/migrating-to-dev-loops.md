@@ -78,13 +78,12 @@ set a run-id yourself, prefer `DEVLOOPS_RUN_ID`.
 
 ## 4. Config file location
 
-Consumer overrides should live in **`.devloops`** at the repo root. The legacy
-`.pi/dev-loop/settings.*` and `.pi/dev-loop/overrides.*` are deprecated fallbacks that load
-only when no `.devloops` is present (a single deprecation warning fires when a legacy path is found) — move your
-overrides to `.devloops` (`.yml`/`.json` extensions are also accepted). Packaged defaults
+Consumer overrides live in **`.devloops`** at the repo root (`.yml`/`.json` extensions are also accepted). Packaged defaults
 ship with the extension in `packages/core/src/config/extension-defaults.yaml`; a repo-local
 `.pi/dev-loop/defaults.*` layer merges on top of them when present, and you only need to
-override the keys you want to change.
+override the keys you want to change. The legacy `.pi/dev-loop/settings.*` and `.pi/dev-loop/overrides.*`
+fallbacks were removed at the v1.0.0 cut (ADR 0017) and no longer load — if you still have one, move its
+contents into `.devloops`.
 
 ## 5. Node version floor
 

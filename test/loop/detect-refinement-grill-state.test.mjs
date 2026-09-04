@@ -24,6 +24,13 @@ const REFINED_BODY = [
   "",
   "- [ ] the thing works",
   "",
+  "## Definition of done",
+  "",
+  "- all checks pass",
+  "",
+  "## Non-goals",
+  "",
+  "- none",
 ].join("\n");
 
 const PROSE_BODY = [

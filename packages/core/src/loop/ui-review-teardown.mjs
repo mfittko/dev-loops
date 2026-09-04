@@ -36,6 +36,8 @@
  * rather than dropping anything.
  */
 
+import { trimmedOrNull } from "./normalize.mjs";
+
 const ROW_STATUS = Object.freeze({
   DROPPED: "dropped",
   DROP_FAILED: "drop-failed",
@@ -247,7 +249,7 @@ export async function teardown(
   //    accretes one secret entry per run; deleting it keeps the hosting target
   //    from piling up. Only ever acts on an explicit gist id from the report
   //    result; a missing id is NONE (nothing published, or Claude-hosted).
-  const gistId = typeof gist?.id === "string" && gist.id.trim().length > 0 ? gist.id.trim() : null;
+  const gistId = trimmedOrNull(gist?.id);
   let gistLedger;
   if (!gistId) {
     gistLedger = { id: null, url: gist?.url ?? null, deleted: false, status: GIST_STATUS.NONE, detail: "no hosting gist to prune" };

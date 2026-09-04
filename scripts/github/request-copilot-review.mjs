@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   buildParseError,
   containsBareCopilotSummon,
@@ -7,23 +8,34 @@ import {
   isCopilotLogin,
   isDirectCliRun,
   parseReviewThreads,
+  resolveCopilotReviewPresence,
   resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { readSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
+import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
 const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
 const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
+// The requested-reviewer / review-list reads that verify a `gh pr edit` request
+// landed are eventually consistent: an immediate read can still see stale
+// (empty) state even though the request already succeeded. Re-read on this
+// fixed backoff before declaring failure — bounded, not open-ended, so a
+// genuine failure (Copilot truly unavailable on the repo) still fails closed
+// after ~30s total instead of hanging indefinitely.
+const VERIFICATION_RETRY_DELAYS_MS = [5000, 10000, 15000];
 const USAGE = `Usage: request-copilot-review.mjs --repo <owner/name> --pr <number>
 Request Copilot as a reviewer on a GitHub pull request.
 Required:
@@ -37,6 +49,12 @@ Optional:
                             composed round cap min(localImplementation.lightMode.
                             maxCopilotRounds ?? 1, refinement.maxCopilotRounds)
                             instead of refinement.maxCopilotRounds alone.
+Verification:
+  After requesting Copilot as a reviewer, the requested-reviewer/review-list
+  read is retried on a fixed backoff (~30s total) before declaring failure,
+  because that read is eventually consistent and can briefly still show stale
+  (empty) state right after a genuinely successful request. The request
+  itself is issued exactly once and never re-issued per probe.
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
@@ -57,6 +75,11 @@ Request statuses:
   suppressed_post_convergence_docs_only  At the round cap, the post-convergence head bump is a provable pure doc/prose
                                 delta since the last Copilot-reviewed head; no fresh blocking round is forced (the prior
                                 converged review stands). Any code/test/config/CI or unclassifiable delta re-opens the round.
+                                Also returned BELOW the round cap when an operator explicitly withdrew a stranded review
+                                request for this exact head via withdraw-copilot-review-request.mjs (issue #1441): that
+                                tool proves and records the same pure doc/prose delta since Copilot's last submitted
+                                review, so a below-cap re-request cannot immediately re-strand the same head. Never
+                                triggered without that prior explicit withdrawal, and any further push invalidates it.
   suppressed_draft              PR is in draft state; review requests are blocked until the PR is marked ready for review
 Error output (stderr, JSON):
   Argument/usage errors:
@@ -179,6 +202,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     copilotReviewPresent: reviewSummary.copilotReviewPresent,
     hasCopilotPendingReviewOnCurrentHead: reviewSummary.hasPendingReviewOnCurrentHead,
     hasCopilotSubmittedReviewOnCurrentHead: reviewSummary.hasSubmittedReviewOnCurrentHead,
+    latestSubmittedReviewOnCurrentHeadAt: reviewSummary.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviewSummary.completedCopilotReviewRounds,
   };
 }
@@ -215,30 +239,19 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 //
 // Queried lazily — only when the raw (un-reset) count has already hit the cap — so
 // the common (under-cap) request path keeps its existing gh-call contract and adds
-// no API round-trip. Uses a single issue-comments fetch (the same source the gate
-// detector uses for the latest clean draft_gate marker), not the full checkpoint-
-// evidence pipeline, to keep the added surface minimal. Best-effort: a fetch failure
-// falls back to the raw count, so the cap is never silently disabled.
+// no API round-trip. Reads the same two verdict surfaces every other gate-evidence
+// reader shares (fetchGateEvidenceComments), not the full checkpoint-evidence
+// pipeline, to keep the added surface minimal. Best-effort: a fetch failure falls
+// back to the raw count, so the cap is never silently disabled.
 async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
   try {
     const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
       ? before.prData.headRefOid.trim()
       : null;
-    const result = await runChild(
-      ghCommand,
-      ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
-      env,
+    const comments = await fetchGateEvidenceComments(
+      { repo: options.repo, pr: options.pr },
+      { env, ghCommand, runChild },
     );
-    if (result.code !== 0) {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
-    let comments;
-    try {
-      const payload = JSON.parse(result.stdout);
-      comments = Array.isArray(payload) ? payload.flat() : [];
-    } catch {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
     const gateSummary = summarizeGateReviewComments(comments);
     const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
     if (draftGateResetAtMs == null) {
@@ -251,6 +264,31 @@ async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCo
   }
 }
 
+// Review-surface presence: Copilot is present when it is a requested reviewer
+// OR has submitted any review on this PR — never decided by assignee
+// membership. A reviewer-configured repo (`copilot-pull-request-reviewer[bot]`)
+// auto-reviews without appearing in requested_reviewers and `@copilot` can be a
+// silent no-op, so prior submitted reviews prove presence and must not be
+// misreported as "Copilot absent / not enabled".
+function isReviewNowObservablyInProgress(before, after) {
+  const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
+  const reviewPresence = resolveCopilotReviewPresence({
+    requested: after.requested,
+    reviews: after.prData?.reviews ?? [],
+  });
+  return after.requested
+    || after.hasPendingReviewOnCurrentHead
+    || reviewCountIncreased
+    || reviewPresence.present;
+}
+// Shared verification-read step: re-fetch review state and check presence in
+// one call, so the initial post-edit read and every in-loop retry read below
+// share one implementation instead of two copies that could drift.
+async function checkReviewObservablyInProgress(options, runtime, before) {
+  const after = await fetchCopilotReviewState(options, runtime);
+  return isReviewNowObservablyInProgress(before, after);
+}
+
 async function fetchCopilotReviewState(options, runtime) {
   const requestedReviewers = await fetchRequestedReviewers(options, runtime);
   const reviews = await fetchCopilotReviewIds(options, runtime);
@@ -261,6 +299,7 @@ async function fetchCopilotReviewState(options, runtime) {
     copilotReviewPresent: reviews.copilotReviewPresent,
     hasPendingReviewOnCurrentHead: reviews.hasCopilotPendingReviewOnCurrentHead,
     hasSubmittedReviewOnCurrentHead: reviews.hasCopilotSubmittedReviewOnCurrentHead,
+    latestSubmittedReviewOnCurrentHeadAt: reviews.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviews.completedCopilotReviewRounds,
   };
 }
@@ -271,6 +310,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
     copilotReviewPresent = false,
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
+    latestSubmittedReviewOnCurrentHeadAt = null,
   } = priorReviewState;
   if (typeof options.sameHeadCleanConverged === "boolean") {
     return options.sameHeadCleanConverged;
@@ -284,10 +324,19 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       runtime,
     );
     const parsedThreads = parseReviewThreads(threadsPayload);
+    const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        copilotRequested: requested,
+      },
+      runtime,
+    );
     const snapshot = buildSnapshotFromPrFacts({
       prData,
       prNumber: options.pr,
-      copilotReviewRequestStatus: hasPendingReviewOnCurrentHead || requested ? "requested" : "none",
+      copilotReviewRequestStatus,
       copilotReviewPresent,
       copilotReviewOnCurrentHead: hasSubmittedReviewOnCurrentHead,
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
@@ -311,6 +360,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
     copilotReviewPresent = false,
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
+    latestSubmittedReviewOnCurrentHeadAt = null,
   } = priorReviewState;
   if (prData === null) {
     return { eligible: false, interpretation: null };
@@ -321,10 +371,19 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       runtime,
     );
     const parsedThreads = parseReviewThreads(threadsPayload);
+    const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
+      {
+        repo: options.repo,
+        pr: options.pr,
+        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        copilotRequested: requested,
+      },
+      runtime,
+    );
     const snapshot = buildSnapshotFromPrFacts({
       prData,
       prNumber: options.pr,
-      copilotReviewRequestStatus: hasPendingReviewOnCurrentHead || requested ? "requested" : "none",
+      copilotReviewRequestStatus,
       copilotReviewPresent,
       copilotReviewOnCurrentHead: hasSubmittedReviewOnCurrentHead,
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
@@ -360,7 +419,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
 // Only a provably linear, rename-free, non-truncated delta yields the destination
 // paths, which the path-based resolveConvergenceCarryForward can then classify.
 const COMPARE_FILES_PAGE_CAP = 300;
-async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
     result = await runChild(ghCommand, ["api", `repos/${repo}/compare/${base}...${head}`], env);
@@ -396,7 +455,7 @@ async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env,
   }
   return changed;
 }
-function getLastCopilotReviewHeadSha(prData) {
+export function getLastCopilotReviewHeadSha(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
   // Only consider submitted (non-PENDING) Copilot reviews.
   // A PENDING review on a stale head could be selected as "most recent"
@@ -431,6 +490,20 @@ function getLastCopilotReviewHeadSha(prData) {
   // Tolerate both GraphQL commit.oid and REST commit_id shapes
   const sha = lastReview?.commit?.oid ?? lastReview?.commit_id;
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
+}
+
+// Shared classification seam (issue #1441): the same fail-closed
+// fetch-delta-then-classify pipeline the round-cap AC2 check below performs,
+// exposed for withdraw-copilot-review-request.mjs and
+// detect-pr-gate-coordination-state.mjs to reuse instead of re-implementing it.
+// Fails closed to `{ carryForward: false }` whenever the delta itself is
+// unavailable/unproven (see fetchDeltaChangedFiles above for every such case).
+export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime = {}) {
+  const deltaChangedFiles = await fetchDeltaChangedFiles({ repo, base, head }, runtime);
+  if (deltaChangedFiles === null) {
+    return { carryForward: false, reason: "delta since the last reviewed head is unavailable or unproven (fail-closed)" };
+  }
+  return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
 }
 function classifyRequestFailure(detail) {
   const normalized = detail.toLowerCase();
@@ -535,7 +608,10 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
     violationCommentIds,
   };
 }
-export async function performCopilotReviewRequest(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function performCopilotReviewRequest(
+  options,
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, delayImpl = delay } = {},
+) {
   const runtime = { env, ghCommand, runChild };
   const before = await fetchCopilotReviewState(options, runtime);
   if (before.prData?.isDraft) {
@@ -560,6 +636,50 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
         detail: "Non-Copilot PR comment(s) detected containing @copilot or /copilot. Delete the violating comment(s) and re-run this helper instead.",
         violationCommentIds: copilotCommentCheck.violationCommentIds,
       };
+    }
+  }
+  // Operator-authorized post-convergence suppression (#1441): withdraw-copilot-
+  // review-request.mjs writes a marker, scoped to an EXACT head SHA, only after
+  // explicitly withdrawing a stranded request on a head that has advanced past
+  // Copilot's last submitted review with a provable pure doc/prose delta since
+  // then. Checked BEFORE the round-cap logic below (unlike the round-cap AC2
+  // carry-forward check, this applies regardless of round count) so a below-cap
+  // re-request cannot immediately re-strand the exact head an operator already
+  // proved is safe to skip. Never automatic: without that marker this check is a
+  // no-op, and any further push invalidates it (new head no longer matches).
+  if (!before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
+    const currentHeadSha = typeof before.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
+      ? before.prData.headRefOid.trim()
+      : null;
+    if (currentHeadSha) {
+      const marker = await readSuppressionMarker(
+        { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
+        { checkpointDir: options.checkpointDir },
+      );
+      // Re-derive the compare BASE live too, not just the classification —
+      // defense in depth against a stale or hand-edited marker whose
+      // lastReviewedHeadSha no longer names Copilot's actual last submitted
+      // review. A marker that disagrees with the live value must not suppress.
+      const liveLastReviewedHeadSha = marker ? getLastCopilotReviewHeadSha(before.prData) : null;
+      if (marker && marker.headSha === currentHeadSha
+          && liveLastReviewedHeadSha && liveLastReviewedHeadSha === marker.lastReviewedHeadSha) {
+        // Re-verify live rather than trusting the marker's stored reason —
+        // defense in depth against a stale or hand-edited file.
+        const reverified = await classifyDeltaSinceLastReview(
+          { repo: options.repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+          runtime,
+        );
+        if (reverified.carryForward) {
+          return {
+            ok: true,
+            status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+            repo: options.repo,
+            pr: options.pr,
+            reviewer: "Copilot",
+            detail: `An operator explicitly withdrew a stranded Copilot review request for this exact head (${marker.reason}); the delta since Copilot's last submitted review is still provably a pure doc/prose bump (${reverified.reason}), so no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+          };
+        }
+      }
     }
   }
   let refinementConfig = { maxCopilotRounds: 5 };
@@ -747,10 +867,35 @@ export async function performCopilotReviewRequest(options, { env = process.env, 
   if (requestResult.status === "already-requested") {
     return withConfigWarning(requestResult);
   }
-  const after = await fetchCopilotReviewState(options, runtime);
-  const reviewCountIncreased = after.copilotReviewIds.length > before.copilotReviewIds.length;
-  const reviewNowObservablyInProgress = after.requested || after.hasPendingReviewOnCurrentHead || reviewCountIncreased;
+  // Bounded retry against the read-after-write race documented above: only the
+  // verification READ repeats here, never the `gh pr edit` request itself. A
+  // transient throw from ANY verification read — the initial post-edit read
+  // included — consumes the next scheduled delay and re-probes instead of
+  // aborting immediately; the error only propagates if the final attempt in
+  // the window also throws, in which case that last error is what the caller
+  // sees (not the generic empty-result message below, which is reserved for
+  // the case where every read succeeds but the review never shows up).
+  let reviewNowObservablyInProgress = false;
+  let lastReadError = null;
+  try {
+    reviewNowObservablyInProgress = await checkReviewObservablyInProgress(options, runtime, before);
+  } catch (error) {
+    lastReadError = error;
+  }
+  for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
+    await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
+    try {
+      reviewNowObservablyInProgress = await checkReviewObservablyInProgress(options, runtime, before);
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      continue;
+    }
+  }
   if (!reviewNowObservablyInProgress) {
+    if (lastReadError) {
+      throw lastReadError;
+    }
     throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
   }
   return withConfigWarning({

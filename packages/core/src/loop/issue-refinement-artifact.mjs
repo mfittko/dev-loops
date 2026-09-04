@@ -3,12 +3,20 @@
  *
  * Implements the bounded refinement check required by the draft gate per
  * issue #532: a draft PR cannot leave draft unless the linked issue has an
- * explicit refinement artifact (Acceptance criteria section, DoD section,
- * or a linked refinement doc) that the pre-approval gate can verify
- * against. Prose-only issues (Problem / Root Cause / Fix) without an
- * `Acceptance criteria` or `DoD` section cause the draft gate to post
- * `verdict=blocked` with the `missing_refinement_artifact` finding.
- *
+ * explicit refinement artifact — the full matrix of an Acceptance criteria
+ * checklist plus a Definition of done checklist plus an explicit Non-goals
+ * section, or a linked refinement doc that is a complete artifact on its own —
+ * that the pre-approval gate can verify against. An issue missing any matrix
+ * part fails closed with the matching finding (`missing_dod_checklist`,
+ * `missing_ac_checklist`, `missing_explicit_non_goals`, or
+ * `missing_refinement_artifact`); prose-only issues (Problem / Root Cause /
+ * Fix) cause the draft gate to post `verdict=blocked` with the
+ * `missing_refinement_artifact` finding.
+ */
+import { existsSync } from "node:fs";
+import path from "node:path";
+
+/**
  * This module owns:
  * - canonical section-name matching for AC / DoD blocks
  * - bullet-item extraction (checklist `- [ ]`/`- [x]` and top-level `- ` bullets)
@@ -29,14 +37,42 @@ export const REFINEMENT_SOURCE = Object.freeze({
 
 const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
-// The three artifact sources, any ONE of which satisfies the refinement gate.
-// Single source of truth for the "missing" vocabulary reported when none is
-// present — consumed by the enqueue gate and the parked-unrefined discovery.
+// REFINEMENT_ARTIFACT_SOURCES: the full-matrix floor vocabulary (#1877). The
+// refinement floor is the FULL AC/DoD/Non-goals matrix (a linked refinement
+// doc remains a complete artifact on its own) — this list is the shape of a
+// COMPLETE artifact, not a menu where any one entry suffices.
 export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
   "Acceptance criteria section",
   "Definition of done section",
   "linked refinement doc",
 ]);
+
+/**
+ * #1866: finding reported when the issue body carries a refinement artifact
+ * (AC/DoD checklist or a resolvable linked doc) but no explicit Non-goals
+ * section. Mirrors the PR-path narrative-invariant code
+ * (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.code`) so both spec surfaces
+ * name the missing invariant identically.
+ */
+export const MISSING_EXPLICIT_NON_GOALS_FINDING = "missing_explicit_non_goals";
+
+/**
+ * #1877: finding reported when the issue body carries an AC checklist (and
+ * the Non-goals floor is met) but NO DoD checklist — the tracker-backed
+ * refinement floor is the full AC/DoD/Non-goals matrix (each AC mapped to its
+ * DoD item(s), plus explicit Non-goals), not AC-or-DoD. This lifts the
+ * epic-only matrix requirement (epic-tree-refinement-procedure.md) into the
+ * general refinement predicate, reconciled with #1866's Non-goals parity.
+ */
+export const MISSING_DOD_CHECKLIST_FINDING = "missing_dod_checklist";
+
+/**
+ * #1877: the symmetric matrix miss — a DoD checklist with no Acceptance
+ * criteria checklist. The matrix is authored at refinement on the issue; the
+ * PR then carries the derived checklist whose boxes the pre-approval gate
+ * requires all ticked.
+ */
+export const MISSING_AC_CHECKLIST_FINDING = "missing_ac_checklist";
 
 /**
  * Canonical list of section headings that satisfy the refinement check.
@@ -46,15 +82,151 @@ export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
  *   - one DoD-style section (DoD or Definition of Done)
  */
 const ACCEPTANCE_SECTION_PATTERNS = Object.freeze([
-  /^acceptance criteria\s*$/i,
+  // #1877 round-6: index 0 is the exact-canonical ANCHOR family —
+  // `^acceptance criteria\b` — so a decorated-variant canonical heading
+  // (`## Acceptance criteria (v2)`, `## Definition of done — core`) still lands
+  // in the exact bucket rather than matching NO pattern at all (the alias
+  // families anchor on the `AC`/`DoD` abbreviations and never fire for the
+  // spelled-out phrase). The anchor stays distinct from the alias family below
+  // (`/^ac\b/`), so the precedence contract is unchanged: a spelled-out
+  // canonical heading always outranks an abbreviation-shaped alias heading.
+  /^acceptance criteria\b.*$/i,
   /^ac\b.*$/i,
 ]);
 
 const DOD_SECTION_PATTERNS = Object.freeze([
-  /^definition of done\s*$/i,
-  /^done\s*$/i,
-  /^dod\s*$/i,
+  // Same anchor-family widening as the AC family (see above). #1877 round-7:
+  // the ALIAS arms are widened symmetrically with the AC family too — a
+  // decorated-variant alias heading (`## DoD (v2)`, `## Done — core`) must land
+  // in the alias bucket, not in NO bucket (a `$`-anchored alias silently
+  // disarms the PR-side DoD read and false-blocks the issue side).
+  /^definition of done\b.*$/i,
+  /^done\b.*$/i,
+  /^dod\b.*$/i,
 ]);
+
+/**
+ * Normalize a heading name before section-pattern matching (#1877 round-6
+ * parser hardening): GitHub authors legitimately write decorated canonical
+ * headings — `## **Acceptance criteria**`, `## Acceptance criteria:`,
+ * `## Acceptance criteria ##` — and the raw ATX capture (`match[2]`)
+ * fails every pattern family on them, silently disarming the deterministic
+ * AC/DoD reads (PR-side extractor fail-open; issue-side false
+ * missing_refinement_artifact). Strip the harmless decoration once, at the
+ * parse boundary, so exact-vs-alias precedence stays intact: a normalized
+ * `Acceptance criteria` still matches the exact pattern, a decorated alias
+ * still matches its alias family. Strips: surrounding emphasis runs of any
+ * of `*`/`_` (bold `**`/`__` and single-char italic `*`/`_` alike, #1877
+ * round-7), surrounding backtick runs, trailing `:` and surrounding
+ * whitespace.
+ * Deliberately NOT touched: interior text (a real `AC (v2) - final` name keeps
+ * its interior), leading `#` (ATX markers never reach `match[2]`), and any
+ * decoration a section pattern itself could rely on (none does — every family
+ * anchors at the name's start).
+ */
+function normalizeHeadingName(name) {
+  if (typeof name !== "string") return name;
+  return name
+    // trailing decoration first: closing `##` ATX-style, colons, whitespace
+    .replace(/\s*:*\s*$/u, "")
+    .replace(/\s*#+\s*$/u, "")
+    // surrounding emphasis/backtick runs (any length, must pair; #1877
+    // round-7: a run may be single-char italic `*`/`_` as well as bold
+    // `**`/`__`, so `## *Acceptance criteria*` and `## _Definition of done_`
+    // normalize exactly like their bold forms)
+    .replace(/^[*_`]+/u, "")
+    .replace(/[*_`]+$/u, "")
+    .trim();
+}
+
+// #1877 alias-precedence: exact canonical headings (the first pattern in each
+// family) must outrank loose aliases (`/^ac\b/`, `/^dod\b/`) so a matrix-shaped
+// heading the refined-issue contract itself produces (`## AC/DoD matrix`,
+// `## AC → DoD mapping`) can never hijack the canonical section read. Split
+// each pattern family into [exact, aliases] by convention: pattern index 0
+// is the exact canonical match, the rest are aliases.
+const EXACT_PATTERN_INDEX = 0;
+
+/**
+ * Resolve the sections matching a heading-pattern family with exact-first
+ * precedence (#1877): the first section matching the EXACT canonical pattern
+ * (index 0) wins over any earlier section that only matched a loose alias
+ * (e.g. `## AC/DoD matrix` before `## Acceptance criteria`). When no exact
+ * match exists, the first alias match is returned (alias-only bodies keep
+ * working). Returns null when no section matches at all.
+ */
+function findSectionByPatterns(sections, patterns) {
+  const exact = patterns[EXACT_PATTERN_INDEX];
+  for (const section of sections) {
+    if (exact.test(section.name)) {
+      return section;
+    }
+  }
+  for (const section of sections) {
+    for (let i = 1; i < patterns.length; i += 1) {
+      if (patterns[i].test(section.name)) {
+        return section;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect ALL sections matching a heading-pattern family, exact-first ordered
+ * (exact canonical matches before alias-only matches). Shared with
+ * `findSectionByPatterns`'s precedence semantics so single-section consumers
+ * and union consumers (#1877 PR-body unchecked-box extraction) cannot drift.
+ */
+function findAllSectionsByPatterns(sections, patterns) {
+  const exact = patterns[EXACT_PATTERN_INDEX];
+  const exactMatches = [];
+  const aliasMatches = [];
+  for (const section of sections) {
+    if (exact.test(section.name)) {
+      exactMatches.push(section);
+    } else {
+      for (let i = 1; i < patterns.length; i += 1) {
+        if (patterns[i].test(section.name)) {
+          aliasMatches.push(section);
+          break;
+        }
+      }
+    }
+  }
+  return [...exactMatches, ...aliasMatches];
+}
+
+/**
+ * Flatten a section (heading record) into a body string that extends past
+ * `###` sub-headings (#1877): a section's checklist may nest items under
+ * deeper sub-headings (`### edge cases` inside `## Acceptance criteria`), so
+ * join the section and every following section of a DEEPER heading level up
+ * to the next same-or-shallower heading. `parseMarkdownSections` terminates a
+ * section's `bodyLines` at ANY heading, which is correct for heading
+ * matching but hides unchecked boxes from consumers that must see ALL of a
+ * canonical section's boxes.
+ */
+function flattenSectionDeep(sections, startIndex) {
+  const start = sections[startIndex];
+  // #1877 round-6 heading-name re-injection fix: the raw sub-heading NAME is
+  // NEVER re-injected into the text the checklist parser re-parses. A name is
+  // a different input class from checklist body text: a fence-opening name
+  // (`### ``` `) used to corrupt the parser's fence state and eat every real
+  // box after it (fail-open), and a checkbox-shaped name (`### - [ ] fake`)
+  // used to be counted as a phantom unchecked item (spurious fail-closed).
+  // Only already-classified bodyLines are joined — a heading can never match
+  // any line-level grammar, and real boxes under sub-headings stay visible
+  // because their bodyLines still join normally. (Keeping a marker line is
+  // unnecessary: parseChecklistItems never needed the heading boundary to
+  // track fence state — body lines carry their own fences.)
+  const parts = [start.bodyLines.join("\n")];
+  for (let i = startIndex + 1; i < sections.length; i += 1) {
+    if (sections[i].level <= start.level) break;
+    parts.push(sections[i].bodyLines.join("\n"));
+  }
+  return parts.join("\n");
+}
 
 /**
  * Fenced-code-span tracker. Given the previous fence state and the current
@@ -119,7 +291,12 @@ export function parseMarkdownSections(body) {
       }
       current = {
         level: match[1].length,
-        name: match[2],
+        // #1877 round-6: normalize the captured name so decorated canonical
+        // headings (`## **Acceptance criteria**`) match the section patterns.
+        // The RAW name is never re-parsed as body text (flattenSectionDeep no
+        // longer re-injects it), so normalization is the only consumer of the
+        // capture — the raw form is not retained (no consumer reads it).
+        name: normalizeHeadingName(match[2]),
         bodyLines: [],
       };
       continue;
@@ -136,32 +313,31 @@ export function parseMarkdownSections(body) {
   return sections;
 }
 
-function findSectionByPatterns(sections, patterns) {
-  for (const section of sections) {
-    for (const pattern of patterns) {
-      if (pattern.test(section.name)) {
-        return section;
-      }
-    }
-  }
-  return null;
-}
 
 /**
- * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
- * checklist items and top-level plain `- ` bullets (dash at column 0, so
- * nested/indented sub-bullets are not counted). Empty checkbox placeholders
- * (`- [ ]` / `- [x]` with no trailing text) are skipped, not counted, so a
- * section of only unfilled placeholders reports as unrefined. Returns the
- * trimmed item text for each matching line. The checkbox state (checked vs
- * unchecked) is intentionally not preserved: callers only need the item
- * text to satisfy the refinement-artifact contract.
+ * Parse bullet/checkbox items from a section body into item states. Each
+ * checkbox item — any GFM/CommonMark task-list marker: `-`/`*`/`+` bullets,
+ * ordered `N.`/`N)`, and blockquote-nested `> - [ ]` (#1877 round-6 grammar
+ * widening; parity with tick-verified-checkboxes.mjs's `[-*+]`) — becomes
+ * `{ text, checked }` (`checked` true only for a ticked `[x]`/`[X]` marker,
+ * read from the captured marker group, never a whole-line re-test); a
+ * top-level plain bullet (`- text`, dash at column 0 so nested/indented
+ * sub-bullets are not counted)
+ * becomes `{ text, checked: null }` — it has no checkbox to tick. Empty
+ * checkbox placeholders (`- [ ]` / `- [x]` with no trailing text) are skipped,
+ * not counted, so a section of only unfilled placeholders reports as unrefined.
+ * Code-fenced lines are skipped (same fence logic as parseMarkdownSections,
+ * issue #1025) so a body cannot spoof the AC/DoD gate with code-fenced
+ * checkboxes.
  *
- * This is only ever called on the body of an already-recognized AC/DoD
- * section (see `detectIssueRefinementArtifact`), so counting plain bullets
- * is scoped to those sections and never affects prose sections.
+ * Shared by `extractChecklistItems` (text-only) and the unticked-AC check
+ * (`extractUncheckedChecklistItems`) so the two never drift on what counts as
+ * a checklist item or on the checkbox-state read (#1621). Only ever called on
+ * the body of an already-recognized AC/DoD section (see
+ * `detectIssueRefinementArtifact`), so counting plain bullets is scoped to
+ * those sections and never affects prose sections.
  */
-export function extractChecklistItems(sectionBody) {
+function parseChecklistItems(sectionBody) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
     return [];
   }
@@ -171,22 +347,35 @@ export function extractChecklistItems(sectionBody) {
   let fence = null;
 
   for (const line of lines) {
-    // Checkboxes/bullets inside a fenced code span are non-interactive text, not
-    // real items — skip them so a body cannot spoof the AC/DoD gate with
-    // code-fenced checkboxes (issue #1025). Same fence logic as parseMarkdownSections.
     const step = stepFence(fence, line);
     fence = step.fence;
     if (step.insideFence) {
       continue;
     }
-    // Checklist item: `- [ ]` / `- [x]` (leading indentation tolerated).
-    // Consume ANY checkbox-marker line here; push only when it carries text,
-    // so empty placeholders (`- [ ]`) are skipped rather than counted.
-    const checkboxMatch = /^\s*-\s+\[(?:[ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
+    // Checklist item: GFM/CommonMark task-list markers (#1877 round-6 parser
+    // hardening): `-`/`*`/`+` bullets, ordered `N.`/`N)`, and blockquote-nested
+    // `> - [ ]` — the forms GitHub itself renders as interactive checkboxes.
+    // Grammar parity with tick-verified-checkboxes.mjs's CHECKBOX_RE (same
+    // #1877 round-1 widening): both accept bullets, ordered markers, and
+    // blockquote-nested forms, so every form this extractor surfaces as
+    // unchecked is flippable by the tick tool. Consume ANY checkbox-marker line
+    // here; push only when it carries text, so empty placeholders (`- [ ]`) are
+    // skipped rather than counted. #1877 round-7: the tick state comes from the
+    // CAPTURED marker group of this single match — never a second whole-line
+    // re-test. An unanchored `/\[(?:[xX])\]/u.test(line)` reads an UNCHECKED box
+    // whose label text merely mentions `[x]` (e.g. `- [ ] verify [x] flags`) as
+    // checked, silently disarming the deterministic block — the exact
+    // fail-open class the marker-anchored pre-#1877 read could not produce.
+    const checkboxMatch =
+      /^\s*(?:>|\s)*(?:[-*+]|\d+[.)])\s+\[([ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
     if (checkboxMatch) {
-      const text = (checkboxMatch[1] ?? "").trim();
+      const text = (checkboxMatch[2] ?? "").trim();
       if (text.length > 0) {
-        items.push(text);
+        // `checked` is true only for a ticked marker (`[x]`/`[X]`); a space
+        // marker (`[ ]`) is false — regardless of what the label text says.
+        // A plain bullet has no checkbox, so it stays `null` below — it is
+        // neither ticked nor unticked and does not count as an unticked AC.
+        items.push({ text, checked: checkboxMatch[1] !== " " });
       }
       continue;
     }
@@ -196,7 +385,7 @@ export function extractChecklistItems(sectionBody) {
     if (bulletMatch) {
       const text = bulletMatch[1].trim();
       if (text.length > 0) {
-        items.push(text);
+        items.push({ text, checked: null });
       }
     }
   }
@@ -205,17 +394,51 @@ export function extractChecklistItems(sectionBody) {
 }
 
 /**
+ * Extract bullet items from a section body. Counts both `- [ ]`/`- [x]`
+ * checklist items and top-level plain `- ` bullets. Empty checkbox placeholders
+ * are skipped. Returns the trimmed item text for each matching line; the
+ * checkbox state is not preserved (use `extractUncheckedChecklistItems` for
+ * that). Thin wrapper over `parseChecklistItems` so the text-only contract
+ * stays byte-identical to its pre-#1621 shape.
+ */
+export function extractChecklistItems(sectionBody) {
+  return parseChecklistItems(sectionBody).map((item) => item.text);
+}
+
+/**
+ * Extract the text of UNCHECKED checkbox items (`- [ ]`) from a section body.
+ * A ticked box (`- [x]`/`- [X]`) and a plain bullet (no checkbox) are both
+ * excluded — only an actual unticked checkbox is an "unticked AC item"
+ * (#1621, ACCEPT-CRITERIA-VERIFY-AND-REFLECT). Empty placeholders are skipped.
+ * Thin wrapper over `parseChecklistItems` so the unticked read never drifts
+ * from `extractChecklistItems` on what counts as a checklist item.
+ */
+export function extractUncheckedChecklistItems(sectionBody) {
+  return parseChecklistItems(sectionBody)
+    .filter((item) => item.checked === false)
+    .map((item) => item.text);
+}
+
+/**
  * Detect a linked refinement doc path from the issue body.
  * Looks for explicit `tmp/refinement/<n>-plan.md` style paths and the
  * `## Refinement` / `## Plan` / `## Refinement doc` sections.
  */
 export function detectLinkedRefinementDoc(body) {
+
   if (typeof body !== "string" || body.length === 0) {
     return { found: false, path: null, reason: "empty-body" };
   }
 
   const pathMatch = /(?:^|\s|[`(\[<])(tmp\/refinement\/[A-Za-z0-9._/\-]+\.md)\b/u.exec(body);
   if (pathMatch) {
+    // Containment guard: reject actual '..' path segments (not benign
+    // double-dot filenames) so the new fs-probe wiring can never be used as a
+    // filesystem existence oracle outside tmp/refinement
+    // (e.g. `tmp/refinement/../../docs/some-existing.md`).
+    if (pathMatch[1].split("/").some((segment) => segment === "..")) {
+      return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+    }
     return { found: true, path: pathMatch[1], reason: "explicit-path" };
   }
 
@@ -229,6 +452,11 @@ export function detectLinkedRefinementDoc(body) {
   if (refinementSection) {
     const inlinePath = /(?:^|\s)(tmp\/refinement\/[^\s)`'"]+\.md)\b/u.exec(refinementSection.bodyLines.join("\n"));
     if (inlinePath) {
+      // Containment guard: same segment-based '..' rejection as the
+      // explicit-path branch.
+      if (inlinePath[1].split("/").some((segment) => segment === "..")) {
+        return { found: false, path: null, reason: "path-escapes-refinement-dir" };
+      }
       return { found: true, path: inlinePath[1], reason: "refinement-section-path" };
     }
   }
@@ -239,26 +467,59 @@ export function detectLinkedRefinementDoc(body) {
 /**
  * Detect the refinement artifact on a parsed issue body.
  *
+ * #1866: the tracker-backed refinement floor is the artifact (AC checklist,
+ * DoD checklist, or a resolvable linked refinement doc) AND an explicit,
+ * non-empty Non-goals section — the loop-grill / artifact-authority contract
+ * requires Non-goals on a refined issue body, so the deterministic check
+ * enforces it (fail-closed) with the distinct finding
+ * `MISSING_EXPLICIT_NON_GOALS_FINDING`. The non-goals matcher is shared with
+ * `validatePrBodySpec` (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns`),
+ * so the two spec surfaces cannot drift on what counts as an explicit
+ * Non-goals section. `hasACs` keeps its caller-facing meaning: true only when
+ * the FULL check passes, so every `.hasACs` consumer (enqueue gate, draft
+ * gate, parked-items discovery, gate context) fails closed with no call-site
+ * change.
+ *
+ * `resolveLinkedDoc` (optional, #1866): a `(path) => boolean` callback used to
+ * verify that a linked `tmp/refinement/*.md` doc actually resolves (e.g.
+ * `existsSync`). Enforcement-point callers (enqueue gate, draft-gate
+ * linked-issue path) supply it; a linked doc found in the body then satisfies
+ * the artifact check only when the callback returns true. When the callback is
+ * not supplied the predicate stays pure/no-I/O and behavior is unchanged, and
+ * the `linkedDoc` result carries no `resolves` field. When supplied and the
+ * doc does not resolve, `linkedDoc.resolves === false` and the linked doc does
+ * not satisfy the artifact check (other artifact sources still count).
+ *
+ * Result-shape note: on a `missing_explicit_non_goals` result, `source` keeps
+ * the detected artifact origin (e.g. `issue-body-ac`) so callers/reporting can
+ * still see what artifact exists; `hasACs` is false because the full
+ * refinement check did not pass.
+ *
  * @param {object} input
  * @param {string} [input.body]  Raw issue body Markdown.
  * @param {number} [input.issueNumber]  Issue number, used for linked-doc convention.
+ * @param {Function} [input.resolveLinkedDoc]  Optional `(path) => boolean` doc-resolution check.
  * @returns {{
  *   hasACs: boolean,
+ *   hasNonGoals: boolean,
  *   source: string,
  *   acItems: string[],
+ *   uncheckedAcItems: string[],
  *   dodItems: string[],
  *   sections: string[],
- *   linkedDoc: { found: boolean, path: string|null, reason: string },
+ *   linkedDoc: { found: boolean, path: string|null, reason: string, resolves?: boolean },
  *   reason: string,
  *   finding: string|null,
  * }}
  */
-export function detectIssueRefinementArtifact({ body = "", issueNumber = null } = {}) {
+export function detectIssueRefinementArtifact({ body = "", issueNumber = null, resolveLinkedDoc = null } = {}) {
   if (typeof body !== "string" || body.length === 0) {
     return {
       hasACs: false,
+      hasNonGoals: false,
       source: REFINEMENT_SOURCE.MISSING,
       acItems: [],
+      uncheckedAcItems: [],
       dodItems: [],
       sections: [],
       linkedDoc: { found: false, path: null, reason: "empty-body" },
@@ -273,57 +534,133 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null } 
   const acceptanceSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
 
+  // CONSUMER-CONTRACT BOUNDARY (#1877, intentional asymmetry): the issue-side
+  // reads above are strict — ONE exact-first section, NO deep flattening —
+  // while extractPrBodyUncheckedChecklistItems (PR side) unions ALL matching
+  // sections and deep-flattens past ### sub-headings. The issue side is a
+  // presence check of the refinement matrix: a checklist hidden entirely
+  // under a ### sub-heading fails CLOSED (reported missing, the issue stays
+  // parked for human refinement). The PR side enforces a hard gate over the
+  // derived checklist: it must NEVER miss an unchecked box, so it fails open
+  // on nothing — it unions and deep-flattens. Do not "unify" these reads: the
+  // two failure directions are both deliberate (issue side = safe direction,
+  // PR side = fail-closed gate).
+
   const acItems = acceptanceSection ? extractChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
+  // Unticked AC checkboxes (`- [ ]`) of the spec-of-record — the
+  // ACCEPT-CRITERIA-VERIFY-AND-REFLECT precondition a clean pre_approval_gate
+  // must refuse on (#1621). Only actual unticked checkboxes count; a ticked
+  // box and a plain bullet (no checkbox) are both excluded.
+  const uncheckedAcItems = acceptanceSection ? extractUncheckedChecklistItems(acceptanceSection.bodyLines.join("\n")) : [];
   const dodItems = dodSection ? extractChecklistItems(dodSection.bodyLines.join("\n")) : [];
 
-  const linkedDoc = detectLinkedRefinementDoc(body);
-
-  if (acItems.length > 0) {
-    return {
-      hasACs: true,
-      source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
-      acItems,
-      dodItems,
-      sections: sectionNames,
-      linkedDoc,
-      reason: `Found ${acItems.length} Acceptance criteria checklist item(s) in the issue body.`,
-      finding: null,
-    };
+  let linkedDoc = detectLinkedRefinementDoc(body);
+  let linkedDocResolves = linkedDoc.found;
+  if (linkedDoc.found && typeof resolveLinkedDoc === "function") {
+    linkedDocResolves = resolveLinkedDoc(linkedDoc.path) === true;
+    linkedDoc = { ...linkedDoc, resolves: linkedDocResolves };
   }
 
-  if (dodItems.length > 0) {
-    return {
-      hasACs: true,
-      source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
-      acItems,
-      dodItems,
-      sections: sectionNames,
-      linkedDoc,
-      reason: `Found ${dodItems.length} DoD checklist item(s) in the issue body.`,
-      finding: null,
-    };
-  }
+  // #1866: explicit Non-goals section required on a refined tracker-backed
+  // issue body — same matcher the PR-body spec path uses, so the two cannot
+  // drift. A heading-only or fenced-only section does not count
+  // (sectionHasBody anti-spoof).
+  const hasNonGoals = sectionHasBody(
+    findSectionByPatterns(sections, PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns),
+  );
 
-  if (linkedDoc.found) {
+  const artifactSource = acItems.length > 0
+    ? REFINEMENT_SOURCE.ISSUE_BODY_AC
+    : dodItems.length > 0
+      ? REFINEMENT_SOURCE.ISSUE_BODY_DOD
+      : linkedDocResolves
+        ? REFINEMENT_SOURCE.LINKED_DOC
+        : null;
+
+  const base = {
+    hasNonGoals,
+    acItems,
+    uncheckedAcItems,
+    dodItems,
+    sections: sectionNames,
+    linkedDoc,
+  };
+
+  if (artifactSource !== null) {
+    if (!hasNonGoals) {
+      return {
+        ...base,
+        hasACs: false,
+        source: artifactSource,
+        reason:
+          `Issue body carries a refinement artifact (${artifactSource}) but no explicit Non-goals section; ` +
+          "the tracker-backed refinement contract requires one (rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; " +
+          "e.g. run the loop-grill synthesis). Refusing: the refinement check fails closed without an explicit Non-goals section.",
+        finding: MISSING_EXPLICIT_NON_GOALS_FINDING,
+      };
+    }
+    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_AC) {
+      // #1877 matrix floor: an AC checklist alone is no longer a complete
+      // refinement artifact on a tracker-backed issue — the matrix is each AC
+      // mapped to its DoD item(s) plus explicit Non-goals, so a missing DoD
+      // checklist fails closed with its own finding. A linked refinement doc
+      // stays a complete artifact on its own (the doc itself carries the
+      // matrix).
+      if (dodItems.length === 0) {
+        return {
+          ...base,
+          hasACs: false,
+          source: artifactSource,
+          reason:
+            "Issue body carries an Acceptance criteria checklist but no Definition of done checklist; " +
+            "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
+            "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
+            "without a DoD checklist mapped to the acceptance criteria.",
+          finding: MISSING_DOD_CHECKLIST_FINDING,
+        };
+      }
+      return {
+        ...base,
+        hasACs: true,
+        source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
+        reason: `Found ${acItems.length} Acceptance criteria checklist item(s) in the issue body.`,
+        finding: null,
+      };
+    }
+    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_DOD) {
+      // #1877 matrix floor, symmetric arm: a DoD checklist with no Acceptance
+      // criteria checklist is an incomplete matrix, not a refined issue.
+      return {
+        ...base,
+        hasACs: false,
+        source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
+        reason:
+          "Issue body carries a Definition of done checklist but no Acceptance criteria checklist; " +
+          "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
+          "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
+          "without acceptance criteria for the DoD items to map to.",
+        finding: MISSING_AC_CHECKLIST_FINDING,
+      };
+    }
     return {
+      ...base,
       hasACs: true,
       source: REFINEMENT_SOURCE.LINKED_DOC,
       acItems: [],
+      uncheckedAcItems: [],
       dodItems: [],
-      sections: sectionNames,
-      linkedDoc,
       reason: `Issue body links a refinement doc at ${linkedDoc.path}; treating that as the refinement artifact source.`,
       finding: null,
     };
   }
 
   return {
+    ...base,
     hasACs: false,
     source: REFINEMENT_SOURCE.MISSING,
     acItems: [],
+    uncheckedAcItems: [],
     dodItems: [],
-    sections: sectionNames,
-    linkedDoc,
     reason: "Issue body has no Acceptance criteria section, no DoD section, and no linked refinement doc.",
     finding: REFINEMENT_ARTIFACT_FINDING,
   };
@@ -441,10 +778,72 @@ function sectionHasBody(section) {
  * pick exactly one mode (tracker-backed, with or without a specific
  * expected issue) or issue-less — never both.
  *
- * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean }} input
+ * `requireOpenQuestions` (default `true`, issue #1863): the lightweight
+ * PR-body-as-spec contract (this function's original scope) requires an Open
+ * questions/risks section; the ordinary tracker-backed PR-description
+ * contract (skills/docs/copilot-loop-operations.md "PR description
+ * contract") does not name one. Pass `false` (see
+ * `validateTrackerBackedPrBodySpec` below) to skip the `missing_open_questions`
+ * check without touching any other invariant — the lightweight caller's
+ * default stays byte-identical.
+ *
+ * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean, requireOpenQuestions?: boolean }} input
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
  */
-export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false } = {}) {
+
+// ---------------------------------------------------------------------------
+// Grill sub-loop body predicates (GRILL-SUBLOOP-*, #1628)
+// ---------------------------------------------------------------------------
+// The loop-grill skill writes its raw Q&A transcript and synthesis to an
+// ephemeral tmp artifact and keeps only the canonical synthesized sections
+// (Acceptance criteria / Definition of done / Non-goals) plus the sanctioned
+// `<!-- loop-grill: ... -->` marker in the durable issue/PR body. The body
+// MUST NOT embed the raw grill transcript/synthesis/Q&A headings
+// (GRILL-SUBLOOP-NO-EMBED-SYNTHESIS). These pure predicates are the only
+// mechanically-enforceable part of that contract; the judgment-bound clauses
+// ("resolve every gap the grill decided", "stale contradicting prose") stay
+// agent-level.
+
+export const GRILL_MARKER_PATTERN = /<!--\s*loop-grill:\s*.*?-->/iu;
+
+/** Case-insensitive **section heading names** that embed grill material. */
+export const GRILL_EMBED_HEADING_PATTERNS = Object.freeze([
+  /^grill\s+findings$/iu,
+  /^grill\s+transcript$/iu,
+  /^grill\s+synthesis$/iu,
+  /^grill\s+q&a$/iu,
+  /^grill\s+qa$/iu,
+]);
+
+/**
+ * Detect the sanctioned `<!-- loop-grill: ... -->` marker. Pure predicate.
+ * @param {string} [body]
+ * @returns {boolean} true when the marker is present.
+ */
+export function detectGrillMarker(body = "") {
+  return typeof body === "string" && GRILL_MARKER_PATTERN.test(body);
+}
+
+/**
+ * Detect a grill transcript/synthesis/Q&A embed heading in the body. Pure
+ * predicate; returns the first offending heading name at any markdown level
+ * (# through ######) or null.
+ * @param {string} [body]
+ * @returns {string|null} the offending heading name, or null when none.
+ */
+export function detectGrillEmbedHeading(body = "") {
+  if (typeof body !== "string" || body.length === 0) return null;
+  for (const section of parseMarkdownSections(body)) {
+    for (const pattern of GRILL_EMBED_HEADING_PATTERNS) {
+      if (pattern.test(String(section.name))) {
+        return String(section.name);
+      }
+    }
+  }
+  return null;
+}
+
+export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess = false, requireOpenQuestions = true } = {}) {
   if (issueLess && Number.isInteger(expectedIssue)) {
     // Fail closed at the library boundary too (not just the CLI): the two modes
     // are contradictory and silently preferring one would hide caller bugs.
@@ -454,7 +853,8 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
   const sections = parseMarkdownSections(bodyText);
   const errors = [];
 
-  for (const { code, label, patterns } of Object.values(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
+  for (const [key, { code, label, patterns }] of Object.entries(PR_BODY_SPEC_NARRATIVE_SECTIONS)) {
+    if (key === "open_questions" && !requireOpenQuestions) continue;
     const section = findSectionByPatterns(sections, patterns);
     if (!sectionHasBody(section)) {
       errors.push({ code, message: `Missing or empty ${label} section.` });
@@ -511,6 +911,82 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
 }
 
 /**
+ * Validate a TRACKER-BACKED PR's own body against the PR-description contract
+ * (skills/docs/copilot-loop-operations.md "PR description contract", issue
+ * #1863): Acceptance criteria + Definition of done checklists, an explicit
+ * Non-goals section, and a `Closes #N`/`Fixes #N` reference — regardless of
+ * whether the linked issue itself already carries a refinement artifact. A
+ * linked issue with real ACs is necessary but not sufficient: the PR body is
+ * the portable spec-of-record a tracker-agnostic consumer reads.
+ *
+ * Thin wrapper over `validatePrBodySpec`, not a second divergent checker:
+ * `requireOpenQuestions: false` because the tracker-backed contract, unlike
+ * the lightweight PR-body-as-spec path, does not require an Open
+ * questions/risks section. `expectedIssue` is only checked when the PR closes
+ * exactly ONE issue — an umbrella PR closing several is not required to name
+ * any single one of them in the `expectedIssue` slot (each linked issue's
+ * refinement is verified separately by the caller).
+ *
+ * @param {{ body?: string, closingIssues?: number[] }} input
+ * @returns {ReturnType<typeof validatePrBodySpec>}
+ */
+export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] } = {}) {
+  const expectedIssue = Array.isArray(closingIssues) && closingIssues.length === 1 ? closingIssues[0] : null;
+  return validatePrBodySpec({ body, expectedIssue, requireOpenQuestions: false });
+}
+
+/**
+ * #1877: extract the UNCHECKED AC/DoD checkbox items from a PR body's own
+ * Acceptance criteria / Definition of done checklists — the derived,
+ * self-contained checklist that mirrors the linked issue's AC/DoD/Non-goals
+ * matrix. Any unchecked `- [ ]` in those sections means an acceptance
+ * criterion or definition-of-done item is still open, and the deterministic
+ * pre-approval block (`upsert-checkpoint-verdict.mjs`) fails the gate closed:
+ * the round is `blocked` and the PR cannot reach approval with an open
+ * acceptance criterion. This enforces COMPLETENESS (nothing left
+ * unchecked/forgotten), not truthfulness — a dishonestly-ticked `[x]` passes
+ * this mechanical check and remains the reviewer/judge's responsibility
+ * (ACCEPT-CRITERIA-VERIFY-AND-REFLECT). Composes with
+ * `tick-verified-checkboxes.mjs`: a box the gate could not verify stays
+ * unchecked and therefore blocks.
+ *
+ * Pure; no I/O. Reuses the shared section patterns and checklist parser
+ * (same `parseMarkdownSections` + `extractUncheckedChecklistItems` seams as
+ * `detectIssueRefinementArtifact` / `validatePrBodySpec`) so no parallel
+ * parser can drift. Sections absent from the body contribute no items — the
+ * draft-exit `validateTrackerBackedPrBodySpec` check (#1863) already owns
+ * requiring the sections to EXIST.
+ *
+ * @param {{ body?: string }} input
+ * @returns {{ uncheckedAcItems: string[], uncheckedDodItems: string[] }}
+ */
+export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
+  if (typeof body !== "string" || body.length === 0) {
+    return { uncheckedAcItems: [], uncheckedDodItems: [] };
+  }
+  const sections = parseMarkdownSections(body);
+  // Union the unchecked boxes across ALL sections matching each pattern
+  // family (exact-first ordered), flattening each section past its deeper
+  // sub-headings (#1877): a body nesting ACs under `###` subsections, or
+  // repeating an AC/DoD heading, must not hide unchecked boxes from the
+  // deterministic completeness block. Deduped by text (same box re-read in a
+  // duplicate section is the same box).
+  const collect = (patterns) => {
+    const matched = findAllSectionsByPatterns(sections, patterns);
+    const items = [];
+    for (let i = 0; i < sections.length; i += 1) {
+      if (!matched.includes(sections[i])) continue;
+      items.push(...extractUncheckedChecklistItems(flattenSectionDeep(sections, i)));
+    }
+    return [...new Set(items)];
+  };
+  return {
+    uncheckedAcItems: collect(ACCEPTANCE_SECTION_PATTERNS),
+    uncheckedDodItems: collect(DOD_SECTION_PATTERNS),
+  };
+}
+
+/**
  * Decide what an enqueue caller should do with a refinement-artifact result,
  * so an un-refined item never lands in the Next Up pickup column in the first
  * place. The draft gate remains the backstop for whatever slips through.
@@ -527,18 +1003,96 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
  * @returns {{ action: "enqueue" } | { action: "block"|"divert", reason: string, missing: string[] }}
  */
 export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
-  // `artifact.finding === null` is the explicit "has ANY refinement artifact"
-  // signal (AC checklist OR DoD checklist OR linked doc) — clearer than reading
-  // `hasACs`, whose name understates that a DoD or linked doc also satisfies it.
+  // `artifact.finding === null` is the explicit "passes the full refinement
+  // check" signal (artifact AND — since #1866 — an explicit Non-goals
+  // section AND — since #1877 — the full AC/DoD checklist matrix), clearer
+  // than reading `hasACs`, whose name understates what it covers.
   if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
+  }
+  // #1866: artifact present but the contract-mandated Non-goals section is
+  // absent/empty — a distinct failure with its own guidance.
+  if (artifact.finding === MISSING_EXPLICIT_NON_GOALS_FINDING) {
+    const reason =
+      "Issue carries a refinement artifact but no explicit Non-goals section. " +
+      "Add an explicit `## Non-goals` section to the issue body " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without an explicit Non-goals section.";
+    return { action: auto ? "divert" : "block", reason, missing: ["explicit Non-goals section"] };
+  }
+  // #1877 matrix arms: name the actual missing matrix arm — an AC-only or
+  // DoD-only issue is NOT artifact-less, so the generic reason below would be
+  // factually wrong and would misdirect the fix.
+  if (artifact.finding === MISSING_DOD_CHECKLIST_FINDING) {
+    const reason =
+      "Issue carries an Acceptance criteria checklist but no Definition of done checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
+      "Add a Definition of done checklist to the issue body (mapped to the acceptance criteria) " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["Definition of done checklist"] };
+  }
+  if (artifact.finding === MISSING_AC_CHECKLIST_FINDING) {
+    const reason =
+      "Issue carries a Definition of done checklist but no Acceptance criteria checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
+      "Add an Acceptance criteria checklist to the issue body (for the DoD items to map to) " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["Acceptance criteria checklist"] };
   }
   const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
     `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
-    "Add at least ONE of them — an Acceptance criteria section, a Definition of done section, or a linked refinement doc " +
-    "(e.g. run `/loop-grill <issue> --auto`, or the refiner) — before it enters the pickup queue.";
+    "Refine the issue to the full AC/DoD/Non-goals matrix — an Acceptance criteria checklist, a Definition of done checklist, and an explicit Non-goals section — " +
+    "or link a refinement doc (tmp/refinement/*.md), which is a complete artifact on its own " +
+    "(e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself), or the refiner) — before it enters the pickup queue.";
   return { action: auto ? "divert" : "block", reason, missing };
+}
+
+/**
+ * Apply the pickup-column refinement gate to one issue: fetch the issue body,
+ * run `decideEnqueueRefinementGate`, and throw the canonical `GH_API_ERROR` /
+ * `MISSING_REFINEMENT_ARTIFACT` on failure. This is the single
+ * gate-application orchestration shared by `queue add` (enqueue-time) and
+ * `queue move` (move-time) — never a second copy. It returns the gate decision
+ * so add-only (divert/park) and move-only (refined-flag) handling stays with
+ * each caller.
+ *
+ * @param {{ issueNumber: number, repo: string, env: object, runChild: Function, auto?: boolean }} input
+ * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
+ */
+export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false, repoRoot = null }) {
+  const bodyResult = await runChild(
+    "gh",
+    ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
+    env,
+  );
+  if (bodyResult.code !== 0) {
+    const detail = bodyResult.stderr?.trim() || `exit code ${bodyResult.code}`;
+    throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
+  }
+  let bodyPayload;
+  try {
+    bodyPayload = JSON.parse(bodyResult.stdout);
+  } catch {
+    throw new Error("Invalid JSON input");
+  }
+  const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
+  // #1866: a linked refinement doc satisfies the gate only when it actually
+  // resolves. Paths follow the `tmp/refinement/*.md` convention and are
+  // anchored to the caller's repo root (`repoRoot` option, falling back to
+  // process.cwd()) — never the ambient cwd of whichever subdirectory the
+  // gate happened to run from.
+  const docAnchor = repoRoot ?? process.cwd();
+  const artifact = detectIssueRefinementArtifact({
+    body,
+    issueNumber,
+    resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
+  });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto });
+  if (decision.action === "block") {
+    throw Object.assign(new Error(decision.reason), {
+      code: "MISSING_REFINEMENT_ARTIFACT",
+      missing: decision.missing,
+    });
+  }
+  return decision;
 }
 
 /**

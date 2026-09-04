@@ -4,7 +4,7 @@
 //
 // The JSON schema file is a derived artifact: every config layer the loader
 // reads (shipped extension-defaults, repo .pi/dev-loop/defaults.*, consumer
-// .devloops, legacy .pi/dev-loop/settings.*/overrides.*) is validated with
+// .devloops) is validated with
 // FileConfigSchema (see applyLayer in packages/core/src/config/config.mjs),
 // so the JSON schema is extracted from that schema rather than maintained by
 // hand. Cross-field refinements (roleTiers alias checks, per-action step
@@ -89,8 +89,7 @@ export function generateConfigJsonSchema() {
       "GENERATED FILE — do not edit by hand; regenerate with `node scripts/generate-config-schema.mjs`. " +
       "Extracted from FileConfigSchema in packages/core/src/config/config.mjs, the validator the loader " +
       "applies to every config file layer: the shipped defaults in packages/core/src/config/extension-defaults.yaml, " +
-      "the repo-local .pi/dev-loop/defaults.* layer, consumer .devloops (.yaml/.yml/.json), and the legacy " +
-      ".pi/dev-loop/settings.*/overrides.* fallbacks. The zod loader remains authoritative: cross-field " +
+      "the repo-local .pi/dev-loop/defaults.* layer, and consumer .devloops (.yaml/.yml/.json). The zod loader remains authoritative: cross-field " +
       "refinements (models.roleTiers alias resolution, uiReview step per-action requirements, regex validity) " +
       "are enforced there and cannot be expressed in JSON Schema.",
     ...body,

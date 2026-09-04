@@ -10,6 +10,7 @@ import {
   selectFlows,
   classifyFailures,
   driveUiReview,
+  isAbortedRequestFailure,
   isErrorResponseStatus,
   PAGE_ERROR_STACK_MAX_CHARS,
 } from "@dev-loops/core/loop/ui-review-drive";
@@ -208,6 +209,44 @@ test("classifyFailures: a requestFailure becomes request-failed and a pageError 
   assert.match(byKind["page-error"].message, /uncaught page error: TypeError: boom/);
   // Stage 3 exception -> source-line mapping needs the stack on the feed entry.
   assert.match(byKind["page-error"].stack, /at app\.js:42:9/);
+});
+
+// Navigating away cancels in-flight asset requests, so a multi-goto flow emits one
+// requestfailed per unfinished image/font on the page it left. Those carried
+// severity must-fix and, since `ok: failures.length === 0`, failed an otherwise
+// clean drive — a real sofatutor two-goto admin2 walk produced 13, all "cancelled".
+test("classifyFailures: browser-aborted requests are not failures, real request failures still are", () => {
+  const failures = classifyFailures({
+    requestFailures: [
+      { url: "http://x/a.svg", failure: "cancelled" },
+      { url: "http://x/b.svg", failure: "net::ERR_ABORTED" },
+      { url: "http://x/c.svg", failure: "NS_BINDING_ABORTED" },
+      { url: "http://x/d.svg", failure: "net::ERR_CONNECTION_REFUSED" },
+    ],
+  });
+  assert.equal(failures.length, 1, "only the connection-refused failure survives");
+  assert.equal(failures[0].url, "http://x/d.svg");
+  assert.equal(failures[0].severity, "must-fix");
+});
+
+test("isAbortedRequestFailure: matches every engine's abort token, ignores non-strings and real faults", () => {
+  for (const token of ["cancelled", "Cancelled", "canceled", "net::ERR_ABORTED", "NS_BINDING_ABORTED"]) {
+    assert.equal(isAbortedRequestFailure(token), true, `${token} must count as aborted`);
+  }
+  for (const token of ["net::ERR_CONNECTION_REFUSED", "net::ERR_NAME_NOT_RESOLVED", "", null, undefined, 42]) {
+    assert.equal(isAbortedRequestFailure(token), false, `${String(token)} must not count as aborted`);
+  }
+});
+
+test("attachPageListeners: an aborted request never enters the buffer, so console.json stays clean too", () => {
+  const handlers = {};
+  const page = { on: (evt, fn) => { handlers[evt] = fn; } };
+  const { getCapturedEvents } = attachPageListeners(page);
+  handlers.requestfailed({ url: () => "http://app/late.svg", failure: () => ({ errorText: "cancelled" }) });
+  handlers.requestfailed({ url: () => "http://app/gone.svg", failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }) });
+  assert.deepEqual(getCapturedEvents().requestFailures, [
+    { url: "http://app/gone.svg", failure: "net::ERR_CONNECTION_REFUSED" },
+  ]);
 });
 
 test("classifyFailures: page-error stack is null when absent and bounded when huge", () => {

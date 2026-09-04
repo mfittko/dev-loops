@@ -964,7 +964,7 @@ test("manage-sub-issues emits usage error to stderr and exits 1 on bad args", as
   const parsed = JSON.parse(result.stderr);
   assert.equal(parsed.ok, false);
   assert.ok(typeof parsed.error === "string" && parsed.error.length > 0);
-  assert.ok(typeof parsed.usage === "string" && parsed.usage.length > 0);
+  assert.equal(parsed.hint, "run with --help for usage");
 });
 
 test("manage-sub-issues prints usage to stdout and exits 0 for --help", async () => {

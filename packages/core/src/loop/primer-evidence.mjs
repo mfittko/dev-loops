@@ -1,0 +1,375 @@
+/**
+ * primer-evidence.mjs — primer dispatch ordering evidence + fail-closed fan-in
+ * validation (issue #1468 slice 3).
+ *
+ * Slice 1-2 (review-dispatch-plan.mjs) produced the deterministic request-plan
+ * artifact, request-prefix fingerprints, stable/volatile separation, and
+ * per-model primer-group partitioning. This slice closes the gap between
+ * "the rules say prime before fan-out" and "we can assert it happened": it
+ * records evidence that each request group's primer actually landed before any
+ * of that group's reviewers were released, and makes fan-in fail closed when
+ * that ordering — or the model group / request fingerprint / shared-prefix hash
+ * binding — is missing or mismatched.
+ *
+ * This module is pure and offline (no GitHub, no harness, no clock). It owns:
+ *
+ *  1. primer-evidence artifact builder — one deterministic per-gate-run record
+ *     ('<gate>-<headSha>.primer-evidence.json') pairing the request plan with
+ *     the observed primer runs and reviewer releases and deriving the ordering
+ *     verdict.
+ *  2. fail-closed validator — checks, named individually, that every request
+ *     group got its own primer run, that each primer is scoped to its own
+ *     model/prefix (never credited to another group), and that every reviewer
+ *     release happened after its group's primer landed.
+ */
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+export const PRIMER_EVIDENCE_SCHEMA_VERSION = 1;
+
+const sha = (s) => `sha256:${String(s).replace(/^sha256:/, "").trim().toLowerCase()}`;
+
+/**
+ * Deterministic artifact path for a gate run's primer evidence.
+ *
+ * @param {object} input
+ * @param {string} input.dir - directory to write under (e.g. the gate-context dir).
+ * @param {string} input.gate - gate name (pre_approval_gate, draft_gate, ...).
+ * @param {string} input.headSha - reviewed head SHA (hex, 7-64).
+ * @returns {string} absolute-style path joined under `dir`.
+ */
+export function primerEvidencePath({ dir, gate, headSha } = {}) {
+  if (typeof dir !== "string" || dir.length === 0) throw new Error("primerEvidencePath requires a dir");
+  if (typeof gate !== "string" || gate.length === 0) throw new Error("primerEvidencePath requires a gate");
+  if (typeof headSha !== "string" || !/^[0-9a-f]{7,64}$/i.test(headSha.trim())) {
+    throw new Error("primerEvidencePath requires a hex headSha");
+  }
+  return path.join(dir, `${gate}-${headSha.trim().toLowerCase()}.primer-evidence.json`);
+}
+
+/**
+ * Import a plan's request groups into a plain lookup keyed by canonical
+ * (model, requestPrefixFingerprint). Fingerprint-less groups are keyed by a
+ * per-model ordinal (`${model}::__unkeyed:<n>`), mirroring partitionPrimerGroups'
+ * per-partition separation.
+ *
+ * @param {object[]} requestGroups
+ * @returns {Map<string, object>}
+ */
+function planGroupIndex(requestGroups) {
+  const idx = new Map();
+  // Fingerprint-less groups are keyed by a PER-MODEL ordinal so a primer run
+  // maps to the SAME plan group regardless of array positions. The prior
+  // position-based `${model}::__unkeyed:${i}` key used the array index (the
+  // primer run's position), which was NOT the same index planGroupIndex used
+  // (the group's position in the plan) — a fingerprint-less run whose array
+  // index differed from its group's plan index threw a false "prefix not
+  // present" error, and validatePrimerEvidence keyed them without any index
+  // at all (`__unkeyed`). One ordinal scheme everywhere closes that drift.
+  const unkeyedOrdinals = new Map();
+  for (let i = 0; i < requestGroups.length; i++) {
+    const g = requestGroups[i];
+    let key;
+    if (g.requestPrefixFingerprint) {
+      key = `${g.model}::${g.requestPrefixFingerprint}`;
+    } else {
+      const n = unkeyedOrdinals.get(g.model) ?? 0;
+      unkeyedOrdinals.set(g.model, n + 1);
+      key = `${g.model}::__unkeyed:${n}`;
+    }
+    if (!idx.has(key)) idx.set(key, []);
+    idx.get(key).push(g);
+  }
+  return idx;
+}
+
+/** Normalize a fingerprint to a canonical `sha256:<hex>` or null. */
+function normFp(v) {
+  if (v == null) return null;
+  return sha(v);
+}
+
+/**
+ * Build the primer-evidence artifact for a gate run.
+ *
+ * @param {object} input
+ * @param {object} input.plan - the dispatch plan from buildReviewDispatchPlan().
+ * @param {Array<object>} input.primerRuns - [{ model, requestPrefixFingerprint, primerForm, landedAt }]
+ * @param {Array<object>} input.reviewerReleases - [{ model, requestPrefixFingerprint, releasedAt }]
+ * @returns {object} canonical evidence artifact.
+ */
+export function buildPrimerEvidence({ plan, primerRuns = [], reviewerReleases = [] } = {}) {
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.requestGroups)) {
+    throw new Error("buildPrimerEvidence requires a plan with requestGroups");
+  }
+  if (!Array.isArray(primerRuns)) throw new Error("primerRuns must be an array");
+  if (!Array.isArray(reviewerReleases)) throw new Error("reviewerReleases must be an array");
+
+  const groups = plan.requestGroups;
+  const idx = planGroupIndex(groups);
+
+  const runUnkeyedOrdinals = new Map();
+  const normRuns = primerRuns.map((r, i) => {
+    if (typeof r.model !== "string" || r.model.length === 0) {
+      throw new Error(`primerRuns[${i}].model must be a non-empty concrete model`);
+    }
+    const fp = normFp(r.requestPrefixFingerprint);
+    let key;
+    if (fp) {
+      key = `${r.model}::${fp}`;
+    } else {
+      const n = runUnkeyedOrdinals.get(r.model) ?? 0;
+      runUnkeyedOrdinals.set(r.model, n + 1);
+      key = `${r.model}::__unkeyed:${n}`;
+    }
+    if (!idx.has(key)) {
+      throw new Error(
+        `primerRuns[${i}] references model ${JSON.stringify(r.model)} with a prefix not present in the plan's request groups`,
+      );
+    }
+    return Object.freeze({
+      model: r.model,
+      requestPrefixFingerprint: fp,
+      primerForm: r.primerForm ?? null,
+      landedAt: Number.isFinite(r.landedAt) ? r.landedAt : null,
+    });
+  });
+
+  const normReleases = reviewerReleases.map((r, i) => {
+    return Object.freeze({
+      model: r.model,
+      requestPrefixFingerprint: normFp(r.requestPrefixFingerprint),
+      releasedAt: Number.isFinite(r.releasedAt) ? r.releasedAt : null,
+    });
+  });
+
+  return Object.freeze({
+    schemaVersion: PRIMER_EVIDENCE_SCHEMA_VERSION,
+    gate: plan.gate,
+    headSha: plan.headSha,
+    planHash: plan.planHash,
+    sharedPrefixHash: plan.sharedPrefixHash ?? null,
+    primerRuns: Object.freeze(normRuns),
+    reviewerReleases: Object.freeze(normReleases),
+  });
+}
+
+/**
+ * Fail-closed validation of primer-evidence against the request plan.
+ *
+ * @param {object} input
+ * @param {object} input.plan - dispatch plan.
+ * @param {object} input.evidence - artifact from buildPrimerEvidence().
+ * @returns {{ ok: boolean, failures: Array<{check: string, reason: string}> }}
+ */
+export function validatePrimerEvidence({ plan, evidence } = {}) {
+  const failures = [];
+
+  // shared-prefix hash binding. A plan that carries no shared-prefix hash HAS
+  // no cache-access binding to enforce (both null is a pass); when the plan
+  // carries one, the evidence must carry the SAME value. This is a real bug
+  // fix: the prior `evidence.sharedPrefixHash == null ||` clause failed even
+  // when plan and evidence were BOTH absent (a both-absent plan could never be
+  // validated).
+  if (evidence.sharedPrefixHash !== (plan.sharedPrefixHash ?? null)) {
+    failures.push({
+      check: "shared_prefix_hash",
+      reason: `evidence sharedPrefixHash ${JSON.stringify(evidence.sharedPrefixHash)} does not match the plan's ${JSON.stringify(plan.sharedPrefixHash ?? null)}`,
+    });
+  }
+
+  // plan hash binding: evidence must reference the same search. Fails closed
+  // on a MISSING evidence planHash too (the evidence was not derived from this
+  // search, or was tampered), not only on a mismatch — matching the contract
+  // text that "plan hash is missing or mismatched" refuses consolidation.
+  if (evidence.planHash == null || plan.planHash == null || evidence.planHash !== plan.planHash) {
+    failures.push({
+      check: "plan_hash",
+      reason: `evidence planHash ${JSON.stringify(evidence.planHash)} does not match the plan's ${JSON.stringify(plan.planHash)}`,
+    });
+  }
+
+  const groups = plan.requestGroups ?? [];
+  const idx = planGroupIndex(groups);
+
+  // group coverage: every request group must have a primer run bound to its
+  // model + request fingerprint.
+  const coveredKeys = new Set();
+  const coveredUnkeyedOrdinals = new Map();
+  for (const r of evidence.primerRuns) {
+    if (r.requestPrefixFingerprint) {
+      coveredKeys.add(`${r.model}::${r.requestPrefixFingerprint}`);
+    } else {
+      const n = coveredUnkeyedOrdinals.get(r.model) ?? 0;
+      coveredUnkeyedOrdinals.set(r.model, n + 1);
+      coveredKeys.add(`${r.model}::__unkeyed:${n}`);
+    }
+  }
+  const groupUnkeyedOrdinals = new Map();
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    let key;
+    if (g.requestPrefixFingerprint) {
+      key = `${g.model}::${g.requestPrefixFingerprint}`;
+    } else {
+      const n = groupUnkeyedOrdinals.get(g.model) ?? 0;
+      groupUnkeyedOrdinals.set(g.model, n + 1);
+      key = `${g.model}::__unkeyed:${n}`;
+    }
+    if (!coveredKeys.has(key)) {
+      failures.push({
+        check: "group_coverage",
+        reason: `request group ${i} (model ${JSON.stringify(g.model)}) has no primer run in the evidence`,
+      });
+    }
+  }
+
+  // model-group / request-fingerprint binding per reviewer release.
+  for (let i = 0; i < evidence.reviewerReleases.length; i++) {
+    const rel = evidence.reviewerReleases[i];
+    const key = rel.requestPrefixFingerprint
+      ? `${rel.model}::${rel.requestPrefixFingerprint}`
+      : `${rel.model}::__unkeyed`;
+    if (rel.requestPrefixFingerprint && idx.has(key)) {
+      // bound to a known group -> ok
+    } else if (rel.requestPrefixFingerprint && !idx.has(key)) {
+      failures.push({
+        check: "model_group",
+        reason: `reviewer release ${i} bound to model ${JSON.stringify(rel.model)} + fingerprint that is not a request group (heterogeneous routing must not credit one model's primer to another)`,
+      });
+    }
+    // ordering: a released reviewer must have ITS group's primer landed before
+    // it. Candidate primers are scoped to the release's OWN primer group — a
+    // keyed release binds to a same-model + same-fingerprint run, a
+    // fingerprint-less release binds to a same-model fingerprint-less run —
+    // NEVER the first same-model primer (which could belong to a different
+    // group sharing the model, e.g. a keyed group). This closes the fail-open
+    // where an unkeyed release was credited to a keyed group's earlier primer
+    // even though its own group's primer landed after it.
+    const candidates = evidence.primerRuns.filter(
+      (r) =>
+        r.model === rel.model &&
+        (rel.requestPrefixFingerprint == null
+          ? r.requestPrefixFingerprint == null
+          : r.requestPrefixFingerprint === rel.requestPrefixFingerprint),
+    );
+    if (candidates.length === 0) {
+      failures.push({
+        check: "model_group",
+        reason: `reviewer release ${i} has no primer run for model ${JSON.stringify(rel.model)}`,
+      });
+    } else {
+      // Deterministic: the barrier must hold against the LAST-landed candidate
+      // (reduce/max is order-independent, unlike .find()'s first-match). With a
+      // single same-group primer this is exactly that group's primer; only an
+      // anomalous multiplicity of same-group primers here is stricter, and
+      // stricter is the fail-closed direction.
+      const primerForRel = candidates.reduce((a, b) => (b.landedAt > a.landedAt ? b : a));
+      if (!Number.isFinite(rel.releasedAt) || !Number.isFinite(primerForRel.landedAt) || rel.releasedAt < primerForRel.landedAt) {
+        // Fail CLOSED when the ordering barrier is unprovable (missing / non-finite
+        // timestamps), not only when it is provably reversed: a release without a
+        // landed primer timestamp cannot attest the primer ran before it, so the
+        // evidence must not proceed.
+        failures.push({
+          check: "primer_order",
+          reason: `reviewer release ${i} (${JSON.stringify(rel.model)}) cannot prove its primer landed before it: releasedAt=${String(rel.releasedAt)}, primer landedAt=${String(primerForRel.landedAt)} (ordering barrier missing or violated)`,
+        });
+      }
+    }
+  }
+
+  // request-fingerprint binding for primer runs that reference a real prefix.
+  // (planUnkeyedKeys + the per-model run ordinal counter support the inverse
+  // fingerprint-LESS binding below.)
+  const planUnkeyedKeys = new Set();
+  {
+    const planUnkeyedOrdinals = new Map();
+    for (const g of groups) {
+      if (g.requestPrefixFingerprint) continue;
+      const n = planUnkeyedOrdinals.get(g.model) ?? 0;
+      planUnkeyedOrdinals.set(g.model, n + 1);
+      planUnkeyedKeys.add(`${g.model}::__unkeyed:${n}`);
+    }
+  }
+  const unkeyedRunOrdinals = new Map();
+  for (let i = 0; i < evidence.primerRuns.length; i++) {
+    const r = evidence.primerRuns[i];
+    if (r.requestPrefixFingerprint) {
+      const key = `${r.model}::${r.requestPrefixFingerprint}`;
+      if (!idx.has(key)) {
+        failures.push({
+          check: "request_fingerprint",
+          reason: `primer run ${i} request-prefix fingerprint not present in the plan's request groups for model ${JSON.stringify(r.model)}`,
+        });
+      }
+    } else {
+      // Inverse group binding for fingerprint-LESS runs: mirror the keyed
+      // check above. group_coverage proves every plan group has a primer run;
+      // this proves the reverse — that every unkeyed primer run maps to a
+      // fingerprint-less plan group for its model. Without it, a hand-edited /
+      // legacy evidence file could carry extra fingerprint-less runs for models
+      // or groups the plan never requested and still validate, breaking the
+      // "derived from the plan" invariant for unkeyed groups.
+      const n = unkeyedRunOrdinals.get(r.model) ?? 0;
+      unkeyedRunOrdinals.set(r.model, n + 1);
+      if (!planUnkeyedKeys.has(`${r.model}::__unkeyed:${n}`)) {
+        failures.push({
+          check: "request_group_unkeyed",
+          reason: `primer run ${i} (${JSON.stringify(r.model)}) is fingerprint-less but no fingerprint-less request group exists in the plan for that ordinal`,
+        });
+      }
+    }
+  }
+
+  // Drop duplicate entries (same check on the same release).
+  const seen = new Set();
+  const unique = failures.filter((f) => {
+    const key = `${f.check}|${f.reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return { ok: unique.length === 0, failures: unique };
+}
+
+/**
+ * Strict fail-closed enforcement surface (GATE-EXEC-PRIMER-EVIDENCE): throws
+ * when fan-in evidence is missing or invalid, naming the failing check. This is
+ * the refusal path a gate conductor calls after validatePrimerEvidence returns
+ * ok:false — it turns a reported failure into a hard stop.
+ *
+ * @param {object} input
+ * @param {object} input.plan - dispatch plan.
+ * @param {object} input.evidence - artifact from buildPrimerEvidence().
+ * @returns {true}
+ * @throws {Error} when any primer-evidence check fails.
+ */
+export function enforcePrimerEvidence({ plan, evidence } = {}) {
+  const r = validatePrimerEvidence({ plan, evidence });
+  if (!r.ok) {
+    throw new Error(
+      `GATE-EXEC-PRIMER-EVIDENCE: primer evidence failed validation; refusing to proceed (${r.failures.map((f) => `${f.check}: ${f.reason}`).join("; ")})`,
+    );
+  }
+  return true;
+}
+
+/**
+ * Persist the evidence artifact to its deterministic path.
+ *
+ * @param {object} input
+ * @param {string} input.dir
+ * @param {object} input.evidence
+ * @returns {Promise<{ path: string }>}
+ */
+export async function writePrimerEvidence({ dir, evidence } = {}) {
+  const target = primerEvidencePath({
+    dir,
+    gate: evidence.gate,
+    headSha: evidence.headSha,
+  });
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  return { path: target };
+}

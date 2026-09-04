@@ -92,7 +92,7 @@ The recommendation is "pursue this". `buildGraduatedPlanBody` builds a #947-cons
 - `Findings` are recorded as supporting evidence.
 - A fixed Explicit non-goals block keeps the plan from re-opening the concluded exploration.
 
-The emitted body carries the four plan-file base sections (`## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — see [Plan-file Contract](plan-file-contract.md)), so it passes `validatePlanFile` and enters the local-first plan→PR promotion path (#952) unchanged: refine it, hold the local human-review checkpoint, then `promote-plan.mjs`. Graduation is idempotent — `buildGraduatedPlanBody` is pure, so re-running reproduces the same plan file, and it fails closed (throws) on an empty required section, so a graduate exit cannot emit a plan the validator would reject.
+The emitted body carries the four plan-file base sections (`## Status`, `## Objective`, `## In scope`, `## Explicit non-goals` — see [Plan-file Contract](local-planning.md#plan-file-contract)), so it passes `validatePlanFile` and enters the local-first plan→PR promotion path (#952) unchanged: refine it, hold the local human-review checkpoint, then `promote-plan.mjs`. Graduation is idempotent — `buildGraduatedPlanBody` is pure, so re-running reproduces the same plan file, and it fails closed (throws) on an empty required section, so a graduate exit cannot emit a plan the validator would reject.
 
 ## Relaxed gate profile
 
@@ -223,16 +223,14 @@ The trace replay shows p95 dropping from 240ms to 90ms with the cache, with a
 - Work beyond the recommendation above.
 ```
 
-This plan file passes `validatePlanFile`, so it enters the local-planning flow as a new plan needing refinement: refine it, hold the local human-review checkpoint, then `promote-plan.mjs` opens the draft PR (see the [Local-Planning Worked Example](local-planning-worked-example.md)). Re-running the graduate exit reproduces the same plan body, because `buildGraduatedPlanBody` is pure.
+This plan file passes `validatePlanFile`, so it enters the local-planning flow as a new plan needing refinement: refine it, hold the local human-review checkpoint, then `promote-plan.mjs` opens the draft PR (see the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example)). Re-running the graduate exit reproduces the same plan body, because `buildGraduatedPlanBody` is pure.
 
 ## Relationship to other docs
 
 | Doc | Relationship |
 |---|---|
 | [Artifact Authority Contract](artifact-authority-contract.md) | Canonical artifact model; a graduated spike feeds the local-planning tier |
-| [Local-Planning Flow](local-planning-flow.md) | The operator sequence a graduated plan file then follows |
-| [Local-Planning Worked Example](local-planning-worked-example.md) | One plan file through promotion, where a graduated spike lands |
-| [Plan-file Contract](plan-file-contract.md) | Plan-file format and base sections the graduated body satisfies |
+| [Local Planning](local-planning.md) | Plan-file format, the operator sequence a graduated plan file then follows, and a worked example of one plan file through promotion |
 | [Public Dev Loop Contract](public-dev-loop-contract.md) | Canonical routing contract; `--spike` is one startup input |
 
 ## Non-goals

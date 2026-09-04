@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import test from "node:test";
 
@@ -548,6 +548,70 @@ test("gate prints usage with -h", async () => {
     const result = await runGate(["-h"], { cwd: tempDir });
     assert.equal(result.exitCode, 0);
     assert.ok(result.stdout.includes("Usage"), "stdout should contain usage text");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Worktree core isolation (#1627)
+// ---------------------------------------------------------------------------
+
+test("gate fails when a worktree's @dev-loops/core link escapes to the main checkout (core_link_escapes)", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-core-escape-"));
+  try {
+    const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-1627");
+    mkdirSync(path.join(worktreeDir, "packages", "core"), { recursive: true });
+    // The forbidden state: node_modules/@dev-loops/core points at the MAIN
+    // checkout's dependency tree instead of the worktree's own packages/core.
+    const mainDeps = path.join(tempDir, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainDeps, { recursive: true });
+    const linkDir = path.join(worktreeDir, "node_modules", "@dev-loops");
+    mkdirSync(linkDir, { recursive: true });
+    symlinkSync(mainDeps, path.join(linkDir, "core"));
+
+    const logFile = path.join(tempDir, "git.log");
+    const worktreeListOut = [
+      `${realpathSync(tempDir)}  535a18a [main]`,
+      `${realpathSync(worktreeDir)}  535a18a [issue-1627]`,
+    ].join("\n");
+    writeGitStub(tempDir, { worktreeListOut, logFile });
+
+    const result = await runGate([], { cwd: worktreeDir, gitDir: tempDir });
+
+    assert.equal(result.exitCode, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error, "core_link_escapes");
+    assert.ok(payload.guidance.includes("node_modules/@dev-loops/core"));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("gate passes when a worktree's @dev-loops/core link resolves into its own packages/core", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "preflight-core-ok-"));
+  try {
+    const worktreeDir = path.join(tempDir, "tmp", "worktrees", "issue-1627");
+    const realCore = path.join(worktreeDir, "packages", "core");
+    mkdirSync(realCore, { recursive: true });
+    const linkDir = path.join(worktreeDir, "node_modules", "@dev-loops");
+    mkdirSync(linkDir, { recursive: true });
+    symlinkSync(realCore, path.join(linkDir, "core"));
+
+    const logFile = path.join(tempDir, "git.log");
+    const worktreeListOut = [
+      `${realpathSync(tempDir)}  535a18a [main]`,
+      `${realpathSync(worktreeDir)}  535a18a [issue-1627]`,
+    ].join("\n");
+    writeGitStub(tempDir, { worktreeListOut, logFile });
+
+    const result = await runGate([], { cwd: worktreeDir, gitDir: tempDir });
+
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.checks.worktree, true);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

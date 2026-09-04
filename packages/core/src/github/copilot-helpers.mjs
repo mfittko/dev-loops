@@ -6,17 +6,127 @@
  * scripts and other packages/core modules.
  */
 
+import { GATE_REVIEW_VERDICT_SET } from "../loop/policy-constants.mjs";
+import { trimmedOrNull } from "../loop/normalize.mjs";
+
 // Exported so anything deciding "is there a real prior review" uses the same
 // whitelist as the loop-state reader — two copies could drift, and a guard
 // acting on the gate's behalf must agree with the gate about what a submitted
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
-const GATE_REVIEW_VERDICTS = new Set(["clean", "findings_present", "blocked"]);
+// `review` (the standalone review entrypoint, upsert-checkpoint-verdict.mjs's
+// `--gate review`) is a RECOGNIZED gate header — it is identified, not
+// absent — but carries no draft/pre-approval evidence by design (#1808 AC3).
+// Recognizing it (rather than leaving it unrecognized) is what lets
+// parseGateReviewCommentFields below short-circuit to null the instant a
+// `review` header is seen, instead of falling through to the lenient
+// draft_gate/pre_approval_gate token scan — the fallthrough that previously
+// let a `review` verdict whose findings text merely MENTIONED "draft_gate"
+// get recorded as real draft-gate evidence (a draft-gate bypass).
+const NON_EVIDENCE_GATE_NAMES = new Set(["review"]);
+const RECOGNIZED_GATE_NAMES = new Set([...GATE_REVIEW_NAMES, ...NON_EVIDENCE_GATE_NAMES]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+// Size-budget outcome vocabulary — mirrors
+// check-size-budget.mjs's computeSizeBudget outcome enum exactly; this file
+// never recomputes the outcome, only round-trips it through the verdict
+// comment.
+const GATE_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
+
+// The literal header line the gate review body always emits first
+// (upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody, re-exported
+// from there). Owned here so the machine-artifact filter below and every
+// consumer that needs to recognize "is this a real gate verdict surface" read
+// the same producer-owned literal instead of restating it. Line-start anchored
+// (`m`) so a quoted header in a reply/blockquote can't match.
+export const GATE_REVIEW_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
+
+/** Returns the matched gate name when `body` carries a genuine gate verdict header, else null. */
+export function matchGateReviewCommentHeader(body) {
+  if (typeof body !== "string") return null;
+  const match = body.match(GATE_REVIEW_COMMENT_HEADER_RE);
+  return match ? match[1] : null;
+}
+
+// Machine-authored gate artifacts that must never win the newest-gate-marker
+// tie-break in summarizeGateReviewComments/summarizeGateReviewCommentMarkers:
+// a historical standalone findings review always embedded this gate's name in
+// its header line and could quote the current head sha inside a finding's own
+// free text (the lenient gate-name+hex-token fallback in
+// parseGateReviewCommentFields would otherwise happily match that), and the
+// historical deferred-summary PR comment quoted a gate name plus a sha-shaped
+// id in its table rows the same way. Both are excluded HERE, inside the two
+// shared summarizers, because this module is the true merge point: every
+// consumer (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs,
+// ready-for-review.mjs, request-copilot-review.mjs) calls
+// summarizeGateReviewComments/summarizeGateReviewCommentMarkers to turn a raw
+// comment/review list into a gate verdict, so filtering here — rather than
+// per-caller — covers all of them by construction.
+//
+// Anchored to the start of a line (`^` with `m`) so only a marker rendered as
+// the first character of its own line is excluded — a genuine verdict
+// comment whose findings summary merely QUOTES the marker text mid-line (for
+// example, describing this very mechanism) still counts as evidence. Both
+// producers render their marker at column 0, so the anchor costs nothing
+// against genuine artifacts.
+// The set covers exactly three marker tokens: the per-round review round
+// marker (gate-findings-review), post-gate-findings.mjs's opt-in findings
+// COMMENT marker (gate-findings gate=...), and the historical
+// deferred-summary comment. Without the findings-comment marker, that comment
+// parses as a verdict marker candidate (its "Gate fan-out findings:"/
+// "Reviewed head:" lines yield gate+headSha) and the verdict upsert claims
+// and overwrites it in place, silently destroying the round's visible
+// findings record. Every branch is delimiter-anchored — the token must be
+// followed by whitespace or the closing `-->` — so no suffixed `<token>-<x>`
+// variant ever matches.
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|gate-findings|deferred-summary)(?=\s|-->)/mu;
+
+export function isGateMachineArtifactBody(body) {
+  if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {
+    return false;
+  }
+  // A gate round now posts ONE PR review carrying BOTH the verdict header and
+  // the gate-findings-review marker (the findings it files live on that same
+  // surface). Such a body IS the verdict, not a separate machine artifact, so
+  // the producer-owned verdict header wins over the artifact marker. Only a
+  // marker-bearing body with NO genuine verdict header (a historical standalone
+  // findings review or deferred-summary comment) stays excluded.
+  return matchGateReviewCommentHeader(body) === null;
+}
 
 export function isCopilotLogin(login) {
   return typeof login === "string" && /^copilot(?:[^a-z]|$)/i.test(login);
+}
+
+/**
+ * Resolve whether Copilot is present as a reviewer on a PR from the REVIEW
+ * surface only — requested reviewers plus submitted reviews — never from
+ * assignees (#1670).
+ *
+ * Copilot review is configured in two ways: Copilot is either formally listed
+ * in the PR's `requested_reviewers`, or it is a configured auto-reviewer
+ * (`copilot-pull-request-reviewer[bot]`) that submits an actual review without
+ * ever appearing in `requested_reviewers`. Both are review-surface facts.
+ * Assignment is a disjoint surface and must never decide presence: on a
+ * reviewer-configured repo Copilot is never an assignee, so an assignee-based
+ * proxy would falsely report a fully-configured Copilot reviewer as absent and
+ * could let the gate skip the Copilot-convergence requirement on a false premise.
+ *
+ * @param {object} params
+ * @param {boolean} [params.requested] - Copilot is listed in the PR's requested_reviewers
+ * @param {Array<{author?: {login?: string}}>} [params.reviews] - PR review list
+ * @returns {{ present: boolean, sources: string[] }}
+ */
+export function resolveCopilotReviewPresence({ requested = false, reviews = [] } = {}) {
+  const list = Array.isArray(reviews) ? reviews : [];
+  const sources = [];
+  if (requested === true) {
+    sources.push("requested_reviewer");
+  }
+  if (list.some((review) => isCopilotLogin(review?.author?.login))) {
+    sources.push("submitted_review");
+  }
+  return { present: sources.length > 0, sources };
 }
 
 // Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command. Both
@@ -196,14 +306,19 @@ function stripGateCommentMarkdown(rawLine) {
   return line.trim();
 }
 
+// Recognizes BOTH evidence gates (draft_gate/pre_approval_gate) and the
+// non-evidence `review` gate — parseGateReviewCommentFields below relies on
+// `review` coming back as an identified value (not null) so it can
+// short-circuit to non-evidence explicitly, rather than leaving the field
+// null and falling through to the lenient token-scan fallback.
 function normalizeGateReviewName(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
-  return GATE_REVIEW_NAMES.has(normalized) ? normalized : null;
+  return RECOGNIZED_GATE_NAMES.has(normalized) ? normalized : null;
 }
 
 function normalizeGateReviewVerdict(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
-  return GATE_REVIEW_VERDICTS.has(normalized) ? normalized : null;
+  return GATE_REVIEW_VERDICT_SET.has(normalized) ? normalized : null;
 }
 
 function normalizeGateReviewHeadSha(value) {
@@ -214,6 +329,32 @@ function normalizeGateReviewHeadSha(value) {
 function normalizeGateExecutionMode(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
   return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
+}
+
+function normalizeGateSizeOutcome(value) {
+  const normalized = stripOptionalCodeTicks(value).toLowerCase();
+  return GATE_SIZE_OUTCOMES.has(normalized) ? normalized : null;
+}
+
+function normalizeGateSizeTouchesT1(value) {
+  const normalized = stripOptionalCodeTicks(value).toLowerCase();
+  if (normalized === "touched") return true;
+  if (normalized === "not touched") return false;
+  return null;
+}
+
+// "none" | "granted" | "granted by <name>" — the approver name is free text
+// (already sanitized by the poster via sanitizeInline before rendering), so
+// no further normalization beyond trimming is applied here.
+function normalizeGateSizeWaiver(value) {
+  const normalized = stripOptionalCodeTicks(value).trim();
+  if (/^none$/iu.test(normalized)) return { granted: false, approvedBy: null };
+  const grantedMatch = normalized.match(/^granted(?:\s+by\s+(.+))?$/iu);
+  if (grantedMatch) {
+    const approvedBy = grantedMatch[1]?.trim();
+    return { granted: true, approvedBy: approvedBy && approvedBy.length > 0 ? approvedBy : null };
+  }
+  return null;
 }
 
 function parseGateReviewCommentFields(body) {
@@ -229,6 +370,10 @@ function parseGateReviewCommentFields(body) {
     nextAction: null,
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
   };
 
   for (const rawLine of body.split(/\r?\n/u)) {
@@ -238,53 +383,133 @@ function parseGateReviewCommentFields(body) {
     }
     const line = stripped;
 
+    // First-NON-EMPTY-wins per field: a genuine comment renders its structured
+    // block first, so the first column-0 match for each field is normally the
+    // real one. A free-text field (findings summary, next action) rendered
+    // later in the SAME comment can embed a newline plus a spoofed
+    // "Verdict: clean" (or any other field label) at column 0; capturing only
+    // the first match (rather than the last) stops that later line from
+    // winning and flipping/nulling the field. But the label regex's
+    // `\s*(.+)$` also matches a label followed by nothing but whitespace,
+    // capturing an empty string — for the enum fields (gate/headSha/verdict/
+    // executionMode) an empty capture normalizes to null already, so the
+    // `=== null` guard below naturally stays open for a later, genuine line.
+    // The two free-text fields (findingsSummary, nextAction) do NOT normalize
+    // through an enum, so an empty capture must be checked for explicitly:
+    // treat it as no-capture (leave the field open) rather than locking it to
+    // "" and hiding a real line that renders after it.
     let match = line.match(/^(?:[-*]\s*)?(?:gate(?:\s+name)?|gate\s+review)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.gate = normalizeGateReviewName(match[1]);
+      if (fields.gate === null) {
+        fields.gate = normalizeGateReviewName(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:head\s+sha(?:\s+reviewed)?|reviewed\s+head\s+sha)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      if (fields.headSha === null) {
+        fields.headSha = normalizeGateReviewHeadSha(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?verdict\s*:\s*(.+)$/iu);
     if (match) {
-      fields.verdict = normalizeGateReviewVerdict(match[1]);
+      if (fields.verdict === null) {
+        fields.verdict = normalizeGateReviewVerdict(match[1]);
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?(?:findings(?:\s+summary)?|summary)\s*:\s*(.+)$/iu);
     if (match) {
-      fields.findingsSummary = match[1].trim();
+      if (fields.findingsSummary === null) {
+        const candidate = match[1].trim();
+        // An empty capture (label followed only by whitespace) is treated as
+        // no-capture: leave the field open so a later, genuine line can still
+        // win instead of first-wins locking it to "".
+        if (candidate.length > 0) {
+          fields.findingsSummary = candidate;
+        }
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?next\s+action\s*:\s*(.+)$/iu);
     if (match) {
-      fields.nextAction = match[1].trim();
+      if (fields.nextAction === null) {
+        const candidate = match[1].trim();
+        if (candidate.length > 0) {
+          fields.nextAction = candidate;
+        }
+      }
       continue;
     }
 
     match = line.match(/^(?:[-*]\s*)?execution\s+mode\s*:\s*(.+)$/iu);
     if (match) {
-      const rest = match[1].trim();
-      // Split on the first em-dash / en-dash / " - " separator to recover an
-      // optional inline reason: "inline_single_agent — <reason>".
-      const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
-      const modeToken = sepMatch ? sepMatch[1].trim() : rest;
-      const reasonToken = sepMatch ? sepMatch[2].trim() : "";
-      fields.executionMode = normalizeGateExecutionMode(modeToken);
-      // Only record an inline reason for inline_single_agent. A trailing
-      // "— text" on a fanout_fanin (or invalid) mode line must not surface an
-      // inconsistent mode/reason pair, so leave inlineReason null otherwise.
-      if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
-        fields.inlineReason = reasonToken;
+      if (fields.executionMode === null) {
+        const rest = match[1].trim();
+        // Split on the first em-dash / en-dash / " - " separator to recover an
+        // optional inline reason: "inline_single_agent — <reason>".
+        const sepMatch = rest.match(/^(.*?)\s*(?:[—–]|\s-\s)\s*(.*)$/u);
+        const modeToken = sepMatch ? sepMatch[1].trim() : rest;
+        const reasonToken = sepMatch ? sepMatch[2].trim() : "";
+        fields.executionMode = normalizeGateExecutionMode(modeToken);
+        // Only record an inline reason for inline_single_agent. A trailing
+        // "— text" on a fanout_fanin (or invalid) mode line must not surface an
+        // inconsistent mode/reason pair, so leave inlineReason null otherwise.
+        if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
+          fields.inlineReason = reasonToken;
+        }
       }
       continue;
     }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+outcome\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeOutcome === null) {
+        fields.sizeOutcome = normalizeGateSizeOutcome(match[1]);
+      }
+      continue;
+    }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+t1\s+slice\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeTouchesT1 === null) {
+        fields.sizeTouchesT1 = normalizeGateSizeTouchesT1(match[1]);
+      }
+      continue;
+    }
+
+    match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+waiver\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.sizeWaiverGranted === null) {
+        const parsedWaiver = normalizeGateSizeWaiver(match[1]);
+        if (parsedWaiver) {
+          fields.sizeWaiverGranted = parsedWaiver.granted;
+          fields.sizeWaiverApprovedBy = parsedWaiver.approvedBy;
+        }
+      }
+      continue;
+    }
+  }
+
+  // An explicit, RECOGNIZED `review` gate field is authoritative and returns
+  // null here — before the lenient token-scan fallback below ever runs. A
+  // `review` verdict comment carries no draft/pre-approval evidence by
+  // design (#1808 AC3); without this short circuit, `fields.gate` would stay
+  // "review" (not one of the two evidence gates) but the lenient fallback
+  // below only fires when `!fields.gate` — so a *recognized* `review` gate
+  // would otherwise skip the fallback yet still return non-null fields keyed
+  // to "review", which is harmless for the two summarizers here (they only
+  // read `.draft_gate`/`.pre_approval_gate`) but leaves the non-evidence
+  // contract implicit rather than explicit. Stated plainly: an identified
+  // non-evidence gate must never be treated as an unidentified body, and an
+  // unidentified body is the ONLY case the token-scan fallback exists for.
+  if (NON_EVIDENCE_GATE_NAMES.has(fields.gate)) {
+    return null;
   }
 
   // Lenient fallback: detect gate name and head SHA anywhere in body
@@ -353,8 +578,24 @@ export function parseGateReviewCommentMarkerBody(body) {
     nextAction: fields.nextAction,
     executionMode: fields.executionMode,
     inlineReason: fields.inlineReason,
+    sizeOutcome: fields.sizeOutcome,
+    sizeTouchesT1: fields.sizeTouchesT1,
+    sizeWaiverGranted: fields.sizeWaiverGranted,
+    sizeWaiverApprovedBy: fields.sizeWaiverApprovedBy,
     contractComplete: Boolean(fields.verdict && fields.findingsSummary && fields.nextAction),
   };
+}
+
+// Which GitHub surface carries a gate verdict. The poster needs it to pick the
+// right in-place correction endpoint on a same-head rerun (a PR review is PUT
+// to pulls/{pr}/reviews/{id}; a legacy verdict issue comment is PATCHed to
+// issues/comments/{id}). Anything that is not the review surface — including a
+// raw issue-comment payload with no `surface` field — is issue_comment, so the
+// historical shape survives untouched. SINGLE definition: a restatement that
+// misses a future third surface would silently route its body to the
+// issue-comment endpoint, where it does not live.
+export function normalizeVerdictSurface(value) {
+  return value === "review" ? "review" : "issue_comment";
 }
 
 export function summarizeGateReviewComments(comments) {
@@ -367,6 +608,9 @@ export function summarizeGateReviewComments(comments) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentBody(comment?.body);
     if (!parsed) {
       continue;
@@ -382,8 +626,13 @@ export function summarizeGateReviewComments(comments) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
+      sizeOutcome: parsed.sizeOutcome ?? null,
+      sizeTouchesT1: parsed.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: parsed.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: parsed.sizeWaiverApprovedBy ?? null,
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
-      commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
+      commentUrl: trimmedOrNull(comment?.html_url),
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"
         ? (comment.updated_at ?? comment.updatedAt).trim()
         : typeof (comment?.created_at ?? comment?.createdAt) === "string"
@@ -413,6 +662,9 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
 
   for (let index = 0; index < entries.length; index += 1) {
     const comment = entries[index];
+    if (isGateMachineArtifactBody(comment?.body)) {
+      continue;
+    }
     const parsed = parseGateReviewCommentMarkerBody(comment?.body);
     if (!parsed) {
       continue;
@@ -432,9 +684,14 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       nextAction: parsed.nextAction,
       executionMode: parsed.executionMode ?? null,
       inlineReason: parsed.inlineReason ?? null,
+      sizeOutcome: parsed.sizeOutcome ?? null,
+      sizeTouchesT1: parsed.sizeTouchesT1 ?? null,
+      sizeWaiverGranted: parsed.sizeWaiverGranted ?? null,
+      sizeWaiverApprovedBy: parsed.sizeWaiverApprovedBy ?? null,
       contractComplete: parsed.contractComplete,
+      surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
-      commentUrl: typeof comment?.html_url === "string" && comment.html_url.trim().length > 0 ? comment.html_url.trim() : null,
+      commentUrl: trimmedOrNull(comment?.html_url),
       updatedAt: typeof (comment?.updated_at ?? comment?.updatedAt) === "string"
         ? (comment.updated_at ?? comment.updatedAt).trim()
         : typeof (comment?.created_at ?? comment?.createdAt) === "string"

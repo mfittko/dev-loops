@@ -30,6 +30,8 @@ This grill is the bounded, closed sub-loop modeled by `packages/core/src/loop/re
 /loop-grill <path/to/plan.md> --auto   # local-planning, auto-answer
 ```
 
+In a consumer (plugin) install these run as `/dev-loops:loop-grill …`; the bare `/loop-grill` form is dev-loops-repo-local (repo-local `.claude/commands`).
+
 PR bodies are supported the same way as issues: fetch/edit the PR body via the existing PR wrappers (`scripts/github/view-pr.mjs` / `scripts/github/edit-pr.mjs`), never raw `gh`.
 
 ## Argument validation (fail-closed)
@@ -48,7 +50,7 @@ Before doing anything else:
 - **PR body:** fetch the PR body via `scripts/github/view-pr.mjs` (never raw `gh`).
 - **Local-planning:** read the plan file from disk.
 
-"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact (AC/DoD present) is a zero-iteration `grill_clean`: do not rewrite the body.
+"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact — the full AC/DoD/Non-goals matrix per `detectIssueRefinementArtifact` — is a zero-iteration `grill_clean`: do not rewrite the body.
 
 ## Step 1b — Surface external resources
 
@@ -81,6 +83,13 @@ Scan the loaded content and identify each gap. The minimum required gap detector
 
 Additional gaps discovered through semantic reading of the spec are also recorded.
 
+### Count-based acceptance criteria guardrail
+
+<!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
+`GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH the per-angle default AND the shipped grouped-dispatch default, not just one. When the repo uses grouped fan-out by default (this repo does — `resolveFanoutGroups` writes ONE sentinel per group; #1579/#1601), the AC MUST call out the grouped-dispatch interaction explicitly, or it will false-fail every grouped round. Detect a count-based AC that omits the unit or the dispatch-mode interaction as a gap before synthesis, and sharpen the unit + dispatch-mode validation into the synthesized `## Acceptance criteria`.
+
+Cautionary case (#1618 AC3): the literal AC "sentinel count short of non-carried angle count" would have regressed the shipped grouped-dispatch default — grouped fan-out writes ONE sentinel per group, so `1 sentinel < N non-carried angles` false-fails every grouped round. A fresh-context reviewer caught it as HIGH; the operator chose Option D (thread `--expected-dispatch-units`). Writing the AC without considering grouped dispatch forced an in-flight scope decision. Count-based ACs that omit the unit + dispatch-mode interaction repeat this failure mode.
+
 For each gap, classify it as either:
 - **Bounded choice** — the answer is one of a small discrete set (e.g. yes/no, A/B/C).
 - **Open-ended** — the answer requires free-form elaboration.
@@ -94,7 +103,7 @@ For each gap, in order:
 - **Bounded choice gap:** use `AskUserQuestion` with the question text and the choice options, plus an "Other / free text" option. Block until the user answers.
 - **Open-ended gap:** present the question as a plain text turn. Block until the user answers.
 
-Record each answer with its source: `human`.
+Record each answer's source as the operator's GitHub handle: resolve it once per run with `gh api user --jq .login`. This direct self-lookup is a knowingly accepted advisory raw-`gh` call under the wrapper-for-`gh`-reads rule owned by the [Dev Loop Skill](../dev-loop/SKILL.md) — the operator declared a dedicated wrapper a non-goal for this one read-only self-read; every other `gh` read still goes through a wrapper. Treat the login as resolved only when the command exits 0 and its trimmed stdout is non-empty, is not the literal `null`, and matches `^[A-Za-z0-9-]{1,39}$` (a plain GitHub handle — never markdown-significant text); use that handle (e.g. `mfittko`) as the `Source` value for every human-answered gap. In every other case fall back to the literal `human`. `--auto` mode is unaffected — its evidence-source tokens are not human answers.
 
 > `AskUserQuestion` is a Claude Code–native construct. If you are running outside Claude Code, use `--auto` mode instead.
 
@@ -163,7 +172,7 @@ Three distinct artifacts for tracker-first (two for PR-body/local-planning, whic
 
 1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, `## Acceptance criteria`, `## Definition of done`, and `## Non-goals`. No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
-2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. Same `#<number>` hygiene rule applies.
+2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. For an interactive run the preamble reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`). Same `#<number>` hygiene rule applies.
 
 3. **Raw Q&A transcript** (ephemeral `tmp/issues/issue-<n>/grill/<timestamp>.md` only — never the body, never the comment):
 
@@ -174,7 +183,7 @@ Three distinct artifacts for tracker-first (two for PR-body/local-planning, whic
 
 | # | Gap | Question | Answer | Source |
 |---|-----|----------|--------|--------|
-| 1 | Missing AC | <question text> | <answer text> | codebase \| docs \| context \| inferred \| human |
+| 1 | Missing AC | <question text> | <answer text> | codebase \| docs \| context \| inferred \| <operator-handle> (interactive; fallback `human`) |
 
 ### Unresolved gaps
 

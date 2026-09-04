@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
-import { main, parseCliArgs, runCli } from "../../scripts/projects/list-queue-items.mjs";
+import { main, parseCliArgs, renderItemsTable, runCli } from "../../scripts/projects/list-queue-items.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -534,8 +534,15 @@ describe("list-queue-items", () => {
   });
 
   describe("error paths — API errors", () => {
+    // A gh CLI/GraphQL failure on the user probe now falls through to the org
+    // probe (#1949); when both fail the same way (e.g. a systemic auth
+    // failure), resolveOwner fails closed with NO_USER_ID and preserves the
+    // underlying org-probe error via `cause`.
     it("throws on gh CLI failure", async () => {
-      const responses = [{ error: "gh: authentication required" }];
+      const responses = [
+        { error: "gh: authentication required" },
+        { error: "gh: authentication required" },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1" },
@@ -543,15 +550,17 @@ describe("list-queue-items", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GH_API_ERROR");
-        assert.match(err.message, /gh api graphql failed/);
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GH_API_ERROR");
+        assert.match(err.cause.message, /gh api graphql failed/);
       }
     });
 
     it("throws on GraphQL errors in payload", async () => {
-      const responses = [{
-        payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] },
-      }];
+      const responses = [
+        { payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] } },
+        { payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] } },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1" },
@@ -559,8 +568,9 @@ describe("list-queue-items", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GRAPHQL_ERROR");
-        assert.match(err.message, /GraphQL errors/);
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GRAPHQL_ERROR");
+        assert.match(err.cause.message, /GraphQL errors/);
       }
     });
   });
@@ -883,7 +893,7 @@ describe("list-queue-items", () => {
     });
 
     it("runCli resolves projectNumber from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -893,7 +903,7 @@ describe("list-queue-items", () => {
     });
 
     it("runCli resolves boardTitle from .devloops when --project omitted", async () => {
-      await withTempCwd("queue:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    title: \"Dev Loop Queue\"\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(EXISTING_PROJECT)),
           stdout: noopStream(), stderr: noopStream(),
@@ -904,7 +914,7 @@ describe("list-queue-items", () => {
 
     it("runCli: explicit --project wins over .devloops", async () => {
       const other = { id: "PVT_flag", number: 9, title: "Flag Project", url: "u" };
-      await withTempCwd("queue:\n  board:\n    number: 1\n", async (cwd) => {
+      await withTempCwd("tracker:\n  board:\n    number: 1\n", async (cwd) => {
         await runCli(["--repo", "mfittko/dev-loops", "--project", "9"], {
           env: {}, cwd, runChild: mockRunChild(listResponses(other)),
           stdout: noopStream(), stderr: noopStream(),
@@ -925,5 +935,101 @@ describe("list-queue-items", () => {
         process.exitCode = 0; // avoid leaking a failure code into the test runner
       });
     });
+  });
+});
+
+describe("table mode (--table)", () => {
+  it("renderItemsTable aligns number, status, and title columns", () => {
+    const out = renderItemsTable([
+      { issueNumber: 7, prNumber: null, title: "Short one", status: "Next Up" },
+      { issueNumber: 1234, prNumber: null, title: "A longer title here", status: "In Progress" },
+      { issueNumber: null, prNumber: 88, title: "A PR item", status: "Done" },
+    ]);
+    assert.equal(out, [
+      "#7      Next Up      Short one",
+      "#1234   In Progress  A longer title here",
+      "PR #88  Done         A PR item",
+    ].map((line) => `${line}\n`).join(""));
+  });
+
+  it("renderItemsTable on an empty list prints a single placeholder line", () => {
+    assert.equal(renderItemsTable([]), "No items.\n");
+  });
+
+  it("--table is mutually exclusive with --summary, --jq, and --silent (exit 1, no fetch)", async () => {
+    for (const extra of [["--summary"], ["--jq", ".ok"], ["--silent"]]) {
+      let err = "";
+      process.exitCode = 0;
+      await runCli(["--repo", "mfittko/dev-loops", "--table", ...extra], {
+        env: {}, cwd: process.cwd(), runChild: mockRunChild([]),
+        stdout: { write() {} }, stderr: { write(s) { err += s; } },
+      });
+      assert.equal(process.exitCode, 1, `expected exit 1 for --table with ${extra[0]}`);
+      assert.match(err, /mutually exclusive/);
+      process.exitCode = 0;
+    }
+  });
+});
+
+describe("table mode wiring through runCli (--table)", () => {
+  function tableResponses(items) {
+    return [
+      { payload: { data: { user: { id: "U_kgDOABC123" } } } },
+      { payload: { data: { user: { projectsV2: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: "PVT_proj1", number: 1, title: "Dev Loop Queue", url: "u" }] } } } } },
+      { payload: { data: { node: { fields: { nodes: [{ id: "PVTSSF_status", name: "Status", options: [{ id: "opt2", name: "Next Up" }, { id: "opt3", name: "In Progress" }] }], pageInfo: { hasNextPage: false } } } } } },
+      { payload: { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } } },
+    ];
+  }
+  const item = (n, title, status) => ({
+    id: `it-${n}`,
+    fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: status }] },
+    content: { __typename: "Issue", id: `c-${n}`, number: n, title, url: `https://x/${n}` },
+  });
+
+  it("runCli with --table renders the aligned rows to stdout (flag actually wired)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1", "--table"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([
+        item(7, "Short one", "Next Up"),
+        item(1234, "A longer title here", "In Progress"),
+      ])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    assert.equal(out, "#7     Next Up      Short one\n#1234  In Progress  A longer title here\n");
+  });
+
+  it("runCli --table composes with --limit (renders only the limited rows)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1", "--table", "--limit", "1"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([
+        item(7, "Short one", "Next Up"),
+        item(1234, "A longer title here", "In Progress"),
+      ])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    assert.equal(out, "#7  Next Up  Short one\n");
+  });
+
+  it("default mode emits JSON with the documented item keys (no shape change without --table)", async () => {
+    let out = "";
+    process.exitCode = 0;
+    await runCli(["--repo", "mfittko/dev-loops", "--project", "1"], {
+      env: {}, cwd: process.cwd(),
+      runChild: mockRunChild(tableResponses([item(7, "Short one", "Next Up")])),
+      stdout: { write(s) { out += s; } }, stderr: { write() {} },
+    });
+    assert.equal(process.exitCode, 0);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(
+      Object.keys(parsed.items[0]).sort(),
+      ["contentId", "issueNumber", "itemId", "prNumber", "status", "title", "url"],
+    );
   });
 });

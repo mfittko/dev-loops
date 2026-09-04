@@ -37,6 +37,231 @@ const TERM_RE = /<!--\s*term:\s*(state|reason|gate):([a-zA-Z0-9_.:-]+)\s*-->/g;
 const CODE_TOKEN_RE = /`([a-z][a-z0-9_:-]+)`/g;
 const MODAL_RE = /\b(MUST NOT|SHALL NOT|SHOULD NOT|MAY NOT|MUST|SHALL|SHOULD|MAY)\b/g;
 
+// Enforcement classification surface: every registry rule carries a
+// `doc` | `runtime` | `agent` classification; `agent` requires a one-line
+// `enforcementNote` justification. `runtime` is the default for an unspecified
+// classification, so a rule can never quietly escape the enforcement ratchet.
+const ENFORCEMENT_VALUES = new Set(["doc", "runtime", "agent"]);
+const RUNTIME_ROOTS = ["scripts", "packages"];
+const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
+// Registry-ID shape used to spot enforcement citations in runtime source.
+// First segment is 3+ uppercase chars so 3-letter prefixes (OPS-, ADR-) are
+// detectable, consistent with the canonical MARKER_RE grammar below.
+const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
+
+// Refusal/error emission construct carried by the same line as an enforcement
+// citation. Enforcement credit is refusal-path-based (#1617): a runtime rule is
+// only counted as enforced when its ID appears in an *enforcement error/refusal
+// string* — a string literal emitted because the rule forbids an operation —
+// not mere presence in source. An ID in a docstring, usage text, data/log
+// string, or bare identifier performs no enforcement and must not be credited.
+// This is a line-level lexical heuristic (this validator is deliberately
+// lexical): a citation line is a refusal path when it carries one of these
+// refusal/error emission constructs.
+const REFUSAL_SIGNAL_RE = /\b(?:refus|throw|new Error|errors\.push|process\.exit|stderr\.write|console\.error|violat|invalid|forbid|denied|blocked|cannot|must not|must fail|required by|>&2|exit\s*\()/i;
+
+// Line-level string-literal membership: returns true when `index` falls inside
+// the literal text of a '...', "...", or `...` string on `line`. Handles
+// template-literal `${...}` interpolation nesting (including a nested backtick
+// string inside an interpolation), which naive quote-parity cannot (that is why
+// a backtick-string nesting like the jq-output refusal breaks simple parity).
+export function indexInsideStringLiteral(line, index) {
+  const n = line.length;
+  const stack = []; // 'sq' | 'dq' | 'tick' | 'interp'
+  let i = 0;
+  while (i < n) {
+    const top = stack[stack.length - 1];
+    if (i === index) return top === "sq" || top === "dq" || top === "tick";
+    const c = line[i];
+    if (top === "sq") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "'") stack.pop();
+      i += 1; continue;
+    }
+    if (top === "dq") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === '"') stack.pop();
+      i += 1; continue;
+    }
+    if (top === "tick") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "`") { stack.pop(); i += 1; continue; }
+      if (c === "$" && line[i + 1] === "{") { stack.push("interp"); i += 2; continue; }
+      i += 1; continue;
+    }
+    if (top === "interp") {
+      if (c === "\\") { i += 2; continue; }
+      if (c === "'") { stack.push("sq"); i += 1; continue; }
+      if (c === '"') { stack.push("dq"); i += 1; continue; }
+      if (c === "`") { stack.push("tick"); i += 1; continue; }
+      if (c === "{") { stack.push("interp"); i += 1; continue; }
+      if (c === "}") { stack.pop(); i += 1; continue; }
+      i += 1; continue;
+    }
+    // code context (no open string)
+    if (c === "'") { stack.push("sq"); i += 1; continue; }
+    if (c === '"') { stack.push("dq"); i += 1; continue; }
+    if (c === "`") { stack.push("tick"); i += 1; continue; }
+    i += 1;
+  }
+  return false;
+}
+
+// A citation occurrence counts as an enforcement (refusal-path) site only when
+// the rule ID sits inside a string literal that is part of a refusal/error
+// emission on that line. `tokenIndex` is the 0-based column of the token in `line`.
+export function isRefusalPathCitation(line, tokenIndex) {
+  // A string literal that is simply the right-hand side of a data assignment
+  // (`x = "..."`) is data, not an enforcement message, whatever keyword the
+  // string happens to contain (#1617 finding 2): `const isActive =
+  // "TEST-RULE-001 cannot be nil"` must not grant credit. Refusal/error
+  // strings live inline in emission/refusal constructs (throw / errors.push /
+  // stderr.write / refusal echo / reason/message fields), which do not sit on
+  // an `= "..."` RHS.
+  if (/\=\s*(['"`])/.test(line)) return false;
+  return indexInsideStringLiteral(line, tokenIndex) && REFUSAL_SIGNAL_RE.test(line);
+}
+
+// Registry-ID-shaped tokens that appear in runtime source but are ordinary
+// English/technical/placeholder tokens, not rule citations. Mirrors the
+// KNOWN_INTENTIONAL_DUPLICATE_SENTENCES allowlist pattern: without this, a raw
+// shape scan would flag FAIL-CLOSED / BEST-EFFORT / PROJ-123 as phantom rule
+// citations. A NEW unknown token in runtime source that is not a real registry
+// ID and not on this list is treated as a phantom citation (gating).
+const NON_RULE_TOKENS = new Set([
+  "ACCEPT-CRITERIA-VERIFY-AND",
+  "AGENT-LEVEL",
+  "AXIS-TEXT-DELIMITER",
+  "BEST-EFFORT",
+  "CLEANUP-SAFETY",
+  "DEFAULT-SAFE",
+  "FAIL-CLOSED",
+  "FAIL-OPEN",
+  "FAIL-SOFT",
+  "FALSE-ACCEPTS",
+  "GATE-AUTHORED",
+  "HEAD-ADVANCED",
+  "INLINE-INTERPRETER",
+  "INTERNALLY-CONSISTENT",
+  "LOCAL-FIRST",
+  "LOCATABLE-SHAPED",
+  "MANY-TO-ONE",
+  "MARKER-ONLY",
+  "MUST-RE-RUN",
+  "NON-FATAL",
+  "OWN-AUTHORED",
+  "PATH-NUMBERING",
+  "POST-CAP",
+  "PREFIX-ONLY",
+  "PROJ-123",
+  "PURE-DETERMINISTIC",
+  "SHA-256",
+  "SUPERSEDE-NOT-REWRITE",
+  "TOP-LEVEL",
+  "VERDICT-ONLY",
+  "WORK-DEDUP",
+  "YYYY-MM-DD",
+  "YYYY-MM-DDTHH",
+]);
+
+export function normalizeRuleEntry(entry) {
+  if (typeof entry === "string") return { id: entry, enforcement: "runtime" };
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry) || typeof entry.id !== "string" || entry.id.trim() === "") {
+    return {
+      id: undefined,
+      enforcement: "runtime",
+      invalid: true,
+      reason: entry === null ? "null entry" : Array.isArray(entry) ? `array entry` : typeof entry.id !== "string" ? `expected a string "id", got ${typeof entry.id}` : `empty "id"`,
+    };
+  }
+  return {
+    id: entry.id,
+    enforcement: entry.enforcement || "runtime",
+    enforcementNote: entry.enforcementNote,
+  };
+}
+
+export function isRuntimeSourceFile(basename, relPath) {
+  const parts = relPath.split(/[\\/]/);
+  if (parts.includes("test") || parts.includes("node_modules") || parts.includes("tmp") || parts.includes("site")) return false;
+  if (/\.test\./.test(basename)) return false;
+  return RUNTIME_FILE_RE.test(basename);
+}
+
+// Strip comments before scanning so a rule ID named only in a code comment is not
+// credited as enforcement: the structural-quality.md convention requires the rule ID
+// in an actual enforcement error message/check, not just a comment. .json has no
+// comments and its string values are data, not enforcement sites, so it is excluded.
+function stripSourceComments(content, ext) {
+  if (ext === ".json") return ""; // json values are data, never enforcement citations
+  if (ext === ".sh") {
+    return content.replace(/^[ \t]*#.*$/gm, "");
+  }
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const c = content[i];
+    if (c === "/" && content[i + 1] === "*") {
+      const end = content.indexOf("*/", i + 2);
+      i = end === -1 ? n : end + 2;
+      out += " ";
+    } else if (c === "/" && content[i + 1] === "/") {
+      const end = content.indexOf("\n", i);
+      i = end === -1 ? n : end + 1;
+      out += "\n";
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+async function* walkRuntime(dir) {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === "ENOENT") return;
+    throw err;
+  }
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    // vendor/ (and analogous vendored dirs) is never an enforcement site: it
+    // holds third-party/minified files whose rule-ID-shaped tokens must not be
+    // citation or phantom signals (c.f. the node_modules/tmp/site exclusions).
+    if (entry.name === "node_modules" || entry.name === "tmp" || entry.name === "site" || entry.name === "vendor" || entry.name === ".claude") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) yield* walkRuntime(full);
+    else if (entry.isFile()) yield full;
+  }
+}
+
+// Registry-ID-shaped tokens found in non-test runtime source (scripts/,
+// packages/), tagged with the relative file they appear in and whether the
+// occurrence is a refusal-path (enforcement error/refusal string) citation.
+// Phantom detection (unknown IDs) scans all presence; enforcement credit uses
+// `refusalPath` only (see validateRuleOwnership).
+export async function collectRuntimeCitations(repoRoot = REPO_ROOT) {
+  const tokens = [];
+  for (const root of RUNTIME_ROOTS) {
+    for await (const file of walkRuntime(path.join(repoRoot, root))) {
+      const rel = toPosix(path.relative(repoRoot, file));
+      if (!isRuntimeSourceFile(path.basename(file), rel)) continue;
+      const content = await readFile(file, "utf8");
+      const scanned = stripSourceComments(content, path.extname(file));
+      const lines = scanned.split("\n");
+      for (const line of lines) {
+        for (const match of line.matchAll(RULE_ID_SHAPE_RE)) {
+          tokens.push({ id: match[0], file: rel, refusalPath: isRefusalPathCitation(line, match.index) });
+        }
+      }
+    }
+  }
+  return tokens;
+}
+
 // Duplicate-imperative-sentence scan (ported from validate-no-duplicate-rules.mjs).
 const IMPERATIVE_PATTERNS = [/\bmust\b/i, /\bnever\b/i, /\bdo not\b/i, /\brequire[sd]?\b/i];
 const MIN_SENTENCE_LENGTH = 20;
@@ -320,7 +545,9 @@ async function readRequiredRules(repoRoot) {
     throw new Error(`Malformed JSON in ${rulesPath}`, { cause: error });
   }
   return {
-    requiredRules: Array.isArray(parsed.requiredRules) ? parsed.requiredRules : [],
+    // Entries may be legacy flat ID strings (default `runtime`) or objects with an
+    // `enforcement` classification.
+    requiredRules: Array.isArray(parsed.requiredRules) ? parsed.requiredRules.map(normalizeRuleEntry) : [],
     // Explicit opt-out for a defined rule that is intentionally NOT deletion-protected. Empty by default.
     optOutRules: Array.isArray(parsed.optOutRules) ? parsed.optOutRules : [],
   };
@@ -376,10 +603,31 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   }
 
   const { requiredRules, optOutRules } = await readRequiredRules(repoRoot);
-  const requiredSet = new Set(requiredRules);
+  // Malformed manifest entries are a clean gating error, never a crash or a silently
+  // inserted `undefined`, so they are reported and excluded from further processing.
+  for (const entry of requiredRules) {
+    if (entry.invalid) errors.push({ kind: "invalid_manifest_entry", id: entry.id, location: `required-rules.json: ${entry.reason}` });
+  }
+  const validRequiredRules = requiredRules.filter((entry) => !entry.invalid);
+  const requiredSet = new Set(validRequiredRules.map((entry) => entry.id));
   const optOutSet = new Set(optOutRules);
-  for (const id of requiredRules) {
+  for (const id of validRequiredRules.map((entry) => entry.id)) {
     if (!byId.has(id)) errors.push({ kind: "required_rule_missing", id });
+  }
+  // Enforcement classification validation: classification must be one of
+  // doc/runtime/agent, and an `agent` rule must carry a one-line justification so
+  // it cannot become a quiet escape hatch from the runtime enforcement ratchet.
+  for (const entry of validRequiredRules) {
+    if (!ENFORCEMENT_VALUES.has(entry.enforcement)) {
+      errors.push({ kind: "invalid_enforcement_classification", id: entry.id, location: `enforcement="${entry.enforcement}"` });
+    } else if (entry.enforcement === "agent") {
+      const note = entry.enforcementNote;
+      if (!(typeof note === "string" && note.trim())) {
+        errors.push({ kind: "agent_enforcement_missing_justification", id: entry.id });
+      } else if (note.includes("\n")) {
+        errors.push({ kind: "agent_enforcement_multiline_justification", id: entry.id, location: "enforcementNote must be one line" });
+      }
+    }
   }
   // corpus→manifest completeness: every defined rule must be registered in the manifest or explicitly opted out.
   for (const [id, defs] of byId) {
@@ -423,7 +671,39 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
     errors.push({ kind: "dead_allowlist_entry", id: text });
   }
 
-  return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors };
+  // Runtime-source enforcement cross-check:
+  //   - phantom_rule_citation (gating): a registry-ID-shaped token in runtime
+  //     source that is neither a real registry ID nor on the NON_RULE_TOKENS
+  //     allowlist is a bogus citation — fail the build.
+  //   - runtimeEnforced/runtimeUnenforced (reported ratchet): a `runtime`-classed
+  //     rule that appears in runtime source counts as enforced; the rest are a
+  //     non-increasing ratchet pinned by a test (do not backfill in one sweep).
+  const runtimeCitations = await collectRuntimeCitations(repoRoot);
+  const unknownById = new Map();
+  const citedRuntimeIds = new Set();
+  for (const token of runtimeCitations) {
+    if (byId.has(token.id)) {
+      // Enforcement credit is refusal-path-based (#1617): only a citation in an
+      // enforcement error/refusal string marks the rule as enforced, not mere
+      // presence in source. Phantom detection below still scans all presence.
+      if (requiredSet.has(token.id) && token.refusalPath) citedRuntimeIds.add(token.id);
+    } else if (!NON_RULE_TOKENS.has(token.id)) {
+      const prev = unknownById.get(token.id);
+      unknownById.set(token.id, prev ? { count: prev.count + 1, file: prev.file } : { count: 1, file: token.file });
+    }
+  }
+  for (const [id, { count, file }] of unknownById) {
+    errors.push({ kind: "phantom_rule_citation", id, location: `cited ${count}x in runtime source (e.g. ${file})` });
+  }
+  const runtimeIds = new Set(validRequiredRules.filter((entry) => entry.enforcement === "runtime").map((entry) => entry.id));
+  const runtimeEnforced = [...citedRuntimeIds].filter((id) => runtimeIds.has(id)).length;
+  const enforcement = {
+    runtimeTotal: runtimeIds.size,
+    runtimeEnforced,
+    runtimeUnenforced: runtimeIds.size - runtimeEnforced,
+  };
+
+  return { ok: errors.length === 0, filesScanned: files.length, rules: definitions.length, references: references.length, terms: termDefs.length, errors, enforcement };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -433,7 +713,8 @@ async function main(argv = process.argv.slice(2)) {
   }
   const result = await validateRuleOwnership(REPO_ROOT);
   if (result.ok) {
-    process.stdout.write(`Rule ownership validation passed: ${result.rules} rules, ${result.references} references, ${result.terms} terms, ${result.filesScanned} files scanned.\n`);
+    const e = result.enforcement;
+    process.stdout.write(`Rule ownership validation passed: ${result.rules} rules, ${result.references} references, ${result.terms} terms, ${result.filesScanned} files scanned. Runtime rules: ${e.runtimeTotal} total, ${e.runtimeEnforced} enforced, ${e.runtimeUnenforced} unenforced.\n`);
     return 0;
   }
   process.stdout.write(`Rule ownership validation failed:\n`);

@@ -3,6 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
 import { parseJsonText } from "./review-threads.mjs";
 import { parseRepoSlug } from "./repo-slug.mjs";
+import { guardCommentBodyNoIssuePrIds } from "./comment-id-guard.mjs";
 
 /**
  * Core `gh issue` operations, extracted from the thin CLI wrappers under
@@ -227,6 +228,11 @@ export async function resolveCommentBody(options) {
 
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
   const body = await resolveCommentBody(options);
+  // ISSUE/PR-ID GUARD (#1731): a generated comment body must never emit a raw
+  // issue/PR id (fail-closed unless explicitly allowlisted). `allowedRefs` is
+  // the ONLY sanctioned escape for a deliberate cross-reference, threaded from
+  // the generic CLI writers' --allowed-refs option.
+  guardCommentBodyNoIssuePrIds(body, { ref: "issue comment body", allowedRefs: options.allowedRefs });
   const result = await run(
     ghCommand,
     ["issue", "comment", String(options.issue), "--repo", options.repo, "--body", body],
@@ -281,6 +287,13 @@ export async function listIssues(options, { env = process.env, ghCommand = "gh",
   ];
   for (const label of options.labels ?? []) {
     args.push("--label", label);
+  }
+  // `--search` narrows the result set to gh's own full-text search (title,
+  // body, comments) rather than the bare paged listing — needed by a caller
+  // that must find one specific issue by title without trusting that it falls
+  // within the default 30-issue page.
+  if (typeof options.search === "string" && options.search.length > 0) {
+    args.push("--search", options.search);
   }
   const result = await run(ghCommand, args, env);
   if (result.code !== 0) {

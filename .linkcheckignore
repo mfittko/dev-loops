@@ -7,3 +7,4 @@ docs/phases/phase-x.md # local-implementation skill documents a generic phase pl
 agents/refiner.md # skills/docs/docs-grill-step.md links the generated refiner agent form
 agents/docs.md # skills/docs/docs-grill-step.md links the generated docs agent form
 agents/review.md # skills/docs/gate-review-sub-loop-contract.md + skills/copilot-pr-followup/SKILL.md link the generated review agent form
+agents/dev-loop.md # skills/docs/anti-patterns.md + skills/dev-loop/SKILL.md link the generated dev-loop agent form (#1907)

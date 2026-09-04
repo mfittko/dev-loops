@@ -1,6 +1,9 @@
 // Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts
 // (issue #981, subsumes #963). One helper applied uniformly so the loop never
 // falls back to `gh api | python3` or inline `node -e` to read tool JSON.
+// BASE-JQ-OUTPUT-GUARANTEE: emitResult is the single shared emit path every
+// JSON-emitting command routes through (enforced by the jq-output-base-guarantee
+// contract test).
 //
 // Convention (also documented in skills/dev-loop/SKILL.md):
 //   prefer the dev-loops subcommand
@@ -49,27 +52,29 @@ function parseLiteral(token) {
   return { ok: false };
 }
 
-// Resolve a single-value path expression like `.`, `.a.b`, `.a[0].b`, `.[2]`.
-// Returns undefined for a missing path (jq yields null; we map missing->undefined
-// then callers coerce). Throws JqFilterError on malformed path syntax.
-function resolvePath(value, path) {
+// Parse a path expression like `.`, `.a.b`, `.a[0].b`, `.[2]` into a step
+// list. Pure syntax: never touches data. Throws JqFilterError on malformed
+// path syntax. This is the syntactic core both resolvePath (real evaluation)
+// and assertJqFilterSyntax (parse-time pre-validation, no data) build on, so
+// the two never drift apart.
+function parsePathSteps(path) {
   const trimmed = path.trim();
   if (trimmed === "") {
     // An empty path is never valid jq (no empty filter). Fail closed so
     // malformed predicates like `select()` or `==5` don't pass as identity.
     throw new JqFilterError("Empty path expression");
   }
-  if (trimmed === ".") return value;
+  if (trimmed === ".") return [];
   if (!trimmed.startsWith(".")) {
     throw new JqFilterError(`Unsupported path (must start with '.'): ${path}`);
   }
   // Tokenize into .field and [index] steps.
   const stepRe = /\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g;
-  let cursor = value;
   // Root index access (`.[N]`) starts with a leading '.' that is not part of any
   // step token; consume it so the first `[N]` match aligns at the cursor.
   let lastIndex = trimmed.startsWith(".[") ? 1 : 0;
   stepRe.lastIndex = lastIndex;
+  const steps = [];
   let match;
   let consumedAny = false;
   while ((match = stepRe.exec(trimmed)) !== null) {
@@ -78,41 +83,71 @@ function resolvePath(value, path) {
     }
     lastIndex = stepRe.lastIndex;
     consumedAny = true;
-    if (cursor === undefined || cursor === null) {
-      cursor = undefined;
-      continue;
-    }
     if (match[1] !== undefined) {
-      cursor = typeof cursor === "object" && !Array.isArray(cursor) ? cursor[match[1]] : undefined;
+      steps.push({ field: match[1] });
     } else {
-      const idx = Number(match[2]);
-      cursor = Array.isArray(cursor) ? cursor[idx] : undefined;
+      steps.push({ index: Number(match[2]) });
     }
   }
   if (!consumedAny || lastIndex !== trimmed.length) {
     throw new JqFilterError(`Unsupported path syntax: ${path}`);
   }
+  return steps;
+}
+
+// Resolve a single-value path expression against real data. Returns undefined
+// for a missing path (jq yields null; we map missing->undefined then callers
+// coerce). Throws JqFilterError on malformed path syntax (via parsePathSteps).
+function resolvePath(value, path) {
+  const steps = parsePathSteps(path);
+  let cursor = value;
+  for (const step of steps) {
+    if (cursor === undefined || cursor === null) {
+      cursor = undefined;
+      continue;
+    }
+    if (step.field !== undefined) {
+      cursor = typeof cursor === "object" && !Array.isArray(cursor) ? cursor[step.field] : undefined;
+    } else {
+      cursor = Array.isArray(cursor) ? cursor[step.index] : undefined;
+    }
+  }
   return cursor;
 }
 
-function evaluatePredicate(value, predicate) {
+// Parse a select(...)/top-level predicate's syntax without touching data:
+// a bare path (truthy test) or `<path> <op> <literal>`. Pure syntax; throws
+// JqFilterError for malformed path/operand syntax. Data-dependent checks
+// (order-comparing mismatched runtime types) happen later in evaluatePredicate,
+// once real data is available.
+function parsePredicateSyntax(predicate) {
   const cmpRe = /^(.*?)(==|!=|<=|>=|<|>)(.*)$/;
   const m = predicate.match(cmpRe);
   if (!m) {
     // Bare path => truthy test.
-    const resolved = resolvePath(value, predicate);
-    return resolved !== undefined && resolved !== null && resolved !== false;
+    parsePathSteps(predicate);
+    return { kind: "bare", path: predicate };
   }
   const [, leftRaw, op, rightRaw] = m;
-  // jq maps a missing path to null; resolvePath yields undefined -> normalize.
-  const resolvedLeft = resolvePath(value, leftRaw);
-  const left = resolvedLeft === undefined ? null : resolvedLeft;
+  parsePathSteps(leftRaw);
   const lit = parseLiteral(rightRaw);
   if (!lit.ok) {
     throw new JqFilterError(`Unsupported predicate operand: ${rightRaw.trim()}`);
   }
-  const right = lit.value;
-  switch (op) {
+  return { kind: "compare", leftRaw, op, literal: lit.value };
+}
+
+function evaluatePredicate(value, predicate) {
+  const parsed = parsePredicateSyntax(predicate);
+  if (parsed.kind === "bare") {
+    const resolved = resolvePath(value, parsed.path);
+    return resolved !== undefined && resolved !== null && resolved !== false;
+  }
+  // jq maps a missing path to null; resolvePath yields undefined -> normalize.
+  const resolvedLeft = resolvePath(value, parsed.leftRaw);
+  const left = resolvedLeft === undefined ? null : resolvedLeft;
+  const right = parsed.literal;
+  switch (parsed.op) {
     case "==":
       return left === right;
     case "!=":
@@ -126,13 +161,13 @@ function evaluatePredicate(value, predicate) {
       if (typeof left !== typeof right) {
         throw new JqFilterError(`Cannot order-compare ${typeof left} and ${typeof right}`);
       }
-      if (op === "<") return left < right;
-      if (op === "<=") return left <= right;
-      if (op === ">") return left > right;
+      if (parsed.op === "<") return left < right;
+      if (parsed.op === "<=") return left <= right;
+      if (parsed.op === ">") return left > right;
       return left >= right;
     }
     default:
-      throw new JqFilterError(`Unsupported operator: ${op}`);
+      throw new JqFilterError(`Unsupported operator: ${parsed.op}`);
   }
 }
 
@@ -174,6 +209,35 @@ function applyStage(stream, rawStage) {
   }
   // Plain path access (single value per input).
   return stream.map((v) => resolvePath(v, stage));
+}
+
+// Validate one pipe stage's syntax without touching data. Mirrors the
+// branching in applyStage exactly (same order, same subset) so the two never
+// drift apart; type/data-dependent failures (length on a non-collection,
+// iterating a scalar, order-comparing mismatched runtime types) are NOT
+// checked here — those can only be known once real data is present, so they
+// still surface at evaluation/emit time.
+function validateStageSyntax(stage) {
+  const trimmed = stage.trim();
+  if (trimmed === "") {
+    throw new JqFilterError("Empty filter stage");
+  }
+  if (trimmed === "length" || trimmed === "keys") return;
+  const selectMatch = trimmed.match(/^select\((.*)\)$/);
+  if (selectMatch) {
+    parsePredicateSyntax(selectMatch[1]);
+    return;
+  }
+  if (/(==|!=|<=|>=|<|>)/.test(trimmed)) {
+    parsePredicateSyntax(trimmed);
+    return;
+  }
+  if (trimmed === ".[]") return;
+  if (trimmed.endsWith("[]")) {
+    parsePathSteps(trimmed.slice(0, -2));
+    return;
+  }
+  parsePathSteps(trimmed);
 }
 
 function iterate(v) {
@@ -225,6 +289,23 @@ export function evaluateJqFilter(value, filter) {
   return stream;
 }
 
+// Validate a --jq filter's SYNTAX only, independent of any data. Throws
+// JqFilterError for anything outside the supported subset (same grammar
+// evaluateJqFilter enforces, via the same parsePathSteps/parsePredicateSyntax
+// helpers — one source of truth, so this can't silently drift from the real
+// evaluator). Returns normally for a syntactically valid filter, even one
+// that may still fail at evaluation time against a particular data shape
+// (e.g. `length` applied to a scalar) — those are data-dependent and stay at
+// emit time, never here.
+export function assertJqFilterSyntax(filter) {
+  if (typeof filter !== "string" || filter.trim() === "") {
+    throw new JqFilterError("Empty --jq filter");
+  }
+  for (const stage of splitPipes(filter)) {
+    validateStageSyntax(stage);
+  }
+}
+
 // jq truthiness for --silent: matches `jq -e` exit semantics — the status is
 // based on the LAST output value (empty output is falsy; a value is truthy
 // unless it is null or false).
@@ -232,6 +313,33 @@ function streamIsTruthy(stream) {
   if (stream.length === 0) return false;
   const last = stream[stream.length - 1];
   return last !== null && last !== false && last !== undefined;
+}
+
+// Single source of truth for the invalid-filter stderr envelope, shared by
+// emitResult's own (data-dependent-inclusive) error path and the parse-time
+// preflightJqFilter check below, so the two byte-for-byte agree.
+function formatJqFilterErrorEnvelope(error) {
+  return JSON.stringify({ ok: false, error: `--jq (BASE-JQ-OUTPUT-GUARANTEE): ${error.message}` });
+}
+
+// Fail-fast --jq syntax preflight for mutation wrappers: call this AFTER
+// argument parsing but BEFORE the wrapper's mutation runs. A syntactically
+// invalid filter writes the exact stderr envelope emitResult's own
+// JqFilterError branch would produce and returns 2 — the caller should
+// return that code immediately, skipping the mutation. `undefined` means
+// `jq` is absent or syntactically valid; the wrapper proceeds normally (its
+// own eventual emitResult call still handles data-dependent jq errors and
+// the success/failure path, unchanged).
+export function preflightJqFilter(jq, { stderr = process.stderr } = {}) {
+  if (jq === undefined) return undefined;
+  try {
+    assertJqFilterSyntax(jq);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof JqFilterError)) throw error;
+    stderr.write(`${formatJqFilterErrorEnvelope(error)}\n`);
+    return 2;
+  }
 }
 
 function renderJqStream(stream) {
@@ -296,7 +404,7 @@ export function emitResult(
     } catch (error) {
       if (error instanceof JqFilterError) {
         // Fail closed, distinct from a clean "predicate false". Exit 2.
-        stderr.write(`${JSON.stringify({ ok: false, error: `--jq: ${error.message}` })}\n`);
+        stderr.write(`${formatJqFilterErrorEnvelope(error)}\n`);
         return 2;
       }
       throw error;

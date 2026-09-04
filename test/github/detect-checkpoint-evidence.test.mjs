@@ -23,14 +23,16 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
@@ -49,11 +51,10 @@ const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs")
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
   ...options,
-  env: {
-    ...process.env,
+  env: runIdFreeEnv({
     ...(options.env ?? {}),
     DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  },
+  }),
 });
 
 async function writeGhStub(tempDir, entries) {
@@ -78,6 +79,10 @@ test("parseGateReviewCommentBody parses the deterministic visible gate comment f
     nextAction: "mark ready for review",
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
   });
 });
 
@@ -105,6 +110,10 @@ test("parseGateReviewCommentMarkerBody accepts gate/head markers even when contr
     nextAction: null,
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
     contractComplete: false,
   });
 });
@@ -150,6 +159,107 @@ test("summarizeGateReviewComments keeps the newest valid comment for each gate",
   assert.equal(summary.draft_gate?.headSha, "abc1234");
   assert.equal(summary.pre_approval_gate?.commentId, 12);
   assert.equal(summary.pre_approval_gate?.nextAction, "await final human approval");
+});
+
+// #1808 AC3: a `review` verdict is a THIRD, non-evidence gate — it must never
+// satisfy draft_gate or pre_approval_gate evidence. `review` IS a recognized
+// gate header (RECOGNIZED_GATE_NAMES in packages/core/src/github/
+// copilot-helpers.mjs) — recognized, not absent — and parseGateReviewCommentFields
+// explicitly short-circuits to null the instant its header identifies the
+// gate as `review`, before the lenient draft_gate/pre_approval_gate
+// token-scan fallback ever runs. Absence would have left the fallback free
+// to misread findings text that merely mentions "draft_gate" as real
+// evidence (see the regression test below).
+test("summarizeGateReviewComments ignores a review-gate comment (#1808 AC3: review carries no draft/pre-approval evidence)", () => {
+  const summary = summarizeGateReviewComments([
+    {
+      id: 20,
+      body: [
+        "Gate review: review",
+        "Reviewed head SHA: abc1234",
+        "Verdict: clean",
+        "Findings summary: no issues found",
+        "Next action: none — informational review, no re-gate required",
+      ].join("\n"),
+      updated_at: "2026-05-29T23:00:00Z",
+    },
+  ]);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+});
+
+// End-to-end proof against the REAL renderer (upsert-checkpoint-verdict.mjs's
+// own renderGateReviewCommentBody), including the gate-findings-review marker
+// a --findings-ledger round renders: the whole comment is excluded even
+// before field parsing (isGateMachineArtifactBody: true, since the raw
+// marker-bearing body carries no genuine gate verdict header per
+// GATE_REVIEW_COMMENT_HEADER_RE — that regex recognizes only draft_gate/
+// pre_approval_gate, so a review render with a marker is never mistaken for
+// the SAME surface's own verdict), and a PR carrying ONLY this comment
+// reports no draft_gate/pre_approval_gate evidence either way.
+test("a real review-gate verdict comment (with a findings-review marker) never satisfies draft_gate/pre_approval_gate evidence (#1808 AC3)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "none — informational review, no re-gate required",
+    round: 1,
+  });
+  assert.equal(isGateMachineArtifactBody(body), true);
+  const comments = [{ id: 21, body, updated_at: "2026-05-29T23:30:00Z" }];
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+  const markerSummary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(markerSummary.draft_gate, null);
+  assert.equal(markerSummary.pre_approval_gate, null);
+});
+
+// Regression (#1808 HIGH, draft-gate bypass): the bare `upsert-checkpoint-verdict
+// --gate review` path (no --findings-ledger) never renders the
+// gate-findings-review marker, so isGateMachineArtifactBody does NOT exclude
+// it — the body reaches parseGateReviewCommentFields on its structured-field
+// merits alone. Before the fix, a `review` header normalized to null (not
+// recognized), so the parser fell through to the lenient whole-body
+// draft_gate/pre_approval_gate token scan; a clean `review` verdict whose
+// findings text merely MENTIONED "draft_gate" (a plausible thing to say when
+// reporting on this very mechanism) was then recorded as real draft_gate
+// evidence — a draft-gate bypass. The fix recognizes `review` as an
+// identified, non-evidence gate and returns null before that scan ever runs.
+test("a marker-less review-gate verdict comment whose findings text mentions draft_gate/pre_approval_gate is never recorded as evidence (#1808 HIGH regression)", () => {
+  const draftGateMentionBody = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "confirmed this PR never bypasses draft_gate evidence",
+    nextAction: "none — informational review, no re-gate required",
+  });
+  // No --findings-ledger round was supplied, so no marker is rendered — the
+  // exact bare-path shape the HIGH describes.
+  assert.equal(isGateMachineArtifactBody(draftGateMentionBody), false);
+
+  const preApprovalGateMentionBody = renderGateReviewCommentBody({
+    gate: "review",
+    headSha: "def5678",
+    verdict: "clean",
+    findingsSummary: "confirmed this PR never bypasses pre_approval_gate evidence",
+    nextAction: "none — informational review, no re-gate required",
+  });
+  assert.equal(isGateMachineArtifactBody(preApprovalGateMentionBody), false);
+
+  const comments = [
+    { id: 30, body: draftGateMentionBody, updated_at: "2026-05-29T23:40:00Z" },
+    { id: 31, body: preApprovalGateMentionBody, updated_at: "2026-05-29T23:41:00Z" },
+  ];
+
+  const summary = summarizeGateReviewComments(comments);
+  assert.equal(summary.draft_gate, null);
+  assert.equal(summary.pre_approval_gate, null);
+
+  const markerSummary = summarizeGateReviewCommentMarkers(comments, { headSha: "abc1234" });
+  assert.equal(markerSummary.draft_gate, null);
+  assert.equal(markerSummary.pre_approval_gate, null);
 });
 
 test("summarizeGateReviewCommentMarkers can target the newest marker for the current gate+head pair", () => {
@@ -347,7 +457,8 @@ test("fetchGithubReviewThreadsPayload falls back to the GraphQL REST endpoint wh
       { env: { GITHUB_TOKEN: "test-token" }, ghCommand: "gh", runChild: enoentRunChild("gh") },
     );
 
-    assert.deepEqual(payload.data.repository.pullRequest.reviewThreads.nodes, []);
+    // The fetcher returns the merged raw thread-node array (paginated walk).
+    assert.deepEqual(payload, []);
     assert.equal(fetchCalls[0].url, "https://api.github.com/graphql");
     assert.equal(JSON.parse(fetchCalls[0].options.body).variables.pr, 17);
   } finally {
@@ -453,32 +564,47 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       currentHeadSha: "abc1234",
       draftGate: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
+        sizeOutcome: null,
+        sizeTouchesT1: null,
+        sizeWaiverGranted: null,
+        sizeWaiverApprovedBy: null,
         commentId: 42,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-42",
         updatedAt: "2026-05-29T21:00:00Z",
       },
       preApprovalGate: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "await final human approval",
+        sizeOutcome: null,
+        sizeTouchesT1: null,
+        sizeWaiverGranted: null,
+        sizeWaiverApprovedBy: null,
         commentId: 43,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-43",
         updatedAt: "2026-05-29T22:00:00Z",
       },
       draftGateMarker: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
         executionMode: null,
         inlineReason: null,
+        sizeOutcome: null,
+        sizeTouchesT1: null,
+        sizeWaiverGranted: null,
+        sizeWaiverApprovedBy: null,
         contractComplete: true,
         commentId: 42,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-42",
@@ -486,12 +612,17 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
       },
       preApprovalGateMarker: {
         visible: true,
+        surface: "issue_comment",
         headSha: "abc1234",
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "await final human approval",
         executionMode: null,
         inlineReason: null,
+        sizeOutcome: null,
+        sizeTouchesT1: null,
+        sizeWaiverGranted: null,
+        sizeWaiverApprovedBy: null,
         contractComplete: true,
         commentId: 43,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-43",
@@ -1339,6 +1470,275 @@ test("buildPreMergeGateCheck with requireProvenance ON: a carried angle does not
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
+function buildGroupedPerAngle({ groupCount, anglesPerGroup }) {
+  const perAngle = [];
+  const reviewers = [];
+  for (let g = 0; g < groupCount; g++) {
+    const reviewer = `review-${g}`;
+    reviewers.push(reviewer);
+    for (let a = 0; a < anglesPerGroup; a++) {
+      perAngle.push({ angle: `g${g}-a${a}`, reviewer, group: `g${g}` });
+    }
+  }
+  return { perAngle, reviewers };
+}
+
+test("buildPreMergeGateCheck with requireProvenance ON (AC7): 10 fresh angles across 4 declared groups PASSES with distinctReviewers 4 (floor scales with dispatch units, not angles)", () => {
+  const { perAngle } = buildGroupedPerAngle({ groupCount: 4, anglesPerGroup: 2 }); // 8 angles, add 2 more to reach 10
+  perAngle.push({ angle: "g0-a2", reviewer: "review-0", group: "g0" }, { angle: "g1-a2", reviewer: "review-1", group: "g1" });
+  const resolvedGroups = [
+    { name: "g0", angles: ["g0-a0", "g0-a1", "g0-a2"] },
+    { name: "g1", angles: ["g1-a0", "g1-a1", "g1-a2"] },
+    { name: "g2", angles: ["g2-a0", "g2-a1"] },
+    { name: "g3", angles: ["g3-a0", "g3-a1"] },
+  ];
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 4, perAngle },
+        resolvedGroups,
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck with requireProvenance ON (AC7): the SAME 10-angle ledger with no group values still fails at distinctReviewers 4 (one-reviewer-per-angle floor, unaffected by grouping)", () => {
+  const perAngle = [];
+  for (let i = 0; i < 10; i++) perAngle.push({ angle: `a${i}`, reviewer: `review-${i % 4}` }); // no group field at all
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    requireProvenance: true,
+    gates: [
+      {
+        name: "pre_approval_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 4, perAngle },
+        // No resolvedGroups configured for this round — every angle resolves
+        // as its own singleton dispatch unit, so the floor stays 10.
+        resolvedGroups: perAngle.map((e) => ({ name: e.angle, angles: [e.angle] })),
+      },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((f) => f.includes("need provenance.distinctReviewers >= 10")), JSON.stringify(result.failures));
+});
+
+test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real ledger recording a group the repo's own gates.fanout.groups table configures PASSES requireFanoutProvenance", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-grouped-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, kiss]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "a".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-21");
+    await mkdir(ledgerDir, { recursive: true });
+    // 2 fresh dispatch units (the "process" group + the singleton
+    // pr-checklist-matrix), 2 distinct reviewers — meets the floor exactly.
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "kiss", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 21, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    assert.equal(enforcement.requireProvenance, true);
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(gate.provenance, "the grouped ledger satisfies readLedgerProvenanceInAny's own criteria");
+    assert.equal(gate.provenance.distinctReviewers, 2);
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME two angles under a FABRICATED group label the config never configures together FAILS requireFanoutProvenance", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-fabricated-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    maxAnglesPerGroup: 1",
+        // No gates.fanout.groups; maxAnglesPerGroup: 1 (≡ per-angle) keeps
+        // dry/kiss as separate singleton dispatch units (#1601) so a
+        // fabricated group label spanning them is still rejected.
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "b".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-22");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "made-up" },
+            { angle: "kiss", reviewer: "review-a", group: "made-up" },
+            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 22, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    // readLedgerProvenanceInAny's own `satisfies` check already rejects the
+    // fabricated-group ledger under requireFanoutProvenance, so it falls back
+    // to the first-seen (only) provenance for diagnostics rather than "none".
+    assert.ok(gate.provenance, "falls back to the non-satisfying provenance for diagnostics");
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.failures.some((f) => f.includes("does not place all of them in one group")),
+      JSON.stringify(result.failures),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): the SAME legitimately-grouped ledger PASSES under hasFullLabel: true (gate:full dispatches grouped per ADR 0048, so the shared group stays valid)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-full-label-grouped-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - kiss",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    groups:",
+        "      - name: process",
+        "        angles: [dry, kiss]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "c".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-23");
+    await mkdir(ledgerDir, { recursive: true });
+    // The exact ledger the earlier "PASSES requireFanoutProvenance" test above
+    // records — legitimately grouped under gates.fanout.groups for a tiered
+    // round.
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 2,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a", group: "process" },
+            { angle: "kiss", reviewer: "review-a", group: "process" },
+            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 23, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: true,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(gate.provenance, "falls back to the non-satisfying provenance for diagnostics");
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    // #1601 (ADR 0048): gate:full dispatches grouped, so the configured
+    // "process" group stays valid and the shared reviewer passes provenance.
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+    assert.ok(
+      !result.failures.some((f) => f.includes("does not place all of them in one group")),
+      JSON.stringify(result.failures),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("buildPreMergeGateCheck with requireProvenance OFF (default) adds NO new failure even when provenance is absent (Claude-Code non-regression)", () => {
   // requireProvenance falsy => today's behavior exactly: fanout_fanin + ledger present passes.
   const off = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
@@ -1478,6 +1878,25 @@ test("buildPreMergeGateCheck WARNS (does not fail) on a foreign angle when rejec
   assert.match(result.warnings[0], /rejectForeignAngles is false/);
 });
 
+test("buildPreMergeGateCheck accepts the fan-in synthetic pr-checklist-matrix angle when the pool omits it (#1494)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    gates: [
+      {
+        name: "draft_gate",
+        executionMode: "fanout_fanin",
+        ledgerPath: "tmp/b.json",
+        ledgerExists: true,
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }] },
+        mandatoryAngles: [],
+        anglePool: ["dry", "kiss"],
+      },
+    ],
+  });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+  assert.deepEqual(result.warnings ?? [], []);
+});
+
 test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base mandatory angle", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,
@@ -1607,6 +2026,69 @@ test("buildPreMergeGateCheck (#1174) REJECTS an over-threshold inline verdict (s
     gates: [lightGate({ scopeUnderThreshold: false })],
   });
   assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck (#1723) REJECTS an over-threshold inline verdict even with a DOCUMENTED reason (revert of #1648)", () => {
+  // #1723: the #1648 relaxation dropped the scopeUnderThreshold conjunct, so
+  // an over-threshold inline_single_agent verdict with a non-empty documented
+  // exception (fan-out could not produce evidence in child-safe env) was
+  // accepted. Reverted: a real fan-out is the ONLY evidence mode for
+  // over-threshold real-code deltas, so an over-threshold inline verdict is
+  // rejected REGARDLESS of how substantive its recorded reason is. Only the
+  // light-mode scopeUnderThreshold carve-out remains.
+  for (const inlineReason of [
+    "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+    "under_threshold",
+    "docs-only micro change",
+  ]) {
+    const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+      required: true,
+      lightMode: true,
+      hasFullLabel: false,
+      gates: [lightGate({ scopeUnderThreshold: false, inlineReason })],
+    });
+    assert.equal(result.ok, false, `inlineReason=${JSON.stringify(inlineReason)}`);
+    assert.ok(
+      result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
+      JSON.stringify(result.failures),
+    );
+  }
+});
+
+test("buildPreMergeGateCheck skipFanoutLedgerCheck (#1723): REJECTS an over-threshold DOCUMENTED inline verdict (revert of #1648 remote-verifier case)", () => {
+  // Mirrors the exact gate-evidence CI scenario the #1648 relaxation flipped
+  // (the #1719 case): the stateless default-branch detector. After the revert,
+  // an over-threshold inline_single_agent with a DOCUMENTED exception is
+  // rejected in remote-verifier mode too, because the scopeUnderThreshold
+  // conjunct is false.
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
+    required: true,
+    lightMode: true,
+    hasFullLabel: false,
+    gates: [
+      {
+        name: "draft_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+        scopeUnderThreshold: false,
+        ledgerPath: "tmp/gate-findings/o-r/pr-1719/draft_gate-abc1234.json",
+        ledgerExists: false,
+      },
+      {
+        name: "pre_approval_gate",
+        executionMode: "inline_single_agent",
+        inlineReason: "OPERATOR-AUTHORIZED EXCEPTION: fan-out cannot produce evidence in child-safe env",
+        scopeUnderThreshold: false,
+        ledgerPath: "tmp/gate-findings/o-r/pr-1719/pre_approval_gate-abc1234.json",
+        ledgerExists: false,
+      },
+    ],
+  }, { skipFanoutLedgerCheck: true });
+  assert.equal(result.ok, false, JSON.stringify(result.failures));
   assert.ok(
     result.failures.some((f) => f.includes("inline_single_agent") && f.includes("requireFanoutEvidence")),
     JSON.stringify(result.failures),
@@ -2046,6 +2528,212 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
   }
 });
 
+// #1840 AC5 — extends the #1808 non-evidence regression: a `review` verdict
+// posted via the NEW `--submit approve` mode is STILL non-evidence for
+// dev-loops gates. approve/request-changes are reachable only via the
+// interactive submit choice (upsert-checkpoint-verdict.mjs), and a
+// GitHub-native APPROVE review carries real branch-protection weight
+// (satisfies required-approvals rules) — separate and expected — but that is
+// exactly why the dev-loops-internal evidence guard must stay unaffected by
+// the review's `state`/`event`: the guard is the authoritative `review`
+// header recognized by parseGateReviewCommentFields
+// (@dev-loops/core/github/copilot-helpers), which reads only the comment
+// BODY, never the review's submitted GitHub event/state. This test proves
+// that holds end to end through the real detect-checkpoint-evidence CLI, on
+// a review payload shaped exactly like GitHub's response to a submitted
+// APPROVE review (state: "APPROVED", a non-null submitted_at).
+test("detect-checkpoint-evidence: a `review`-gate verdict submitted as an APPROVE review (--submit approve, #1840) is still non-evidence for draft_gate/pre_approval_gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-approve-mode-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const approvedReviewGateComment = {
+      id: 960,
+      body: renderGateReviewCommentBody({
+        gate: "review",
+        headSha: "abc1234",
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "none — informational review, no re-gate required",
+      }),
+      // Shape of GitHub's response to a SUBMITTED review (state !== "PENDING",
+      // a non-empty submitted_at) — exactly what isSubmittedReview
+      // (_gate-finding-surface.mjs) requires before a review enters the
+      // evidence-scan comment stream at all, so this fixture is a genuine
+      // proof the guard holds even once the review clears that filter.
+      state: "APPROVED",
+      submitted_at: "2026-08-27T23:25:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-960",
+    };
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([approvedReviewGateComment]) + "\n" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    // With no genuine draft_gate/pre_approval_gate comment on the PR (only
+    // the APPROVE-mode `review` comment), evidence must remain ABSENT — the
+    // pre-merge check fails closed rather than reading the review as
+    // draft_gate evidence.
+    assert.equal(result.code, 1, result.stdout);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean draft_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence: a posted gate-findings-review body can never win the newest-gate-marker tie-break (evidence-scan hijack)", async () => {
+  // close-gate-findings.mjs's posted findings review always embeds the gate
+  // name in its header line, and a finding's own free text can mention the
+  // current head sha in "head <sha>" context — exactly what the LENIENT
+  // gate-name+hex-token fallback in parseGateReviewCommentFields used to match,
+  // making the review win the newest-marker tie-break over a genuine (older, or
+  // altogether absent) verdict comment.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-evidence-hijack-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const headSha = "abc1234def5678900000000000000000000000a";
+    const hijackReviewBody = [
+      "Gate findings — pre_approval_gate round 2 @ abc1234",
+      `<!-- dev-loops:gate-findings-review pre_approval_gate ${headSha} round=2 -->`,
+      "",
+      `> **must-fix** (\`security\`): the sentinel recorded for head ${headSha} is never verified`,
+    ].join("\n");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([{
+          id: 900,
+          body: hijackReviewBody,
+          submitted_at: "2026-05-30T23:25:00Z",
+          html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-900",
+        }])}\n`,
+      },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    // With no genuine verdict comment on the PR, pre-approval evidence must
+    // remain ABSENT (not_established) — never hijacked into a visible-but-bad
+    // marker sourced from the posted findings review.
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean current-head pre_approval_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence: a genuine verdict comment whose findings summary quotes the machine-artifact marker MID-LINE still establishes evidence", async () => {
+  // The exclusion is anchored to line start (`^` with `m`) precisely so this
+  // case is not lost: a real gate verdict comment's free-text Findings
+  // summary is not entity-encoded, and can legitimately quote the marker text
+  // (e.g. describing this very mechanism) without the marker being the first
+  // character of its own line. Round-2 negative case for the merge-point
+  // filter (packages/core/src/github/copilot-helpers.mjs).
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-quoted-marker-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const quotedSummary = "no issues found (discussed the `<!-- dev-loops:gate-findings-review draft_gate abc1234 round=1 -->` exclusion here)";
+    const genuineComment = (gate, nextAction, id, updatedAt) => ({
+      id,
+      updated_at: updatedAt,
+      html_url: `https://github.com/owner/repo/pull/17#issuecomment-${id}`,
+      body: [
+        `### Gate review: \`${gate}\``,
+        "",
+        "**Reviewed head SHA:** `abc1234`",
+        "**Verdict:** clean",
+        "**Execution mode:** inline_single_agent — tiny change",
+        "",
+        `**Findings summary:** ${quotedSummary}`,
+        "",
+        `**Next action:** ${nextAction}`,
+      ].join("\n"),
+    });
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          genuineComment("draft_gate", "mark ready for review", 42, "2026-05-29T21:00:00Z"),
+          genuineComment("pre_approval_gate", "await final human approval", 43, "2026-05-29T22:00:00Z"),
+        ])}\n`,
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.draftGateMarker.visible, true);
+    assert.equal(payload.preApprovalGateMarker.visible, true);
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detect-checkpoint-evidence: a rendered deferred-summary comment can never win the newest-gate-marker tie-break (evidence-scan hijack)", async () => {
+  // The deferred-summary comment quotes a gate name and a sha-shaped id in its
+  // table rows (thread links, a gate name in a row's Angle/Summary cell) the
+  // same way — same hijack surface as the gate-findings-review body, on the
+  // issue-comment stream instead of the PR-reviews stream.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-deferred-summary-hijack-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const headSha = "bcd2345ef56789000000000000000000000000b";
+    const deferredSummaryBody = [
+      "<!-- dev-loops:deferred-summary -->",
+      "### Deferred gate findings — PR #17",
+      "",
+      "| Severity | Angle | Summary | Location | Round | Thread |",
+      "| --- | --- | --- | --- | --- | --- |",
+      `| worth-fixing-now | pre_approval_gate | quotes head ${headSha} in its own text | — | 2 | — |`,
+    ].join("\n");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([{ id: 55, body: deferredSummaryBody, updated_at: "2026-05-30T23:25:00Z" }])}\n`,
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.evidenceState, "not_established");
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("missing visible clean current-head pre_approval_gate comment")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineReason, id, updatedAt }) {
   const modeLine = inlineReason
     ? `**Execution mode:** ${executionMode} — ${inlineReason}`
@@ -2259,4 +2947,71 @@ test("deriveEvidenceState: both gates clean but an unrelated pre-merge failure (
   const evidence = cleanEvidence();
   const preMergeGateCheck = { ok: false, failures: ["unresolved review threads present (2); must resolve all threads before merge"] };
   assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.VIOLATION);
+});
+
+test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked N>1 round (AC7, #1601)", async () => {
+  // No configured groups; maxAnglesPerGroup: 2 → resolveFanoutGroups auto-chunks
+  // [a,b,c,d] into group:a+b + group:c+d, with pr-checklist-matrix a leftover
+  // singleton. A ledger recording one reviewer per chunk (shared identity within
+  // the chunk, distinct across chunks) must PASS requireFanoutProvenance —
+  // countFreshDispatchUnits counts 3 dispatch units, not 5 angles.
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-autochunk-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - a",
+        "      - b",
+        "      - c",
+        "      - d",
+        "      - name: pr-checklist-matrix",
+        "        mandatory: true",
+        "  fanout:",
+        "    maxAnglesPerGroup: 2",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const headSha = "e".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-31");
+    await mkdir(path.join(ledgerDir), { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 3,
+          perAngle: [
+            { angle: "a", reviewer: "review-a", group: "group:a+b" },
+            { angle: "b", reviewer: "review-a", group: "group:a+b" },
+            { angle: "c", reviewer: "review-b", group: "group:c+d" },
+            { angle: "d", reviewer: "review-b", group: "group:c+d" },
+            { angle: "pr-checklist-matrix", reviewer: "review-c" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 31, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

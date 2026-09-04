@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings } from "./_resolve-project.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
        (dev-loops project ensure … is a back-compat alias)
@@ -21,7 +22,7 @@ board and Status field already exist.
 When --link-repo is provided, links the project to the given repository after creation.
 
 When --project is not provided, resolves from .devloops at repo root
-queue.board.number or queue.board.title.
+tracker.board.number or tracker.board.title.
 
 Output (stdout):
   JSON: { ok: true, project: { id, number, title, url, statusFieldId, linkedRepo } }
@@ -150,49 +151,7 @@ function validateRepo(repo) {
   return repo;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────
-
-async function ghGraphql(query, vars, env, runChild = _runChild) {
-  const fieldArgs = [];
-  for (const [key, value] of Object.entries(vars)) {
-    fieldArgs.push("--field", `${key}=${value}`);
-  }
-  const result = await runChild(
-    "gh",
-    ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
-    env,
-  );
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  const payload = parseJsonText(result.stdout);
-  if (payload.errors && payload.errors.length > 0) {
-    throw Object.assign(
-      new Error(`GraphQL errors: ${payload.errors.map((e) => e.message).join("; ")}`),
-      { code: "GRAPHQL_ERROR" },
-    );
-  }
-  return payload;
-}
-
 // ── Query/mutation fragments ────────────────────────────────────────────
-
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) {",
-  "    id",
-  "  }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) {",
-  "    id",
-  "  }",
-  "}"
-].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -322,25 +281,6 @@ const GET_REPO_ID = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  // Try user first
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  // Try organization (only if user returned null — not for API errors)
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}" (not a user or organization)`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Repository ID resolution ─────────────────────────────────────────────
 
@@ -632,7 +572,11 @@ async function main(args, { env = process.env, runChild } = {}) {
   const repo = validateRepo(args.repo);
   const [owner] = repo.split("/");
   const title = args.title || "Dev Loop Queue"; // explicit default after settings fallback in runCli
-  const linkRepo = args.linkRepo || null;
+  // QUEUE-BOARD-LINKED: default linkRepo to the given repo so every board
+  // created/ensured through this wrapper is linked to its repo (a guard present
+  // at one entry point but not its siblings). `repo` is already validated above
+  // and has exactly owner/name form, so it is safe to reuse here.
+  const linkRepo = args.linkRepo || repo;
   if (linkRepo) validateRepo(linkRepo); // validate format early
 
   // 1. Resolve owner (user or org)

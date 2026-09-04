@@ -4,21 +4,32 @@ import {
   buildParseError,
   formatCliError,
   isDirectCliRun,
-  parseJsonText,
+  normalizeVerdictSurface,
   parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
+// Historical machine-authored gate artifacts (a standalone findings review, a
+// deferred-summary comment) are excluded from evidence at the
+// true merge point — inside summarizeGateReviewComments/
+// summarizeGateReviewCommentMarkers in packages/core/src/github/
+// copilot-helpers.mjs, re-exported here — so every caller of those two
+// summarizers (this file, pre-pr-ready-gate.mjs, ready-for-review.mjs,
+// request-copilot-review.mjs) is covered by construction rather than needing
+// its own per-caller filter.
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-surface.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, checkFanoutAngleCoverage, countFreshAngles, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { ghJson } from "@dev-loops/core/github/gh";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -52,45 +63,53 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     "currentHeadSha": "abc1234",
     "draftGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "mark ready for review",
       "contractComplete": true,
       "commentId": 101,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-101",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-101",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "draftGateSatisfied": true,
     "preApprovalGate": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
+      "sizeOutcome": "pass",
+      "sizeTouchesT1": false,
+      "sizeWaiverGranted": false,
+      "sizeWaiverApprovedBy": null,
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preApprovalGateMarker": {
       "visible": true,
+      "surface": "review",
       "headSha": "abc1234",
       "verdict": "clean",
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "contractComplete": true,
       "commentId": 102,
-      "commentUrl": "https://github.com/owner/repo/pull/17#issuecomment-102",
+      "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
     },
     "preMergeGateCheck": {
@@ -99,11 +118,22 @@ Output (stdout, JSON; always includes preMergeGateCheck):
     },
     "evidenceState": "satisfied"
   }
+  (surface is "review"|"issue_comment" (null when not visible): which GitHub
+  surface carries that verdict — new rounds always post a PR review,
+  "issue_comment" is a legacy verdict comment still read for back-compat.)
   (evidenceState is "satisfied"|"not_established"|"violation": "not_established"
   means evidence for the current head simply doesn't exist yet (draft,
   mid-Copilot-loop, pre-approval not yet re-run after a fix commit); "violation"
   means a visible current-head comment carries a bad verdict, or another
   pre-merge check failed. Present on both success and failure output.)
+  (sizeOutcome is "pass"|"escalate"|"block"|null, sizeTouchesT1/sizeWaiverGranted
+  are boolean|null, sizeWaiverApprovedBy is string|null: the PR's size-budget
+  result (check-size-budget.mjs's computeSizeBudget), round-tripped through the
+  verdict comment. null on every field means size evidence is ABSENT — a verdict
+  posted before this field set existed, or a gate that never ran the size-budget
+  check — which the size-budget merge gate
+  (@dev-loops/core/loop/size-budget-merge-gate) reads as "human approval
+  required", never as "pass".)
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
@@ -182,20 +212,14 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
 // and fails for any other reason (auth, rate limit, a real 404) is a genuine
 // error and is never silently retried through the REST fallback (#1358).
 async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild, restFallback = null }) {
-  let result;
   try {
-    result = await runChild(ghCommand, args, env);
+    return await ghJson(args, { env, ghCommand, runChild });
   } catch (error) {
     if (restFallback && isGhBinaryMissing(error)) {
       return await restFallback();
     }
     throw error;
   }
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || `exit code ${result.code}`;
-    throw new Error(`gh command failed: ${detail}`);
-  }
-  return parseJsonText(result.stdout, { label: `gh ${args.slice(0, 2).join(" ")}` });
 }
 function normalizeIssueCommentsPayload(payload) {
   if (!Array.isArray(payload)) {
@@ -206,26 +230,23 @@ function normalizeIssueCommentsPayload(payload) {
   }
   return payload;
 }
-function normalizePrReviewsPayload(payload) {
-  if (!Array.isArray(payload)) return [];
-  const flat = payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
-  return flat
-    .filter((r) => r && typeof r === "object" && r.state !== "PENDING" && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0 && typeof r.body === "string" && r.body.trim().length > 0)
-    .map((r) => ({
-      id: r.id,
-      body: r.body,
-      html_url: typeof r.html_url === "string" ? r.html_url : null,
-      created_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-      updated_at: typeof r.submitted_at === "string" ? r.submitted_at : null,
-    }));
-}
 function emptyGateSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
     nextAction: null,
+    // Size-budget fields (phase 3 of the fail-closed PR size budget): null on every path where no
+    // comment/marker is visible OR the visible comment predates this field
+    // set — both read identically as "size evidence absent", which the
+    // size-budget merge gate (@dev-loops/core/loop/size-budget-merge-gate)
+    // fails closed on.
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
     commentId: null,
     commentUrl: null,
     updatedAt: null,
@@ -237,10 +258,15 @@ function normalizeGateSummary(summary) {
   }
   return {
     visible: true,
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
+    sizeOutcome: summary.sizeOutcome ?? null,
+    sizeTouchesT1: summary.sizeTouchesT1 ?? null,
+    sizeWaiverGranted: summary.sizeWaiverGranted ?? null,
+    sizeWaiverApprovedBy: summary.sizeWaiverApprovedBy ?? null,
     commentId: summary.commentId,
     commentUrl: summary.commentUrl,
     updatedAt: summary.updatedAt,
@@ -249,12 +275,17 @@ function normalizeGateSummary(summary) {
 function emptyGateMarkerSummary() {
   return {
     visible: false,
+    surface: null,
     headSha: null,
     verdict: null,
     findingsSummary: null,
     nextAction: null,
     executionMode: null,
     inlineReason: null,
+    sizeOutcome: null,
+    sizeTouchesT1: null,
+    sizeWaiverGranted: null,
+    sizeWaiverApprovedBy: null,
     contractComplete: false,
     commentId: null,
     commentUrl: null,
@@ -267,17 +298,58 @@ function normalizeGateMarkerSummary(summary) {
   }
   return {
     visible: true,
+    surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
     executionMode: summary.executionMode ?? null,
     inlineReason: summary.inlineReason ?? null,
+    sizeOutcome: summary.sizeOutcome ?? null,
+    sizeTouchesT1: summary.sizeTouchesT1 ?? null,
+    sizeWaiverGranted: summary.sizeWaiverGranted ?? null,
+    sizeWaiverApprovedBy: summary.sizeWaiverApprovedBy ?? null,
     contractComplete: summary.contractComplete === true,
     commentId: summary.commentId,
     commentUrl: summary.commentUrl,
     updatedAt: summary.updatedAt,
   };
+}
+/**
+ * Decide whether a gate's recorded (or candidate, not-yet-posted) execution
+ * mode satisfies fan-out evidence enforcement, independent of the ledger/
+ * provenance/angle-coverage layer below it. Returns null when the mode
+ * qualifies (fanout_fanin, or a light-mode-accepted inline verdict) and an
+ * error message — identical wording wherever this runs — otherwise.
+ *
+ * This is the ONE place mode qualification is decided. buildPreMergeGateCheck
+ * (merge-time) and upsert-checkpoint-verdict.mjs (post-time) both call this
+ * against the same buildFanoutEnforcement-produced `gate` descriptor
+ * so the two boundaries can never drift apart on what counts as an accepted
+ * inline verdict.
+ */
+export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
+  // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
+  // collapses the gate fan-out to a single inline check (#1043). Accept that
+  // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
+  //   - lightMode is enabled in config, AND
+  //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
+  //     (scopeUnderThreshold; false whenever scope could not be derived), AND
+  //   - the PR carries no gate:full label (which always forces fan-out), AND
+  //   - the verdict records a non-empty inline reason.
+  // Any non-light inline verdict (over threshold / label / lightMode off /
+  // scope underivable) falls through to the byte-identical rejection below.
+  const lightAccepted =
+    gate.executionMode === "inline_single_agent"
+    && fanoutEnforcement.lightMode === true
+    && fanoutEnforcement.hasFullLabel !== true
+    && gate.scopeUnderThreshold === true
+    && typeof gate.inlineReason === "string"
+    && gate.inlineReason.trim().length > 0;
+  if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
+    return `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`;
+  }
+  return null;
 }
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
   const failures = [];
@@ -299,27 +371,9 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
-      // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
-      // collapses the gate fan-out to a single inline check (#1043). Accept that
-      // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
-      //   - lightMode is enabled in config, AND
-      //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
-      //     (scopeUnderThreshold; false whenever scope could not be derived), AND
-      //   - the PR carries no gate:full label (which always forces fan-out), AND
-      //   - the verdict records a non-empty inline reason.
-      // Any non-light inline verdict (over threshold / label / lightMode off /
-      // scope underivable) falls through to the byte-identical rejection below.
-      const lightAccepted =
-        gate.executionMode === "inline_single_agent"
-        && fanoutEnforcement.lightMode === true
-        && fanoutEnforcement.hasFullLabel !== true
-        && gate.scopeUnderThreshold === true
-        && typeof gate.inlineReason === "string"
-        && gate.inlineReason.trim().length > 0;
-      if (gate.executionMode !== "fanout_fanin" && !lightAccepted) {
-        failures.push(
-          `${gate.name}: requireFanoutEvidence is enabled but executionMode is "${gate.executionMode ?? "unset"}" (expected "fanout_fanin"); inline gate verdicts are not accepted`,
-        );
+      const modeFailure = evaluateInlineFanoutMode(gate, fanoutEnforcement);
+      if (modeFailure) {
+        failures.push(modeFailure);
         continue;
       }
       // A stateless remote verifier (the gate-evidence CI check, or a gh-less API
@@ -358,21 +412,25 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
             `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${consistencyErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
           );
         } else {
-          // The floor scales with the fresh (non-carried) angle count: one
-          // reviewer per fresh angle at minimum FANOUT_PROVENANCE_MIN_REVIEWERS
-          // (#1431) — a ledger recording more fresh angles than distinct
-          // reviewers could only have paired one reviewer across angles.
-          const freshAngleCount = countFreshAngles(prov.perAngle);
-          const requiredReviewers = Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, freshAngleCount);
+          // The floor scales with the fresh DISPATCH UNITS actually recorded
+          // (one reviewer per fresh angle, but one reviewer per declared
+          // GROUP of fresh angles — #1431/AC7), at minimum
+          // FANOUT_PROVENANCE_MIN_REVIEWERS — a ledger recording more fresh
+          // dispatch units than distinct reviewers could only have paired one
+          // reviewer across units.
+          const freshUnitCount = countFreshDispatchUnits(prov.perAngle);
+          const requiredReviewers = Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, freshUnitCount);
           // Re-validate the per-identity pairing here too: the ledger is a
           // worktree-local file, so the read path must not trust that the
           // write-time floor produced it (a hand-crafted padded ledger can
           // satisfy the cardinality floor while one reviewer covers two
-          // fresh angles).
-          const pairingErr = fanoutReviewerPairingError(prov.perAngle);
+          // fresh angles/groups). gate.resolvedGroups cross-checks a claimed
+          // `group` against this round's actual dispatch-group resolution
+          // (mode/gate:full-aware) rather than accepting any self-attested label.
+          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups);
           if (reviewers === null || reviewers < requiredReviewers) {
             failures.push(
-              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshAngleCount} fresh angle(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshUnitCount} fresh dispatch unit(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           } else if (pairingErr !== null) {
             failures.push(
@@ -526,11 +584,19 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * inline verdicts never trigger this read.
  */
 async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
-  const { requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true } = criteria;
+  const {
+    requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true,
+    config = null, gateKey = "draft_gate", hasFullLabel = false,
+  } = criteria;
   const satisfies = (prov) => {
     if (provenanceConsistencyError(prov) !== null) return false;
-    if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshAngles(prov.perAngle))) return false;
-    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle) !== null) return false;
+    // The floor and the pairing cross-check both key off this candidate
+    // ledger's OWN fresh angles/groups — resolveFanoutGroups per candidate,
+    // not once up front, since a stale checkout can record a different fresh
+    // angle set than the worktree ledger.
+    const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, freshAngleNames(prov.perAngle), { fullLabel: hasFullLabel });
+    if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
+    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
     if (missingMandatory.length > 0) return false;
     if (foreignAngles.length > 0 && rejectForeignAngles) return false;
@@ -641,6 +707,11 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // checkout's contract-failing ledger cannot shadow a passing one.
     const readProvenance = requireProvenance || spec.marker.executionMode === "fanout_fanin";
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
+    const provenance = readProvenance
+      ? await readLedgerProvenanceInAny(checkouts, ledgerPath, {
+        requireProvenance, rejectForeignAngles, ...angleFields, config, gateKey: spec.name, hasFullLabel,
+      })
+      : null;
     gates.push({
       name: spec.name,
       executionMode: spec.marker.executionMode ?? null,
@@ -648,9 +719,13 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
-      provenance: readProvenance
-        ? await readLedgerProvenanceInAny(checkouts, ledgerPath, { requireProvenance, rejectForeignAngles, ...angleFields })
-        : null,
+      provenance,
+      // The dispatch units THIS ledger's own fresh angles actually resolve to
+      // (grouped or singleton, mode/gate:full-aware) — buildPreMergeGateCheck
+      // re-validates the cardinality floor and the pairing exception against
+      // this, so both agree with what readLedgerProvenanceInAny already used
+      // to pick this ledger.
+      resolvedGroups: resolveFanoutGroups(config, GATE_CONFIG_KEY[spec.name] ?? spec.name, freshAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
       ...angleFields,
     });
   }
@@ -694,20 +769,24 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
-  // Also scan PR reviews for gate comments posted via the review API.
-  // This prevents duplicates when an escape-hatch path posted a gate verdict
-  // as a PR review rather than an issue comment (root cause 3 from issue #692).
+  // The PR review stream is the PRIMARY verdict surface: the poster renders the
+  // round's single visible surface as a review. The issue-comment scan above is
+  // the back-compat read that still sees legacy verdicts and the zero-dep
+  // fallback poster's output. Both feed the same summarizers, so a verdict is
+  // counted once wherever it lives.
   let prReviews = [];
   try {
     const reviewsRaw = await runGhJson(
-      ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
-      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`, env) },
+      prReviewsApiArgs(options.repo, options.pr),
+      { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
   } catch {
     // Graceful fallback: PR reviews fetch failure is non-fatal.
     // We continue with issue comments only.
   }
+  // Machine-artifact bodies are filtered inside the two summarizers below, not
+  // here — see the import comment above.
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
@@ -795,13 +874,25 @@ async function main() {
   try {
     const result = await detectCheckpointEvidence(options);
     let unresolvedThreadCount = -1;
+    let unresolvedGateThreadCount = -1;
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
+      // #1585: the draftGateSatisfied field must assert 0 unresolved
+      // gate-authored threads (high, medium, low, question, AND nit),
+      // not just a clean verdict. Reuse the same raw thread payload already
+      // fetched for the total count (marker-only, fail-closed proxy — no extra
+      // gh round-trip; the read-only counter cannot under-count a real
+      // gate-authored thread, only over-count a foreign quote, which blocks
+      // safely).
+      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
     } catch {
       unresolvedThreadCount = -1;
+      unresolvedGateThreadCount = -1;
     }
+    // #1585: fold the gate-authored thread invariant into draftGateSatisfied.
+    result.draftGateSatisfied = result.draftGateSatisfied && unresolvedGateThreadCount === 0;
     const staleRunnerCheck = {
       ok: result.staleRunner.status === "fresh_runner" || result.staleRunner.status === "no_owner_record",
       failures: result.staleRunner.status === "stale_runner"
