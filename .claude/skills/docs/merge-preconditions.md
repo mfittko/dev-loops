@@ -98,8 +98,28 @@ practice:
   round's verdict review, or — where the full toolchain is unavailable — the
   zero-dep fallback poster's issue comment re-fires via the issue_comment
   arm. An identical same-head rerun is a deliberate no-op and does not
-  re-fire. `gh run rerun` is NOT a recovery
-  path (it replays the stale original event payload). (There is no `pull_request_review_thread` Actions
+  re-fire. `gh run rerun` is not a native re-fire path (it replays the stale
+  original event payload), but it IS the sanctioned recovery for one specific
+  stuck state (issue #1935, ADR 0057): the verdict-post re-fire was CANCELLED by
+  the job's `cancel-in-progress` concurrency (a superseding review/comment event
+  landed right after it) or evaluated before the just-posted verdict was
+  API-visible, so the required status stayed `failure` on the current head even
+  though a clean current-head verdict now exists, and no further event re-fired
+  it — the merge stays `UNSTABLE`. Because the loop excludes `gate-evidence` from
+  its own CI convergence wait (`LOOP_DERIVED_CI_CHECK_NAMES`), nothing heals this
+  automatically. `scripts/github/reconcile-gate-evidence-status.mjs --repo <o/r>
+  --pr <n>` closes it deterministically at merge-readiness: it reads the
+  authoritative evidence the same way this check does
+  (`detect-checkpoint-evidence --skip-fanout-ledger-check`) and the current-head
+  `gate-evidence` status, and when the evidence is genuinely satisfied but the
+  status is stuck non-green it re-fires the run that posted the stale status
+  (`gh run rerun <id>`, id parsed from the status `target_url`). The head has not
+  moved at merge-readiness, so the replayed payload targets the correct SHA and
+  the rerun re-evaluates LIVE (now-satisfied) evidence to `success`. It is
+  fail-closed and test-pinned: when the evidence is genuinely NOT satisfied it
+  re-fires nothing, so a real "verdict missing" head keeps failing closed. The
+  reconcile never posts a status itself — it only re-triggers the trusted-base CI
+  run. (There is no `pull_request_review_thread` Actions
   trigger, so thread resolve/unresolve is not itself a re-fire event; a
   newly-appearing unresolved thread arrives via a submitted review or a review
   comment, both of which do re-fire. One narrow residual remains: a bare
