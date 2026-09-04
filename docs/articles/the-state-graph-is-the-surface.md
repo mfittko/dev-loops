@@ -44,16 +44,7 @@ A useful way to position the repository is by the problem each pattern solves.
 
 ## The graph follows the work
 
-Many agent frameworks begin with an execution graph:
-
-- node A is a planner;
-- node B is a coder;
-- node C is a reviewer;
-- an edge decides which agent runs next.
-
-Actor-first graphs emphasize execution roles.
-
-`dev-loops` starts from the other direction. It models facts such as:
+`dev-loops` models work facts such as:
 
 - which artifact is active;
 - whether an issue has a linked pull request;

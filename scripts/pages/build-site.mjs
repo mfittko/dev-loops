@@ -8,12 +8,14 @@
 // their markdown twin (edit the .md, then `npm run articles:render`); the rest
 // are hand-maintained sources.
 // Usage: node scripts/pages/build-site.mjs [--out <dir>] [--repo-root <dir>]
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, parse as parsePath } from 'node:path';
+import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, posix, relative, resolve, sep, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildStateAtlasHtml } from './build-state-atlas.mjs';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const OUTPUT_MARKER = '.dev-loops-pages-output';
+const OUTPUT_MARKER_CONTENT = 'owned by scripts/pages/build-site.mjs\n';
 
 // The landing page: the intro article, published as index.html. file is
 // relative to docs/articles/.
@@ -60,9 +62,96 @@ const deckOut = (deck) => deck.outFile ?? deck.file;
 export function assertUniquePublishTargets(targets) {
   const seen = new Set();
   for (const target of targets) {
-    if (seen.has(target)) throw new Error(`duplicate Pages output target ${target}`);
-    seen.add(target);
+    if (typeof target !== 'string' || target.length === 0 || target.includes('\\') || posix.isAbsolute(target)) {
+      throw new Error(`unsafe Pages output target ${String(target)}`);
+    }
+    const normalized = posix.normalize(target);
+    if (normalized !== target || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+      throw new Error(`unsafe Pages output target ${target}`);
+    }
+    for (const prior of seen) {
+      if (prior === normalized || prior.startsWith(`${normalized}/`) || normalized.startsWith(`${prior}/`)) {
+        throw new Error(`duplicate Pages output target ${target}`);
+      }
+    }
+    seen.add(normalized);
   }
+}
+
+const isContained = (parent, candidate, pathApi = { relative, sep }) => {
+  const rel = pathApi.relative(parent, candidate);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute?.(rel);
+};
+
+// Pure relationship guard, parameterized so Windows containment semantics are
+// covered even when the test runner itself is POSIX.
+export function assertSafeOutputRelationship(repoRoot, outDir, pathApi = { relative, sep, parse: parsePath, isAbsolute: () => false }) {
+  const defaultOut = pathApi.join ? pathApi.join(repoRoot, 'site') : join(repoRoot, 'site');
+  const isInsideRoot = isContained(repoRoot, outDir, pathApi);
+  if (
+    outDir === pathApi.parse(outDir).root ||
+    outDir === repoRoot ||
+    isContained(outDir, repoRoot, pathApi) ||
+    (isInsideRoot && outDir !== defaultOut)
+  ) {
+    throw new Error(`refusing to wipe unsafe output dir ${outDir}`);
+  }
+}
+
+async function physicalOutputPath(outDir) {
+  let existing = outDir;
+  for (;;) {
+    try {
+      await lstat(existing);
+      break;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = dirname(existing);
+      if (parent === existing) throw error;
+      existing = parent;
+    }
+  }
+  const physicalAncestor = await realpath(existing);
+  return resolve(physicalAncestor, relative(existing, outDir));
+}
+
+async function prepareOutputDirectory(repoRoot, outDir) {
+  assertSafeOutputRelationship(repoRoot, outDir, { relative, sep, parse: parsePath, isAbsolute: (value) => resolve(value) === value, join });
+
+  // Re-evaluate after resolving the nearest existing ancestor. This catches an
+  // intermediate symlink whose lexical spelling looks external but lands in the
+  // repository (or above it).
+  const [physicalRoot, physicalOut] = await Promise.all([realpath(repoRoot), physicalOutputPath(outDir)]);
+  assertSafeOutputRelationship(physicalRoot, physicalOut, { relative, sep, parse: parsePath, isAbsolute: (value) => resolve(value) === value, join });
+
+  const defaultOut = join(resolve(repoRoot), 'site');
+  let outStat;
+  try {
+    outStat = await lstat(outDir);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (outStat?.isSymbolicLink() || (outStat && !outStat.isDirectory())) {
+    throw new Error(`refusing to wipe unsafe output dir ${outDir}`);
+  }
+  if (outStat && outDir !== defaultOut) {
+    const entries = await readdir(outDir);
+    if (entries.length > 0) {
+      let marker;
+      try {
+        marker = await readFile(join(outDir, OUTPUT_MARKER), 'utf8');
+      } catch {
+        // A nonempty external directory is never assumed to belong to this build.
+      }
+      if (marker !== OUTPUT_MARKER_CONTENT) {
+        throw new Error(`refusing to wipe unowned output dir ${outDir}`);
+      }
+    }
+  }
+
+  await rm(outDir, { recursive: true, force: true });
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(outDir, OUTPUT_MARKER), OUTPUT_MARKER_CONTENT, 'utf8');
 }
 
 // The State atlas: a generated page (site/state-atlas.html) rendering every
@@ -141,15 +230,9 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const decksDir = join(repoRoot, 'docs', 'presentations');
 
   // Guard: out is wiped before assembly. Within the repository, only the
-  // generated site/ directory is a legal target; external output dirs support
-  // previews and tests without putting tracked source at risk.
+  // generated site/ directory is a legal target. External output dirs must be
+  // empty or carry this builder's ownership marker before they can be reused.
   const root = resolve(repoRoot);
-  const defaultOut = join(root, 'site');
-  const isAncestorOf = (a, b) => b === a || b.startsWith(a + '/');
-  const isInsideRoot = out.startsWith(root + '/');
-  if (out === parsePath(out).root || out === root || isAncestorOf(out, root) || (isInsideRoot && out !== defaultOut)) {
-    throw new Error(`refusing to wipe unsafe output dir ${out}`);
-  }
 
   const files = [
     'index.html',
@@ -157,11 +240,11 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     ...DECKS.map((d) => deckOut(d)),
     STATE_ATLAS.file,
     'assets/mermaid.min.js',
+    OUTPUT_MARKER,
   ];
   assertUniquePublishTargets(files);
 
-  await rm(out, { recursive: true, force: true });
-  await mkdir(out, { recursive: true });
+  await prepareOutputDirectory(root, out);
 
   const repoUrl = await resolveRepoUrl(repoRoot);
 

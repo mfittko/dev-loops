@@ -160,6 +160,7 @@ export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
 
 export function assertMobileFit(m) {
   assertDeckFit(m, `${MOBILE.width}px viewport`);
+  expect(m.oversizedSections, `sections exceed the mobile viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
 }
 
 export function assertDesktopFit(m) {
@@ -191,7 +192,15 @@ function captureRuntimeErrors(page) {
 //   { sliceId, deckPath, sectionIds, mobileCapture: { id, stateName } }
 // `sectionIds` may be plain ids or { id, stateName, capture } entries; entries
 // with capture !== false get a desktop named-state capture.
-export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, desktopFit = false, evidenceAssertions = false }) {
+export function defineDeckSuite({
+  sliceId,
+  deckPath,
+  sectionIds,
+  mobileCapture,
+  desktopFit = false,
+  mobileFit = false,
+  evidenceAssertions = false,
+}) {
   const states = sectionIds.map((entry) =>
     typeof entry === "string" ? { id: entry, stateName: entry, capture: true } : { capture: true, stateName: entry.id, ...entry });
   const ids = states.map((s) => s.id);
@@ -262,7 +271,8 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
     try {
       await settleMobile(page, url);
       const m = await measureFit(page);
-      assertMobileFit(m);
+      if (mobileFit) assertMobileFit(m);
+      else assertDeckFit(m, `${MOBILE.width}px viewport`);
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
@@ -301,6 +311,21 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture, 
       });
       const m = await measureFit(page);
       expect(() => assertMobileFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  if (mobileFit) test(`${sliceId} mobile fit check fails on a deliberately-tall section`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const section = document.querySelector("section");
+        section.style.minHeight = `${window.innerHeight + 200}px`;
+      });
+      const m = await measureFit(page);
+      expect(() => assertMobileFit(m)).toThrow(/sections exceed the mobile viewport height/);
     } finally {
       await stopFixtureServer(server);
     }

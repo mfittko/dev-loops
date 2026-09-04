@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -70,6 +70,7 @@ test('build-site: index is the intro article, all resources published, nav links
         ...DECKS.map((d) => deckOut(d)),
         STATE_ATLAS.file,
         'assets/mermaid.min.js',
+        '.dev-loops-pages-output',
       ].sort(),
     );
   } finally {
@@ -181,7 +182,58 @@ test('build-site refuses repository-internal output directories without deleting
   }
 });
 
+test('build-site refuses a nonempty external directory it does not own', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'pages-unowned-'));
+  const sentinel = join(out, 'sentinel.txt');
+  try {
+    await writeFile(sentinel, 'preserve me', 'utf8');
+    await assert.rejects(() => buildSite({ outDir: out }), /refusing to wipe unowned output dir/);
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site reuses an external directory only after marking it as owned', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'pages-owned-'));
+  try {
+    await buildSite({ outDir: out });
+    await buildSite({ outDir: out });
+    assert.equal(await readFile(join(out, '.dev-loops-pages-output'), 'utf8'), 'owned by scripts/pages/build-site.mjs\n');
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site resolves an external parent symlink before allowing deletion', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'pages-symlink-parent-'));
+  const link = join(parent, 'repo-link');
+  const sentinel = join(process.cwd(), 'docs', 'sentinel-never-create.txt');
+  try {
+    await symlink(process.cwd(), link, 'dir');
+    await assert.rejects(() => buildSite({ outDir: join(link, 'docs') }), /refusing to wipe unsafe output dir/);
+    await assert.rejects(() => stat(sentinel), { code: 'ENOENT' });
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('Pages output relationship guard uses Windows containment semantics', () => {
+  assert.throws(
+    () => assertSafeOutputRelationship('C:\\repo', 'C:\\repo\\docs', win32),
+    /refusing to wipe unsafe output dir/,
+  );
+  assert.throws(
+    () => assertSafeOutputRelationship('C:\\repo', 'C:\\', win32),
+    /refusing to wipe unsafe output dir/,
+  );
+  assert.doesNotThrow(() => assertSafeOutputRelationship('C:\\repo', 'D:\\preview', win32));
+});
+
 test('Pages output targets reject cross-family collisions', () => {
   assert.doesNotThrow(() => assertUniquePublishTargets(['index.html', 'deck.html', 'assets/runtime.js']));
   assert.throws(() => assertUniquePublishTargets(['index.html', 'deck.html', 'index.html']), /duplicate Pages output target index\.html/);
+  assert.throws(() => assertUniquePublishTargets(['index.html', 'sub/../index.html']), /unsafe Pages output target/);
+  assert.throws(() => assertUniquePublishTargets(['index.html', '../outside.html']), /unsafe Pages output target/);
+  assert.throws(() => assertUniquePublishTargets(['assets', 'assets/runtime.js']), /duplicate Pages output target/);
 });
