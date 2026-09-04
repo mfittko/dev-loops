@@ -103,13 +103,16 @@ const INSTRUCTIONAL_MARKER = /\b(?:posts?|posted|posting|stating|states|requires
 
 /**
  * Remove the markdown contexts where the approval phrase is being QUOTED or
- * referenced rather than asserted (#1941, root-cause fix for the fail-open):
- * inline code spans (`` `approve release v1.0.0` ``), fenced code blocks
- * (```` ```…``` ````/`~~~…~~~`), and block-quote lines (`> …`). An
- * agent-authored handoff/summary comment that quotes the phrase inside any of
- * these is not a genuine top-level operator approval, so it must not satisfy
- * the gate. Replaces each stripped span with a space so surrounding words never
- * fuse into a false phrase match.
+ * referenced rather than asserted (#1941, root-cause fix for the fail-open).
+ * Removes, in order: fenced code blocks (backtick/tilde, incl. an unterminated
+ * fence to end-of-text), inline code spans (any backtick form, coarsely — see
+ * the inline-strip note in the body), indented code blocks (4+ spaces / tab
+ * lead), and block-quote lines (`> …`). An agent-authored handoff/summary
+ * comment that quotes the phrase inside any of these is not a genuine top-level
+ * operator approval, so it must not satisfy the gate. Each stripped span becomes
+ * a space so surrounding words never fuse into a false phrase match. The strip
+ * only ever refuses more (fail-closed): it can never expose a quoted phrase as a
+ * genuine one.
  */
 export function stripNonAssertionMarkdown(body) {
   let s = String(body ?? "");
@@ -117,10 +120,20 @@ export function stripNonAssertionMarkdown(body) {
   // end-of-text — an unterminated fence still means "everything after is code".
   s = s.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm, " ");
   s = s.replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, " ");
-  // Inline code spans: a run of N backticks … the same run. Handles single and
-  // multi-backtick spans; leftover stray backticks are then blanked.
-  s = s.replace(/(`+)[^`]*?\1/g, " ");
-  s = s.replace(/`+/g, " ");
+  // Inline code spans (#1941 review, Copilot): strip everything from the FIRST
+  // to the LAST backtick on each line, then blank any lone leftover backtick.
+  // This is deliberately coarser than a precise `(`+)…\1` code-span matcher and
+  // strictly more fail-closed: a phrase quoted in ANY backtick form — including
+  // a CommonMark longer-delimiter span whose content itself contains backticks
+  // (`` `x` approve release v… ``), which a precise matcher could leave for the
+  // leftover-backtick blanking to re-expose as prose (a fail-OPEN) — is removed.
+  // The only cost is over-stripping a phrase sandwiched BETWEEN two separate
+  // code spans on one line; that refuses a contrived approval (fail-closed),
+  // never accepts a quoted one. A phrase entirely before the first or after the
+  // last backtick (a genuine assertion with an unrelated inline code span) still
+  // survives.
+  s = s.replace(/`[^\n]*`/g, " ");
+  s = s.replace(/`/g, " ");
   // Indented code blocks (#1941 review): a line led by 4+ spaces or a tab
   // renders as a code block on GitHub, so a phrase quoted that way is code, not
   // a top-level assertion. Blanking such a line is fail-closed-safe: a genuine
@@ -241,28 +254,41 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
       c.author.trim().toLowerCase() === operatorLower &&
       isGenuineApprovalAssertion(c.body, pattern),
   );
-  // Post-date: only a genuine assertion created strictly after the release
-  // commit counts (a comment created at the exact commit instant, or missing an
-  // authoritative timestamp, cannot be a deliberate post-cut approval).
-  const fresh = genuine.filter((c) => {
+  // Post-date: a genuine assertion counts only when its createdAt is parseable
+  // AND strictly after the release commit. Partition the non-approving remainder
+  // so the refusal is accurate (#1941 review, Copilot): a parseable-but-earlier
+  // timestamp is STALE; an absent/unparseable timestamp is UNVERIFIABLE — both
+  // fail closed, but they are distinct operator-facing situations.
+  const stale = [];
+  const unverifiable = [];
+  let approved = false;
+  for (const c of genuine) {
     const created = Date.parse(c.createdAt);
-    return Number.isFinite(created) && created > releaseEpoch;
-  });
-  const approved = fresh.length > 0;
+    if (!Number.isFinite(created)) unverifiable.push(c);
+    else if (created > releaseEpoch) approved = true;
+    else stale.push(c);
+  }
   if (approved) {
     return { applies: true, approved: true, refusal: null };
   }
-  // A genuine-but-stale assertion gets a distinct refusal so the operator knows
-  // to re-post AFTER the current cut rather than assume the phrase was wrong.
-  const refusal = genuine.length > 0
-    ? `stable release v${version} blocked: the only matching operator approval(s) predate the release commit being tagged (stale). `
+  // Prefer the stale message when any matching approval carried a real,
+  // too-early timestamp (the carried-over/reverted-cut hole); fall back to the
+  // unverifiable message when the only matches lack a parseable created_at.
+  let refusal;
+  if (stale.length > 0) {
+    refusal = `stable release v${version} blocked: the only matching operator approval(s) predate the release commit being tagged (stale). `
       + `An approval carried over from a prior or reverted cut does NOT authorize this release; `
-      + `the operator (@${operator}) must post a fresh "approve release v${version}" AFTER the current release commit.`
-    : `stable release v${version} blocked: no explicit operator release approval record found. `
+      + `the operator (@${operator}) must post a fresh "approve release v${version}" AFTER the current release commit.`;
+  } else if (unverifiable.length > 0) {
+    refusal = `stable release v${version} blocked: a matching operator approval was found but its freshness cannot be verified — the comment has no parseable created_at timestamp, `
+      + `so the gate cannot confirm it post-dates the release commit. Fail closed: the operator (@${operator}) must post a fresh "approve release v${version}" whose timestamp is resolvable.`;
+  } else {
+    refusal = `stable release v${version} blocked: no explicit operator release approval record found. `
       + `Expected an issue comment by the operator (@${operator}) stating "approve release v${version}" `
       + `(as a top-level assertion, not quoted in a code span or handoff text, posted after the release commit), `
       + `or the operator running the publish commands themselves. Blanket merge authorizations and `
       + `generic continue instructions do NOT satisfy this gate.`;
+  }
   return { applies: true, approved: false, refusal };
 }
 

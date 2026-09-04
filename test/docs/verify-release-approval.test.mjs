@@ -263,6 +263,45 @@ test("resolveApprovalState: an un-quoted instructional/handoff occurrence does N
   }
 });
 
+test("resolveApprovalState: a code span whose content contains backticks does NOT count (#1941 review, Copilot fail-open)", () => {
+  // CommonMark longer-delimiter spans, and spans with an inner backtick pair,
+  // must not let the phrase survive backtick blanking as bare prose.
+  for (const body of [
+    "`` `approve release v1.0.0` ``",
+    "`` `x` approve release v1.0.0 ``",
+    "``code ` here`` approve release v1.0.0 ``x``",
+    "`` approve release v1.0.0 ``",
+    "```` `approve release v1.0.0` ````",
+  ]) {
+    const d = resolveApprovalState({
+      version: "1.0.0",
+      operator: "op",
+      releaseRef: RELEASE_REF,
+      comments: [{ author: "op", body, createdAt: AFTER }],
+    });
+    assert.equal(d.approved, false, `backtick-content code span must not approve: ${JSON.stringify(body)}`);
+  }
+});
+
+test("stripNonAssertionMarkdown: a backtick-content span is fully stripped, a trailing genuine phrase survives (#1941 review)", () => {
+  assert.doesNotMatch(stripNonAssertionMarkdown("`` `approve release v1.0.0` ``"), /approve release/i);
+  assert.doesNotMatch(stripNonAssertionMarkdown("`` `x` approve release v1.0.0 ``"), /approve release/i);
+  // A genuine assertion with an unrelated trailing inline code span still survives.
+  assert.match(stripNonAssertionMarkdown("approve release v1.0.0 `see notes`"), /approve release/i);
+});
+
+test("resolveApprovalState: a match with an unverifiable timestamp gets a distinct 'cannot be verified' refusal, not the stale one (#1941 review)", () => {
+  const d = resolveApprovalState({
+    version: "1.0.0",
+    operator: "op",
+    releaseRef: RELEASE_REF,
+    comments: [{ author: "op", body: "approve release v1.0.0", createdAt: "not-a-date" }],
+  });
+  assert.equal(d.approved, false);
+  assert.match(d.refusal, /freshness cannot be verified|no parseable created_at/i);
+  assert.doesNotMatch(d.refusal, /predate|stale/i);
+});
+
 test("resolveApprovalState: a genuine approval that predates the release commit is refused as stale (#1941)", () => {
   const d = resolveApprovalState({
     version: "1.0.0",
