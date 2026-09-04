@@ -492,20 +492,40 @@ export function renderInlineCommentBody(finding, { round }) {
 // from being suppressed by its own fingerprint (fingerprintFinding, matched
 // back on a later run via collectFingerprints) while tracked nowhere else
 // (fingerprint suppression + zero surface = permanent silent loss).
-export function renderNonLocatableBlock(finding, { round }) {
+// The invisible (HTML-comment) marker half of a body-filed finding, factored
+// out on its own (#1942): upsert-checkpoint-verdict.mjs's grouped findings
+// table is now the sole VISIBLE carrier of a body-filed finding's text, but
+// the fingerprint+disposition=deferred stamp this marker carries is still
+// load-bearing for GATE-EXEC-FINDING-THREADS — a later round's
+// collectSuppressedFingerprints match, and isFileableDeferral/
+// isDeferredAtRound's follow-up-issue tracking, both read this exact marker
+// back off the posted review body. Removing the human-readable duplicate the
+// table now makes redundant must never also drop this marker, or a body-filed
+// finding would re-surface as "new" every round with no durable disposition.
+export function buildNonLocatableFindingMarker(finding, { round }) {
   const fp = fingerprintFinding(finding);
   // Normalized ONCE and reused for both the disposition decision and the
   // marker: deciding disposition off a raw, un-normalized legacy spelling
-  // would misclassify it (e.g. "must-fix" !== "high"). The rendered
-  // "> **${severity}**" line goes through renderFindingLine below, which
-  // normalizes AND sanitizes severity again on its own — normalization alone
-  // is not a sanitizer, so this outer normalize is not what keeps a hostile
-  // (e.g. newline-bearing) severity out of the posted body; that guarantee
-  // lives in renderFindingLine's own sanitizeInline call on severity.
+  // would misclassify it (e.g. "must-fix" !== "high").
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const disposition = severity === "high" ? undefined : "deferred";
+  return buildFindingMarker({ fp, severity, angle: finding.angle, round, disposition });
+}
+
+// Human-readable rendering of a body-filed finding, kept for callers that
+// still want the full blockquoted block (e.g. this module's own tests) — no
+// longer spliced into the posted verdict body itself (upsert-checkpoint-verdict.mjs
+// splices buildNonLocatableFindingMarker alone; see its own doc for why).
+export function renderNonLocatableBlock(finding, { round }) {
+  // The rendered "> **${severity}**" line goes through renderFindingLine
+  // below, which normalizes AND sanitizes severity again on its own —
+  // normalization alone is not a sanitizer, so this outer normalize is not
+  // what keeps a hostile (e.g. newline-bearing) severity out of the posted
+  // body; that guarantee lives in renderFindingLine's own sanitizeInline call
+  // on severity.
+  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const lines = [
-    buildFindingMarker({ fp, severity, angle: finding.angle, round, disposition }),
+    buildNonLocatableFindingMarker(finding, { round }),
     `> ${renderFindingLine({ ...finding, severity })}`,
   ];
   if (hasRecommendation(finding)) {

@@ -14,13 +14,34 @@ the latest head — without relying on local or session-only artifacts.
 `GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
 review of type COMMENT, posted by `upsert-checkpoint-verdict.mjs`. Its body carries the required
 verdict fields below; with `--findings-ledger`, that same review also carries the round's
-findings — locatable ones as its inline comments, the rest body-filed under the verdict fields
-(`GATE-EXEC-FINDING-THREADS`, [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+findings — locatable ones as its inline comments, the rest body-filed in full in the body's
+bulleted list below; an invisible per-finding fingerprint+disposition marker, never rendered as
+visible text, is what `GATE-EXEC-FINDING-THREADS`'s cross-round suppression/deferral tracking
+actually reads back) ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 No separate verdict issue comment, no separate findings review, and no deferred-summary comment
-is posted. Each finding's text appears exactly once across the round; the body's per-angle
-breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
-review body; a verdict posted as an ISSUE comment still validates and is still corrected on
-its own surface (back-compat read).
+is posted. The body's per-angle breakdown is TWO TRACKS by locatability, rendered at TOP LEVEL,
+NEVER a markdown table:
+1. **Locatable findings** (each carried by its own inline PR review comment) are never
+   enumerated per-finding in the body — no reference row, no restated text. The body states only
+   one aggregate `**Inline findings:**` line: the count, a severity breakdown (leading emoji per
+   the legend below, with the severity word), and the distinct touched angle names, pointing the
+   reader to the inline comments on the diff.
+2. **Non-locatable (body-only) findings** have no inline carrier, so the body is the only place
+   their text lives: each renders in full as its own plain bulleted list item (never a table row),
+   findings-first and severity-ordered, with a leading severity emoji marker (🔴 high · 🟠 medium ·
+   🟡 low · ⚪ nit · 🔵 question, alongside the severity word), the finding's summary, its
+   `file:line` linked to the blob at the reviewed head SHA when known, and its contributing
+   angle(s) in trailing brackets.
+
+Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
+line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
+carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable) —
+never both, never neither, and never only the on-disk disposition ledger. Budget pressure on an
+over-long round SHORTENS a body-only finding's rendered text rather than degrading it to an
+omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
+`--findings-summary`/`--findings-file` blockquoted continuation-line path below. Verdict evidence
+is read from that review body; a verdict posted as an ISSUE comment still validates and is still
+corrected on its own surface (back-compat read).
 
 <!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST

@@ -384,23 +384,6 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
 
 /**
- * Env var that exempts an orchestrator-owned-commit dispatch from the SubagentStop
- * uncommitted-work guard (#1786).
- *
- * A "LOCAL EDITS ONLY: no commit" dispatch (e.g. the `developer`/`quality`/`docs` delegation
- * pattern in `skills/local-implementation/SKILL.md` "Delegation contract") tells the subagent to
- * make local edits and report changed files, leaving commit + push to the dispatching
- * orchestrator once it consolidates results. Without an exemption, that subagent's own
- * SubagentStop event still sees the dirty worktree it was told not to commit and deadlocks. The
- * dispatcher sets `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` for that dispatch to declare it owns the
- * commit — same opt-in `DEVLOOPS_*` signal shape as `DEVLOOPS_COMMIT_AUTH_PENDING`, but distinct:
- * this one exempts a non-interactive delegated dispatch whose commit responsibility sits with its
- * caller, not an interactive session awaiting operator authorization. Left unset, an ordinary
- * dispatch's commit-before-exit obligation stays enforced (fail closed by default).
- */
-export const DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR = "DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT";
-
-/**
  * Subagent roles whose contract forbids committing to the repository (#1925).
  *
  * The `judge` and `review` agents are read-only over the repository: the judge writes only its
@@ -430,9 +413,18 @@ export function isReadOnlySubagentRole(agentType) {
  * uncommitted changes in a worktree are destroyed with no warning. `LOCAL-COMMIT-BEFORE-EXIT`
  * existed only as prose. This decider makes it mechanical: refuse the subagent stop when the
  * cwd is under `tmp/worktrees/` and `git status --porcelain` is non-empty, unless the session
- * is an interactive one awaiting commit authorization, or the dispatch is an explicit
- * orchestrator-owned-commit exemption (#1786) (either exempt). A clean worktree, a cwd
+ * is an interactive one awaiting commit authorization (exempt). A clean worktree, a cwd
  * outside `tmp/worktrees/`, and a git-error/empty-porcelain case all allow the stop.
+ *
+ * Editing roles (`developer`/`fixer`/`docs`/`quality`) stay fully enforced: an editing
+ * sub-delegate commits its own work before exit (`LOCAL-COMMIT-BEFORE-EXIT`), so a dirty exit is
+ * always a real defect, never a sanctioned "orchestrator owns the commit" split. The removed
+ * `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption (#1786) deadlocked such a role under a
+ * task-scoped no-commit instruction whenever the orchestrator could not set a per-dispatch env
+ * var (the Claude harness): the hook demanded a commit the session then denied, then re-blocked
+ * the exit (#1936). Disallowing the edit-here/commit-there split at the contract level makes the
+ * guard the enforcer and the deadlock structurally impossible while preserving data-loss
+ * protection. An orchestrator that wants one consolidated commit performs the edits itself.
  *
  * Pure and side-effect free. The hook script gathers `cwd` and the `git status --porcelain`
  * output and calls this; the block decision is surfaced via exit code 2 + stderr JSON by the
@@ -446,20 +438,17 @@ export function isReadOnlySubagentRole(agentType) {
  * @param {boolean} [params.pendingCommitAuthorization] - True when the interactive session is
  *   awaiting commit authorization (exempt) — derived by the hook script from the
  *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.
- * @param {boolean} [params.orchestratorOwnsCommit] - True when this dispatch is an explicit
- *   orchestrator-owned-commit exemption (exempt) — derived by the hook script from the
- *   `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` opt-in env signal.
  * @param {string|null} [params.agentType] - Claude `agent_type` from the SubagentStop payload;
  *   a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) is exempt (#1925) — its
  *   contract forbids commits, so any dirty tracked edit in its worktree is foreign
  *   (orchestrator-owned) and must not be pinned on it.
  * @returns {HookDecision}
  */
-export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false, orchestratorOwnsCommit = false, agentType = null }) {
+export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false, agentType = null }) {
   if (typeof cwd !== "string" || !isUnderWorktreePath(cwd)) {
     return ALLOW;
   }
-  if (pendingCommitAuthorization || orchestratorOwnsCommit) {
+  if (pendingCommitAuthorization) {
     return ALLOW;
   }
   if (typeof porcelain !== "string" || porcelain.trim() === "") {
