@@ -8,11 +8,7 @@ test coverage, product behavior, or machine conditions.
 **Evidence status: not yet captured.** No timing result is claimed by this
 document. The migration is a no-go until the complete protocol below produces
 two independently captured, passing sessions and their raw JSON files are added
-under this directory. As of the initial harness commit,
-`scripts/benchmarks/run-package-manager.mjs` records only one cold and one warm
-install sample per tool and creates both logical verification sessions within a
-single process invocation. Those outputs are diagnostic only: they do not
-satisfy the required install medians or independent-session evidence.
+under this directory.
 
 ## Required protocol
 
@@ -56,6 +52,9 @@ The checked-in runner interface is:
 bun scripts/benchmarks/run-package-manager.mjs \
   --npm-source /absolute/path/to/npm-baseline \
   --bun-source /absolute/path/to/bun-candidate \
+  --session session-1 \
+  --start npm \
+  --power-state 'AC power; battery fully charged' \
   --output docs/benchmarks/bun-1.4.1/session-1.raw.json
 
 # End the first invocation, re-establish the recorded machine/power conditions,
@@ -63,18 +62,18 @@ bun scripts/benchmarks/run-package-manager.mjs \
 bun scripts/benchmarks/run-package-manager.mjs \
   --npm-source /absolute/path/to/npm-baseline \
   --bun-source /absolute/path/to/bun-candidate \
+  --session session-2 \
+  --start bun \
+  --power-state 'AC power; battery fully charged' \
   --output docs/benchmarks/bun-1.4.1/session-2.raw.json
 ```
 
-Do not treat these commands as qualifying evidence until the runner emits the
-seven install samples per cache condition and one independently captured verify
-session per invocation described above. Once the runner satisfies that contract,
-analyze each raw artifact with:
+Analyze both independent raw artifacts together so environment, source,
+inventory, and suite fingerprints are compared before timing thresholds:
 
 ```bash
 bun scripts/benchmarks/analyze-package-manager.mjs \
-  docs/benchmarks/bun-1.4.1/session-1.raw.json
-bun scripts/benchmarks/analyze-package-manager.mjs \
+  docs/benchmarks/bun-1.4.1/session-1.raw.json \
   docs/benchmarks/bun-1.4.1/session-2.raw.json
 ```
 

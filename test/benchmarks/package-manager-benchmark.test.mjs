@@ -1,44 +1,45 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { analyzeBenchmark } from "../../scripts/benchmarks/analyze-package-manager.mjs";
+import { buildPairOrders, MEASURED_REPETITIONS } from "../../scripts/benchmarks/run-package-manager.mjs";
 
-const run = (tool, session, measured, durationMs, exitCode = 0) => ({ tool, session, measured, durationMs, exitCode });
+const run = (tool, measured, durationMs, exitCode = 0) => ({ tool, measured, durationMs, exitCode });
+const phase = (tool, duration) => ({ warmups: [run(tool, false, duration)], measured: Array.from({ length: 7 }, () => run(tool, true, duration)) });
 
-function evidence(overrides = {}) {
+function session(id, root, startTool) {
+  const npmWarm = { prime: [run("npm", false, 80)], ...phase("npm", 80) };
+  const bunWarm = { prime: [run("bun", false, 40)], ...phase("bun", 40) };
+  const verify = [run("npm", false, 99), run("bun", false, 70)];
+  for (const order of buildPairOrders(startTool)) for (const tool of order) verify.push(run(tool, true, tool === "npm" ? 100 : 70));
   return {
-    protocolVersion: 1,
-    environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11" },
-    inventory: { npm: { files: 3, bytes: 30 }, bun: { files: 3, bytes: 30 } },
-    installs: {
-      npm: { cold: run("npm", "install", true, 100), warm: run("npm", "install", true, 80) },
-      bun: { cold: run("bun", "install", true, 50), warm: run("bun", "install", true, 40) },
-    },
-    verify: [1, 2].flatMap((session) => {
-      const pair = (npmRun, bunRun) => session === 1 ? [npmRun, bunRun] : [bunRun, npmRun];
-      return [
-        ...pair(run("npm", session, false, 99), run("bun", session, false, 98)),
-        ...Array.from({ length: 7 }, (_, index) => pair(run("npm", session, true, 100 + index), run("bun", session, true, 70 + index))).flat(),
-      ];
-    }),
-    ...overrides,
+    protocolVersion: 2, sessionId: id, sessionRoot: root, startTool,
+    environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11", powerState: "AC power" },
+    sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["a"], bun: ["a"] },
+    inventory: { npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [] }, bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [] } },
+    installs: { npm: { cold: phase("npm", 100), warm: npmWarm }, bun: { cold: phase("bun", 50), warm: bunWarm } }, verify,
   };
 }
 
-test("benchmark analyzer enforces install ratios and both independent verify sessions", () => {
-  const verdict = analyzeBenchmark(evidence());
+test("pair order alternates within one invocation and supports reversed session starts", () => {
+  assert.equal(MEASURED_REPETITIONS, 7);
+  assert.deepEqual(buildPairOrders("npm").slice(0, 3), [["npm", "bun"], ["bun", "npm"], ["npm", "bun"]]);
+  assert.deepEqual(buildPairOrders("bun").slice(0, 2), [["bun", "npm"], ["npm", "bun"]]);
+});
+
+test("analyzer requires two independent sessions and uses seven-sample install medians", () => {
+  const verdict = analyzeBenchmark([session("one", "/tmp/one", "npm"), session("two", "/tmp/two", "bun")]);
   assert.equal(verdict.pass, true);
-  assert.equal(verdict.installs.cold.ratio, 0.5);
-  assert.equal(verdict.installs.warm.ratio, 0.5);
+  assert.equal(verdict.installs[0].cold.ratio, 0.5);
   assert.deepEqual(verdict.verify.map(({ wins, pass }) => ({ wins, pass })), [{ wins: 7, pass: true }, { wins: 7, pass: true }]);
 });
 
-test("benchmark analyzer fails closed on unequal inventory, failed commands, missing samples, or a weak session", () => {
-  assert.equal(analyzeBenchmark(evidence({ inventory: { npm: { files: 2, bytes: 30 }, bun: { files: 3, bytes: 30 } } })).pass, false);
-  const failed = evidence(); failed.verify[3].exitCode = 1;
-  assert.equal(analyzeBenchmark(failed).pass, false);
-  const missing = evidence(); missing.verify.pop();
-  assert.equal(analyzeBenchmark(missing).pass, false);
-  const weak = evidence();
-  for (const sample of weak.verify.filter((item) => item.tool === "bun" && item.session === 2 && item.measured)) sample.durationMs = 200;
-  assert.equal(analyzeBenchmark(weak).pass, false);
+test("analyzer fails closed on missing, failed, inventory, identity, or fingerprint mismatches", () => {
+  const good = () => [session("one", "/tmp/one", "npm"), session("two", "/tmp/two", "bun")];
+  assert.equal(analyzeBenchmark([good()[0]]).pass, false);
+  const failed = good(); failed[0].installs.bun.cold.measured[3].exitCode = 1; assert.equal(analyzeBenchmark(failed).pass, false);
+  const missing = good(); missing[0].verify.pop(); assert.equal(analyzeBenchmark(missing).pass, false);
+  const inventory = good(); inventory[1].inventory.bun.packages.push("extra@1"); assert.equal(analyzeBenchmark(inventory).pass, false);
+  const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
+  const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);
+  const fingerprint = good(); fingerprint[1].sourceFingerprint.bun = "changed"; assert.equal(analyzeBenchmark(fingerprint).pass, false);
 });
