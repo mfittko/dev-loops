@@ -494,7 +494,9 @@ export function defineArticleSuite({ sliceId, articlePath }) {
     try {
       await settleMobile(page, url);
       const m = await measureArticleFit(page);
-      assertMobileFit(m);
+      // Articles are continuous documents, so vertical growth is expected; the
+      // shared deck-only strict height assertion must not reject long pages.
+      assertDeckFit(m, `${MOBILE.width}px viewport`);
       await captureNamedUiState({
         page,
         testInfo,
