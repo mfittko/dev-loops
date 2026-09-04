@@ -401,6 +401,28 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
 export const DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR = "DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT";
 
 /**
+ * Subagent roles whose contract forbids committing to the repository (#1925).
+ *
+ * The `judge` and `review` agents are read-only over the repository: the judge writes only its
+ * own verdict artifact (under `tmp/`, gitignored) and the gate reviewer writes only its findings
+ * artifact (also under `tmp/`) — neither ever authors a tracked-file edit. So any uncommitted
+ * tracked change present in such a subagent's worktree is FOREIGN: it belongs to the orchestrator
+ * that dispatched it (a pending orchestrator edit that was in the shared worktree when the
+ * read-only pass ran), not to the read-only subagent. `LOCAL-COMMIT-BEFORE-EXIT` must not force
+ * one of these roles to author a commit of that foreign work — doing so violates the verdict-only
+ * contract (`agents/judge.agent.md`: "The only thing you write is your own verdict artifact").
+ * The data-loss protection is enforced against the OWNER of the edit (the orchestrator) on its own
+ * stop instead. This is intentionally scoped to read-only roles: editing roles (`developer`,
+ * `fixer`, `docs`, `quality`) and the orchestrator stay enforced (#1925 non-goal).
+ */
+export const READONLY_SUBAGENT_ROLES = Object.freeze(["judge", "review"]);
+
+/** Whether `agentType` (Claude `agent_type` from the SubagentStop payload) is a read-only role. */
+export function isReadOnlySubagentRole(agentType) {
+  return typeof agentType === "string" && READONLY_SUBAGENT_ROLES.includes(agentType);
+}
+
+/**
  * Decide whether a SubagentStop must be blocked because the subagent's worktree has
  * uncommitted changes (#1619).
  *
@@ -427,9 +449,13 @@ export const DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR = "DEVLOOPS_ORCHESTRATOR_OWNS
  * @param {boolean} [params.orchestratorOwnsCommit] - True when this dispatch is an explicit
  *   orchestrator-owned-commit exemption (exempt) — derived by the hook script from the
  *   `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` opt-in env signal.
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the SubagentStop payload;
+ *   a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) is exempt (#1925) — its
+ *   contract forbids commits, so any dirty tracked edit in its worktree is foreign
+ *   (orchestrator-owned) and must not be pinned on it.
  * @returns {HookDecision}
  */
-export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false, orchestratorOwnsCommit = false }) {
+export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization = false, orchestratorOwnsCommit = false, agentType = null }) {
   if (typeof cwd !== "string" || !isUnderWorktreePath(cwd)) {
     return ALLOW;
   }
@@ -438,6 +464,22 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
   }
   if (typeof porcelain !== "string" || porcelain.trim() === "") {
     return ALLOW;
+  }
+  // Read-only role exemption (#1925): the worktree is dirty, but a `judge`/`review` subagent's
+  // contract forbids commits, so this pending tracked edit is foreign — it belongs to the
+  // orchestrator that dispatched this pass. Do not force a verdict-only role to commit it; allow
+  // the stop with an advisory naming the orchestrator as the actor responsible for the edit. The
+  // data-loss guard still fires against the orchestrator on its own (editing) stop.
+  if (isReadOnlySubagentRole(agentType)) {
+    return {
+      decision: "allow",
+      advisory: true,
+      reason:
+        `LOCAL-COMMIT-BEFORE-EXIT exempt for read-only role "${agentType}": the worktree has ` +
+        "uncommitted changes, but a verdict-only role must not author a commit of work it did not " +
+        "create. This pending edit is foreign — the ORCHESTRATOR that dispatched this pass owns it " +
+        "and is responsible for committing it before its own stop.",
+    };
   }
   const dirty = porcelain
     .split("\n")
