@@ -104,6 +104,21 @@ test('build-site: relative repoRoot uses the same default output as its absolute
   }
 });
 
+test('build-site: invalid repoRoot preserves a pre-existing site directory', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-invalid-root-'));
+  const sentinel = join(repoRoot, 'site', 'sentinel.txt');
+  try {
+    await mkdir(join(repoRoot, 'site'));
+    await writeFile(sentinel, 'preserve me', 'utf8');
+
+    await assert.rejects(() => buildSite({ repoRoot }), /package\.json/);
+
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('build-site: state atlas is generated from the code tables, navigable, with the mermaid asset', async () => {
   const out = await mkdtemp(join(tmpdir(), 'pages-atlas-'));
   try {

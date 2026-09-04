@@ -243,9 +243,16 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   ];
   assertUniquePublishTargets(files);
 
-  await prepareOutputDirectory(root, out);
+  // Reject obviously unsafe relationships before repository validation so
+  // callers still receive the more specific output-safety error.
+  assertSafeOutputRelationship(root, out, { relative, sep, parse: parsePath, isAbsolute: (value) => resolve(value) === value, join });
 
-  const repoUrl = await resolveRepoUrl(repoRoot);
+  // Establish that repoRoot identifies a repository before granting its site/
+  // directory privileged output status. A mistyped root must fail without
+  // deleting an unrelated, nonempty site/ directory.
+  const repoUrl = await resolveRepoUrl(root);
+
+  await prepareOutputDirectory(root, out);
 
   // Landing page: the intro article, navigable, published as index.html.
   const landingHtml = await readFile(join(articlesDir, LANDING.file), 'utf8');
