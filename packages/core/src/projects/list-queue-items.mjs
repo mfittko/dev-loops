@@ -1,6 +1,6 @@
 import { runChild as _runChild } from "../cli/primitives.mjs";
 import { resolveProjectSelector, findProject } from "./resolve-project.mjs";
-import { ghGraphql } from "../github/gh.mjs";
+import { ghGraphql, resolveOwner } from "../github/gh.mjs";
 
 // ── Validation ───────────────────────────────────────────────────────────
 
@@ -31,18 +31,6 @@ function validateRepo(repo) {
 }
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
 
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
@@ -110,23 +98,6 @@ const GET_PROJECT_ITEMS = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Paginated project listing ────────────────────────────────────────────
 

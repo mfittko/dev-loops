@@ -92,3 +92,52 @@ export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { 
   }
   return payload;
 }
+
+const GET_USER_ID = [
+  "query($login:String!) {",
+  "  user(login:$login) { id }",
+  "}",
+].join("\n");
+
+const GET_ORG_ID = [
+  "query($login:String!) {",
+  "  organization(login:$login) { id }",
+  "}",
+].join("\n");
+
+/**
+ * Resolve a GitHub owner login to its node id and kind. Probes the user
+ * namespace first; a not-a-user probe failure (org logins make `gh api graphql`
+ * exit non-zero) falls through to the org namespace instead of throwing (#1949).
+ * A login that is neither a user nor an org fails closed with NO_USER_ID.
+ *
+ * The issue's "Proposed fix" wrapped only the user probe, but AC #3 requires
+ * NO_USER_ID for a genuinely non-existent owner; in production the org probe
+ * on a missing org also throws (non-zero exit), so both probes must be caught
+ * for the AC to hold. `cause` preserves the underlying org error for
+ * diagnostics. This does not change `ghGraphql`'s throw-on-non-zero-exit
+ * contract.
+ */
+export async function resolveOwner(login, env, runChild) {
+  try {
+    const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
+    if (userPayload?.data?.user?.id) {
+      return { id: userPayload.data.user.id, kind: "user" };
+    }
+  } catch {
+    // not a user login → fall through to the org probe
+  }
+  let orgError;
+  try {
+    const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
+    if (orgPayload?.data?.organization?.id) {
+      return { id: orgPayload.data.organization.id, kind: "org" };
+    }
+  } catch (err) {
+    orgError = err;
+  }
+  throw Object.assign(
+    new Error(`Could not resolve owner ID for "${login}"`),
+    { code: "NO_USER_ID", cause: orgError },
+  );
+}

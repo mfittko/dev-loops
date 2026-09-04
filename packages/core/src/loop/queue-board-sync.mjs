@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
-import { ghGraphql } from "../github/gh.mjs";
+import { ghGraphql, resolveOwner } from "../github/gh.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
@@ -277,18 +277,6 @@ export function loadStateColumnMap(repoRoot) {
 
 // ── Minimal project lookup (read-only, no create/repair) ────────────────
 
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) { id }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) { id }",
-  "}"
-].join("\n");
-
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
   "  user(login:$login) {",
@@ -310,21 +298,6 @@ const LIST_ORG_PROJECTS = [
   "  }",
   "}"
 ].join("\n");
-
-async function resolveOwner(login, env, runChild) {
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}"`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 async function listAllProjects(login, kind, env, runChild) {
   const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;

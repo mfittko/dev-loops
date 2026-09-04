@@ -558,21 +558,37 @@ describe("ensure-queue-board", () => {
       await assert.rejects(() => main({}), /required/);
     });
 
+    // A gh CLI/GraphQL failure on the user probe now falls through to the org
+    // probe (#1949); when both fail the same way (e.g. a systemic auth
+    // failure), resolveOwner fails closed with NO_USER_ID and preserves the
+    // underlying org-probe error via `cause`.
     it("throws on GraphQL API error", async () => {
-      const responses = [{ error: "gh: authentication required" }];
+      const responses = [
+        { error: "gh: authentication required" },
+        { error: "gh: authentication required" },
+      ];
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
-        /gh api graphql failed/,
+        (error) => {
+          assert.equal(error.code, "NO_USER_ID");
+          assert.match(error.cause.message, /gh api graphql failed/);
+          return true;
+        },
       );
     });
 
     it("throws on GraphQL errors in payload", async () => {
-      const responses = [{
-        payload: { errors: [{ message: "Could not resolve to a User" }] },
-      }];
+      const responses = [
+        { payload: { errors: [{ message: "Could not resolve to a User" }] } },
+        { payload: { errors: [{ message: "Could not resolve to a User" }] } },
+      ];
       await assert.rejects(
         () => main({ repo: "mfittko/dev-loops" }, { env: {}, runChild: mockRunChild(responses) }),
-        /GraphQL errors/,
+        (error) => {
+          assert.equal(error.code, "NO_USER_ID");
+          assert.match(error.cause.message, /GraphQL errors/);
+          return true;
+        },
       );
     });
 

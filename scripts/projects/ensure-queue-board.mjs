@@ -4,7 +4,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings } from "./_resolve-project.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { ghGraphql } from "@dev-loops/core/github/gh";
+import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
 
 const USAGE = `Usage: dev-loops queue ensure --repo <owner/name> [--project <number>] [--title <title>] [--link-repo <owner/name>] [--repair-rename]
        (dev-loops project ensure … is a back-compat alias)
@@ -153,22 +153,6 @@ function validateRepo(repo) {
 
 // ── Query/mutation fragments ────────────────────────────────────────────
 
-const GET_USER_ID = [
-  "query($login:String!) {",
-  "  user(login:$login) {",
-  "    id",
-  "  }",
-  "}"
-].join("\n");
-
-const GET_ORG_ID = [
-  "query($login:String!) {",
-  "  organization(login:$login) {",
-  "    id",
-  "  }",
-  "}"
-].join("\n");
-
 const LIST_USER_PROJECTS = [
   "query($login:String!, $after:String) {",
   "  user(login:$login) {",
@@ -297,25 +281,6 @@ const GET_REPO_ID = [
   "  }",
   "}"
 ].join("\n");
-
-// ── Owner resolution ────────────────────────────────────────────────────
-
-async function resolveOwner(login, env, runChild) {
-  // Try user first
-  const userPayload = await ghGraphql(GET_USER_ID, { login }, env, runChild);
-  if (userPayload?.data?.user?.id) {
-    return { id: userPayload.data.user.id, kind: "user" };
-  }
-  // Try organization (only if user returned null — not for API errors)
-  const orgPayload = await ghGraphql(GET_ORG_ID, { login }, env, runChild);
-  if (orgPayload?.data?.organization?.id) {
-    return { id: orgPayload.data.organization.id, kind: "org" };
-  }
-  throw Object.assign(
-    new Error(`Could not resolve owner ID for "${login}" (not a user or organization)`),
-    { code: "NO_USER_ID" },
-  );
-}
 
 // ── Repository ID resolution ─────────────────────────────────────────────
 

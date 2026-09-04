@@ -248,7 +248,11 @@ describe("sync-item-status", () => {
         const parsed = JSON.parse(stdout.text());
         assert.equal(parsed.ok, true);
         assert.equal(parsed.skipped, true);
-        assert.match(parsed.reason, /gh api graphql failed|authentication required/);
+        // failingRunChild fails every gh call, so both the user and org
+        // owner probes fail identically and resolveOwner's fallback (#1949)
+        // exhausts into the NO_USER_ID message rather than surfacing the
+        // raw gh error.
+        assert.match(parsed.reason, /Could not resolve owner ID/);
       });
       process.exitCode = prevExitCode;
     });
@@ -329,7 +333,7 @@ describe("sync-item-status", () => {
         assert.equal(result.skipped, true);
         // Must NOT be the not-configured skip — the gh failure was reached.
         assert.notEqual(result.reason, "board not configured");
-        assert.match(result.reason, /gh api graphql failed|authentication required/);
+        assert.match(result.reason, /Could not resolve owner ID/);
       } finally {
         rmSync(tempDir, { recursive: true, force: true });
       }

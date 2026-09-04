@@ -534,8 +534,15 @@ describe("list-queue-items", () => {
   });
 
   describe("error paths — API errors", () => {
+    // A gh CLI/GraphQL failure on the user probe now falls through to the org
+    // probe (#1949); when both fail the same way (e.g. a systemic auth
+    // failure), resolveOwner fails closed with NO_USER_ID and preserves the
+    // underlying org-probe error via `cause`.
     it("throws on gh CLI failure", async () => {
-      const responses = [{ error: "gh: authentication required" }];
+      const responses = [
+        { error: "gh: authentication required" },
+        { error: "gh: authentication required" },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1" },
@@ -543,15 +550,17 @@ describe("list-queue-items", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GH_API_ERROR");
-        assert.match(err.message, /gh api graphql failed/);
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GH_API_ERROR");
+        assert.match(err.cause.message, /gh api graphql failed/);
       }
     });
 
     it("throws on GraphQL errors in payload", async () => {
-      const responses = [{
-        payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] },
-      }];
+      const responses = [
+        { payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] } },
+        { payload: { errors: [{ message: "Could not resolve to a ProjectV2" }] } },
+      ];
       try {
         await main(
           { repo: "mfittko/dev-loops", project: "1" },
@@ -559,8 +568,9 @@ describe("list-queue-items", () => {
         );
         assert.fail("should have thrown");
       } catch (err) {
-        assert.equal(err.code, "GRAPHQL_ERROR");
-        assert.match(err.message, /GraphQL errors/);
+        assert.equal(err.code, "NO_USER_ID");
+        assert.equal(err.cause.code, "GRAPHQL_ERROR");
+        assert.match(err.cause.message, /GraphQL errors/);
       }
     });
   });
