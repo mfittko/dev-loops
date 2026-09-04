@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **A stuck `gate-evidence` required status now self-heals at merge-readiness instead of needing a manual `gh run rerun` (#1935).** The server-side check re-fires when a gate verdict is posted (ADR 0043), but that native re-fire is racy: the verdict-post run can be cancelled by the job's `cancel-in-progress` concurrency, or evaluate before the just-posted verdict is API-visible, leaving the required status `failure` on the current head with nothing to re-fire it — the merge stays `UNSTABLE`. New `scripts/github/reconcile-gate-evidence-status.mjs` (and the pure `resolveGateEvidenceStatusReconcile` decision in `@dev-loops/core/loop/gate-evidence-reconcile`) reads the authoritative evidence exactly as the CI check does and the current-head `gate-evidence` status; when the evidence is satisfied but the status is stuck non-green it re-fires the run that posted the stale status so it flips to `success`. Fail-closed and test-pinned: a genuinely missing verdict re-fires nothing and keeps failing closed. The dev-loop runs it at merge-readiness after the post-drive audit. See ADR 0057.
+
 ## 1.0.1 - 2026-09-04
 
 First npm-published stable release. Identical in content to 1.0.0 (see below) — no code changes; a version bump only. `dev-loops@1.0.0` was published then unpublished during an earlier reverted release cut, and npm permanently tombstones an unpublished version number, so the first stable that can ship to the npm `latest` dist-tag is `1.0.1`. `@dev-loops/core` is bumped to `1.0.1` in lockstep.
