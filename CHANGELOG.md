@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **docs-reference validator: remove latent false positives from the disposition audit (#1920).** The `referenced-docs-commands-shipped` contract now resolves anchor links into setext headings (`===`/`---` underlines, matching GitHub) so a valid link is not false-failed as dangling, and skips `#fragment` links into non-markdown targets (e.g. `foo.mjs#L10`) instead of reading them and false-failing for having no headings (this narrows filesystem reads). The brittle scan-SIZE proxy is replaced by direct required-root assertions (`README.md`, `PLAN.md`, `AGENTS.md`, and at least one `docs/` file). Leading YAML frontmatter is stripped before setext detection so a frontmatter-closing `---` cannot forge a phantom anchor.
+
 ## 1.0.1 - 2026-09-04
 
 First npm-published stable release. Identical in content to 1.0.0 (see below) — no code changes; a version bump only. `dev-loops@1.0.0` was published then unpublished during an earlier reverted release cut, and npm permanently tombstones an unpublished version number, so the first stable that can ship to the npm `latest` dist-tag is `1.0.1`. `@dev-loops/core` is bumped to `1.0.1` in lockstep.
