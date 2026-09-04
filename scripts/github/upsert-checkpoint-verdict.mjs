@@ -23,6 +23,7 @@ import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitiz
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
+  buildNonLocatableFindingMarker,
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   createGateReview,
@@ -32,7 +33,6 @@ import {
   listPrReviews,
   readGateFindingsLedger,
   renderInlineCommentBody,
-  renderNonLocatableBlock,
   resolveGateRound,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
@@ -1069,93 +1069,155 @@ export function normalizeStructuredFindings(input) {
   }
   return angles.length > 0 ? angles : null;
 }
-// Render the consolidated per-angle fan-in findings as a readable, multi-line
-// markdown block: one section per angle (angle label + per-angle verdict),
-// nested findings carrying severity and an optional file:line reference. Newlines
-// are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
-// summarizeCheckpointVerdictText. The whole block is bounded by
-// MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it (enforcePostedCommentLimit).
-// The leading single-line digest is what the marker parser captures for the
-// `**Findings summary:**` field; the structured body is nested below it and is
-// deliberately written so no nested line matches a gate field regex (no
-// `verdict:` / `next action:` / `execution mode:` line starts) — belt-and-braces
-// alongside the parser's actual guards. The real guards against a per-angle
-// finding's own free text forging a field (including `next action`, which
-// renders after this block) are: (1) parseGateReviewCommentFields is
-// first-NON-EMPTY-wins per field, so a genuine line rendered before this block
-// always wins over a spoofed one rendered after it, and (2) any free-text
-// field that preserves newlines (the --findings-file path above) has every
-// continuation line blockquoted (`> `) before splicing, so an embedded
-// "next action:"/"execution mode:"/etc. line can never sit at column 0 of its
-// own logical line for the parser to match. This template's own bullet/
-// backtick shape is a redundant third layer, not the only guard.
-// Exported so
-// consolidate-fanin.mjs can measure whether a candidate findingsJson shape
-// actually renders (catching this throw) instead of approximating its
-// rendered size — the exact bound this function enforces, not an estimate of
-// it (see consolidate-fanin.mjs's fitsRenderBudget).
-export function renderStructuredFindings(angles) {
+// Leading severity emoji marker for a grouped-table finding row (#1942). Row/
+// line ORDER still follows SEVERITY_ORDER's rank (imported above); this legend
+// listing order is independent and fixed: high, medium, low, nit, question.
+// An unknown/empty severity renders no emoji (undefined lookup -> falsy).
+const SEVERITY_EMOJI = Object.freeze({
+  high: "🔴",
+  medium: "🟠",
+  low: "🟡",
+  nit: "⚪",
+  question: "🔵",
+});
+// A grouped-table cell's text must never break the table's row structure: a
+// literal `|` in a finding's summary would otherwise split it into extra
+// (bogus) columns, and a stray newline would start a new markdown line mid-row.
+// sanitizeStructuredInline/sanitizeStructuredCodeSpan neutralize markdown/HTML
+// forgery but do not escape `|` or collapse newlines — this is the narrow,
+// table-specific finishing pass every cell goes through after sanitization.
+function escapeTableCell(value) {
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/gu, " ");
+}
+// Same file:line location logic renderStructuredFindings always used (file
+// present -> code-span the sanitized path, append ":line" only for a finite
+// numeric line) — folded into the grouped-table Finding cell instead of its
+// own trailing paren.
+function renderFindingLocationSuffix(finding) {
+  if (!finding.file) return "";
+  const fileRef = sanitizeStructuredCodeSpan(finding.file);
+  if (fileRef.length === 0) return "";
+  const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
+  return ` _\`${fileRef}${lineRef}\`_`;
+}
+// One grouped-table "Finding" cell: leading severity emoji (per the legend
+// above; none for an unknown/empty severity), the sanitized summary, the
+// file:line location when known, and the same disposition/judge suffixes
+// renderStructuredFindings always rendered.
+function renderFindingCell(finding) {
+  const emoji = SEVERITY_EMOJI[finding.severity] ?? "";
+  const summary = sanitizeStructuredInline(finding.summary);
+  const location = renderFindingLocationSuffix(finding);
+  const dispositionSuffix = finding.disposition
+    ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
+    : "";
+  // Judge relevance-based disposition (#1525).
+  const judgeSuffix = finding.judgeDisposition
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
+    : "";
+  const text = `${summary}${location}${dispositionSuffix}${judgeSuffix}`;
+  return escapeTableCell(emoji ? `${emoji} ${text}` : text);
+}
+// An angle's own worst (most urgent) severity among its real findings, as a
+// SEVERITY_ORDER rank (0 = high, lower is more urgent) — mirrors
+// consolidate-fanin.mjs's angleWorstSeverityRank exactly (the one rank rule
+// both share via severityRank). A clean angle, or a findings-bearing angle
+// whose only entries are unparseable (no `findings`), ranks last.
+function angleWorstSeverityRank(angle) {
+  let best = SEVERITY_ORDER.length;
+  for (const f of angle.findings) {
+    const rank = severityRank(f.severity);
+    if (rank < best) best = rank;
+  }
+  return best;
+}
+// Partition + order the per-angle sections for the grouped findings table:
+// findings-bearing angles first (an angle is findings-bearing when it carries
+// at least one finding OR unparseable entry), ordered by worst-severity rank
+// ascending; ties preserve input order — decorated with the original index so
+// the tiebreak is explicit/stable rather than relying on engine sort
+// stability alone. Clean angles keep their existing relative (input) order.
+function partitionAnglesForGroupedTable(angles) {
+  const findingsBearing = [];
+  const clean = [];
+  angles.forEach((angle, index) => {
+    const isFindingsBearing = angle.findings.length > 0 || (Array.isArray(angle.unparseable) && angle.unparseable.length > 0);
+    if (isFindingsBearing) {
+      findingsBearing.push({ angle, index, rank: angleWorstSeverityRank(angle) });
+    } else {
+      clean.push(angle);
+    }
+  });
+  findingsBearing.sort((a, b) => a.rank - b.rank || a.index - b.index);
+  return { findingsBearing: findingsBearing.map((entry) => entry.angle), clean };
+}
+// Render the consolidated per-angle fan-in findings as a findings-first,
+// severity-ordered, emoji-marked, two-column (`Finding | Angles`) markdown
+// table, with every clean (zero-finding) angle collapsed into one trailing
+// comma-joined line (#1942) — the single grouped shape both
+// renderStructuredFindings and renderAngleVerdictDigest now render (kept as
+// two exported names for existing callers/tests; both delegate here). A
+// finding's own text (summary + file:line, when known) is ALWAYS the row's
+// real content — degradation under budget pressure (consolidate-fanin.mjs)
+// shortens that text, never replaces it with an omitted-count/ledger pointer.
+// Newlines inside a cell are intentionally impossible (escapeTableCell), so
+// this whole block is safe to splice at markdown top level (never through the
+// blockquoted --findings-summary/--findings-file continuation-line path). The
+// whole block is bounded by MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it
+// (enforcePostedCommentLimit) — consolidate-fanin.mjs's fitsRenderBudget
+// measures fit by actually rendering a candidate through this function and
+// catching that throw, not by approximating its size.
+function renderGroupedFindingsTable(angles) {
+  const { findingsBearing, clean } = partitionAnglesForGroupedTable(angles);
   const lines = [];
-  for (const { angle, verdict, findings, unparseable } of angles) {
-    // severity/verdict/disposition are enum labels, never prose — rendered
-    // inside a backtick code span (like the angle label and file ref already
-    // are) rather than bare, so a reviewer-supplied value crafted to look like
-    // markdown link/image syntax (e.g. a severity of `high](url)`) cannot
-    // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
-    // strips any backtick from the value first, so the span it is wrapped in
-    // below can never be prematurely closed by the value's own content.
-    const angleLabel = sanitizeStructuredCodeSpan(angle);
-    lines.push(`- \`${angleLabel}\` → \`${sanitizeStructuredCodeSpan(verdict)}\``);
-    for (const finding of findings) {
-      const severity = sanitizeStructuredCodeSpan(finding.severity) || "finding";
-      const summary = sanitizeStructuredInline(finding.summary);
-      let location = "";
-      if (finding.file) {
-        const fileRef = sanitizeStructuredCodeSpan(finding.file);
-        const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
-        if (fileRef.length > 0) {
-          location = ` (\`${fileRef}${lineRef}\`)`;
-        }
+  if (findingsBearing.length > 0) {
+    lines.push("| Finding | Angles |", "|---|---|");
+    for (const angle of findingsBearing) {
+      // severity/verdict/disposition are enum labels, never prose — rendered
+      // inside a backtick code span (like the angle label already is) rather
+      // than bare, so a reviewer-supplied value crafted to look like markdown
+      // link/image syntax cannot break out of its literal `[...]`/`_..._`
+      // position: sanitizeStructuredCodeSpan strips any backtick from the
+      // value first, so the span it is wrapped in below can never be
+      // prematurely closed by the value's own content.
+      const angleLabel = escapeTableCell(sanitizeStructuredCodeSpan(angle.angle));
+      for (const finding of angle.findings) {
+        lines.push(`| ${renderFindingCell(finding)} | ${angleLabel} |`);
       }
-      const dispositionSuffix = finding.disposition
-        ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
-        : "";
-      // Judge relevance-based disposition (#1525).
-      const judgeSuffix = finding.judgeDisposition
-        ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
-        : "";
-      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}${judgeSuffix}`);
+      // A finding the normalizer could not interpret is reported explicitly as
+      // unparseable — never dropped (#1526). Its severity (when readable) is
+      // rendered so a reader can see whether it sat at a blocking severity;
+      // the "could not be interpreted" text distinguishes it from a normal
+      // finding that is simply not blocking.
+      for (const u of angle.unparseable ?? []) {
+        const sev = sanitizeStructuredCodeSpan(u.severity) || "none";
+        lines.push(`| ⚪ finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped) | ${angleLabel} |`);
+      }
     }
-    // A finding the normalizer could not interpret is reported explicitly as
-    // unparseable — never dropped (#1526). Its severity (when readable) is
-    // rendered so a reader can see whether it sat at a blocking severity;
-    // the `unparseable` label itself distinguishes "could not interpret this
-    // finding" from a normal `[severity]` finding that is simply not blocking.
-    for (const u of unparseable ?? []) {
-      const sev = sanitizeStructuredCodeSpan(u.severity) || "none";
-      lines.push(`  - [\`unparseable\`] finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped)`);
-    }
+  }
+  if (clean.length > 0) {
+    if (findingsBearing.length > 0) lines.push("");
+    const names = clean.map((angle) => sanitizeStructuredCodeSpan(angle.angle)).join(", ");
+    lines.push(`**Clean (${clean.length}):** ${escapeTableCell(names)}`);
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
-// The reduced per-angle breakdown for a round that carries its own finding
-// surface: angle, per-angle verdict, and the finding COUNT — never a finding's
-// text, which lives exactly once on this same review (an inline comment, or the
-// body-filed block). Unbounded by construction: one short line per angle, and
-// the angle pool is config-bounded, so this can never approach the posted-body
-// budget the way a full breakdown can.
+// Exported so consolidate-fanin.mjs can measure whether a candidate
+// findingsJson shape actually renders (catching renderGroupedFindingsTable's
+// length-exceeded throw) instead of approximating its rendered size, and so
+// existing callers/tests that render the full per-angle breakdown keep this
+// name. Both this and renderAngleVerdictDigest render the identical grouped
+// table (#1942) — there is no longer a distinct "full" vs "reduced" shape.
+export function renderStructuredFindings(angles) {
+  return renderGroupedFindingsTable(angles);
+}
+// Kept as a separate exported name for existing callers (renderGateReviewCommentBody's
+// finding-surface branch) and tests; renders the SAME grouped table as
+// renderStructuredFindings (#1942) — a finding's own text now lives on this
+// one carrier regardless of whether this round also has an inline-comment
+// finding surface (inline comments are additive, never a substitute).
 export function renderAngleVerdictDigest(angles) {
-  return angles
-    .map(({ angle, verdict, findings, unparseable }) => {
-      // An unparseable finding still occupies a finding slot, so it counts
-      // toward the per-angle total — otherwise the digest would undercount a
-      // round that the clean-verdict tally and the rendered breakdown both see
-      // (#1526).
-      const count = findings.length + (Array.isArray(unparseable) ? unparseable.length : 0);
-      const suffix = count === 0 ? "" : ` (${count} finding${count === 1 ? "" : "s"})`;
-      return `- \`${sanitizeStructuredCodeSpan(angle)}\` → \`${sanitizeStructuredCodeSpan(verdict)}\`${suffix}`;
-    })
-    .join("\n");
+  return renderGroupedFindingsTable(angles);
 }
 // Build the single-line digest shown on the `**Findings summary:**` line when a
 // structured per-angle block is rendered. The marker/parse contract requires this
@@ -1252,6 +1314,13 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
     `**Size-budget waiver:** ${waiverLine}`,
   ];
 }
+// `nonLocatableFindings` no longer drives any VISIBLE rendering choice: the
+// grouped findings table (from `structuredFindings`) is the single carrier of
+// every finding's own text, locatable or not (#1942); a locatable finding's
+// inline review comment stays additive, produced elsewhere from that same
+// finding surface. It still drives one thing below: an invisible
+// fingerprint+disposition marker per non-locatable finding, load-bearing for
+// GATE-EXEC-FINDING-THREADS's cross-round suppression/deferral tracking.
 export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
@@ -1275,26 +1344,46 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
-  // When structured per-angle fan-in data is supplied, render it as a readable
-  // multi-line block. The `**Findings summary:**` line still carries a non-empty
-  // single-line digest so the marker/parse contract (which captures only that
-  // one line) keeps round-tripping; the structured breakdown is nested below it
-  // with newlines preserved (NOT collapsed to a run-on line).
+  // When structured per-angle fan-in data is supplied, render it as the
+  // grouped, findings-first, severity-ordered, emoji-marked table (#1942) at
+  // TOP LEVEL — the single carrier of every finding's own text on this
+  // review, including a non-locatable one; a locatable finding's inline PR
+  // review comment (produced elsewhere from this same round's finding
+  // surface) is ADDITIVE, never a substitute, so it is never re-rendered or
+  // summarized here. The `**Findings summary:**` line still carries a
+  // non-empty single-line digest so the marker/parse contract (which captures
+  // only that one line) keeps round-tripping; the grouped table renders below
+  // it with newlines preserved (NOT collapsed to a run-on line) and never
+  // repeats that digest's own "Findings summary" heading.
   const angles = normalizeStructuredFindings(structuredFindings);
-  // A round that carries its own finding surface (this review's inline comments
-  // plus the body-filed block below) renders each finding's TEXT exactly once,
-  // on that surface. The per-angle breakdown then degrades to `angle → verdict
-  // (+ finding count)` one-liners: repeating each summary here would put the
-  // same text twice on the SAME visible surface. A bare verdict post (no
-  // findings ledger, so no finding surface at all) keeps the full breakdown —
-  // it is the only place those findings would otherwise appear.
-  const hasFindingSurface = Array.isArray(nonLocatableFindings);
+  // An `inline_single_agent` round may pass `--findings-ledger` alone, with no
+  // `--findings-json` (structuredFindings/angles absent) — the sanctioned
+  // fallback documented on the Gate comment command. `nonLocatableFindings` (a
+  // flat per-finding array — the same shape normalizeStructuredFindings
+  // already groups by `.angle`) is then the ONLY source of real finding text
+  // this round has; falling back to it here for the TABLE ONLY is what keeps
+  // that text visible instead of silently rendering nothing but an invisible
+  // marker. Deliberately NOT used for the digest line: the free-text
+  // `findingsSummary` the caller supplied stays byte-identical to today's
+  // contract (upsertCheckpointVerdict's noop comparison parses that exact
+  // line back off a previously posted body), so a round whose ledger
+  // suppresses down to zero unposted findings renders the identical
+  // digest-only shape a truly-empty round always has — never a table that
+  // appears/disappears purely from suppression state.
+  const fallbackTableAngles = angles ?? (Array.isArray(nonLocatableFindings) ? normalizeStructuredFindings(nonLocatableFindings) : null);
   if (angles) {
     lines.push(
       "",
       `**Findings summary:** ${buildStructuredFindingsDigest(angles, findingsSeverityCounts)}`,
       "",
-      hasFindingSurface ? renderAngleVerdictDigest(angles) : renderStructuredFindings(angles),
+      renderStructuredFindings(angles),
+    );
+  } else if (fallbackTableAngles) {
+    lines.push(
+      "",
+      `**Findings summary:** ${findingsSummary}`,
+      "",
+      renderStructuredFindings(fallbackTableAngles),
     );
   } else {
     lines.push(
@@ -1302,14 +1391,19 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
       `**Findings summary:** ${findingsSummary}`,
     );
   }
-  if (hasFindingSurface) {
-    lines.push("", "**Body-filed findings** (no in-diff location):");
-    if (nonLocatableFindings.length === 0) {
-      lines.push("", "> None — every finding this round is an inline comment on this review.");
-    } else {
-      for (const finding of nonLocatableFindings) {
-        lines.push("", renderNonLocatableBlock(finding, { round }));
-      }
+  // A round that carries its own finding surface (nonLocatableFindings is an
+  // array) stamps one INVISIBLE marker per body-filed finding — never its
+  // visible text, which the grouped table above already carries in full.
+  // GATE-EXEC-FINDING-THREADS's cross-round fingerprint suppression
+  // (collectSuppressedFingerprints) and disposition=deferred tracking
+  // (isFileableDeferral/isDeferredAtRound, follow-up-issue filing) all read
+  // this exact marker back off the posted review body; dropping it would
+  // silently re-surface the same finding as "new" every round with no
+  // durable disposition — a semantics change the display-only regrouping
+  // above must not cause (#1942).
+  if (Array.isArray(nonLocatableFindings)) {
+    for (const finding of nonLocatableFindings) {
+      lines.push(buildNonLocatableFindingMarker(finding, { round }));
     }
   }
   // The gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)

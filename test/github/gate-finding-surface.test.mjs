@@ -443,11 +443,15 @@ test("renderGateReviewCommentBody (single surface): no body-filed finding line c
   assert.equal(forged, undefined, `a line forged a gate field: ${JSON.stringify(forged)}`);
 });
 
-test("renderGateReviewCommentBody (single surface): the round marker is rendered, and omitted without a finding surface", () => {
+test("renderGateReviewCommentBody (single surface): the round marker is rendered, and no finding-surface artifact leaks without one", () => {
   const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
   const withSurface = renderGateReviewCommentBody({ ...base, round: 2, nonLocatableFindings: [] });
   assert.equal(withSurface.split("\n")[1], buildReviewHeaderMarker({ gate: "draft_gate", headSha: HEAD_SHA, round: 2 }));
-  assert.match(withSurface, /Body-filed findings/);
+  // The grouped findings table (#1942) is the single carrier of finding text
+  // now — there is no separate "Body-filed findings" block to assert on; an
+  // empty finding surface (no findings this round) renders no table at all.
+  assert.doesNotMatch(withSurface, /Body-filed findings/);
+  assert.doesNotMatch(withSurface, /\| Finding \| Angles \|/);
   assert.doesNotMatch(renderGateReviewCommentBody(base), /dev-loops:gate-findings-review/);
 });
 

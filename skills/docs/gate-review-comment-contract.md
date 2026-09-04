@@ -14,13 +14,23 @@ the latest head — without relying on local or session-only artifacts.
 `GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
 review of type COMMENT, posted by `upsert-checkpoint-verdict.mjs`. Its body carries the required
 verdict fields below; with `--findings-ledger`, that same review also carries the round's
-findings — locatable ones as its inline comments, the rest body-filed under the verdict fields
-(`GATE-EXEC-FINDING-THREADS`, [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+findings — locatable ones as its inline comments, the rest body-filed (their text on the grouped
+table below; an invisible per-finding fingerprint+disposition marker, never rendered as visible
+text, is what `GATE-EXEC-FINDING-THREADS`'s cross-round suppression/deferral tracking actually
+reads back) ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 No separate verdict issue comment, no separate findings review, and no deferred-summary comment
-is posted. Each finding's text appears exactly once across the round; the body's per-angle
-breakdown carries angle, verdict, and finding counts only. Verdict evidence is read from that
-review body; a verdict posted as an ISSUE comment still validates and is still corrected on
-its own surface (back-compat read).
+is posted. The body's per-angle breakdown is a top-level, findings-first, severity-ordered
+two-column markdown table (`Finding | Angles`), one row per finding, with a leading severity
+emoji marker (🔴 high · 🟠 medium · 🟡 low · ⚪ nit · 🔵 question); every clean (zero-finding)
+angle is collapsed into one trailing comma-joined `**Clean (N):**` line, never a table row. This
+table carries EVERY finding's own text (summary plus file:line when known), including a locatable
+one — a locatable finding's own inline review comment is ADDITIVE to its table row, never a
+substitute for it: the body table is never reduced to an angle/verdict/count one-liner just
+because this round also carries inline comments. Budget pressure on an over-long round SHORTENS a
+finding's rendered text rather than degrading it to an omitted-count/ledger pointer. The table
+renders at TOP LEVEL, never through the `--findings-summary`/`--findings-file` blockquoted
+continuation-line path below. Verdict evidence is read from that review body; a verdict posted as
+an ISSUE comment still validates and is still corrected on its own surface (back-compat read).
 
 <!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
