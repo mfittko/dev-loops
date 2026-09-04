@@ -39,6 +39,9 @@ import { readHookInput } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+// Claude exposes `agent_type` inside a subagent (null in the main agent). A read-only role
+// (judge/review) is exempt (#1925) — see decideSubagentStopGuard / READONLY_SUBAGENT_ROLES.
+const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 
 const pendingCommitAuthorization = process.env[DEVLOOPS_COMMIT_AUTH_PENDING_VAR] === "1";
 const orchestratorOwnsCommit = process.env[DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT_VAR] === "1";
@@ -61,10 +64,14 @@ try {
   porcelain = "";
 }
 
-const decision = decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization, orchestratorOwnsCommit });
+const decision = decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization, orchestratorOwnsCommit, agentType });
 if (decision.decision === "block") {
   process.stderr.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
   process.exit(2);
 }
-// allow the stop
+// allow the stop; surface an advisory reason (e.g. the read-only-role exemption naming the
+// orchestrator as the owner of the pending edit) to stderr without blocking (exit 0).
+if (decision.advisory && typeof decision.reason === "string") {
+  process.stderr.write(JSON.stringify({ decision: "allow", advisory: true, reason: decision.reason }) + "\n");
+}
 process.exit(0);

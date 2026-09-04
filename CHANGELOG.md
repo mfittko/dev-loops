@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **SubagentStop data-loss guard is now role-aware (#1925).** The `LOCAL-COMMIT-BEFORE-EXIT` uncommitted-worktree guard (`decideSubagentStopGuard` / `.claude/hooks/subagent-stop-uncommitted-guard.mjs`) was role-blind: a read-only `judge`/`review` subagent that stopped with a foreign uncommitted edit in the shared worktree was forced to commit it, violating the verdict-only contract. The guard now exempts read-only roles (`READONLY_SUBAGENT_ROLES = judge, review`) by `agent_type`, allowing the stop with an advisory that names the orchestrator as the actor responsible for the pending edit; the data-loss protection stays enforced against the orchestrator and every editing role (`developer`, `fixer`, `docs`, `quality`).
+
 ## 1.0.1 - 2026-09-04
 
 First npm-published stable release. Identical in content to 1.0.0 (see below) — no code changes; a version bump only. `dev-loops@1.0.0` was published then unpublished during an earlier reverted release cut, and npm permanently tombstones an unpublished version number, so the first stable that can ship to the npm `latest` dist-tag is `1.0.1`. `@dev-loops/core` is bumped to `1.0.1` in lockstep.

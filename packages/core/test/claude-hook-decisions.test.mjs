@@ -560,6 +560,43 @@ test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", 
   assert.equal(decideSubagentStopGuard({ cwd: undefined, porcelain: " M x" }).decision, "allow");
 });
 
+// Read-only role exemption (#1925): a judge/review subagent's contract forbids commits, so a
+// dirty tracked edit in its worktree is foreign (orchestrator-owned). The guard must not force
+// the read-only role to commit it, and its message must name the orchestrator as responsible.
+for (const role of ["judge", "review"]) {
+  test(`decideSubagentStopGuard exempts a read-only "${role}" role from committing foreign uncommitted work (#1925)`, () => {
+    const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/gate-fanin.mjs", agentType: role });
+    assert.equal(d.decision, "allow");
+    assert.equal(d.advisory, true);
+    assert.match(d.reason, /ORCHESTRATOR/);
+    assert.match(d.reason, new RegExp(role));
+    // Not re-blocked: the verdict-only role is never told to commit.
+    assert.doesNotMatch(d.reason, /Commit your work before stopping/);
+  });
+}
+
+// Non-goal anchor (#1925): editing roles and the orchestrator stay enforced — the exemption must
+// not regress into a blanket agentType-based allow.
+for (const role of ["developer", "fixer", "docs", "quality"]) {
+  test(`decideSubagentStopGuard still blocks an editing "${role}" role with a dirty worktree (#1925 non-goal)`, () => {
+    const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: role });
+    assert.equal(d.decision, "block");
+    assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  });
+}
+
+test("decideSubagentStopGuard still blocks a null agentType (main-agent / unknown dispatch) with a dirty worktree (#1925)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: null });
+  assert.equal(d.decision, "block");
+  assert.match(d.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+});
+
+test("decideSubagentStopGuard allows a read-only role with a CLEAN worktree without an advisory (#1925)", () => {
+  const d = decideSubagentStopGuard({ cwd: WT, porcelain: "", agentType: "judge" });
+  assert.equal(d.decision, "allow");
+  assert.notEqual(d.advisory, true);
+});
+
 test("decideSubagentStopGuard caps the enumerated dirty paths at 50, reports the full count, and preserves porcelain order", () => {
   // Descending index order (not ascending/sorted) so the assertions can tell "preserves
   // porcelain order" apart from "sorts the paths" — git porcelain lists tracked
