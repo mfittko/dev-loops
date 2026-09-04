@@ -78,6 +78,7 @@ jobs:
           fi
 
   verify-suite:
+    name: verify-suite (${{ matrix.suite }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

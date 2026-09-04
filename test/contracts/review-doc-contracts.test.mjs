@@ -351,6 +351,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   // aggregation job named `verify` so the required-status-check name is
   // preserved. Assert every suite is a matrix leg and the gate fails closed.
   assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
+  assert.match(ciWorkflow, /name:\s*verify-suite \(\$\{\{\s*matrix\.suite\s*\}\}\$\{\{\s*matrix\.shard[\s\S]*shard \{0\}[\s\S]*\}\}\)/);
   assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
   assert.match(ciWorkflow, /verify-suite:[\s\S]*bun run \$\{\{\s*matrix\.suite\s*\}\}/i);
 
