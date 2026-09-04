@@ -170,15 +170,10 @@ jobs:
           [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
 
   viewer-smoke:
-    name: viewer-smoke (shard ${{ matrix.shard }})
     needs:
       - changes
     if: needs.changes.outputs.inspect_run_viewer == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1/2, 2/2]
 
     steps:
       - name: Check out repository
@@ -188,7 +183,7 @@ jobs:
         uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
-        run: bun run test:playwright:viewer --shard=${{ matrix.shard }}
+        run: bun run test:playwright:viewer
 
   deck-smoke:
     needs:

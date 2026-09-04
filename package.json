@@ -30,7 +30,7 @@
     "test:scripts": "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none GIT_CONFIG_KEY_1=core.fsyncObjectFiles GIT_CONFIG_VALUE_1=false bun test --only-failures --parallel=2 test/github/*.test.mjs test/loop/*.test.mjs test/docs/*.test.mjs test/projects/*.test.mjs test/pages/*.test.mjs test/security/*.test.mjs",
     "test:core": "bun test --only-failures --parallel=2 packages/core/test/*.test.mjs",
     "test:dev-loop": "bun test --only-failures --parallel=2 skills/dev-loop/scripts/dev-mode-context.test.mjs skills/dev-loop/scripts/render-template.test.mjs skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs",
-    "test:playwright:viewer": "PW_UI_SLICE=inspect-run-viewer node ./node_modules/@playwright/test/cli.js test --project=inspect-run-viewer",
+    "test:playwright:viewer": "PW_UI_SLICE=inspect-run-viewer node ./node_modules/@playwright/test/cli.js test --project=inspect-run-viewer --workers=2",
     "test:playwright:deep-dive": "PW_UI_SLICE=deep-dive-deck node ./node_modules/@playwright/test/cli.js test --project=deep-dive-deck",
     "test:playwright:how-decided-deck": "PW_UI_SLICE=how-decided-deck node ./node_modules/@playwright/test/cli.js test --project=how-decided-deck",
     "test:playwright:intro-deck": "PW_UI_SLICE=intro-deck node ./node_modules/@playwright/test/cli.js test --project=intro-deck",

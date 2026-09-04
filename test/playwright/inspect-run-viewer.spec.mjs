@@ -12,6 +12,10 @@ import {
   waitForMermaidGraph,
 } from "./harness/inspect-run-viewer-harness.mjs";
 
+// Each case owns its browser page, binds its fixture server to an ephemeral
+// port, and writes through Playwright's testInfo-scoped artifact paths.
+test.describe.configure({ mode: "parallel" });
+
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
     { target: { repo: "other/repo", pr: 77 }, title: "Waiting PR", signal: "attention" },

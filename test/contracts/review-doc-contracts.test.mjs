@@ -269,10 +269,11 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.doesNotMatch(ciWorkflow, /inspect_run_viewer_relevant_paths_json/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*needs:[\s\S]*- changes/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
-  assert.match(ciWorkflow, /name:\s*viewer-smoke \(shard \$\{\{\s*matrix\.shard\s*\}\}\)/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*shard:\s*\[1\/2,\s*2\/2\]/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer --shard=\$\{\{\s*matrix\.shard\s*\}\}/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer/i);
+  const rootPackage = JSON.parse(await readRepo("package.json"));
+  assert.match(rootPackage.scripts["test:playwright:viewer"], /--workers=2$/);
+  assert.match(await readRepo("test/playwright/inspect-run-viewer.spec.mjs"), /test\.describe\.configure\(\{\s*mode:\s*"parallel"\s*\}\)/);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
