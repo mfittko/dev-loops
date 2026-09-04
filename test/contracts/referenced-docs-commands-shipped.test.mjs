@@ -14,6 +14,18 @@
 // docs/archive and the generated .claude/skills mirror) via its exported
 // `collectMarkdownFiles`, reusing its fence-aware link parsing
 // (`extractAnchorLinks`) rather than re-implementing markdown parsing.
+//
+// Supported anchor-link surface (the reference kinds this check resolves,
+// #1920):
+//   - heading anchors into a MARKDOWN target (`.md`), matched against both ATX
+//     (`# Heading`) and setext (text underlined by `===`/`---`) headings, since
+//     GitHub renders and slugs both. Leading YAML frontmatter is stripped so a
+//     `key: value` line above a frontmatter-closing `---` is not read as a
+//     setext heading.
+//   - a `#fragment` into a NON-markdown target (a source-line anchor like
+//     `foo.mjs#L10`, an image, or a directory) is NOT a heading-anchor claim
+//     and is skipped, the same as a missing target — it is not false-failed as
+//     a dangling heading.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -170,22 +182,46 @@ function slugifyHeadingText(text) {
     .replace(/\s/g, "-");
 }
 
-// Extracts the set of heading-anchor ids a markdown file produces: the
-// github-slugger id for every ATX heading's visible text, de-duplicated the
-// same way (repeat slug N gets a `-N` suffix), plus any explicit `{#custom-id}`
-// trailer (an explicit id is stripped from the slugified text first, then
-// added to the set alongside the auto-computed slug — both are valid targets).
+// Strips a leading YAML frontmatter block (`---` on the first line through the
+// next `---` delimiter) so its `key: value` lines are never mistaken for a
+// setext heading followed by a `---` underline. Every scanned `---`/`===`
+// "underline immediately under a non-blank line" in this repo is a frontmatter
+// closer, so without this strip setext support would forge phantom anchors
+// (e.g. `user-invocable: false` -> `user-invocable-false`). Only the leading
+// block is stripped, matching the universal frontmatter convention.
+function stripLeadingFrontmatter(content) {
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    return content;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === "---") {
+      return lines.slice(index + 1).join("\n");
+    }
+  }
+  return content;
+}
+
+// Extracts the set of heading-anchor ids a markdown file produces. Covers BOTH
+// heading syntaxes GitHub renders and slugs:
+//   - ATX headings (`# Heading`)
+//   - setext headings (a text line immediately underlined by a run of `=` for
+//     h1 or `-` for h2, no blank line between) — GitHub generates the same
+//     slug for these, so a link to a setext heading is a VALID reference and
+//     must not be false-failed as dangling (#1920). The underline must sit
+//     directly under a non-blank line that is not itself an ATX heading or
+//     another underline; a `---` after a blank line is a thematic break, not a
+//     setext underline, and leading frontmatter is stripped first.
+// Both syntaxes are de-duplicated the same way (repeat slug N gets a `-N`
+// suffix), plus any explicit `{#custom-id}` trailer (an explicit id is stripped
+// from the slugified text first, then added to the set alongside the
+// auto-computed slug — both are valid targets).
 function extractHeadingAnchorIds(content) {
   const ids = new Set();
   const seenCounts = new Map();
 
-  for (const { text: line } of iterNonFencedLines(content)) {
-    const headingMatch = line.trimStart().match(/^#{1,6}\s+(.+)$/);
-    if (!headingMatch) {
-      continue;
-    }
-
-    let text = headingMatch[1].trim();
+  function addHeadingText(rawText) {
+    let text = rawText.trim();
     const explicitIdMatch = text.match(/\{#([\w-]+)\}\s*$/);
     let explicitId = null;
     if (explicitIdMatch) {
@@ -199,6 +235,28 @@ function extractHeadingAnchorIds(content) {
     ids.add(count === 0 ? baseSlug : `${baseSlug}-${count}`);
     if (explicitId) {
       ids.add(explicitId);
+    }
+  }
+
+  const lines = [...iterNonFencedLines(stripLeadingFrontmatter(content))];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].text;
+
+    const atxMatch = line.trimStart().match(/^#{1,6}\s+(.+)$/);
+    if (atxMatch) {
+      addHeadingText(atxMatch[1]);
+      continue;
+    }
+
+    const isUnderline = /^(=+|-+)$/.test(line.trim());
+    if (isUnderline && index > 0) {
+      const previous = lines[index - 1].text;
+      const previousIsHeadingText = previous.trim() !== ""
+        && !/^#{1,6}\s+/.test(previous.trimStart())
+        && !/^(=+|-+)$/.test(previous.trim());
+      if (previousIsHeadingText) {
+        addHeadingText(previous);
+      }
     }
   }
 
@@ -226,6 +284,15 @@ function findDanglingAnchorReferences({ sourceContent, loadTargetContent }) {
 
 function loadTargetContentRelativeTo(repoRoot, sourceAbsPath) {
   return (pathPart) => {
+    // Only markdown targets carry heading anchors this offline check can
+    // resolve. A `#fragment` into a NON-markdown file — a source-line anchor
+    // (`foo.mjs#L10`), an image/asset, or a directory — is not a heading-anchor
+    // claim, so skip it the same as a missing target (#1920). This also NARROWS
+    // the filesystem reads (non-`.md` targets are never read) rather than
+    // broadening them.
+    if (!pathPart.toLowerCase().endsWith(".md")) {
+      return null;
+    }
     const targetAbs = path.resolve(path.dirname(sourceAbsPath), pathPart);
     // Guard against a link path traversing outside the repo (e.g. `../../../../etc/hosts`):
     // treat it the same as a missing target rather than reading outside the repo root.
@@ -284,9 +351,22 @@ async function computeAllFailures(repoRoot) {
   return { scannedFiles, failures };
 }
 
-test("the docs-reference surface is non-trivially scanned", async () => {
+test("the docs-reference surface covers the required root doc surfaces", async () => {
   const { scannedFiles } = await computeAllFailures(REPO_ROOT);
-  assert.ok(scannedFiles.length > 100, `scanned markdown surface looks too small (${scannedFiles.length}) — collectMarkdownFiles likely broken`);
+  const scanned = new Set(scannedFiles);
+
+  // Assert the required root surfaces directly instead of a brittle scan-SIZE
+  // proxy (#1920): a size threshold passes even if a specific required root
+  // (say AGENTS.md) silently drops out of the scan, and false-fails on a
+  // legitimate shrink of the docs surface. Naming the roots pins exactly what
+  // `collectMarkdownFiles` must keep scanning.
+  for (const requiredRoot of ["README.md", "PLAN.md", "AGENTS.md"]) {
+    assert.ok(scanned.has(requiredRoot), `required root surface ${requiredRoot} is not in the scanned set — collectMarkdownFiles likely broken`);
+  }
+  assert.ok(
+    scannedFiles.some((relPath) => relPath.startsWith("docs/")),
+    "no docs/ file is in the scanned set — collectMarkdownFiles likely broken",
+  );
 });
 
 test("every npm run / CLI subcommand / markdown anchor reference in the shipped docs surface resolves", async () => {
@@ -408,6 +488,60 @@ test("extractHeadingAnchorIds mirrors github-slugger, including the double-hyphe
   assert.ok(ids.has("angle-carry-forward-fail-closed"));
   assert.ok(ids.has("repeat"));
   assert.ok(ids.has("repeat-1"), "github-slugger de-dupes repeated headings with a -N suffix");
+});
+
+test("extractHeadingAnchorIds resolves setext headings and ignores frontmatter / thematic breaks (#1920)", () => {
+  const ids = extractHeadingAnchorIds([
+    "---",
+    "title: Frontmatter Key",
+    "user-invocable: false",
+    "---",
+    "",
+    "Setext Title",
+    "======",
+    "",
+    "Setext Section",
+    "---",
+    "",
+    "Some paragraph.",
+    "",
+    "---",
+    "",
+    "After break.",
+  ].join("\n"));
+
+  assert.ok(ids.has("setext-title"), "a `===` underline directly under text is a setext h1 anchor");
+  assert.ok(ids.has("setext-section"), "a `---` underline directly under text is a setext h2 anchor");
+  assert.ok(!ids.has("frontmatter-key"), "leading YAML frontmatter must not forge heading anchors");
+  assert.ok(!ids.has("user-invocable-false"), "a frontmatter-closing `---` must not read the key line above it as a setext heading");
+  assert.ok(!ids.has("some-paragraph"), "a `---` after a blank line is a thematic break, not a setext underline");
+
+  // The exclusion guard: an underline sitting directly under an ATX heading (or
+  // another underline) must NOT re-consume that line as setext text. `# Title`
+  // then `===` yields exactly one `title` anchor — never a deduped
+  // `title` + `title-1` from double-counting the same heading.
+  const atxThenUnderline = extractHeadingAnchorIds("# Title\n===\n");
+  assert.ok(atxThenUnderline.has("title"), "the ATX heading itself still produces its anchor");
+  assert.ok(!atxThenUnderline.has("title-1"), "an ATX heading followed by an underline is not double-counted as a setext heading");
+});
+
+test("findDanglingAnchorReferences accepts a valid anchor into a setext heading in another file (#1920)", () => {
+  const sourceContent = "See [Section](./other.md#setext-section).";
+  const otherContent = "# Other\n\nSetext Section\n---\n";
+  const failures = findDanglingAnchorReferences({
+    sourceContent,
+    loadTargetContent: (pathPart) => (pathPart === "./other.md" ? otherContent : null),
+  });
+  assert.deepEqual(failures, [], "a link to a real setext heading must not be false-failed as dangling");
+});
+
+test("loadTargetContentRelativeTo skips a non-markdown anchor target rather than reading it (#1920)", () => {
+  const sourceAbsPath = path.join(REPO_ROOT, "docs", "synthetic-1920.md");
+  const loadTargetContent = loadTargetContentRelativeTo(REPO_ROOT, sourceAbsPath);
+  // `package.json` exists and is inside the repo, but is not markdown — a
+  // `#fragment` into it is not a heading-anchor claim, so it is skipped
+  // (returns null) rather than read-and-false-failed for having no headings.
+  assert.equal(loadTargetContent("../package.json"), null);
 });
 
 test("findDanglingAnchorReferences flags a same-file anchor with no matching heading and accepts a real one", () => {
