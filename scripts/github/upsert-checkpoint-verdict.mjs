@@ -1136,6 +1136,17 @@ function renderCleanRosterLine(angles) {
 // (trimmed) value — sanitizeStructuredCodeSpan is a display-text transform,
 // not a URL-safe one — while the visible backticked text still goes through
 // sanitizeStructuredCodeSpan like every other code-span field here.
+// URL-encode a finding's `file` for a markdown link DESTINATION. `finding.file`
+// is untrusted (reviewer/producer text): a raw `)` closes the `(...)`
+// destination early and a following `[x](url)`/`![x](url)` forges a live
+// link/auto-loaded image on the verdict body; a raw `#`/`?` corrupts the URL
+// into a false anchor/query. encodeURI keeps `/` path separators (and the
+// already-safe unreserved set) but leaves exactly `( ) # ?` unencoded, so
+// entity-encode those four residues on top of it. The visible backticked text
+// (displayFile) is a separate display-only transform.
+function encodeBlobPathSegment(file) {
+  return encodeURI(String(file)).replace(/[()#?]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
 function renderBodyOnlyFindingLocation(finding, { repo, headSha } = {}) {
   if (!finding.file) return "";
   const displayFile = sanitizeStructuredCodeSpan(finding.file);
@@ -1143,7 +1154,7 @@ function renderBodyOnlyFindingLocation(finding, { repo, headSha } = {}) {
   const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
   if (typeof repo === "string" && repo.trim().length > 0 && typeof headSha === "string" && headSha.trim().length > 0) {
     const anchor = Number.isFinite(finding.line) ? `#L${finding.line}` : "";
-    return ` [\`${displayFile}${lineRef}\`](https://github.com/${repo}/blob/${headSha}/${finding.file}${anchor})`;
+    return ` [\`${displayFile}${lineRef}\`](https://github.com/${repo}/blob/${headSha}/${encodeBlobPathSegment(finding.file)}${anchor})`;
   }
   return ` _\`${displayFile}${lineRef}\`_`;
 }
@@ -1434,9 +1445,17 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     if (Array.isArray(locatableFindings) && locatableFindings.length > 0) {
       lines.push("", buildInlineFindingsAggregateLine(locatableFindings));
     }
-    const normalizedNonLocatable = nonLocatableFindings.map(normalizeFlatFindingWithAngle).filter(Boolean);
-    if (normalizedNonLocatable.length > 0) {
-      lines.push("", renderBodyOnlyFindingsList(normalizedNonLocatable, { repo, headSha }).join("\n"));
+    // Never drop a body-filed finding from the VISIBLE list: every entry gets a
+    // suppression marker stamped below, so one that fails normalization (no
+    // usable summary) must still render — as an unparseable row (#1526) — or it
+    // is invisible yet marked-suppressed, i.e. silently lost next round. Map
+    // rather than filter-Boolean.
+    const bodyOnlyRows = nonLocatableFindings.map(
+      (f) => normalizeFlatFindingWithAngle(f)
+        ?? { unparseable: true, severity: readRawSeverity(f), angle: typeof f?.angle === "string" ? f.angle.trim() : "" },
+    );
+    if (bodyOnlyRows.length > 0) {
+      lines.push("", renderBodyOnlyFindingsList(bodyOnlyRows, { repo, headSha }).join("\n"));
     }
     if (angles) {
       const cleanLine = renderCleanRosterLine(angles);

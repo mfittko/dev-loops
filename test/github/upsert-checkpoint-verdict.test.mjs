@@ -2930,6 +2930,42 @@ test("renderGateReviewCommentBody's ledger-path body-only list renders a real fi
   assert.match(body, /^- 🟡 low — ok _\(correctness\)_$/m);
 });
 
+test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding file path so it cannot forge a link/image on the verdict body (#1942 renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    nonLocatableFindings: [{ severity: "high", angle: "correctness", summary: "boom", file: "a)b.js", line: 3 }],
+  });
+  // The `)` in the path must be percent-encoded in the URL destination so it
+  // cannot close the markdown `(...)` early and let a following `[x](url)`
+  // forge a live link/image.
+  assert.match(body, /\/blob\/abc1234000000000000000000000000000000000\/a%29b\.js#L3\)/);
+  assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
+});
+
+test("renderGateReviewCommentBody renders an un-normalizable body-only finding as an unparseable bullet instead of silently dropping it (#1942 #1526 never-drop)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    // No usable summary -> normalizeFlatFindingWithAngle returns null; it must
+    // still surface (it gets a suppression marker stamped), never vanish.
+    nonLocatableFindings: [{ severity: "high", angle: "correctness" }],
+  });
+  assert.match(body, /finding could not be interpreted/);
+});
+
 // --- Size-budget fields (phase 3 of the fail-closed PR size budget): the
 // verdict/evidence contract write (renderGateReviewCommentBody) + read
 // (parseGateReviewCommentBody) round-trip. ---
