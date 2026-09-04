@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Publishable state-graph presentation with reproducible browser evidence.** Adds the self-contained, CSP-safe “The State Graph Is the Surface” deck and registers it with the shared desktop/mobile Playwright fit, accessibility, console, and screenshot harness so rendered-artifact gate evidence is produced automatically.
+
 ### Fixed
 
 - **SubagentStop guard no longer hard-deadlocks an editing subagent under a task-scoped no-commit instruction (#1936).** The `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption (#1786) sanctioned a "LOCAL EDITS ONLY: no commit" delegation split: an editing sub-delegate (`developer`/`quality`/`docs`) made edits and left the commit to the orchestrator, exempting its own `SubagentStop`. On the Claude harness the orchestrator cannot set a per-dispatch env var, so a delegated editing subagent told not to commit hit a hard deadlock — the `subagent-stop-uncommitted-guard` hook demanded a commit, the session permission classifier denied it, the hook re-blocked the exit, and only a human interrupt broke the loop. This also contradicted `LOCAL-COMMIT-BEFORE-EXIT` (implementation-loop step 12), which already mandates a dispatched editing subagent commit before exit. The split and its env-var exemption are removed: editing sub-delegates (`developer`/`quality`/`docs`/`fixer`) commit their own work (and push, for tracker-backed sessions); an orchestrator that wants one consolidated commit performs the edits itself. The guard stays fully enforced for every editing role, so data-loss protection is preserved and the deadlock is structurally impossible. The read-only-role exemption (#1925, `judge`/`review`) and the interactive `DEVLOOPS_COMMIT_AUTH_PENDING` exemption (#1619) are unchanged. See ADR 0058.
