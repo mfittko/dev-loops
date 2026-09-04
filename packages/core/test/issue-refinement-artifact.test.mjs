@@ -118,6 +118,20 @@ test("detectAcDodMatrix ignores an unrelated (non-criterion/evidence) table", ()
   assert.equal(m.found, false);
 });
 
+test("#1951 detectAcDodMatrix does not mistake a generic status table (Outcome/Done) for the matrix without a matrix heading", () => {
+  const body = [
+    "## Progress", "",
+    "| Outcome | Done |",
+    "|---|---|",
+    "| the parser handles input | yes it is finished |",
+    "",
+  ].join("\n");
+  assert.equal(detectAcDodMatrix(body).found, false);
+  // The same rows DO qualify once placed under an explicit matrix heading.
+  const withHeading = "## AC / DoD matrix\n\n" + body.split("\n").slice(2).join("\n");
+  assert.equal(detectAcDodMatrix(withHeading).valid, true);
+});
+
 test("detectAcDodMatrix skips a fenced table (anti-spoof)", () => {
   const body = [
     "## AC / DoD matrix", "",

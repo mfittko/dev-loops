@@ -462,9 +462,15 @@ const MATRIX_SECTION_PATTERNS = Object.freeze([
 
 // Header column families: col0 names the criterion side, col1 the evidence
 // side. Used to recognize an unheaded (not under a matrix heading) but clearly
-// criterion→evidence table anywhere in the body.
-const MATRIX_CRITERION_HEADER = /\b(criteri\w*|acceptance|\bac\b|outcome)\b/i;
-const MATRIX_EVIDENCE_HEADER = /\b(evidence|done|\bdod\b|completion|deliverable)\b/i;
+// criterion→evidence table anywhere in the body. Kept STRONG on purpose (#1951
+// draft_gate correctness review): a generic status table like `| Outcome |
+// Done |` must NOT be mistaken for the refinement matrix — only headers that
+// explicitly name acceptance criteria AND completion evidence / DoD qualify
+// without a matrix heading. A matrix under a weaker header still qualifies via
+// its `## AC / DoD matrix` heading (MATRIX_SECTION_PATTERNS), which is what the
+// loop-grill synthesis and the epic procedure both write.
+const MATRIX_CRITERION_HEADER = /\b(criteri\w*|acceptance|ac)\b/i;
+const MATRIX_EVIDENCE_HEADER = /\b(evidence|dod|definition of done)\b/i;
 
 const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/u;
 
