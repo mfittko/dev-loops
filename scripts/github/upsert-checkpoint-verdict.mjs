@@ -1145,7 +1145,11 @@ function renderCleanRosterLine(angles) {
 // entity-encode those four residues on top of it. The visible backticked text
 // (displayFile) is a separate display-only transform.
 function encodeBlobPathSegment(file) {
-  return encodeURI(String(file)).replace(/[()#?]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  // toWellFormed() first: a lone surrogate in the untrusted path makes
+  // encodeURI throw URIError, which would otherwise propagate up and crash the
+  // whole verdict post (one malformed finding blocking the entire gate comment).
+  // It replaces any lone surrogate with U+FFFD so encoding always succeeds.
+  return encodeURI(String(file).toWellFormed()).replace(/[()#?]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 function renderBodyOnlyFindingLocation(finding, { repo, headSha } = {}) {
   if (!finding.file) return "";

@@ -2949,6 +2949,25 @@ test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding fil
   assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
 });
 
+test("renderGateReviewCommentBody does not crash the verdict post on a lone surrogate in a body-only finding path (#1942 fail-closed)", () => {
+  // A lone surrogate makes encodeURI throw URIError; toWellFormed() must
+  // neutralize it so one malformed path never crashes the whole gate post.
+  assert.doesNotThrow(() => {
+    const body = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      repo: "owner/repo",
+      verdict: "findings_present",
+      findingsSummary: "ignored",
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+      nonLocatableFindings: [{ severity: "high", angle: "correctness", summary: "boom", file: "a\uD800b.js", line: 3 }],
+    });
+    assert.ok(body.includes("boom"));
+  });
+});
+
 test("renderGateReviewCommentBody renders an un-normalizable body-only finding as an unparseable bullet instead of silently dropping it (#1942 #1526 never-drop)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
