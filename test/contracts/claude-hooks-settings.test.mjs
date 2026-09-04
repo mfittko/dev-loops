@@ -20,12 +20,13 @@ function runHook(script, payload, env = {}) {
   // the cli-harness-agnostic contract confines those literals to the adapter boundary.
   const childEnv = { ...process.env };
   for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
-  // Strip the SubagentStop exemption signals so non-exempt tests are deterministic regardless of
-  // host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 / DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1 would
-  // silently exempt the dirty case). The exempt tests explicitly set them to "1" below, which
-  // overrides this. #1619 review finding; #1786 added the second marker.
+  // Strip the one SubagentStop exemption signal the hook still reads so non-exempt tests are
+  // deterministic regardless of host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently
+  // exempt the dirty case). The exempt test explicitly sets it to "1" below, which overrides this.
+  // #1619 review finding. The #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed in
+  // #1936, so the hook no longer reads that var — a leaked host value is inert and needs no strip;
+  // the #1936 "no escape" tests still set it explicitly to prove it grants no exemption.
   delete childEnv["DEVLOOPS_COMMIT_AUTH_PENDING"];
-  delete childEnv["DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT"];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
@@ -342,51 +343,20 @@ test("SubagentStop hook exempts an interactive session awaiting commit authoriza
   }
 });
 
-test("SubagentStop hook exempts an explicit orchestrator-owned-commit dispatch (#1786)", () => {
-  // A "LOCAL EDITS ONLY: no commit" delegate dispatch (developer/quality/docs) leaves the
-  // worktree dirty on purpose; the dispatching orchestrator sets the marker to declare it owns
-  // the commit, exempting this dispatch's own SubagentStop from the dirty-worktree block.
-  const dir = makeWorktree("orchestrator-owns-commit", true);
+test("SubagentStop hook stays enforced e2e for an editing dispatch — the removed orchestrator-owned-commit env var grants no escape (#1936)", () => {
+  // #1936: the #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed. Setting it (as a
+  // leaked/stale env var) must NOT exempt a dirty worktree — the "edit here, commit there" split
+  // that deadlocked an editing subagent under a task-scoped no-commit instruction is gone. The
+  // only resolution is to commit the dispatch's own work. Mutation anchor: reintroducing the
+  // env-var allow branch in the hook would flip this exit code back to 0 and re-open the deadlock.
+  const dir = makeWorktree("no-orchestrator-owns-commit-escape", true);
   try {
     const { code, stderrJson } = runHook(
       "subagent-stop-uncommitted-guard.mjs",
       { cwd: dir },
       { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "1" },
     );
-    assert.equal(code, 0, "orchestrator-owned-commit dispatch must be exempt");
-    assert.equal(stderrJson, null);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("SubagentStop hook still blocks a dirty worktree WITHOUT the orchestrator-owned-commit marker (#1786)", () => {
-  // Mutation anchor: the default MUST stay strict — an ordinary dispatch's commit-before-exit
-  // obligation is unaffected by the new marker's mere existence; it must be explicitly set.
-  const dir = makeWorktree("orchestrator-owns-commit-absent", true);
-  try {
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
-    assert.equal(code, 2, "dirty worktree without the marker must still be refused (exit 2)");
-    assert.ok(stderrJson, "block reason JSON on stderr");
-    assert.equal(stderrJson.decision, "block");
-    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("SubagentStop hook still blocks when the orchestrator-owned-commit marker is a non-\"1\" value (#1786)", () => {
-  // Mutation anchor for the strict `=== "1"` read: the exemption is opt-in on the exact value "1",
-  // not any truthy value. A marker of "0" (or any non-"1" string) must NOT exempt — a loosened
-  // `Boolean(env[VAR])` read would wrongly allow here and this assertion catches it.
-  const dir = makeWorktree("orchestrator-owns-commit-nonone", true);
-  try {
-    const { code, stderrJson } = runHook(
-      "subagent-stop-uncommitted-guard.mjs",
-      { cwd: dir },
-      { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "0" },
-    );
-    assert.equal(code, 2, "a non-\"1\" marker value must still be refused (exit 2)");
+    assert.equal(code, 2, "a dirty worktree must still be refused — the removed env var grants no escape (exit 2)");
     assert.ok(stderrJson, "block reason JSON on stderr");
     assert.equal(stderrJson.decision, "block");
     assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
