@@ -66,6 +66,7 @@ describe("Bun 1.4.1 toolchain authority", () => {
     for (const [name, script] of bunTestScripts) {
       assert.match(script, /\bbun test --only-failures\b/, `${name} suppresses passing-test output`);
     }
+    assert.match(root.scripts["test:scripts"], /\bbun test --only-failures --parallel=2\b/);
     for (const script of Object.values(root.scripts).filter((value) => value.includes("playwright"))) {
       assert.match(script, /node \.\/node_modules\/@playwright\/test\/cli\.js/);
     }

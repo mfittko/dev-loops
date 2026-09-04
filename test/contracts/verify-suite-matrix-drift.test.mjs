@@ -23,7 +23,7 @@ test("verify-suite matrix suites equal the test:* suites composing npm run verif
     nextJobRelative === -1 ? ciWorkflow.length : headerIndex + 1 + nextJobRelative,
   );
   const matrixSuites = new Set(
-    [...section.matchAll(/^\s*-\s*(test:[\w:-]+)\s*$/gm)].map((m) => m[1]),
+    [...section.matchAll(/^\s*-\s*(?:suite:\s*)?(test:[\w:-]+)\s*$/gm)].map((m) => m[1]),
   );
 
   const missingFromMatrix = [...verifySuites].filter((s) => !matrixSuites.has(s));
