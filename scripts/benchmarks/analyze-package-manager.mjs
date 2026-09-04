@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const stable = (value) => JSON.stringify(value);
 const validRuns = (runs, count, { tool, measured } = {}) => Array.isArray(runs) && runs.length === count
-  && runs.every((run) => run.exitCode === 0 && Number.isFinite(run.durationMs) && run.durationMs >= 0
+  && runs.every((run) => run.exitCode === 0 && run.timedOut === false && Number.isSafeInteger(run.timeoutMs) && run.timeoutMs > 0 && Number.isFinite(run.durationMs) && run.durationMs >= 0
     && (tool === undefined || run.tool === tool) && (measured === undefined || run.measured === measured));
 
 export function analyzeBenchmark(sessions) {
@@ -13,8 +13,9 @@ export function analyzeBenchmark(sessions) {
   if (!Array.isArray(sessions) || sessions.length !== 2) return { pass: false, errors: ["exactly two independent session files are required"] };
   const [first, second] = sessions;
   for (const [index, evidence] of sessions.entries()) {
-    if (evidence?.protocolVersion !== 2) errors.push(`session ${index + 1}: unsupported protocolVersion`);
+    if (evidence?.protocolVersion !== 3) errors.push(`session ${index + 1}: unsupported protocolVersion`);
     if (!evidence?.sessionId || !evidence?.sessionRoot) errors.push(`session ${index + 1}: missing session identity/root`);
+    if (!Number.isSafeInteger(evidence?.commandTimeoutMs) || evidence.commandTimeoutMs <= 0) errors.push(`session ${index + 1}: missing command timeout`);
     for (const key of ["platform", "arch", "cpu", "node", "bun", "npm", "powerState"]) if (!evidence?.environment?.[key]) errors.push(`session ${index + 1}: missing environment.${key}`);
     for (const [field, label, missingLabel] of [
       ["packages", "dependency package identities", "dependency package identity inventories"],
@@ -30,7 +31,7 @@ export function analyzeBenchmark(sessions) {
   }
   if (first?.sessionId === second?.sessionId || first?.sessionRoot === second?.sessionRoot) errors.push("sessions must have distinct ids and temporary roots");
   if (first?.startTool === second?.startTool) errors.push("sessions must use opposite starting tool orders");
-  for (const key of ["environment", "sourceFingerprint", "suiteInventory"]) if (stable(first?.[key]) !== stable(second?.[key])) errors.push(`session fingerprint mismatch: ${key}`);
+  for (const key of ["environment", "sourceFingerprint", "suiteInventory", "commandTimeoutMs"]) if (stable(first?.[key]) !== stable(second?.[key])) errors.push(`session fingerprint mismatch: ${key}`);
 
   const installs = [];
   const verify = [];

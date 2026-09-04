@@ -1,25 +1,52 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, mkdir, readFile, readdir, readlink, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const MEASURED_REPETITIONS = 7;
+export const DEFAULT_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;
 
 function parseArgs(argv) {
   const result = {};
   for (let index = 0; index < argv.length; index += 2) result[argv[index]?.replace(/^--/, "")] = argv[index + 1];
-  if (!result["npm-source"] || !result["bun-source"] || !result.output || !result.session || !result["power-state"] || !["npm", "bun"].includes(result.start)) throw new Error("usage: run-package-manager.mjs --npm-source <dir> --bun-source <dir> --session <id> --start <npm|bun> --power-state <description> --output <json>");
+  if (!result["npm-source"] || !result["bun-source"] || !result.output || !result.session || !result["power-state"] || !["npm", "bun"].includes(result.start)) throw new Error("usage: run-package-manager.mjs --npm-source <dir> --bun-source <dir> --session <id> --start <npm|bun> --power-state <description> --output <json> [--timeout-ms <positive integer>]");
+  const timeout = result["timeout-ms"] ?? String(DEFAULT_COMMAND_TIMEOUT_MS);
+  if (!/^[1-9]\d*$/u.test(timeout) || !Number.isSafeInteger(Number(timeout))) throw new Error("--timeout-ms must be a positive integer");
+  result.commandTimeoutMs = Number(timeout);
   return result;
 }
 
-function invoke(tool, args, { cwd, env, phase, measured }) {
+const emitProgress = (event) => process.stderr.write(`[benchmark] ${JSON.stringify(event)}\n`);
+
+export function invokeBenchmarkCommand(command, args, {
+  cwd, env, sessionId, phase, tool = command, measured, sampleIndex, pairIndex, orderInPair, timeoutMs,
+}, reportProgress = emitProgress) {
+  const context = { sessionId, phase, tool, measured, sampleIndex, pairIndex, orderInPair, timeoutMs };
+  reportProgress({ event: "command_start", ...context });
   const started = process.hrtime.bigint();
-  const result = spawnSync(tool, args, { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  return { tool, args, phase, measured, durationMs: Number(process.hrtime.bigint() - started) / 1e6, exitCode: result.status ?? 1,
-    signal: result.signal, stdout: result.stdout ?? "", stderr: result.stderr ?? String(result.error ?? "") };
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: timeoutMs });
+  const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  const run = { tool, args, phase, measured, sampleIndex, pairIndex, orderInPair, timeoutMs, timedOut, durationMs, exitCode: result.status ?? 1,
+    signal: result.signal, errorCode: result.error?.code ?? null, stdout: result.stdout ?? "", stderr: result.stderr ?? String(result.error ?? "") };
+  reportProgress({ event: "command_end", ...context, elapsedMs: durationMs, exitCode: run.exitCode, signal: run.signal, timedOut });
+  return run;
+}
+
+export async function writeEvidenceAtomically(output, evidence) {
+  const destination = path.resolve(output);
+  await mkdir(path.dirname(destination), { recursive: true });
+  const temporary = `${destination}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(evidence, null, 2)}\n`);
+    await rename(temporary, destination);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export function buildPairOrders(startTool) {
@@ -115,37 +142,42 @@ async function main() {
     const caches = { npm: path.join(tempRoot, "npm-cache"), bun: path.join(tempRoot, "bun-cache") };
     const envs = { npm: { ...process.env, npm_config_cache: caches.npm }, bun: { ...process.env, BUN_INSTALL_CACHE_DIR: caches.bun } };
     const commands = { npm: { install: ["ci"], verify: ["run", "verify"] }, bun: { install: ["install", "--frozen-lockfile"], verify: ["run", "verify"] } };
+    const invoke = (tool, commandArgs, details) => invokeBenchmarkCommand(tool, commandArgs, {
+      cwd: roots[tool], env: envs[tool], sessionId: args.session, tool, timeoutMs: args.commandTimeoutMs, ...details,
+    });
     const installs = { npm: {}, bun: {} };
     for (const tool of ["npm", "bun"]) {
       const nodeModules = path.join(roots[tool], "node_modules");
       const cold = { warmups: [], measured: [] };
       for (let iteration = 0; iteration <= MEASURED_REPETITIONS; iteration++) {
         await reset(caches[tool]); await rm(nodeModules, { recursive: true, force: true });
-        const run = invoke(tool, commands[tool].install, { cwd: roots[tool], env: envs[tool], phase: "cold", measured: iteration > 0 });
+        const run = invoke(tool, commands[tool].install, { phase: "cold", measured: iteration > 0, sampleIndex: iteration });
         (iteration === 0 ? cold.warmups : cold.measured).push(run);
       }
       await reset(caches[tool]); await rm(nodeModules, { recursive: true, force: true });
-      const warm = { prime: [invoke(tool, commands[tool].install, { cwd: roots[tool], env: envs[tool], phase: "warm-prime", measured: false })], warmups: [], measured: [] };
+      const warm = { prime: [invoke(tool, commands[tool].install, { phase: "warm-prime", measured: false, sampleIndex: 0 })], warmups: [], measured: [] };
       for (let iteration = 0; iteration <= MEASURED_REPETITIONS; iteration++) {
         await rm(nodeModules, { recursive: true, force: true });
-        const run = invoke(tool, commands[tool].install, { cwd: roots[tool], env: envs[tool], phase: "warm", measured: iteration > 0 });
+        const run = invoke(tool, commands[tool].install, { phase: "warm", measured: iteration > 0, sampleIndex: iteration });
         (iteration === 0 ? warm.warmups : warm.measured).push(run);
       }
       installs[tool] = { cold, warm };
     }
     const inventory = { npm: await dependencyInventory(roots.npm), bun: await dependencyInventory(roots.bun) };
-    const verify = ["npm", "bun"].map((tool) => invoke(tool, commands[tool].verify, { cwd: roots[tool], env: envs[tool], phase: "verify-warmup", measured: false }));
-    for (const order of buildPairOrders(args.start)) for (const tool of order) verify.push(invoke(tool, commands[tool].verify, { cwd: roots[tool], env: envs[tool], phase: "verify", measured: true }));
+    const verify = ["npm", "bun"].map((tool, orderInPair) => invoke(tool, commands[tool].verify, { phase: "verify-warmup", measured: false, sampleIndex: 0, orderInPair }));
+    for (const [pairIndex, order] of buildPairOrders(args.start).entries()) {
+      for (const [orderInPair, tool] of order.entries()) verify.push(invoke(tool, commands[tool].verify, { phase: "verify", measured: true, sampleIndex: pairIndex + 1, pairIndex, orderInPair }));
+    }
     const version = (tool) => spawnSync(tool, ["--version"], { encoding: "utf8" }).stdout.trim();
     const manifests = await Promise.all(Object.values(roots).map(async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))));
-    const evidence = { protocolVersion: 2, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start,
+    const evidence = { protocolVersion: 3, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
       environment: { platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"] },
       sourceFingerprint: { npm: await sourceFingerprint(roots.npm), bun: await sourceFingerprint(roots.bun) }, suiteInventory: {
         npm: Object.keys(manifests[0].scripts).filter((name) => name.startsWith("test:")).sort(),
         bun: Object.keys(manifests[1].scripts).filter((name) => name.startsWith("test:")).sort(),
       },
       isolatedCaches: caches, inventory, installs, verify };
-    await writeFile(path.resolve(args.output), `${JSON.stringify(evidence, null, 2)}\n`);
+    await writeEvidenceAtomically(args.output, evidence);
   } finally { await rm(tempRoot, { recursive: true, force: true }); }
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

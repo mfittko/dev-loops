@@ -17,7 +17,10 @@ dependency graph, and source revisions throughout a comparison. Record the
 exact Node, npm, and Bun versions; Bun must report `1.4.1`. Prepare two source
 trees: the npm/Node baseline with its authoritative npm lockfile, and the final
 Bun candidate with its authoritative `bun.lock`. Do not edit dependencies or
-tests between paired runs.
+tests between paired runs. Keep unrelated host workloads idle while measuring;
+the runner isolates source copies and package-manager caches, but it cannot
+mechanically prevent another process from consuming CPU, memory, disk, or
+network resources. If such overlap occurs, invalidate and repeat the session.
 
 For each independent session:
 
@@ -38,6 +41,16 @@ For each independent session:
    and suite inventory for every run.
 7. Save the raw, unrounded observations without deleting failed runs. Analyze
    only after all required samples have been attempted.
+8. Bound every install and verification command. The runner defaults to 900,000
+   ms (15 minutes), which is above this repository's expected full-verification
+   runtime while still terminating a hung sample. A timeout is captured as
+   `timedOut: true` with a nonzero exit and makes the analyzer fail closed.
+
+The runner writes concise `command_start` and `command_end` JSON heartbeats to
+stderr with the session, phase, tool, sample/pair order, elapsed time, and
+result. These are live progress only: the raw evidence file is written through
+a same-directory temporary file and atomically renamed after the session data
+is complete.
 
 Session 2 must be a separate invocation after Session 1 has fully ended. Recheck
 and record the environment; use new source copies and new isolated caches. Do
@@ -54,6 +67,7 @@ bun scripts/benchmarks/run-package-manager.mjs \
   --bun-source /absolute/path/to/bun-candidate \
   --session session-1 \
   --start npm \
+  --timeout-ms 900000 \
   --power-state 'AC power; battery fully charged' \
   --output docs/benchmarks/bun-1.4.1/session-1.raw.json
 
@@ -64,6 +78,7 @@ bun scripts/benchmarks/run-package-manager.mjs \
   --bun-source /absolute/path/to/bun-candidate \
   --session session-2 \
   --start bun \
+  --timeout-ms 900000 \
   --power-state 'AC power; battery fully charged' \
   --output docs/benchmarks/bun-1.4.1/session-2.raw.json
 ```
@@ -92,7 +107,7 @@ wins at least five of seven interleaved pairs.
 The result **must not** be declared passing when any command fails, a suite is
 skipped, output is unattributable, dependency inventories differ, source or
 power conditions are incomparable, fewer than seven timed samples exist, the
-sessions are not independently captured, or a threshold is missed. Do not
-increase concurrency, loosen assertions, suppress failures, discard outliers,
-or change product behavior to manufacture a speedup. Record the observed result
-as no-go and stop before treating Bun as authoritative.
+sessions are not independently captured, any sample times out, or a threshold
+is missed. Do not increase concurrency, loosen assertions, suppress failures,
+discard outliers, or change product behavior to manufacture a speedup. Record
+the observed result as no-go and stop before treating Bun as authoritative.
