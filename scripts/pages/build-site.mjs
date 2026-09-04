@@ -225,15 +225,14 @@ export function injectNav(html, repoUrl) {
 }
 
 export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
-  const out = outDir ? resolve(outDir) : join(repoRoot, 'site');
+  const root = resolve(repoRoot);
+  const out = outDir ? resolve(outDir) : join(root, 'site');
   const articlesDir = join(repoRoot, 'docs', 'articles');
   const decksDir = join(repoRoot, 'docs', 'presentations');
 
   // Guard: out is wiped before assembly. Within the repository, only the
   // generated site/ directory is a legal target. External output dirs must be
   // empty or carry this builder's ownership marker before they can be reused.
-  const root = resolve(repoRoot);
-
   const files = [
     'index.html',
     ...ARTICLES.map((a) => a.file),

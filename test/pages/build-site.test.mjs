@@ -1,10 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, win32 } from 'node:path';
+import { join, relative, win32 } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -75,6 +75,32 @@ test('build-site: index is the intro article, all resources published, nav links
     );
   } finally {
     await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site: relative repoRoot uses the same default output as its absolute path', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-relative-root-'));
+  const relativeRoot = relative(process.cwd(), repoRoot);
+  try {
+    await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
+    await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
+    await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
+    for (const article of ARTICLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', article.file), '<style></style><body>article</body>', 'utf8');
+    }
+    for (const deck of DECKS) {
+      await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+
+    const result = await buildSite({ repoRoot: relativeRoot });
+
+    assert.equal(result.out, join(repoRoot, 'site'));
+    await stat(join(result.out, 'index.html'));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
