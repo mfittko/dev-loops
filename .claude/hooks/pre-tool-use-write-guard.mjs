@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * PreToolUse Write/Edit guard hook (#773, #1994).
+ * PreToolUse Write/Edit guard hook (#773).
  *
  * Two independent boundaries on a Write/Edit:
  *
- * 1. WRONG-CHECKOUT guard (#1994, always on): when the call context is operating
+ * 1. WRONG-CHECKOUT guard (always on): when the call context is operating
  *    inside a linked worktree (the active cycle worktree) but the target resolves
  *    to a TRACKED file in the MAIN checkout, the mutation would silently land on
  *    the wrong checkout and be lost from the branch. Denied before it reaches a
@@ -33,7 +33,7 @@ if (typeof filePath !== "string" || !filePath) {
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 const abs = path.resolve(cwd, filePath);
 
-// --- Boundary 1: wrong-checkout guard (#1994, always on) ---------------------
+// --- Boundary 1: wrong-checkout guard (always on) ----------------------------
 // Resolve the active worktree from `git worktree list`. The active worktree is
 // the one containing cwd — anchoring on cwd (not on the mere existence of a
 // worktree) keeps the guard immune to the many stale tmp/worktrees/ worktrees
@@ -45,7 +45,7 @@ try {
     const mainWorktreePath = parseMainWorktreePath(worktreeOutput);
     // Realpath-normalize the target against its nearest EXISTING ancestor so a
     // Write creating a new (nonexistent) file is classified with the same
-    // symlink-resolved prefix the worktree/main roots already carry (#1994) —
+    // symlink-resolved prefix the worktree/main roots already carry —
     // otherwise an under-a-symlinked-ancestor new-file write is misclassified.
     const absReal = realpathNearestExisting(abs);
     const isTargetUnderActiveWorktree = isMainCheckout(absReal, activeWorktreeRoot);

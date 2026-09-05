@@ -194,7 +194,7 @@ export function isWorktreeCoreIsolated(cwd, worktreePaths) {
 
 
 /**
- * Realpath-normalize a path that MAY NOT EXIST yet (#1994).
+ * Realpath-normalize a path that MAY NOT EXIST yet.
  *
  * `realpathSync` throws ENOENT on a nonexistent leaf — which is exactly a `Write`
  * creating a NEW file. Resolving only the roots (worktree/main) while leaving the
@@ -232,7 +232,7 @@ export function realpathNearestExisting(p) {
 /**
  * Map a `git check-ignore -q` outcome to whether a MAIN-checkout target must be
  * treated as a guarded (non-gitignored) file, failing SAFE on an unresolvable
- * outcome (#1994, AC4).
+ * outcome.
  *
  * `git check-ignore -q` exits 0 when the path IS gitignored and 1 when it is NOT.
  * Any other exit (git error, missing binary) is UNRESOLVABLE: the wrong-checkout

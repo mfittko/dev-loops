@@ -372,7 +372,7 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 
 /**
  * Env var that authorizes a deliberate main-checkout mutation while a worktree
- * cycle is active (#1994). Reuses the existing default-branch-guard override
+ * cycle is active. Reuses the existing default-branch-guard override
  * (`DEVLOOPS_ALLOW_MAIN`, GUARD_OVERRIDE_ENV) — both mean "I intend to operate on
  * the primary checkout on purpose" — so the operator surface stays one flag.
  */
@@ -382,7 +382,7 @@ export const WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV = "DEVLOOPS_ALLOW_MAIN";
  * Decide whether a PreToolUse Write/Edit is a WRONG-CHECKOUT mutation: the call
  * context is operating inside a linked worktree (the active cycle worktree) but
  * the target resolves to a TRACKED file in the MAIN checkout instead of that
- * worktree (#1994).
+ * worktree.
  *
  * After `ensure-worktree.mjs` establishes an isolated worktree for a cycle, an
  * absolute-path `Edit`/`Write` that names the main-checkout copy of a source
