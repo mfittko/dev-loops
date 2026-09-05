@@ -193,6 +193,41 @@ test("verify-fresh-review-context --scope rejects values with slashes", async ()
   assert.equal(result.status, 2, result.stderr);
 });
 
+// Issue #1957: a gate-group scope hand-composed from the underscore gate id
+// (draft_gate/pre_approval_gate) must validate on the FIRST attempt — no
+// hyphen self-correction retry — and key the same sentinel as its hyphenated
+// twin (both are the same dispatch unit).
+test("verify-fresh-review-context accepts an underscore gate-id-derived group scope without retry", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    for (const scope of ["draft_gate-group-docs-surface", "pre_approval_gate-group-a"]) {
+      const result = runScript(["--scope", scope, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout.trim()).fresh, true);
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context keys the underscore and hyphen scope forms to one sentinel", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    // Underscore form runs first (fresh)...
+    const r1 = runScript(["--scope", "draft_gate-group-docs-surface", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(r1.status, 0, r1.stderr);
+    assert.equal(JSON.parse(r1.stdout.trim()).fresh, true);
+    // ...the already-hyphenated twin then hits the SAME sentinel (contamination).
+    const r2 = runScript(["--scope", "draft-gate-group-docs-surface", "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(r2.status, 1, r2.stderr);
+    assert.equal(JSON.parse(r2.stdout.trim()).fresh, false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("verify-fresh-review-context --scope with missing value fails closed", async () => {
   // --scope followed by another flag or nothing
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));

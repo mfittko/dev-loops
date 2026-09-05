@@ -35,9 +35,20 @@ export const GATE_VERDICTS = ["clean", "findings_present", "blocked"];
 const GATE_NAMES_SET = new Set(GATE_NAMES);
 const GATE_VERDICTS_SET = new Set(GATE_VERDICTS);
 
+// Canonicalize a reviewer-scope name to the hyphen-only convention every scope
+// validator (VALID_SCOPE_RE) enforces. Gate ids canonically carry underscores
+// (draft_gate, pre_approval_gate), so a scope hand-composed from a gate id
+// (e.g. `${gate}-group-<name>` → `draft_gate-group-docs-surface`) inherits the
+// underscore and fails the hyphen-only validator, forcing per-cycle self-
+// correction (#1957). Every --scope entry point canonicalizes through here so a
+// gate-id-derived scope validates on the first attempt and keys to the same
+// canonical sentinel as its already-hyphenated twin. This is the single source
+// of the underscore→hyphen scope normalization; gateScopePrefix reuses it.
+export const canonicalizeScope = (scope) => String(scope).replace(/_/g, "-");
+
 // Sentinel scopes spell the gate with dashes (draft-gate-<angle>); this is the
 // one place that derives the dashed scope prefix from a gate name.
-export const gateScopePrefix = (gate) => `${String(gate).replace(/_/g, "-")}-`;
+export const gateScopePrefix = (gate) => `${canonicalizeScope(gate)}-`;
 
 // The one normalizeGate/normalizeVerdict/normalizeHeadSha implementation,
 // shared by every CLI (--gate/--verdict/--head-sha parsing) and ledger reader
