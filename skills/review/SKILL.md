@@ -148,7 +148,7 @@ repeat phases those gates run:
        below).
      - **Discard** — re-run `upsert-checkpoint-verdict.mjs --gate review
        --submit discard --interactive-confirm`, which DELETES the caller's
-       own pending draft review (`DELETE /pulls/reviews/<id>`) so no dangling
+       own pending draft review (`DELETE /pulls/<pr>/reviews/<id>`) so no dangling
        artifact is left (#1912). `discard` is destructive, so like
        approve/request-changes it is refused headless and fails closed
        without `--interactive-confirm`. This is distinct from **Leave

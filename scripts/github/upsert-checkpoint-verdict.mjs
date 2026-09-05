@@ -789,7 +789,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // review skill's interactive multiple-choice.
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
-      `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+      `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
     );
   }
   // Discard is destructive (deletes the caller's own pending review, #1912),
@@ -2083,7 +2083,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
       throw new Error(
-        `--submit ${reviewSubmitMode} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+        `--submit ${reviewSubmitMode} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
       );
     }
     if (options.interactiveConfirm !== true) {

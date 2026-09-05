@@ -990,18 +990,35 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
  * No author-identity check is needed: GitHub's list-reviews endpoint returns a
  * PENDING review ONLY to the token that authored it (other users' pending
  * reviews are never listed), so any `state === "PENDING"` entry here is already
- * the caller's own, and there is at most one. The returned `sameHead` flag
- * reports whether its `commit_id` matches this round's head so the caller can
- * submit a same-head pending as-is but clear a STALE (different-head, or
- * `commit_id`-less) one before creating fresh — leaving a stale pending in
- * place would 422 the create. A pending review missing an integer `id` is
- * treated as absent (nothing to resolve). Returns `{ id, commitId, body,
- * sameHead }` or `null`.
+ * the caller's own, and there is at most one. But "the caller's own" is not the
+ * same as "this tool's own": the token may have a MANUAL pending draft (a
+ * human review-in-progress in the GitHub UI on the same account). Submitting or
+ * deleting THAT would be data loss, so this fails closed to a dev-loops draft —
+ * only a pending review whose body carries the `### Gate review: \`review\``
+ * header (`REVIEW_GATE_PENDING_HEADER_RE`, which every `--submit pending` post
+ * renders) is treated as resolvable; a foreign/manual draft is reported as absent and
+ * left untouched (the create then 422s with GitHub's own error rather than
+ * clobbering the human's draft). The returned `sameHead` flag reports whether
+ * its `commit_id` matches this round's head so the caller can submit a same-head
+ * pending as-is but clear a STALE (different-head, or `commit_id`-less) one
+ * before creating fresh — leaving a stale pending in place would 422 the
+ * create. A pending review missing an integer `id` is treated as absent
+ * (nothing to resolve). Returns `{ id, commitId, body, sameHead }` or `null`.
  */
+// A dev-loops review-gate pending draft always renders this exact header
+// (`renderGateReviewCommentBody`). The core GATE_REVIEW_COMMENT_HEADER_RE is
+// scoped to draft_gate/pre_approval_gate only (`review` is deliberately
+// excluded there as non-evidence), so match the review header locally — it is
+// what distinguishes OUR OWN gate draft from a human's manual
+// review-in-progress on the same token (#1912 data-loss guard).
+const REVIEW_GATE_PENDING_HEADER_RE = /^###\s+Gate review:\s*`review`\s*$/m;
+
 export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
   const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
   const match = flattenPaginatedSlurp(payload).find((r) =>
-    r?.state === "PENDING" && Number.isInteger(r?.id),
+    r?.state === "PENDING"
+    && Number.isInteger(r?.id)
+    && REVIEW_GATE_PENDING_HEADER_RE.test(typeof r?.body === "string" ? r.body : ""),
   );
   if (!match) return null;
   const commitId = typeof match.commit_id === "string" ? match.commit_id : null;

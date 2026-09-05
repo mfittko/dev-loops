@@ -134,7 +134,7 @@ substitutable by a differently-submitted review).
 | `comment` (default when `--submit` is omitted) | `COMMENT` | Submits the review immediately (today's behavior, unchanged) |
 | `request-changes` | `REQUEST_CHANGES` | Submits the review; a GitHub-native branch-protection signal that can BLOCK merge until dismissed |
 | `approve` | `APPROVE` | Submits the review; a GitHub-native branch-protection signal that SATISFIES a required-approvals rule |
-| `discard` | n/a (DELETE) | Deletes the caller's own pending draft review (`DELETE /pulls/reviews/<id>`); leaves nothing behind |
+| `discard` | n/a (DELETE) | Deletes the caller's own pending draft review (`DELETE /pulls/<pr>/reviews/<id>`); leaves nothing behind |
 
 `request-changes`/`approve` carry GitHub-native branch-protection effects
 independent of any dev-loops gate. A headless/non-interactive review run

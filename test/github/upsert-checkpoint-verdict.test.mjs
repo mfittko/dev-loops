@@ -6987,7 +6987,7 @@ test("#1912: a STALE own pending review on a DIFFERENT head is DELETEd before fa
     // GitHub's one-pending-per-PR-per-user limit means it would 422 any create
     // while present — so it must be deleted before the create, never submitted
     // via /events (its inline comments point at the stale head).
-    const stalePending = { id: 7777, state: "PENDING", commit_id: "def45670000000000000000000000000000000000", user: { login: "gate-bot" }, body: "old" };
+    const stalePending = { id: 7777, state: "PENDING", commit_id: "def45670000000000000000000000000000000000", user: { login: "gate-bot" }, body: "### Gate review: `review`\n**Reviewed head SHA:** `def45670000000000000000000000000000000000`\n(stale draft)" };
     const entries = [
       // findOwnPendingReview scan finds the stale (wrong-head) pending.
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([stalePending]) + "\n" },
@@ -7087,6 +7087,46 @@ test("#1912: findOwnPendingReview fail-closed guard — a pending entry with a n
     // No DELETE/events against the malformed entry.
     assert.equal(calls.find((c) => c.args.includes("DELETE")), undefined);
   }, { prefix: "dev-loops-upsert-review-malformed-pending-" });
+});
+
+test("#1912 (Copilot): a FOREIGN same-head pending review (no dev-loops gate-review header — e.g. a human's manual draft) is NEVER submitted or deleted (data-loss guard); the round falls through to create", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A manual review-in-progress on the same token: same head, integer id, but
+    // its body carries NO `### Gate review:` header. findOwnPendingReview must
+    // treat it as absent so the tool never clobbers the human's draft.
+    const foreignPending = { id: 5555, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "WIP: still drafting my own comments" };
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([foreignPending]) + "\n" },
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":963,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-963"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // The human's draft (id 5555) is never submitted or deleted.
+    assert.equal(calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/5555")), undefined);
+    assert.equal(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/5555/events")), undefined);
+  }, { prefix: "dev-loops-upsert-review-foreign-pending-" });
 });
 
 test("#1912: --gate review --submit comment with NO own pending review creates a fresh review (no regression to the create path)", async () => {
