@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { GATE_NAMES } from "./_gate-names.mjs";
+import { GATE_NAMES, canonicalizeScope } from "./_gate-names.mjs";
 import { DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const USAGE = `Usage: record-dispatch-prompt-layout.mjs --scope <name> --head-sha <sha> --prefix-path <path> --prompt-file <path> [--help]
@@ -165,9 +165,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const scope = resolveFlagValue(argv, "--scope");
+  const scopeArg = resolveFlagValue(argv, "--scope");
+  // Canonicalize a gate-id-derived scope (underscore → hyphen) before
+  // validating and keying the record path, so the dispatch layout accepts an
+  // underscore form on the first attempt and keys it identically to its
+  // hyphenated twin (#1957).
+  const scope = scopeArg === null || scopeArg === "" ? scopeArg : canonicalizeScope(scopeArg);
   if (scope === null || scope === "" || !VALID_SCOPE_RE.test(scope)) {
-    process.stderr.write(`${formatCliError(parseError(`--scope is required and must be non-empty, alphanumeric/hyphen only${scope ? ` (got ${JSON.stringify(scope)})` : ""}.`))}\n`);
+    process.stderr.write(`${formatCliError(parseError(`--scope is required and must be non-empty, alphanumeric/hyphen only${scopeArg ? ` (got ${JSON.stringify(scopeArg)})` : ""}.`))}\n`);
     return 2;
   }
   const headShaArg = resolveFlagValue(argv, "--head-sha");

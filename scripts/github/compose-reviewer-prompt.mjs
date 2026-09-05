@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { normalizeGate } from "./_gate-names.mjs";
+import { normalizeGate, canonicalizeScope } from "./_gate-names.mjs";
 import { composeReviewerPromptText } from "@dev-loops/core/loop/review-dispatch-plan";
 import { buildGateBriefingPrefixPath, buildGateBriefingVolatilePath } from "./write-gate-context.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, recordDispatchPromptLayout } from "./record-dispatch-prompt-layout.mjs";
@@ -119,9 +119,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
   const headSha = headShaArg.toLowerCase();
-  const scope = resolveFlagValue(argv, "--scope");
+  const scopeArg = resolveFlagValue(argv, "--scope");
+  // Canonicalize a gate-id-derived scope (underscore → hyphen) before
+  // validating and using it, so an underscore form validates on the first
+  // attempt and matches its hyphenated twin (#1957).
+  const scope = scopeArg === null || scopeArg === "" ? scopeArg : canonicalizeScope(scopeArg);
   if (scope === null || scope === "" || !VALID_SCOPE_RE.test(scope)) {
-    process.stderr.write(`${formatCliError(parseError(`--scope is required and must be non-empty, alphanumeric/hyphen only${scope ? ` (got ${JSON.stringify(scope)})` : ""}.`))}\n`);
+    process.stderr.write(`${formatCliError(parseError(`--scope is required and must be non-empty, alphanumeric/hyphen only${scopeArg ? ` (got ${JSON.stringify(scopeArg)})` : ""}.`))}\n`);
     return 2;
   }
   const angleSuffixFileArg = resolveFlagValue(argv, "--angle-suffix-file");
