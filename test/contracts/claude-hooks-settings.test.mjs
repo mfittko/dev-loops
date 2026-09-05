@@ -276,9 +276,22 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
 // unresolvable while cwd is under a worktree (AC4). Always-on: no DEVLOOPS_MAIN_AGENT_READONLY.
 // Mutation anchor: revert the catch-block fail-safe and the escaping-target deny stops firing.
 
-const GIT_IDENTITY_ENV = {
-  GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
-};
+// Hermetic git env for the throwaway fixtures: pin an identity (CI runners may omit
+// user.name/email) AND clear any ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE so the
+// fixture's git commands can never operate on the wrong repo (e.g. when these tests run
+// inside a git hook or a CI step that sets them). Matches the repo's fixture convention.
+const HERMETIC_GIT_ENV = (() => {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
+  };
+  for (const v of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[v];
+  return env;
+})();
+// `-c commit.gpgsign=false` (a repo-local signing config would fail the throwaway commit)
+// and `-c core.hooksPath=` (never run this repo's own hooks against the fixture).
+const gitFixture = (args, cwd) =>
+  spawnSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=", ...args], { cwd, encoding: "utf8", env: HERMETIC_GIT_ENV });
 
 // A self-contained main checkout + a real linked worktree under its tmp/worktrees/, in os.tmpdir()
 // (never under this repo, so it never pollutes repoRoot's own `git worktree list`).
@@ -286,7 +299,7 @@ function makeMainAndLinkedWorktree() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wcg-e2e-"));
   const main = path.join(root, "main");
   fs.mkdirSync(main, { recursive: true });
-  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, ...GIT_IDENTITY_ENV } });
+  const git = (args, cwd) => gitFixture(args, cwd);
   git(["init", "-q", "-b", "main"], main);
   fs.writeFileSync(path.join(main, "seed.txt"), "seed\n", "utf8");
   git(["add", "seed.txt"], main);
