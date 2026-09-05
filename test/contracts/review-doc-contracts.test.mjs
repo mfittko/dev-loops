@@ -386,7 +386,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       `verify-suite matrix must include ${suite}`,
     );
   }
-  for (const shard of ["1/2", "2/2"]) {
+  for (const shard of ["1/3", "2/3", "3/3"]) {
     assert.match(verifySuiteSection, new RegExp(`shard: ${shard.replace("/", "\\/")}`));
   }
   assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --parallel=1 --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
