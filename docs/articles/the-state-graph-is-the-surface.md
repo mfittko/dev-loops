@@ -252,7 +252,7 @@ The context and evidence bundle vary while the control model remains stable:
 - stop at ambiguity or authorization boundaries;
 - record terminal truth in the backend.
 
-A brownfield repository requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both contexts. Repeated second-repository pilot runs provide portability evidence beyond this bootstrap repository.
+A brownfield repository requires richer facts, stronger invariants, and more demanding gates. The same graph/loop surface can carry both contexts. Portability beyond this bootstrap repository is not yet established: the planned second-repository pilot has not started, and repeated external runs remain required future evidence.
 
 ## Self-correction today, self-improvement as the next layer
 

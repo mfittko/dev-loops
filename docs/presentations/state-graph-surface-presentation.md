@@ -309,7 +309,7 @@ flowchart LR
 <div class="metric-card mt-5">
 <p class="hero-copy"><strong>The same change lifecycle carries both contexts.</strong> Codebase age changes the context and verification burden supplied to the state-backed control model.</p>
 </div>
-<div class="soft-note">Repeated second-repository pilot runs provide portability evidence beyond this bootstrap repository.</div>
+<div class="soft-note">Portability beyond this bootstrap repository is not yet established: the planned second-repository pilot has not started, and repeated external runs remain required future evidence.</div>
 
 ---
 
