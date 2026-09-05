@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 
 import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./webkit-smoke-harness.mjs";
@@ -44,7 +45,7 @@ export async function settleMobile(page, url) {
   await page.evaluate(() => document.fonts.ready);
 }
 
-// Returns { hOffenders, pageScrollWidth, innerWidth, clipped } measured after settle.
+// Returns viewport overflow and clipping facts measured after layout settles.
 export async function measureFit(page) {
   return page.evaluate(() => {
     const iw = window.innerWidth;
@@ -60,15 +61,21 @@ export async function measureFit(page) {
     // Vertical clip: a section whose content is taller than its box while its
     // own overflow-y is hidden has cut-off content.
     const clipped = [];
+    const oversizedSections = [];
     for (const el of document.querySelectorAll("section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
         clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
       }
+      const height = el.getBoundingClientRect().height;
+      if (height > window.innerHeight + 1) {
+        oversizedSections.push(`<${el.tagName.toLowerCase()} id="${el.id}"> height=${Math.round(height)} viewport=${window.innerHeight}`);
+      }
     }
     return {
       hOffenders,
       clipped,
+      oversizedSections,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -102,15 +109,22 @@ export async function measureArticleFit(page) {
       }
     }
     const clipped = [];
-    for (const el of document.querySelectorAll("section")) {
+    const oversizedSections = [];
+    for (const el of document.querySelectorAll("article, section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
         clipped.push(`<${el.tagName.toLowerCase()} id="${el.id}"> client=${el.clientHeight} scroll=${el.scrollHeight}`);
       }
+      const height = el.getBoundingClientRect().height;
+      if (height > window.innerHeight + 1) {
+        oversizedSections.push(`<${el.tagName.toLowerCase()} id="${el.id}"> height=${Math.round(height)} viewport=${window.innerHeight}`);
+      }
     }
     return {
+      layoutMode: "continuous-document",
       hOffenders,
       clipped,
+      oversizedSections,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -143,19 +157,63 @@ export async function assertCspMeta(page) {
 
 // Assert the mobile (390px) layout fits: per-element right edge, defensive
 // page scrollWidth, and per-section vertical-clip.
-export function assertMobileFit(m) {
-  expect(m.hOffenders, `elements overflow the ${MOBILE.width}px viewport (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
+export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
+  expect(m.hOffenders, `elements overflow the ${viewportLabel} (must FIT, not scroll):\n${m.hOffenders.join("\n")}`).toEqual([]);
   // Defensive secondary: body{overflow-x:hidden} clips page-level growth, so this
   // line rarely fires on its own — the per-element check above is the real catch.
   expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
   expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
 }
 
+export function assertMobileFit(m) {
+  assertDeckFit(m, `${MOBILE.width}px viewport`);
+  expect(m.oversizedSections, `sections exceed the mobile viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
+}
+
+export function assertArticleFit(m) {
+  expect(m.layoutMode, "article measurements must identify continuous-document flow").toBe("continuous-document");
+  expect(m.oversizedSections, "article measurements must report tall sections explicitly").toEqual(expect.any(Array));
+  assertDeckFit(m, `${MOBILE.width}px viewport`);
+}
+
+export function assertDesktopFit(m) {
+  assertDeckFit(m, "1280x800 desktop viewport");
+  expect(m.oversizedSections, `sections exceed the desktop viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
+}
+
+export function assertA11yClean(results) {
+  expect(results, "axe results must be available").toBeTruthy();
+  expect(results.violations, "axe accessibility violations").toEqual([]);
+}
+
+export function assertRuntimeClean(report) {
+  expect(report.consoleErrors, `console/page errors:\n${report.consoleErrors.join("\n")}`).toEqual([]);
+  expect(report.failedRequests, `failed requests:\n${report.failedRequests.join("\n")}`).toEqual([]);
+}
+
+function captureRuntimeErrors(page) {
+  const report = { consoleErrors: [], failedRequests: [] };
+  page.on("console", (message) => {
+    if (message.type() === "error") report.consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => report.consoleErrors.push(String(error)));
+  page.on("requestfailed", (request) => report.failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? "failed"}`));
+  return report;
+}
+
 // Registry-driven runner: defines the full per-deck suite from one data entry.
 //   { sliceId, deckPath, sectionIds, mobileCapture: { id, stateName } }
 // `sectionIds` may be plain ids or { id, stateName, capture } entries; entries
 // with capture !== false get a desktop named-state capture.
-export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }) {
+export function defineDeckSuite({
+  sliceId,
+  deckPath,
+  sectionIds,
+  mobileCapture,
+  desktopFit = false,
+  mobileFit = false,
+  evidenceAssertions = false,
+}) {
   const states = sectionIds.map((entry) =>
     typeof entry === "string" ? { id: entry, stateName: entry, capture: true } : { capture: true, stateName: entry.id, ...entry });
   const ids = states.map((s) => s.id);
@@ -164,10 +222,16 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
 
   test(`webkit renders the ${sliceId} and captures named states`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
+    const runtimeReport = captureRuntimeErrors(page);
     try {
+      await page.setViewportSize({ width: 1280, height: 800 });
       await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.waitForLoadState("networkidle");
+      await page.evaluate(() => document.fonts.ready);
       await assertSectionIdsAndNoHorizontalScroll(page, ids);
       await assertCspMeta(page);
+      if (desktopFit) assertDesktopFit(await measureFit(page));
+      if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       for (const { id, stateName, capture } of states) {
         const section = page.locator(`#${id}`);
@@ -187,8 +251,28 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
             route: `#${id}`,
             reviewHint: `Designer-review state for the "${id}" deck section.`,
           },
+          captureConsole: async () => runtimeReport,
         });
       }
+      if (evidenceAssertions) assertRuntimeClean(runtimeReport);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  if (desktopFit) test(`${sliceId} desktop fit check fails on a deliberately-tall section`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => {
+        const section = document.querySelector("section");
+        if (section) section.style.minHeight = `${window.innerHeight + 200}px`;
+      });
+      const m = await measureFit(page);
+      expect(m.clipped).toEqual([]);
+      expect(m.oversizedSections.length).toBeGreaterThan(0);
+      expect(() => assertDesktopFit(m)).toThrow(/sections exceed the desktop viewport height/);
     } finally {
       await stopFixtureServer(server);
     }
@@ -196,10 +280,13 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
 
   test(`webkit ${sliceId} fits the mobile viewport (no horizontal scroll, no vertical clip)`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
+    const runtimeReport = captureRuntimeErrors(page);
     try {
       await settleMobile(page, url);
       const m = await measureFit(page);
-      assertMobileFit(m);
+      if (mobileFit) assertMobileFit(m);
+      else assertDeckFit(m, `${MOBILE.width}px viewport`);
+      if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
       await section.scrollIntoViewIfNeeded();
@@ -217,7 +304,9 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
           route: `#${mobileCapture.id}`,
           reviewHint: `Mobile (390x844) layout for the ${mobileCapture.id} section — fits the viewport, no scroll/clip.`,
         },
+        captureConsole: async () => runtimeReport,
       });
+      if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);
     }
@@ -234,7 +323,22 @@ export function defineDeckSuite({ sliceId, deckPath, sectionIds, mobileCapture }
         document.body.appendChild(wide);
       });
       const m = await measureFit(page);
-      expect(m.hOffenders.length).toBeGreaterThan(0);
+      expect(() => assertMobileFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  if (mobileFit) test(`${sliceId} mobile fit check fails on a deliberately-tall section`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const section = document.querySelector("section");
+        section.style.minHeight = `${window.innerHeight + 200}px`;
+      });
+      const m = await measureFit(page);
+      expect(() => assertMobileFit(m)).toThrow(/sections exceed the mobile viewport height/);
     } finally {
       await stopFixtureServer(server);
     }
@@ -299,6 +403,25 @@ export const DECK_REGISTRY = {
       { id: "measurement-loop", stateName: "Measurement loop", capture: true },
       { id: "instrumented", stateName: "Instrumented", capture: true },
       { id: "metrics", stateName: "Metrics", capture: false },
+      { id: "close", stateName: "Close", capture: true },
+    ],
+  },
+  "state-graph-surface-deck": {
+    sliceId: "state-graph-surface-deck",
+    deck: "state-graph-surface.html",
+    mobileCapture: { id: "delivery", stateName: "Delivery progression" },
+    sectionIds: [
+      { id: "hero", stateName: "Hero", capture: true },
+      { id: "landscape", stateName: "Landscape", capture: false },
+      { id: "reframe", stateName: "Reframe", capture: true },
+      { id: "public-contract", stateName: "Public contract", capture: false },
+      { id: "composition", stateName: "Composition", capture: false },
+      { id: "delivery", stateName: "Delivery progression", capture: true },
+      { id: "cycle", stateName: "Cycle", capture: false },
+      { id: "backend", stateName: "Backend boundary", capture: true },
+      { id: "responsibility", stateName: "Responsibility", capture: false },
+      { id: "applicability", stateName: "Applicability", capture: true },
+      { id: "learning", stateName: "Learning", capture: false },
       { id: "close", stateName: "Close", capture: true },
     ],
   },
@@ -384,7 +507,7 @@ export function defineArticleSuite({ sliceId, articlePath }) {
     try {
       await settleMobile(page, url);
       const m = await measureArticleFit(page);
-      assertMobileFit(m);
+      assertArticleFit(m);
       await captureNamedUiState({
         page,
         testInfo,
@@ -416,7 +539,25 @@ export function defineArticleSuite({ sliceId, articlePath }) {
         document.body.appendChild(wide);
       });
       const m = await measureArticleFit(page);
-      expect(m.hOffenders.length).toBeGreaterThan(0);
+      expect(() => assertArticleFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  // Cross-family contract: articles report tall sections but intentionally
+  // permit them because the document scrolls continuously instead of paging.
+  test(`${sliceId} article fit permits a deliberately-tall section`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const article = document.querySelector("article");
+        article.style.minHeight = `${window.innerHeight + 200}px`;
+      });
+      const m = await measureArticleFit(page);
+      expect(m.oversizedSections.length).toBeGreaterThan(0);
+      assertArticleFit(m);
     } finally {
       await stopFixtureServer(server);
     }
