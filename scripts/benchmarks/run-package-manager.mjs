@@ -219,7 +219,7 @@ async function main() {
     }
     const version = (tool) => spawnSync(tool, ["--version"], { encoding: "utf8" }).stdout.trim();
     const manifests = await Promise.all(Object.values(roots).map(async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))));
-    const evidence = { protocolVersion: 5, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
+    const evidence = { protocolVersion: 6, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
       environment: { platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"] },
       sourceFingerprint: { npm: await sourceFingerprint(roots.npm), bun: await sourceFingerprint(roots.bun) }, suiteInventory: {
         npm: Object.keys(manifests[0].scripts).filter((name) => name.startsWith("test:")).sort(),

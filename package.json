@@ -69,10 +69,6 @@
     "@axe-core/playwright": "^4.10.0",
     "@playwright/test": "^1.60.0"
   },
-  "trustedDependencies": [
-    "@google/genai",
-    "protobufjs"
-  ],
   "pi": {
     "extensions": [
       "./extension/index.ts"

@@ -7,6 +7,11 @@ const stable = (value) => JSON.stringify(value);
 const packageName = (identity) => identity.startsWith("@")
   ? identity.slice(0, identity.indexOf("@", identity.indexOf("/") + 1))
   : identity.slice(0, identity.lastIndexOf("@"));
+const INERT_BLOCKED_LIFECYCLE_SCRIPTS = [
+  { package: "@google/genai@1.52.0", scripts: [["preinstall", "echo 'preinstall: no-op'"]] },
+  { package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] },
+];
+const INERT_BLOCKED_PACKAGES = INERT_BLOCKED_LIFECYCLE_SCRIPTS.map(({ package: identity }) => packageName(identity)).sort();
 const validRuns = (runs, count, { tool, measured } = {}) => Array.isArray(runs) && runs.length === count
   && runs.every((run) => run.exitCode === 0 && run.timedOut === false && Number.isSafeInteger(run.timeoutMs) && run.timeoutMs > 0 && Number.isFinite(run.durationMs) && run.durationMs >= 0
     && (tool === undefined || run.tool === tool) && (measured === undefined || run.measured === measured));
@@ -16,7 +21,7 @@ export function analyzeBenchmark(sessions) {
   if (!Array.isArray(sessions) || sessions.length !== 2) return { pass: false, errors: ["exactly two independent session files are required"] };
   const [first, second] = sessions;
   for (const [index, evidence] of sessions.entries()) {
-    if (evidence?.protocolVersion !== 5) errors.push(`session ${index + 1}: unsupported protocolVersion`);
+    if (evidence?.protocolVersion !== 6) errors.push(`session ${index + 1}: unsupported protocolVersion`);
     if (!evidence?.sessionId || !evidence?.sessionRoot) errors.push(`session ${index + 1}: missing session identity/root`);
     if (!Number.isSafeInteger(evidence?.commandTimeoutMs) || evidence.commandTimeoutMs <= 0) errors.push(`session ${index + 1}: missing command timeout`);
     for (const key of ["platform", "arch", "cpu", "node", "bun", "npm", "powerState"]) if (!evidence?.environment?.[key]) errors.push(`session ${index + 1}: missing environment.${key}`);
@@ -38,17 +43,21 @@ export function analyzeBenchmark(sessions) {
       }
     }
     const lifecycleAudit = evidence?.dependencyLifecycleAudit;
-    const lifecyclePackages = (evidence?.inventory?.bun?.lifecycleScripts ?? []).map(({ package: identity }) => packageName(identity)).sort();
+    const lifecycleScripts = evidence?.inventory?.bun?.lifecycleScripts ?? [];
+    const lifecyclePackages = lifecycleScripts.map(({ package: identity }) => packageName(identity)).sort();
     if (!validRuns(lifecycleAudit?.bun === undefined ? [] : [lifecycleAudit.bun], 1, { tool: "bun", measured: false })) {
       errors.push(`session ${index + 1}: missing successful Bun dependency lifecycle audit`);
-    } else if (!`${lifecycleAudit.bun.stdout}\n${lifecycleAudit.bun.stderr}`.includes("Found 0 untrusted dependencies with scripts.")) {
-      errors.push(`session ${index + 1}: Bun dependency lifecycle audit did not confirm zero blocked scripts`);
+    } else if (!`${lifecycleAudit.bun.stdout}\n${lifecycleAudit.bun.stderr}`.includes("These dependencies had their lifecycle scripts blocked during install.")) {
+      errors.push(`session ${index + 1}: Bun dependency lifecycle audit did not confirm the classified blocked scripts`);
     }
-    if (!Array.isArray(lifecycleAudit?.blockedPackages) || lifecycleAudit.blockedPackages.length > 0) {
-      errors.push(`session ${index + 1}: Bun blocked dependency lifecycle scripts`);
+    const blockedLifecycleScripts = lifecycleScripts.filter(({ package: identity }) => lifecycleAudit?.blockedPackages?.includes(packageName(identity)));
+    if (!Array.isArray(lifecycleAudit?.blockedPackages)
+      || stable([...lifecycleAudit.blockedPackages].sort()) !== stable(INERT_BLOCKED_PACKAGES)
+      || stable(blockedLifecycleScripts) !== stable(INERT_BLOCKED_LIFECYCLE_SCRIPTS)) {
+      errors.push(`session ${index + 1}: Bun has unclassified blocked dependency lifecycle scripts`);
     }
-    if (!Array.isArray(lifecycleAudit?.explicitlyTrusted) || lifecyclePackages.some((name) => !lifecycleAudit.explicitlyTrusted.includes(name))) {
-      errors.push(`session ${index + 1}: dependency lifecycle packages are not explicitly trusted by Bun`);
+    if (!Array.isArray(lifecycleAudit?.explicitlyTrusted) || lifecyclePackages.some((name) => lifecycleAudit.explicitlyTrusted.includes(name))) {
+      errors.push(`session ${index + 1}: Bun explicitly trusts a dependency without a demonstrated required install outcome`);
     }
     if (stable(evidence?.suiteInventory?.npm) !== stable(evidence?.suiteInventory?.bun)) errors.push(`session ${index + 1}: verification suite inventories differ`);
   }

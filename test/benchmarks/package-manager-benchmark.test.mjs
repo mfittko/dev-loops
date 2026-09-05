@@ -16,17 +16,23 @@ function session(id, root, startTool) {
   const verify = [run("npm", false, 99), run("bun", false, 70)];
   for (const order of buildPairOrders(startTool)) for (const tool of order) verify.push(run(tool, true, tool === "npm" ? 100 : 70));
   return {
-    protocolVersion: 5, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    protocolVersion: 6, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11", powerState: "AC power" },
     sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["a"], bun: ["a"] },
     inventory: {
-      npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [] },
-      bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [] },
+      npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [
+        { package: "@google/genai@1.52.0", scripts: [["preinstall", "echo 'preinstall: no-op'"]] },
+        { package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] },
+      ] },
+      bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [
+        { package: "@google/genai@1.52.0", scripts: [["preinstall", "echo 'preinstall: no-op'"]] },
+        { package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] },
+      ] },
     },
     lifecycleOutcomes: { npm: ["postinstall", "preinstall"], bun: ["postinstall", "preinstall"] },
     dependencyLifecycleAudit: {
-      explicitlyTrusted: [], blockedPackages: [],
-      bun: { ...run("bun", false, 1), stdout: "Found 0 untrusted dependencies with scripts.\n", stderr: "" },
+      explicitlyTrusted: [], blockedPackages: ["@google/genai", "protobufjs"],
+      bun: { ...run("bun", false, 1), stdout: "These dependencies had their lifecycle scripts blocked during install.\n", stderr: "" },
     },
     installs: { npm: { cold: phase("npm", 100), warm: npmWarm }, bun: { cold: phase("bun", 50), warm: bunWarm } }, verify,
   };
@@ -63,8 +69,8 @@ test("raw evidence replacement is atomic within the output directory", async () 
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-output-"));
   const output = path.join(root, "session.raw.json");
   try {
-    await writeEvidenceAtomically(output, { protocolVersion: 5, sessionId: "one" });
-    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 5, sessionId: "one" });
+    await writeEvidenceAtomically(output, { protocolVersion: 6, sessionId: "one" });
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 6, sessionId: "one" });
     assert.deepEqual(await readdir(root), ["session.raw.json"]);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -152,9 +158,9 @@ test("analyzer fails closed on missing, failed, inventory, identity, or fingerpr
   const peers = good(); peers[0].inventory.bun.peerMetadata.push({ package: "a@1", peers: [["peer", "^2"]], optionalPeers: [] }); assert.ok(analyzeBenchmark(peers).errors.includes("session 1: peer/optional metadata differ"));
   const lifecycleScripts = good(); lifecycleScripts[0].inventory.bun.lifecycleScripts.push({ package: "a@1", scripts: [["postinstall", "node build.js"]] }); assert.ok(analyzeBenchmark(lifecycleScripts).errors.includes("session 1: lifecycle script declarations differ"));
   const lifecycleOutcome = good(); lifecycleOutcome[1].lifecycleOutcomes.bun = ["preinstall"]; assert.ok(analyzeBenchmark(lifecycleOutcome).errors.includes("session 2: bun lifecycle probe did not complete preinstall and postinstall"));
-  const blockedLifecycle = good(); blockedLifecycle[0].dependencyLifecycleAudit.blockedPackages = ["protobufjs"]; assert.ok(analyzeBenchmark(blockedLifecycle).errors.includes("session 1: Bun blocked dependency lifecycle scripts"));
-  const inconclusiveLifecycle = good(); inconclusiveLifecycle[0].dependencyLifecycleAudit.bun.stdout = ""; assert.ok(analyzeBenchmark(inconclusiveLifecycle).errors.includes("session 1: Bun dependency lifecycle audit did not confirm zero blocked scripts"));
-  const untrustedLifecycle = good(); untrustedLifecycle[0].inventory.bun.lifecycleScripts.push({ package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] }); untrustedLifecycle[0].inventory.npm.lifecycleScripts.push({ package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] }); assert.ok(analyzeBenchmark(untrustedLifecycle).errors.includes("session 1: dependency lifecycle packages are not explicitly trusted by Bun"));
+  const blockedLifecycle = good(); blockedLifecycle[0].dependencyLifecycleAudit.blockedPackages.push("native-addon"); blockedLifecycle[0].inventory.bun.lifecycleScripts.push({ package: "native-addon@1.0.0", scripts: [["install", "node-gyp rebuild"]] }); blockedLifecycle[0].inventory.npm.lifecycleScripts.push({ package: "native-addon@1.0.0", scripts: [["install", "node-gyp rebuild"]] }); assert.ok(analyzeBenchmark(blockedLifecycle).errors.includes("session 1: Bun has unclassified blocked dependency lifecycle scripts"));
+  const inconclusiveLifecycle = good(); inconclusiveLifecycle[0].dependencyLifecycleAudit.bun.stdout = ""; assert.ok(analyzeBenchmark(inconclusiveLifecycle).errors.includes("session 1: Bun dependency lifecycle audit did not confirm the classified blocked scripts"));
+  const overtrustedLifecycle = good(); overtrustedLifecycle[0].dependencyLifecycleAudit.explicitlyTrusted = ["protobufjs"]; assert.ok(analyzeBenchmark(overtrustedLifecycle).errors.includes("session 1: Bun explicitly trusts a dependency without a demonstrated required install outcome"));
   const missingInventory = good(); delete missingInventory[0].inventory.bun.bins; assert.ok(analyzeBenchmark(missingInventory).errors.includes("session 1: missing root executable bin inventories"));
   const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
   const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);
