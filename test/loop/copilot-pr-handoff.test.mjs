@@ -265,7 +265,7 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
       // request: add reviewer
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       // request: verify requested_reviewers after
       {
@@ -882,7 +882,7 @@ if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.in
 
 if (args[0] === "api" && args.includes("-X") && args.includes("POST") && args.some((a) => a.includes("requested_reviewers"))) {
   writeFileSync(requestedStatePath, "requested\\n");
-  write("https://github.com/owner/repo/pull/17\\n");
+  write({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
   process.exit(0);
 }
 
@@ -1074,7 +1074,7 @@ test("copilot-pr-handoff preserves copilotReviewPresent=false for an initial req
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1181,7 +1181,7 @@ if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.in
 
 if (args[0] === "api" && args.includes("-X") && args.includes("POST") && args.some((a) => a.includes("requested_reviewers"))) {
   writeFileSync(requestedStatePath, "requested\\n");
-  write("https://github.com/owner/repo/pull/17\\n");
+  write({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
   process.exit(0);
 }
 
@@ -1421,7 +1421,7 @@ test("copilot-pr-handoff re-requests Copilot review at the cap when a significan
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
         stdout: JSON.stringify({ headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews: CAP_REVIEWS, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -2537,7 +2537,7 @@ test("copilot-pr-handoff stops when human comment check fails with non-zero exit
       // performCopilotReviewRequest → request reviewer (REST requested_reviewers POST)
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       // performCopilotReviewRequest → confirm requested_reviewers
       {
@@ -2603,7 +2603,7 @@ test("copilot-pr-handoff stops when human comment check fails with invalid JSON"
       // performCopilotReviewRequest → request reviewer (REST requested_reviewers POST)
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       // performCopilotReviewRequest → confirm requested_reviewers  
       {
@@ -2736,7 +2736,7 @@ test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async ()
       // request: check reviews
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
       // request: add reviewer
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       // request: verify after
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
@@ -2769,7 +2769,7 @@ test("copilot-pr-handoff skips internal detection when GH_SEQUENCE_PATH is set (
       // request: normal flow continues because GH_SEQUENCE_PATH guard skips detection
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"reviews":[]}\n' },
     ]);

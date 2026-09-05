@@ -99,7 +99,7 @@ test("request-copilot-review requests Copilot deterministically and verifies via
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -269,7 +269,7 @@ test("request-copilot-review accepts --force-rerequest-review as a valid flag", 
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -296,7 +296,7 @@ test("request-copilot-review accepts an immediate Copilot review as proof the re
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -335,7 +335,7 @@ test("request-copilot-review accepts review-surface presence (prior submitted Co
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -377,7 +377,7 @@ test("request-copilot-review retries the post-request verification read on an em
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     {
       // First post-request verification read: still stale/empty.
@@ -442,7 +442,7 @@ test("request-copilot-review fails closed after the bounded verification retries
     emptyReviewsEntry,
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     // Initial post-request verification read, plus one per bounded retry — all stale.
     emptyRequestedReviewersEntry,
@@ -506,7 +506,7 @@ test("request-copilot-review retries a throwing verification read inside the bou
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     {
       // Initial post-request read (pre-loop): still stale/empty.
@@ -579,7 +579,7 @@ test("request-copilot-review propagates the final attempt's error when every bou
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     {
       // Initial post-request read (pre-loop): stale/empty, not a throw.
@@ -636,7 +636,7 @@ test("request-copilot-review fails closed with the empty-result message when a m
     ...emptyVerificationPair,
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     // Initial post-request read: empty.
     ...emptyVerificationPair,
@@ -689,7 +689,7 @@ test("request-copilot-review recovers when the INITIAL post-request read throws 
     },
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-      stdout: "https://github.com/owner/repo/pull/17\n",
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
     // Initial post-request read: throws.
     {
@@ -842,7 +842,7 @@ test("request-copilot-review does not treat a stale pending Copilot review as al
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1091,7 +1091,7 @@ test("request-copilot-review --silent exits 0 only when status is requested", as
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1342,7 +1342,7 @@ test("request-copilot-review does not block request when PR is not draft", async
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1677,7 +1677,7 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -1749,7 +1749,7 @@ test("the draft-gate round reset sees a clean verdict that lives only in the rev
           body: "Gate review: draft_gate\nReviewed head SHA: aaa1111\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
         }]]) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"headRefOid":"bbb2222","reviews":[]}\n' },
     ]);
@@ -1797,7 +1797,7 @@ test("request-copilot-review --force-rerequest-review re-opens the round when a 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "src/foo.mjs", status: "modified" }] }) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1823,7 +1823,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: threeHundredDocs }) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1843,7 +1843,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/x.md", status: "renamed" }] }) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1864,7 +1864,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         stderr: "gh: Not Found\n",
         exitCode: 1,
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1884,7 +1884,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "diverged", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
       },
-      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1946,7 +1946,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
           stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
         },
-        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
         { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
         {
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -1980,7 +1980,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
           stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
         },
-        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
         { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
         {
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],

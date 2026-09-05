@@ -425,7 +425,7 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -558,7 +558,7 @@ if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.in
 
 if (args[0] === "api" && args.includes("-X") && args.includes("POST") && args.some((a) => a.includes("requested_reviewers"))) {
   writeFileSync(requestedStatePath, "requested\\n");
-  write("https://github.com/owner/repo/pull/17\\n");
+  write({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
   process.exit(0);
 }
 
