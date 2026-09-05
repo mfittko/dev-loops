@@ -159,13 +159,14 @@ jobs:
         run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
 
   verify:
-    needs: [verify-suite, viewer-smoke]
+    needs: [changes, verify-suite, viewer-smoke]
     if: always()
     runs-on: ubuntu-latest
 
     steps:
       - name: Require all verify-suite legs to pass
         run: |
+          [ "${{ needs.changes.result }}" = "success" ] || exit 1
           [ "${{ needs.verify-suite.result }}" = "success" ] || exit 1
           [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
 

@@ -16,10 +16,14 @@ function session(id, root, startTool) {
   const verify = [run("npm", false, 99), run("bun", false, 70)];
   for (const order of buildPairOrders(startTool)) for (const tool of order) verify.push(run(tool, true, tool === "npm" ? 100 : 70));
   return {
-    protocolVersion: 3, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    protocolVersion: 4, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11", powerState: "AC power" },
     sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["a"], bun: ["a"] },
-    inventory: { npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [] }, bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [] } },
+    inventory: {
+      npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [] },
+      bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [] },
+    },
+    lifecycleOutcomes: { npm: ["postinstall", "preinstall"], bun: ["postinstall", "preinstall"] },
     installs: { npm: { cold: phase("npm", 100), warm: npmWarm }, bun: { cold: phase("bun", 50), warm: bunWarm } }, verify,
   };
 }
@@ -55,8 +59,8 @@ test("raw evidence replacement is atomic within the output directory", async () 
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-output-"));
   const output = path.join(root, "session.raw.json");
   try {
-    await writeEvidenceAtomically(output, { protocolVersion: 3, sessionId: "one" });
-    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 3, sessionId: "one" });
+    await writeEvidenceAtomically(output, { protocolVersion: 4, sessionId: "one" });
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 4, sessionId: "one" });
     assert.deepEqual(await readdir(root), ["session.raw.json"]);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -85,7 +89,13 @@ test("dependency inventory canonicalizes npm nested and Bun hoisted layouts", as
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-inventory-"));
   const npmRoot = path.join(root, "npm");
   const bunRoot = path.join(root, "bun");
-  const packageJson = (name) => JSON.stringify({ name, version: "1.0.0" });
+  const packageJson = (name) => JSON.stringify({
+    name,
+    version: "1.0.0",
+    peerDependencies: { peer: "^2.0.0" },
+    peerDependenciesMeta: { peer: { optional: true } },
+    scripts: { postinstall: "node build.js" },
+  });
   try {
     await mkdir(path.join(npmRoot, "node_modules", "a", "node_modules", "b"), { recursive: true });
     await mkdir(path.join(bunRoot, "node_modules", "a"), { recursive: true });
@@ -94,7 +104,16 @@ test("dependency inventory canonicalizes npm nested and Bun hoisted layouts", as
     await writeFile(path.join(npmRoot, "node_modules", "a", "node_modules", "b", "package.json"), packageJson("b"));
     await writeFile(path.join(bunRoot, "node_modules", "a", "package.json"), packageJson("a"));
     await writeFile(path.join(bunRoot, "node_modules", "b", "package.json"), packageJson("b"));
-    assert.deepEqual(await dependencyInventory(npmRoot), await dependencyInventory(bunRoot));
+    const npmInventory = await dependencyInventory(npmRoot);
+    assert.deepEqual(npmInventory, await dependencyInventory(bunRoot));
+    assert.deepEqual(npmInventory.peerMetadata, [
+      { package: "a@1.0.0", peers: [["peer", "^2.0.0"]], optionalPeers: ["peer"] },
+      { package: "b@1.0.0", peers: [["peer", "^2.0.0"]], optionalPeers: ["peer"] },
+    ]);
+    assert.deepEqual(npmInventory.lifecycleScripts, [
+      { package: "a@1.0.0", scripts: [["postinstall", "node build.js"]] },
+      { package: "b@1.0.0", scripts: [["postinstall", "node build.js"]] },
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -117,6 +136,9 @@ test("analyzer fails closed on missing, failed, inventory, identity, or fingerpr
   const packages = good(); packages[1].inventory.bun.packages.push("extra@1"); assert.ok(analyzeBenchmark(packages).errors.includes("session 2: dependency package identities differ"));
   const bins = good(); bins[1].inventory.bun.bins.push("extra"); assert.ok(analyzeBenchmark(bins).errors.includes("session 2: root executable bins differ"));
   const workspaces = good(); workspaces[1].inventory.bun.workspaceLinks.push({ location: "node_modules/example", kind: "symlink", target: "../example" }); assert.ok(analyzeBenchmark(workspaces).errors.includes("session 2: workspace links differ"));
+  const peers = good(); peers[0].inventory.bun.peerMetadata.push({ package: "a@1", peers: [["peer", "^2"]], optionalPeers: [] }); assert.ok(analyzeBenchmark(peers).errors.includes("session 1: peer/optional metadata differ"));
+  const lifecycleScripts = good(); lifecycleScripts[0].inventory.bun.lifecycleScripts.push({ package: "a@1", scripts: [["postinstall", "node build.js"]] }); assert.ok(analyzeBenchmark(lifecycleScripts).errors.includes("session 1: lifecycle script declarations differ"));
+  const lifecycleOutcome = good(); lifecycleOutcome[1].lifecycleOutcomes.bun = ["preinstall"]; assert.ok(analyzeBenchmark(lifecycleOutcome).errors.includes("session 2: bun lifecycle probe did not complete preinstall and postinstall"));
   const missingInventory = good(); delete missingInventory[0].inventory.bun.bins; assert.ok(analyzeBenchmark(missingInventory).errors.includes("session 1: missing root executable bin inventories"));
   const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
   const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);

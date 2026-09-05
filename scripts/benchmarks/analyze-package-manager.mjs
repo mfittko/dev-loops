@@ -13,7 +13,7 @@ export function analyzeBenchmark(sessions) {
   if (!Array.isArray(sessions) || sessions.length !== 2) return { pass: false, errors: ["exactly two independent session files are required"] };
   const [first, second] = sessions;
   for (const [index, evidence] of sessions.entries()) {
-    if (evidence?.protocolVersion !== 3) errors.push(`session ${index + 1}: unsupported protocolVersion`);
+    if (evidence?.protocolVersion !== 4) errors.push(`session ${index + 1}: unsupported protocolVersion`);
     if (!evidence?.sessionId || !evidence?.sessionRoot) errors.push(`session ${index + 1}: missing session identity/root`);
     if (!Number.isSafeInteger(evidence?.commandTimeoutMs) || evidence.commandTimeoutMs <= 0) errors.push(`session ${index + 1}: missing command timeout`);
     for (const key of ["platform", "arch", "cpu", "node", "bun", "npm", "powerState"]) if (!evidence?.environment?.[key]) errors.push(`session ${index + 1}: missing environment.${key}`);
@@ -21,11 +21,18 @@ export function analyzeBenchmark(sessions) {
       ["packages", "dependency package identities", "dependency package identity inventories"],
       ["bins", "root executable bins", "root executable bin inventories"],
       ["workspaceLinks", "workspace links", "workspace link inventories"],
+      ["peerMetadata", "peer/optional metadata", "peer/optional metadata inventories"],
+      ["lifecycleScripts", "lifecycle script declarations", "lifecycle script inventories"],
     ]) {
       const npmInventory = evidence?.inventory?.npm?.[field];
       const bunInventory = evidence?.inventory?.bun?.[field];
       if (!Array.isArray(npmInventory) || !Array.isArray(bunInventory)) errors.push(`session ${index + 1}: missing ${missingLabel}`);
       else if (stable(npmInventory) !== stable(bunInventory)) errors.push(`session ${index + 1}: ${label} differ`);
+    }
+    for (const tool of ["npm", "bun"]) {
+      if (stable(evidence?.lifecycleOutcomes?.[tool]) !== stable(["postinstall", "preinstall"])) {
+        errors.push(`session ${index + 1}: ${tool} lifecycle probe did not complete preinstall and postinstall`);
+      }
     }
     if (stable(evidence?.suiteInventory?.npm) !== stable(evidence?.suiteInventory?.bun)) errors.push(`session ${index + 1}: verification suite inventories differ`);
   }

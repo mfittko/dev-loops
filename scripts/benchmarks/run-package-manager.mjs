@@ -58,6 +58,8 @@ export function buildPairOrders(startTool) {
 
 export async function dependencyInventory(root) {
   const packages = new Set();
+  const peerMetadata = new Map();
+  const lifecycleScripts = new Map();
   async function walk(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.name === ".bin") continue;
@@ -66,7 +68,18 @@ export async function dependencyInventory(root) {
       else if (entry.isDirectory()) {
         try {
           const pkg = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
-          packages.add(`${pkg.name}@${pkg.version}`);
+          const identity = `${pkg.name}@${pkg.version}`;
+          packages.add(identity);
+          const peers = Object.entries(pkg.peerDependencies ?? {}).sort(([left], [right]) => left.localeCompare(right));
+          const optionalPeers = Object.entries(pkg.peerDependenciesMeta ?? {})
+            .filter(([, metadata]) => metadata?.optional === true)
+            .map(([name]) => name)
+            .sort();
+          if (peers.length > 0 || optionalPeers.length > 0) peerMetadata.set(identity, { package: identity, peers, optionalPeers });
+          const lifecycle = ["preinstall", "install", "postinstall"]
+            .filter((name) => typeof pkg.scripts?.[name] === "string")
+            .map((name) => [name, pkg.scripts[name]]);
+          if (lifecycle.length > 0) lifecycleScripts.set(identity, { package: identity, scripts: lifecycle });
           await walk(path.join(target, "node_modules"));
         } catch (error) {
           if (error?.code !== "ENOENT") throw error;
@@ -82,7 +95,30 @@ export async function dependencyInventory(root) {
     const target = path.join(root, location);
     try { const stat = await lstat(target); workspaceLinks.push({ location, kind: stat.isSymbolicLink() ? "symlink" : "directory", target: stat.isSymbolicLink() ? await readlink(target) : null }); } catch (error) { if (error?.code !== "ENOENT") throw error; }
   }
-  return { packages: [...packages].sort(), bins: bins.sort(), workspaceLinks };
+  return {
+    packages: [...packages].sort(),
+    bins: bins.sort(),
+    workspaceLinks,
+    peerMetadata: [...peerMetadata.values()].sort((left, right) => left.package.localeCompare(right.package)),
+    lifecycleScripts: [...lifecycleScripts.values()].sort((left, right) => left.package.localeCompare(right.package)),
+  };
+}
+
+async function installLifecycleProbe(root) {
+  const manifestPath = path.join(root, "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.scripts ??= {};
+  for (const phase of ["preinstall", "postinstall"]) {
+    const probe = `node .benchmark-lifecycle-probe.cjs ${phase}`;
+    manifest.scripts[phase] = manifest.scripts[phase] ? `${manifest.scripts[phase]} && ${probe}` : probe;
+  }
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(path.join(root, ".benchmark-lifecycle-probe.cjs"), [
+    'const { mkdirSync, writeFileSync } = require("node:fs");',
+    'mkdirSync(".benchmark-lifecycle", { recursive: true });',
+    'writeFileSync(`.benchmark-lifecycle/${process.argv[2]}`, "completed\\n");',
+    "",
+  ].join("\n"));
 }
 
 async function copySource(source, destination) {
@@ -138,6 +174,7 @@ async function main() {
   try {
     const roots = { npm: path.join(tempRoot, "npm-project"), bun: path.join(tempRoot, "bun-project") };
     await Promise.all([copySource(args["npm-source"], roots.npm), copySource(args["bun-source"], roots.bun)]);
+    await Promise.all(Object.values(roots).map(installLifecycleProbe));
     for (const root of Object.values(roots)) materializeGitRepository(root);
     const caches = { npm: path.join(tempRoot, "npm-cache"), bun: path.join(tempRoot, "bun-cache") };
     const envs = { npm: { ...process.env, npm_config_cache: caches.npm }, bun: { ...process.env, BUN_INSTALL_CACHE_DIR: caches.bun } };
@@ -158,25 +195,30 @@ async function main() {
       const warm = { prime: [invoke(tool, commands[tool].install, { phase: "warm-prime", measured: false, sampleIndex: 0 })], warmups: [], measured: [] };
       for (let iteration = 0; iteration <= MEASURED_REPETITIONS; iteration++) {
         await rm(nodeModules, { recursive: true, force: true });
+        if (iteration === MEASURED_REPETITIONS) await rm(path.join(roots[tool], ".benchmark-lifecycle"), { recursive: true, force: true });
         const run = invoke(tool, commands[tool].install, { phase: "warm", measured: iteration > 0, sampleIndex: iteration });
         (iteration === 0 ? warm.warmups : warm.measured).push(run);
       }
       installs[tool] = { cold, warm };
     }
     const inventory = { npm: await dependencyInventory(roots.npm), bun: await dependencyInventory(roots.bun) };
+    const lifecycleOutcomes = Object.fromEntries(await Promise.all(Object.entries(roots).map(async ([tool, root]) => [
+      tool,
+      (await readdir(path.join(root, ".benchmark-lifecycle")).catch(() => [])).sort(),
+    ])));
     const verify = ["npm", "bun"].map((tool, orderInPair) => invoke(tool, commands[tool].verify, { phase: "verify-warmup", measured: false, sampleIndex: 0, orderInPair }));
     for (const [pairIndex, order] of buildPairOrders(args.start).entries()) {
       for (const [orderInPair, tool] of order.entries()) verify.push(invoke(tool, commands[tool].verify, { phase: "verify", measured: true, sampleIndex: pairIndex + 1, pairIndex, orderInPair }));
     }
     const version = (tool) => spawnSync(tool, ["--version"], { encoding: "utf8" }).stdout.trim();
     const manifests = await Promise.all(Object.values(roots).map(async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))));
-    const evidence = { protocolVersion: 3, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
+    const evidence = { protocolVersion: 4, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
       environment: { platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"] },
       sourceFingerprint: { npm: await sourceFingerprint(roots.npm), bun: await sourceFingerprint(roots.bun) }, suiteInventory: {
         npm: Object.keys(manifests[0].scripts).filter((name) => name.startsWith("test:")).sort(),
         bun: Object.keys(manifests[1].scripts).filter((name) => name.startsWith("test:")).sort(),
       },
-      isolatedCaches: caches, inventory, installs, verify };
+      isolatedCaches: caches, inventory, lifecycleOutcomes, installs, verify };
     await writeEvidenceAtomically(args.output, evidence);
   } finally { await rm(tempRoot, { recursive: true, force: true }); }
 }

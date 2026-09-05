@@ -105,13 +105,16 @@ describe("Bun 1.4.1 toolchain authority", () => {
   });
 
   test("documents the contributor, consumer-runtime, and publication boundaries", async () => {
-    const [readme, agents, extension, scripts, copilot, validation, release, adr, benchmark] = await Promise.all([
+    const [readme, agents, extension, scripts, copilot, validation, followup, claudeFollowup, handoff, release, adr, benchmark] = await Promise.all([
       readRepo("README.md"),
       readRepo("AGENTS.md"),
       readRepo("extension/README.md"),
       readRepo("scripts/README.md"),
       readRepo(".github/copilot-instructions.md"),
       readRepo("skills/docs/validation-policy.md"),
+      readRepo("skills/copilot-pr-followup/SKILL.md"),
+      readRepo(".claude/skills/copilot-pr-followup/SKILL.md"),
+      readRepo("packages/core/src/loop/handoff-envelope.mjs"),
       readRepo("skills/docs/release-runbook.md"),
       readRepo("docs/decisions/0059-bun-development-toolchain.md"),
       readRepo(path.join("docs", "benchmarks", "bun-1.4.1", "README.md")),
@@ -124,6 +127,9 @@ describe("Bun 1.4.1 toolchain authority", () => {
       ["scripts/README.md", scripts],
       [".github/copilot-instructions.md", copilot],
       ["skills/docs/validation-policy.md", validation],
+      ["skills/copilot-pr-followup/SKILL.md", followup],
+      [".claude/skills/copilot-pr-followup/SKILL.md", claudeFollowup],
+      ["packages/core/src/loop/handoff-envelope.mjs", handoff],
     ]) {
       assert.match(source, /bun run verify/i, `${file} names the canonical Bun verification command`);
     }

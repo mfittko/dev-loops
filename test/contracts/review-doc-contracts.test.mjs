@@ -405,7 +405,8 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
     verifyHeaderIndex,
     nextJobRelative === -1 ? ciWorkflow.length : verifyHeaderIndex + 1 + nextJobRelative,
   );
-  assert.match(verifySection, /needs:\s*\[verify-suite,\s*viewer-smoke\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs:\s*\[changes,\s*verify-suite,\s*viewer-smoke\][\s\S]*needs\.changes\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs\.verify-suite\.result[\s\S]*success/i);
   assert.match(verifySection, /needs\.viewer-smoke\.result[\s\S]*success[\s\S]*skipped/i);
   assert.match(verifySection, /if:\s*always\(\)/i);
   assert.match(verifySection, /exit 1/i);
