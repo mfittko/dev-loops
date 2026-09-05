@@ -35,9 +35,11 @@ For each independent session:
 5. Compare installed dependency inventories, workspace links, executable shims,
    peer/optional metadata, and lifecycle-script outcomes. Any mismatch is a
    correctness failure, not a timing result. The runner inventories installed
-   peer declarations and install lifecycle scripts, and injects matching root
-   preinstall/postinstall probes whose completion must be recorded for both
-   package managers.
+   peer declarations and install lifecycle scripts, requires every dependency
+   declaring an install lifecycle to be explicitly trusted by Bun, requires
+   `bun pm untrusted` to confirm that no dependency scripts were blocked after
+   a successful install, and injects matching root preinstall/postinstall probes
+   whose completion must be recorded for both package managers.
 6. With dependencies already installed, run one untimed full-verification
    warm-up per tool. Then run seven timed pairs, alternating tool order on every
    pair. Capture command, duration, exit code, signal, stdout/stderr location,

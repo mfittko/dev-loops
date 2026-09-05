@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { analyzeBenchmark } from "../../scripts/benchmarks/analyze-package-manager.mjs";
-import { buildPairOrders, DEFAULT_COMMAND_TIMEOUT_MS, dependencyInventory, invokeBenchmarkCommand, materializeGitRepository, MEASURED_REPETITIONS, writeEvidenceAtomically } from "../../scripts/benchmarks/run-package-manager.mjs";
+import { buildPairOrders, DEFAULT_COMMAND_TIMEOUT_MS, dependencyInventory, invokeBenchmarkCommand, materializeGitRepository, MEASURED_REPETITIONS, parseBunUntrustedPackages, writeEvidenceAtomically } from "../../scripts/benchmarks/run-package-manager.mjs";
 
 const run = (tool, measured, durationMs, exitCode = 0) => ({ tool, measured, durationMs, exitCode, timedOut: false, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS });
 const phase = (tool, duration) => ({ warmups: [run(tool, false, duration)], measured: Array.from({ length: 7 }, () => run(tool, true, duration)) });
@@ -16,7 +16,7 @@ function session(id, root, startTool) {
   const verify = [run("npm", false, 99), run("bun", false, 70)];
   for (const order of buildPairOrders(startTool)) for (const tool of order) verify.push(run(tool, true, tool === "npm" ? 100 : 70));
   return {
-    protocolVersion: 4, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    protocolVersion: 5, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11", powerState: "AC power" },
     sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["a"], bun: ["a"] },
     inventory: {
@@ -24,6 +24,10 @@ function session(id, root, startTool) {
       bun: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [] },
     },
     lifecycleOutcomes: { npm: ["postinstall", "preinstall"], bun: ["postinstall", "preinstall"] },
+    dependencyLifecycleAudit: {
+      explicitlyTrusted: [], blockedPackages: [],
+      bun: { ...run("bun", false, 1), stdout: "Found 0 untrusted dependencies with scripts.\n", stderr: "" },
+    },
     installs: { npm: { cold: phase("npm", 100), warm: npmWarm }, bun: { cold: phase("bun", 50), warm: bunWarm } }, verify,
   };
 }
@@ -59,8 +63,8 @@ test("raw evidence replacement is atomic within the output directory", async () 
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-benchmark-output-"));
   const output = path.join(root, "session.raw.json");
   try {
-    await writeEvidenceAtomically(output, { protocolVersion: 4, sessionId: "one" });
-    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 4, sessionId: "one" });
+    await writeEvidenceAtomically(output, { protocolVersion: 5, sessionId: "one" });
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { protocolVersion: 5, sessionId: "one" });
     assert.deepEqual(await readdir(root), ["session.raw.json"]);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -119,6 +123,15 @@ test("dependency inventory canonicalizes npm nested and Bun hoisted layouts", as
   }
 });
 
+test("Bun dependency lifecycle audit parses blocked scoped and unscoped packages", () => {
+  assert.deepEqual(parseBunUntrustedPackages([
+    "./node_modules/@google/genai @1.52.0",
+    " » [preinstall]: echo no-op",
+    "./node_modules/protobufjs @7.6.5",
+    " » [postinstall]: node scripts/postinstall",
+  ].join("\n")), ["@google/genai", "protobufjs"]);
+});
+
 test("analyzer requires two independent sessions and uses seven-sample install medians", () => {
   const verdict = analyzeBenchmark([session("one", "/tmp/one", "npm"), session("two", "/tmp/two", "bun")]);
   assert.equal(verdict.pass, true);
@@ -139,6 +152,9 @@ test("analyzer fails closed on missing, failed, inventory, identity, or fingerpr
   const peers = good(); peers[0].inventory.bun.peerMetadata.push({ package: "a@1", peers: [["peer", "^2"]], optionalPeers: [] }); assert.ok(analyzeBenchmark(peers).errors.includes("session 1: peer/optional metadata differ"));
   const lifecycleScripts = good(); lifecycleScripts[0].inventory.bun.lifecycleScripts.push({ package: "a@1", scripts: [["postinstall", "node build.js"]] }); assert.ok(analyzeBenchmark(lifecycleScripts).errors.includes("session 1: lifecycle script declarations differ"));
   const lifecycleOutcome = good(); lifecycleOutcome[1].lifecycleOutcomes.bun = ["preinstall"]; assert.ok(analyzeBenchmark(lifecycleOutcome).errors.includes("session 2: bun lifecycle probe did not complete preinstall and postinstall"));
+  const blockedLifecycle = good(); blockedLifecycle[0].dependencyLifecycleAudit.blockedPackages = ["protobufjs"]; assert.ok(analyzeBenchmark(blockedLifecycle).errors.includes("session 1: Bun blocked dependency lifecycle scripts"));
+  const inconclusiveLifecycle = good(); inconclusiveLifecycle[0].dependencyLifecycleAudit.bun.stdout = ""; assert.ok(analyzeBenchmark(inconclusiveLifecycle).errors.includes("session 1: Bun dependency lifecycle audit did not confirm zero blocked scripts"));
+  const untrustedLifecycle = good(); untrustedLifecycle[0].inventory.bun.lifecycleScripts.push({ package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] }); untrustedLifecycle[0].inventory.npm.lifecycleScripts.push({ package: "protobufjs@7.6.5", scripts: [["postinstall", "node scripts/postinstall"]] }); assert.ok(analyzeBenchmark(untrustedLifecycle).errors.includes("session 1: dependency lifecycle packages are not explicitly trusted by Bun"));
   const missingInventory = good(); delete missingInventory[0].inventory.bun.bins; assert.ok(analyzeBenchmark(missingInventory).errors.includes("session 1: missing root executable bin inventories"));
   const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
   const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);

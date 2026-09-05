@@ -56,6 +56,12 @@ export function buildPairOrders(startTool) {
   });
 }
 
+export function parseBunUntrustedPackages(output) {
+  return [...String(output).matchAll(/^\.\/node_modules\/(.+?)\s+@[^\s]+$/gmu)]
+    .map((match) => match[1])
+    .sort();
+}
+
 export async function dependencyInventory(root) {
   const packages = new Set();
   const peerMetadata = new Map();
@@ -206,19 +212,26 @@ async function main() {
       tool,
       (await readdir(path.join(root, ".benchmark-lifecycle")).catch(() => [])).sort(),
     ])));
+    const bunLifecycleAudit = invoke("bun", ["pm", "untrusted"], { phase: "dependency-lifecycle-audit", measured: false, sampleIndex: 0 });
     const verify = ["npm", "bun"].map((tool, orderInPair) => invoke(tool, commands[tool].verify, { phase: "verify-warmup", measured: false, sampleIndex: 0, orderInPair }));
     for (const [pairIndex, order] of buildPairOrders(args.start).entries()) {
       for (const [orderInPair, tool] of order.entries()) verify.push(invoke(tool, commands[tool].verify, { phase: "verify", measured: true, sampleIndex: pairIndex + 1, pairIndex, orderInPair }));
     }
     const version = (tool) => spawnSync(tool, ["--version"], { encoding: "utf8" }).stdout.trim();
     const manifests = await Promise.all(Object.values(roots).map(async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))));
-    const evidence = { protocolVersion: 4, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
+    const evidence = { protocolVersion: 5, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
       environment: { platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"] },
       sourceFingerprint: { npm: await sourceFingerprint(roots.npm), bun: await sourceFingerprint(roots.bun) }, suiteInventory: {
         npm: Object.keys(manifests[0].scripts).filter((name) => name.startsWith("test:")).sort(),
         bun: Object.keys(manifests[1].scripts).filter((name) => name.startsWith("test:")).sort(),
       },
-      isolatedCaches: caches, inventory, lifecycleOutcomes, installs, verify };
+      isolatedCaches: caches, inventory, lifecycleOutcomes,
+      dependencyLifecycleAudit: {
+        explicitlyTrusted: [...(manifests[1].trustedDependencies ?? [])].sort(),
+        bun: bunLifecycleAudit,
+        blockedPackages: parseBunUntrustedPackages(`${bunLifecycleAudit.stdout}\n${bunLifecycleAudit.stderr}`),
+      },
+      installs, verify };
     await writeEvidenceAtomically(args.output, evidence);
   } finally { await rm(tempRoot, { recursive: true, force: true }); }
 }

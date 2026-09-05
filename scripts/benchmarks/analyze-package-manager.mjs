@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const stable = (value) => JSON.stringify(value);
+const packageName = (identity) => identity.startsWith("@")
+  ? identity.slice(0, identity.indexOf("@", identity.indexOf("/") + 1))
+  : identity.slice(0, identity.lastIndexOf("@"));
 const validRuns = (runs, count, { tool, measured } = {}) => Array.isArray(runs) && runs.length === count
   && runs.every((run) => run.exitCode === 0 && run.timedOut === false && Number.isSafeInteger(run.timeoutMs) && run.timeoutMs > 0 && Number.isFinite(run.durationMs) && run.durationMs >= 0
     && (tool === undefined || run.tool === tool) && (measured === undefined || run.measured === measured));
@@ -13,7 +16,7 @@ export function analyzeBenchmark(sessions) {
   if (!Array.isArray(sessions) || sessions.length !== 2) return { pass: false, errors: ["exactly two independent session files are required"] };
   const [first, second] = sessions;
   for (const [index, evidence] of sessions.entries()) {
-    if (evidence?.protocolVersion !== 4) errors.push(`session ${index + 1}: unsupported protocolVersion`);
+    if (evidence?.protocolVersion !== 5) errors.push(`session ${index + 1}: unsupported protocolVersion`);
     if (!evidence?.sessionId || !evidence?.sessionRoot) errors.push(`session ${index + 1}: missing session identity/root`);
     if (!Number.isSafeInteger(evidence?.commandTimeoutMs) || evidence.commandTimeoutMs <= 0) errors.push(`session ${index + 1}: missing command timeout`);
     for (const key of ["platform", "arch", "cpu", "node", "bun", "npm", "powerState"]) if (!evidence?.environment?.[key]) errors.push(`session ${index + 1}: missing environment.${key}`);
@@ -33,6 +36,19 @@ export function analyzeBenchmark(sessions) {
       if (stable(evidence?.lifecycleOutcomes?.[tool]) !== stable(["postinstall", "preinstall"])) {
         errors.push(`session ${index + 1}: ${tool} lifecycle probe did not complete preinstall and postinstall`);
       }
+    }
+    const lifecycleAudit = evidence?.dependencyLifecycleAudit;
+    const lifecyclePackages = (evidence?.inventory?.bun?.lifecycleScripts ?? []).map(({ package: identity }) => packageName(identity)).sort();
+    if (!validRuns(lifecycleAudit?.bun === undefined ? [] : [lifecycleAudit.bun], 1, { tool: "bun", measured: false })) {
+      errors.push(`session ${index + 1}: missing successful Bun dependency lifecycle audit`);
+    } else if (!`${lifecycleAudit.bun.stdout}\n${lifecycleAudit.bun.stderr}`.includes("Found 0 untrusted dependencies with scripts.")) {
+      errors.push(`session ${index + 1}: Bun dependency lifecycle audit did not confirm zero blocked scripts`);
+    }
+    if (!Array.isArray(lifecycleAudit?.blockedPackages) || lifecycleAudit.blockedPackages.length > 0) {
+      errors.push(`session ${index + 1}: Bun blocked dependency lifecycle scripts`);
+    }
+    if (!Array.isArray(lifecycleAudit?.explicitlyTrusted) || lifecyclePackages.some((name) => !lifecycleAudit.explicitlyTrusted.includes(name))) {
+      errors.push(`session ${index + 1}: dependency lifecycle packages are not explicitly trusted by Bun`);
     }
     if (stable(evidence?.suiteInventory?.npm) !== stable(evidence?.suiteInventory?.bun)) errors.push(`session ${index + 1}: verification suite inventories differ`);
   }
