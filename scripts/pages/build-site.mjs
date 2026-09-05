@@ -42,9 +42,9 @@ export const DECKS = [
   {
     file: 'dev-loops-deep-dive.html',
     outFile: 'dev-loops-deep-dive-deck.html',
-    title: 'dev-loops: A Deep Dive',
-    subtitle: 'Coordination delay and the waiting between actions',
-    description: 'How explicit handoffs on a state graph and measuring the wait between actions cut delivery delay.',
+    title: 'dev-loops: Control & Observability',
+    subtitle: 'Explicit delivery control and measurable waiting between actions',
+    description: 'How explicit delivery control and measuring the wait between actions make handoff delay actionable.',
     navLabel: 'Deep dive (deck)',
   },
   {
