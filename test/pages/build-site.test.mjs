@@ -78,6 +78,18 @@ test('build-site: index is the intro article, all resources published, nav links
   }
 });
 
+test('build-site: publishes exactly the four supported presentation decks', () => {
+  assert.deepEqual(
+    DECKS.map(({ file }) => file),
+    [
+      'introducing-dev-loops.html',
+      'dev-loops-deep-dive.html',
+      'state-graph-surface.html',
+      'how-dev-loops-decided-itself.html',
+    ],
+  );
+});
+
 test('build-site: relative repoRoot uses the same default output as its absolute path', async () => {
   const repoRoot = await mkdtemp(join(tmpdir(), 'pages-relative-root-'));
   const relativeRoot = relative(process.cwd(), repoRoot);

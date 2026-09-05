@@ -54,6 +54,13 @@ export const DECKS = [
     description: 'How dev-loops turns lifecycle state and evidence into one governed control surface.',
     navLabel: 'State graph (deck)',
   },
+  {
+    file: 'how-dev-loops-decided-itself.html',
+    title: 'How dev-loops Decided Itself Into Shape',
+    subtitle: 'A decision ledger of recorded corrections and reversals',
+    description: 'How explicit decisions, visible consequences, and two reversals shaped the project.',
+    navLabel: 'History (deck)',
+  },
 ];
 
 // Resolve a deck's published filename: distinct outFile when set, else file.

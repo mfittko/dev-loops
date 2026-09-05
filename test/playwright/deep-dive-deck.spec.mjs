@@ -6,5 +6,9 @@ const entry = deckRegistryEntry("deep-dive-deck");
 
 defineDeckSuite({
   ...entry,
+  desktopFit: true,
+  mobileFit: true,
+  evidenceAssertions: true,
+  navigationAssertions: true,
   deckPath: fileURLToPath(new URL(`../../docs/presentations/${entry.deck}`, import.meta.url)),
 });

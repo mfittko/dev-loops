@@ -213,6 +213,7 @@ export function defineDeckSuite({
   desktopFit = false,
   mobileFit = false,
   evidenceAssertions = false,
+  navigationAssertions = false,
 }) {
   const states = sectionIds.map((entry) =>
     typeof entry === "string" ? { id: entry, stateName: entry, capture: true } : { capture: true, stateName: entry.id, ...entry });
@@ -255,6 +256,37 @@ export function defineDeckSuite({
         });
       }
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  if (navigationAssertions) test(`${sliceId} keyboard navigation respects guards and boundaries`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+
+      const modifiedPrevented = await page.evaluate(() => {
+        const event = new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true, cancelable: true });
+        dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      expect(modifiedPrevented).toBe(false);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+
+      await page.keyboard.press("ArrowLeft");
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(() => scrollY > innerHeight * 0.5);
+      await page.keyboard.press("Home");
+      await page.waitForFunction(() => scrollY < innerHeight * 0.5);
+      await page.keyboard.press("End");
+      await page.waitForFunction((count) => scrollY > innerHeight * (count - 2), ids.length);
+      const atEnd = await page.evaluate(() => scrollY);
+      await page.keyboard.press("ArrowRight");
+      expect(await page.evaluate(() => scrollY)).toBe(atEnd);
     } finally {
       await stopFixtureServer(server);
     }

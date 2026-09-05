@@ -10,6 +10,10 @@ const deckPath = fileURLToPath(new URL(`../../docs/presentations/${entry.deck}`,
 
 defineDeckSuite({
   ...entry,
+  desktopFit: true,
+  mobileFit: true,
+  evidenceAssertions: true,
+  navigationAssertions: true,
   deckPath,
 });
 
