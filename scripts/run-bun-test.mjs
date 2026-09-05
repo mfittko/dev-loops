@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_PARALLELISM = 4;
+const DEFAULT_PARALLELISM = 8;
 
 export function resolveBunTestParallelism(env = process.env) {
   const raw = env.BUN_TEST_PARALLELISM;

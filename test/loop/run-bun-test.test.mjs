@@ -6,12 +6,12 @@ import {
   resolveBunTestParallelism,
 } from "../../scripts/run-bun-test.mjs";
 
-test("run-bun-test defaults local execution to four workers", () => {
-  assert.equal(resolveBunTestParallelism({}), 4);
+test("run-bun-test defaults local execution to eight workers", () => {
+  assert.equal(resolveBunTestParallelism({}), 8);
   assert.deepEqual(buildBunTestArgs(["test/example.test.mjs"], {}), [
     "test",
     "--only-failures",
-    "--parallel=4",
+    "--parallel=8",
     "test/example.test.mjs",
   ]);
 });
