@@ -356,10 +356,25 @@ export function normalizeSeverityCounts(counts) {
  * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
  * @returns {boolean}
  */
+/**
+ * Resolve a finding's file path from EITHER shape the shared floor accepts:
+ * `file` (singular string, hand-authored / future-producer ledgers) or
+ * `files[0]` (the array shape consolidate-fanin / write-gate-findings-log emit).
+ * The ONE resolver `hasLocatableShape` and every downstream consumer keys on,
+ * so a consumer reading `finding.files[0]` directly can never crash on a
+ * singular-`file` finding that already passed the floor. Returns `undefined`
+ * when neither shape names a string path.
+ * @param {{ file?: unknown, files?: unknown }} finding
+ * @returns {string|undefined}
+ */
+export function resolveFindingFile(finding) {
+  if (typeof finding?.file === "string") return finding.file;
+  if (Array.isArray(finding?.files) && typeof finding.files[0] === "string") return finding.files[0];
+  return undefined;
+}
+
 export function hasLocatableShape(finding) {
-  const file = typeof finding?.file === "string"
-    ? finding.file
-    : (Array.isArray(finding?.files) ? finding.files[0] : undefined);
+  const file = resolveFindingFile(finding);
   return typeof file === "string" && file.trim().length > 0
     && Number.isInteger(finding?.line) && /** @type {number} */ (finding.line) >= 1;
 }
