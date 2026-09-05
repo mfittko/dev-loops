@@ -342,21 +342,6 @@ export function normalizeSeverityCounts(counts) {
 }
 
 /**
- * A finding is LOCATABLE-SHAPED when it names a real file (via `file` or
- * `files[0]`) and a positive-integer `line` — the ONE shared shape check
- * every producer/consumer of the locatable/non-locatable distinction keys
- * on, whether the finding is the raw per-angle `{file, line}` shape
- * (consolidateFanin's own input) or the ledger's `{files, line}` shape
- * (write-gate-findings-log.mjs / post-gate-findings.mjs). This is NECESSARY
- * but not SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
- * (scripts/github/_gate-finding-surface.mjs) additionally requires the
- * file:line to fall inside the reviewed diff, which only that caller
- * (holding the diff's commentable-line set) can check — this function is
- * its shared shape floor, not a replacement for it.
- * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
- * @returns {boolean}
- */
-/**
  * Resolve a finding's file path from EITHER shape the shared floor accepts:
  * `file` (singular string, hand-authored / future-producer ledgers) or
  * `files[0]` (the array shape consolidate-fanin / write-gate-findings-log emit).
@@ -373,6 +358,21 @@ export function resolveFindingFile(finding) {
   return undefined;
 }
 
+/**
+ * A finding is LOCATABLE-SHAPED when it names a real file (via `file` or
+ * `files[0]`) and a positive-integer `line` — the ONE shared shape check
+ * every producer/consumer of the locatable/non-locatable distinction keys
+ * on, whether the finding is the raw per-angle `{file, line}` shape
+ * (consolidateFanin's own input) or the ledger's `{files, line}` shape
+ * (write-gate-findings-log.mjs / post-gate-findings.mjs). This is NECESSARY
+ * but not SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
+ * (scripts/github/_gate-finding-surface.mjs) additionally requires the
+ * file:line to fall inside the reviewed diff, which only that caller
+ * (holding the diff's commentable-line set) can check — this function is
+ * its shared shape floor, not a replacement for it.
+ * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
+ * @returns {boolean}
+ */
 export function hasLocatableShape(finding) {
   const file = resolveFindingFile(finding);
   return typeof file === "string" && file.trim().length > 0
