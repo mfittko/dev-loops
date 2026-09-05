@@ -516,7 +516,7 @@ if (args[0] === "pr" && args[1] === "view" && !args.includes("--json")) {
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/17/requested_reviewers") {
+if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/17/requested_reviewers" && !args.includes("-X")) {
   const requested = existsSync(requestedStatePath);
   write(requested ? { users: [{ login: "Copilot" }], teams: [] } : { users: [], teams: [] });
   process.exit(0);

@@ -285,7 +285,7 @@ function isReviewNowObservablyInProgress(before, after) {
     || reviewPresence.present;
 }
 // Shared verification-read step: re-fetch review state and check presence in
-// one call, so the initial post-edit read and every in-loop retry read below
+// one call, so the initial post-request read and every in-loop retry read below
 // share one implementation instead of two copies that could drift.
 async function checkReviewObservablyInProgress(options, runtime, before) {
   const after = await fetchCopilotReviewState(options, runtime);

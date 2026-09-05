@@ -317,8 +317,8 @@ test("request-copilot-review accepts an immediate Copilot review as proof the re
     });
 });
 
-test("request-copilot-review accepts review-surface presence (prior submitted Copilot review, unchanged after edit) as proof of an in-progress review — #1670 regression", async () => {
-  // Reviewer-configured repo where @copilot is a silent no-op: after `pr edit`
+test("request-copilot-review accepts review-surface presence (prior submitted Copilot review, unchanged after the request) as proof of an in-progress review — #1670 regression", async () => {
+  // Reviewer-configured repo where @copilot is a silent no-op: after the requested_reviewers POST
   // the requested_reviewers stay empty, the review count does NOT increase (a
   // submitted Copilot review was already present in the before-state), and there
   // is no pending current-head review. The only signal preventing the
@@ -356,8 +356,8 @@ test("request-copilot-review accepts review-surface presence (prior submitted Co
   });
 });
 
-test("request-copilot-review retries the post-edit verification read on an empty-then-populated race and succeeds", async () => {
-  // The requested-reviewer/review-list reads that verify a `gh pr edit` request
+test("request-copilot-review retries the post-request verification read on an empty-then-populated race and succeeds", async () => {
+  // The requested-reviewer/review-list reads that verify a review request
   // landed are eventually consistent: this replays a first verification read
   // that still sees stale (empty) state, followed by a retry read that sees the
   // request landed. delayImpl is stubbed to resolve immediately so the test
@@ -380,7 +380,7 @@ test("request-copilot-review retries the post-edit verification read on an empty
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
-      // First post-edit verification read: still stale/empty.
+      // First post-request verification read: still stale/empty.
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
       stdout: '{"users":[],"teams":[]}\n',
     },
@@ -408,8 +408,8 @@ test("request-copilot-review retries the post-edit verification read on an empty
   });
   assert.deepEqual(delayCalls, [5000]);
   // Pin the gh call sequence itself, not just the delay schedule: exactly one
-  // `pr edit` (never re-issued per probe) and exactly the expected number of
-  // verification reads (before-state check, stale post-edit read, landed
+  // the requested_reviewers POST (never re-issued per probe) and exactly the expected number of
+  // verification reads (before-state check, stale post-request read, landed
   // retry read) — `repeatLastOnOverflow` would otherwise silently mask a
   // surplus read past this exact sequence.
   assert.deepEqual(calls.map((call) => call.args), [
@@ -444,7 +444,7 @@ test("request-copilot-review fails closed after the bounded verification retries
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
-    // Initial post-edit verification read, plus one per bounded retry — all stale.
+    // Initial post-request verification read, plus one per bounded retry — all stale.
     emptyRequestedReviewersEntry,
     emptyReviewsEntry,
     emptyRequestedReviewersEntry,
@@ -465,9 +465,9 @@ test("request-copilot-review fails closed after the bounded verification retries
         error.message,
         "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST",
       );
-      // Pin the gh call sequence too: exactly one `pr edit` and exactly the
+      // Pin the gh call sequence too: exactly one requested_reviewers POST and exactly the
       // expected number of verification reads (before-state check, plus one
-      // initial post-edit read and one per bounded retry, all stale) —
+      // initial post-request read and one per bounded retry, all stale) —
       // `repeatLastOnOverflow` would otherwise silently mask a surplus read
       // past this exact sequence.
       assert.deepEqual(error.calls.map((call) => call.args), [
@@ -509,7 +509,7 @@ test("request-copilot-review retries a throwing verification read inside the bou
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
-      // Initial post-edit read (pre-loop): still stale/empty.
+      // Initial post-request read (pre-loop): still stale/empty.
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
       stdout: '{"users":[],"teams":[]}\n',
     },
@@ -582,7 +582,7 @@ test("request-copilot-review propagates the final attempt's error when every bou
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
-      // Initial post-edit read (pre-loop): stale/empty, not a throw.
+      // Initial post-request read (pre-loop): stale/empty, not a throw.
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
       stdout: '{"users":[],"teams":[]}\n',
     },
@@ -638,7 +638,7 @@ test("request-copilot-review fails closed with the empty-result message when a m
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
-    // Initial post-edit read: empty.
+    // Initial post-request read: empty.
     ...emptyVerificationPair,
     // Attempt 1: throws mid-window.
     {
@@ -670,8 +670,8 @@ test("request-copilot-review fails closed with the empty-result message when a m
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
 });
 
-test("request-copilot-review recovers when the INITIAL post-edit read throws and a later read succeeds", async () => {
-  // The initial post-edit read sits inside the retry window: a throw there
+test("request-copilot-review recovers when the INITIAL post-request read throws and a later read succeeds", async () => {
+  // The initial post-request read sits inside the retry window: a throw there
   // consumes the first scheduled delay and re-probes instead of propagating,
   // so a transient blip immediately after a successful edit self-heals.
   const delayCalls = [];
@@ -691,7 +691,7 @@ test("request-copilot-review recovers when the INITIAL post-edit read throws and
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
-    // Initial post-edit read: throws.
+    // Initial post-request read: throws.
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
       exitCode: 1,
