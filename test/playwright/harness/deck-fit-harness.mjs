@@ -325,6 +325,7 @@ export function defineDeckSuite({
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await page.evaluate(() => document.fonts.ready);
         const section = page.locator(`#${id}`);
+        await alignDeckSectionForCapture(page, section, index, ids.length);
         await captureNamedUiState({
           page,
           screenshotTarget: section,
@@ -341,7 +342,6 @@ export function defineDeckSuite({
           },
           captureConsole: async () => runtimeReport,
         });
-        await assertDeckChromeState(page, section, index, ids.length);
       }
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
@@ -431,6 +431,7 @@ export function defineDeckSuite({
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
+      await alignDeckSectionForCapture(page, section, ids.indexOf(mobileCapture.id), ids.length);
       await captureNamedUiState({
         page,
         screenshotTarget: section,
@@ -447,7 +448,6 @@ export function defineDeckSuite({
         },
         captureConsole: async () => runtimeReport,
       });
-      await assertDeckChromeState(page, section, ids.indexOf(mobileCapture.id), ids.length);
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);

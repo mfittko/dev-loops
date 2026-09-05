@@ -38,3 +38,34 @@ test('deck-fit captures wait for top alignment and current visible chrome', asyn
   assert.match(source, /visible progress must match the section being captured/, 'capture must assert the rendered progress width');
   assert.match(source, /capture-state assertion fails on stale chrome/, 'the shared suite must retain a stale-chrome negative control');
 });
+
+test('desktop and mobile deck screenshots are captured only after deterministic chrome alignment', async () => {
+  const source = await readFile(new URL('../../test/playwright/harness/deck-fit-harness.mjs', import.meta.url), 'utf8');
+  const deckSuite = source.slice(
+    source.indexOf('export function defineDeckSuite'),
+    source.indexOf('// The deck registry.'),
+  );
+  const captureCalls = [...deckSuite.matchAll(/await captureNamedUiState\(\{/g)];
+
+  assert.equal(captureCalls.length, 2, 'the deck suite must retain one desktop and one mobile named-state capture flow');
+  for (const [index, flow] of ['desktop', 'mobile'].entries()) {
+    const captureCall = captureCalls[index];
+    const priorCapture = index === 0 ? 0 : captureCalls[index - 1].index + captureCalls[index - 1][0].length;
+    const setup = deckSuite.slice(priorCapture, captureCall.index);
+    assert.match(
+      setup,
+      /await alignDeckSectionForCapture\(page, section, [^;]+\);\s*$/,
+      `${flow} capture must await alignment and exact chrome assertions immediately before writing screenshot evidence`,
+    );
+  }
+
+  const alignmentHelper = source.slice(
+    source.indexOf('export async function alignDeckSectionForCapture'),
+    source.indexOf('// Registry-driven runner:'),
+  );
+  assert.match(
+    alignmentHelper,
+    /await assertDeckChromeState\(page, section, index, total\);/,
+    'alignment must await the exact counter and proportional progress assertion before returning',
+  );
+});
