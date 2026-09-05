@@ -248,9 +248,9 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   assertSafeOutputRelationship(root, out, { relative, sep, parse: parsePath, isAbsolute: (value) => resolve(value) === value, join });
 
   // Establish that repoRoot identifies a repository before granting its site/
-  // directory privileged output status. Load every required source before any
-  // destructive output preparation so an incomplete or mistyped root fails
-  // without deleting an unrelated, nonempty site/ directory.
+  // directory privileged output status. Load and validate every publishable
+  // source before destructive output preparation so an incomplete, malformed,
+  // or mistyped root cannot delete an unrelated, nonempty site/ directory.
   const repoUrl = await resolveRepoUrl(root);
   const mermaidSrc = join(root, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
   const [landingHtml, articleHtml, deckBytes, mermaidBytes] = await Promise.all([
@@ -259,16 +259,18 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     Promise.all(DECKS.map((deck) => readFile(join(decksDir, deck.file)))),
     readFile(mermaidSrc),
   ]);
+  const landingOutput = injectNav(landingHtml, repoUrl);
+  const articleOutput = articleHtml.map((html) => injectNav(html, repoUrl));
+  const stateAtlasOutput = injectNav(buildStateAtlasHtml(), repoUrl);
 
   await prepareOutputDirectory(root, out);
 
   // Landing page: the intro article, navigable, published as index.html.
-  await writeFile(join(out, 'index.html'), injectNav(landingHtml, repoUrl), 'utf8');
+  await writeFile(join(out, 'index.html'), landingOutput, 'utf8');
 
   // Deep-dive article: published with the same nav so the set is navigable.
   for (const [index, article] of ARTICLES.entries()) {
-    const html = articleHtml[index];
-    await writeFile(join(out, article.file), injectNav(html, repoUrl), 'utf8');
+    await writeFile(join(out, article.file), articleOutput[index], 'utf8');
   }
 
   // Decks: self-contained slide renders, copied as-is (no nav injection).
@@ -278,7 +280,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
 
   // State atlas: generated from the core state tables at build time, then given
   // the same shared nav as the article pages so it can never drift from the code.
-  await writeFile(join(out, STATE_ATLAS.file), injectNav(buildStateAtlasHtml(), repoUrl), 'utf8');
+  await writeFile(join(out, STATE_ATLAS.file), stateAtlasOutput, 'utf8');
 
   // Vendored mermaid runtime the atlas page references (Pages has no CSP, so we
   // load it as an external asset rather than inlining ~3MB into the page).

@@ -145,6 +145,33 @@ test('build-site: incomplete repoRoot with valid package metadata preserves a pr
   }
 });
 
+test('build-site: complete repoRoot with a malformed article preserves a pre-existing site directory', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-malformed-root-'));
+  const sentinel = join(repoRoot, 'site', 'sentinel.txt');
+  try {
+    await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
+    await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
+    await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
+    for (const article of ARTICLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', article.file), '<body>article without style</body>', 'utf8');
+    }
+    for (const deck of DECKS) {
+      await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+    await mkdir(join(repoRoot, 'site'));
+    await writeFile(sentinel, 'preserve me', 'utf8');
+
+    await assert.rejects(() => buildSite({ repoRoot }), /cannot inject nav/);
+
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('build-site: state atlas is generated from the code tables, navigable, with the mermaid asset', async () => {
   const out = await mkdtemp(join(tmpdir(), 'pages-atlas-'));
   try {
