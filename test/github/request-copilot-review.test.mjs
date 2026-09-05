@@ -673,7 +673,7 @@ test("request-copilot-review fails closed with the empty-result message when a m
 test("request-copilot-review recovers when the INITIAL post-request read throws and a later read succeeds", async () => {
   // The initial post-request read sits inside the retry window: a throw there
   // consumes the first scheduled delay and re-probes instead of propagating,
-  // so a transient blip immediately after a successful edit self-heals.
+  // so a transient blip immediately after a successful request self-heals.
   const delayCalls = [];
   const delayImpl = async (ms) => {
     delayCalls.push(ms);
