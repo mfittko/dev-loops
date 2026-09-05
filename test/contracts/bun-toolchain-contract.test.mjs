@@ -59,12 +59,12 @@ describe("Bun 1.4.1 toolchain authority", () => {
     assert.deepEqual(root.publishConfig, { access: "public", provenance: true });
     assert.deepEqual(core.publishConfig, { access: "public", provenance: true });
     assert.equal(root.scripts.verify, "bun scripts/verify.mjs");
-    assert.match(root.scripts["test:pack"], /^bun test /);
+    assert.match(root.scripts["test:pack"], /^bun scripts\/run-bun-test\.mjs /);
     const bunTestScripts = [...Object.entries(root.scripts), ["packages/core#test", core.scripts.test]].filter(([, script]) =>
-      script.includes("bun test"),
+      script.includes("run-bun-test.mjs"),
     );
     for (const [name, script] of bunTestScripts) {
-      assert.match(script, /\bbun test --only-failures --parallel=2\b/, `${name} uses the bounded quiet test defaults`);
+      assert.doesNotMatch(script, /--parallel=/, `${name} delegates parallelism to the cross-platform launcher`);
     }
     for (const script of Object.values(root.scripts).filter((value) => value.includes("playwright"))) {
       assert.match(script, /node \.\/node_modules\/@playwright\/test\/cli\.js/);

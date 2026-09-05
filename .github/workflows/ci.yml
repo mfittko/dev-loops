@@ -69,6 +69,8 @@ jobs:
   verify-suite:
     name: verify-suite (${{ matrix.suite }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
+    env:
+      BUN_TEST_PARALLELISM: 2
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +151,7 @@ jobs:
 
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
-        run: bun run ${{ matrix.suite }} --parallel=2 --shard=${{ matrix.shard }}
+        run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
 
   verify:
     needs: [changes, verify-suite, viewer-smoke]

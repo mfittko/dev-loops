@@ -101,7 +101,7 @@
     "bin/**/*.mjs"
   ],
   "scripts": {
-    "test": "bun test --only-failures --parallel=2 ./test/*.test.mjs"
+    "test": "bun ../../scripts/run-bun-test.mjs ./test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public",

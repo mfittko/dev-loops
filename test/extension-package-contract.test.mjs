@@ -14,7 +14,7 @@ test("package metadata exposes the extension entrypoint and root extension test 
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-coding-agent"], "string");
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-tui"], "string");
   assert.equal(typeof packageJson.scripts["test:extension"], "string");
-  assert.match(packageJson.scripts["test:extension"], /^bun test /);
+  assert.match(packageJson.scripts["test:extension"], /^bun scripts\/run-bun-test\.mjs /);
   assert.match(packageJson.scripts["test:extension"], /extension-checks/);
   assert.match(packageJson.scripts["test:extension"], /extension-post-merge-update/);
   assert.match(packageJson.scripts["test:extension"], /extension-command-contract/);
