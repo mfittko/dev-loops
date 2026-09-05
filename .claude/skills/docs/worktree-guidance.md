@@ -217,6 +217,43 @@ pre-existing `commit-msg` hook is never clobbered; `core.hooksPath` pointing
 elsewhere refuses the install) — see `installCommitMsgGuard` in
 `packages/core/src/loop/commit-msg-guard.mjs`.
 
+### Wrong-checkout file-mutation guard
+
+<!-- rule: WORKTREE-WRONG-CHECKOUT-GUARD -->
+`WORKTREE-WRONG-CHECKOUT-GUARD`: under the Claude harness, the PreToolUse
+`Edit`/`Write` hook (`.claude/hooks/pre-tool-use-write-guard.mjs`, deciding via
+`decideWorktreeCheckoutGuard`) refuses a file mutation that would land on the
+MAIN checkout while a worktree cycle is active — the exact silent slip observed
+on #1973, where six absolute-path edits hit the main checkout instead of the
+freshly-created worktree and were caught only by a manual `git status` before
+commit. The "active worktree" is the one CONTAINING the call context's `cwd`
+(anchoring on cwd, not on the mere existence of a worktree, keeps the guard
+immune to the many stale `tmp/worktrees/` worktrees a long-lived checkout
+accumulates). A write is refused when cwd sits inside a listed worktree and the
+target resolves to a non-gitignored file in the main checkout (the check is
+`git check-ignore`, so a not-yet-tracked new source file is caught too, not only
+already-tracked ones); the refusal names the worktree-local path to use instead.
+Unlike the branch/commit-msg guards above,
+this one is ALWAYS ON (not best-effort), because it needs no hook install — it
+runs in-process on every `Edit`/`Write`.
+
+- A legitimate in-worktree edit passes untouched (the target is under the
+  active worktree).
+- A gitignored/scratch path (a main-checkout `tmp/` file, `/tmp`, another
+  worktree's file, anything outside the repo) passes — it is not the
+  wrong-checkout mistake this guard exists to catch.
+- An unresolvable/ambiguous active-worktree context fails SAFE: when the main
+  target's tracked status cannot be determined (e.g. `git check-ignore`
+  errored), the hook treats it as tracked and refuses rather than silently
+  allowing a wrong-checkout write.
+- Override a deliberate main-checkout edit during an active cycle with
+  `DEVLOOPS_ALLOW_MAIN=1 <command>` — the same override the default-branch
+  guard uses, so "I mean to operate on the primary checkout" stays one flag.
+
+This is the tool-call-time counterpart to the commit-time
+`pre-commit-branch-guard.mjs --block-main-checkout` check: it catches the wrong
+checkout at the `Edit`/`Write` before it ever reaches a commit.
+
 ### Post-merge cleanup
 
 <!-- rule: WORKTREE-CLEANUP -->

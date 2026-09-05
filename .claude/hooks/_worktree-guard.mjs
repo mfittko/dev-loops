@@ -193,6 +193,61 @@ export function isWorktreeCoreIsolated(cwd, worktreePaths) {
 }
 
 
+/**
+ * Realpath-normalize a path that MAY NOT EXIST yet.
+ *
+ * `realpathSync` throws ENOENT on a nonexistent leaf — which is exactly a `Write`
+ * creating a NEW file. Resolving only the roots (worktree/main) while leaving the
+ * target un-normalized makes an under-a-symlinked-ancestor comparison asymmetric,
+ * so a wrong-checkout new-file write could be misclassified. This resolves the
+ * realpath of the target's NEAREST EXISTING ancestor and rejoins the nonexistent
+ * tail, so the returned path shares the same symlink-resolved prefix the roots do.
+ *
+ * @param {string} p - Absolute or relative path (possibly not yet existing).
+ * @returns {string} A realpath-normalized absolute path (forward-slash, no trailing slash).
+ */
+export function realpathNearestExisting(p) {
+  const abs = path.resolve(p);
+  let dir = abs;
+  const tail = [];
+  // Walk up to the nearest existing ancestor.
+  for (;;) {
+    try {
+      const real = realpathSync(dir);
+      const joined = tail.length ? path.join(real, ...tail) : real;
+      return joined.replace(/\\/g, "/").replace(/\/+$/u, "");
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        // Reached the filesystem root without an existing ancestor — fall back
+        // to the literal resolved path (nothing to realpath against).
+        return abs.replace(/\\/g, "/").replace(/\/+$/u, "");
+      }
+      tail.unshift(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+/**
+ * Map a `git check-ignore -q` outcome to whether a MAIN-checkout target must be
+ * treated as a guarded (non-gitignored) file, failing SAFE on an unresolvable
+ * outcome.
+ *
+ * `git check-ignore -q` exits 0 when the path IS gitignored and 1 when it is NOT.
+ * Any other exit (git error, missing binary) is UNRESOLVABLE: the wrong-checkout
+ * guard must not silently allow a write it cannot classify, so an unresolvable
+ * outcome is treated as guarded (deny) rather than ignored (allow).
+ *
+ * @param {number|null|undefined} checkIgnoreStatus - The `git check-ignore -q` exit status (null when it could not run).
+ * @returns {boolean} true when the target should be guarded (not-ignored, or unresolvable → fail-safe); false only when it is confirmed gitignored (exit 0).
+ */
+export function resolveTrackedFromCheckIgnore(checkIgnoreStatus) {
+  if (checkIgnoreStatus === 0) return false; // confirmed gitignored — not guarded
+  if (checkIgnoreStatus === 1) return true; // confirmed not-ignored — guarded
+  return true; // unresolvable — fail safe (AC4)
+}
+
 
 // ---------------------------------------------------------------------------
 // Subagent availability

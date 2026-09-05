@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideBashGate, decideWriteGuard, decideSubagentStopGuard } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -722,4 +722,89 @@ test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independent
   assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null }).decision, "allow");
   // non-target repo is unaffected by this repo's humanMergeOnly invariant
   assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
+// decideWorktreeCheckoutGuard
+// ---------------------------------------------------------------------------
+
+const WCG_WT = "/repo/tmp/worktrees/dev-loops/issue-1994";
+
+test("decideWorktreeCheckoutGuard allows when no worktree is active (main/orchestrator context, AC3)", () => {
+  assert.equal(
+    decideWorktreeCheckoutGuard({ filePath: "/repo/scripts/x.mjs", activeWorktreeRoot: null, isMainCheckoutTracked: true }).decision,
+    "allow",
+  );
+});
+
+test("decideWorktreeCheckoutGuard allows a legitimate in-worktree edit (AC2)", () => {
+  // isMainCheckoutTracked:true makes this discriminating — the allow MUST come
+  // from the isTargetUnderActiveWorktree branch, not the later !tracked branch,
+  // so removing the in-worktree branch would flip this to deny.
+  assert.equal(
+    decideWorktreeCheckoutGuard({
+      filePath: `${WCG_WT}/scripts/x.mjs`,
+      activeWorktreeRoot: WCG_WT,
+      isTargetUnderActiveWorktree: true,
+      isMainCheckoutTracked: true,
+    }).decision,
+    "allow",
+  );
+});
+
+test("decideWorktreeCheckoutGuard denies a main-checkout write while a worktree is active (AC1)", () => {
+  const d = decideWorktreeCheckoutGuard({
+    filePath: "/repo/scripts/x.mjs",
+    activeWorktreeRoot: WCG_WT,
+    isTargetUnderActiveWorktree: false,
+    isMainCheckoutTracked: true,
+    suggestedWorktreePath: `${WCG_WT}/scripts/x.mjs`,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked/);
+  // the fix names the worktree-local path to use instead
+  assert.match(d.reason, new RegExp(`${WCG_WT}/scripts/x\\.mjs`));
+  assert.match(d.reason, /DEVLOOPS_ALLOW_MAIN=1/);
+});
+
+test("decideWorktreeCheckoutGuard fails safe on an unresolvable/ambiguous context (AC4)", () => {
+  // The hook sets isMainCheckoutTracked=true when tracked-status is unresolvable
+  // (e.g. git check-ignore errored) — an ambiguous active-worktree context must
+  // not silently allow a wrong-checkout write.
+  const d = decideWorktreeCheckoutGuard({
+    filePath: "/repo/scripts/x.mjs",
+    activeWorktreeRoot: WCG_WT,
+    isTargetUnderActiveWorktree: false,
+    isMainCheckoutTracked: true,
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("decideWorktreeCheckoutGuard allows a deliberate main-checkout edit under the override (AC3)", () => {
+  assert.equal(
+    decideWorktreeCheckoutGuard({
+      filePath: "/repo/scripts/x.mjs",
+      activeWorktreeRoot: WCG_WT,
+      isTargetUnderActiveWorktree: false,
+      isMainCheckoutTracked: true,
+      allowMainCheckout: true,
+    }).decision,
+    "allow",
+  );
+});
+
+test("decideWorktreeCheckoutGuard allows an outside-repo / gitignored scratch write while a worktree is active", () => {
+  assert.equal(
+    decideWorktreeCheckoutGuard({
+      filePath: "/tmp/note.md",
+      activeWorktreeRoot: WCG_WT,
+      isTargetUnderActiveWorktree: false,
+      isMainCheckoutTracked: false,
+    }).decision,
+    "allow",
+  );
+});
+
+test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard override (one operator flag)", () => {
+  assert.equal(WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, "DEVLOOPS_ALLOW_MAIN");
 });

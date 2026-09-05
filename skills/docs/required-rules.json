@@ -761,6 +761,10 @@
       "enforcementNote": "No-stash is agent discipline; no mechanical check."
     },
     {
+      "id": "WORKTREE-WRONG-CHECKOUT-GUARD",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EVIDENCE-AUDIT-TWO-SURFACES",
       "enforcement": "doc"
     }

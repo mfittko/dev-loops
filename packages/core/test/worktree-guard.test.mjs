@@ -12,6 +12,8 @@ import {
   isListedWorktree,
   resolveContainingWorktreeRoot,
   isWorktreeCoreIsolated,
+  realpathNearestExisting,
+  resolveTrackedFromCheckIgnore,
   detectSubagentAvailability,
   DEVLOOPS_SUBAGENT_AVAILABLE_VAR,
 } from "../src/loop/worktree-guard.mjs";
@@ -341,4 +343,47 @@ test("resolveContainingWorktreeRoot: resolves the containing worktree root from 
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// realpathNearestExisting — a Write target may not exist yet
+// ---------------------------------------------------------------------------
+
+test("realpathNearestExisting resolves a nonexistent leaf via its nearest existing ancestor (symlinked ancestor)", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "wg-rpne-"));
+  try {
+    const real = path.join(base, "real");
+    mkdirSync(path.join(real, "scripts"), { recursive: true });
+    const link = path.join(base, "link");
+    symlinkSync(real, link); // symlinked ancestor
+    // Target does NOT exist yet (a new-file Write) under the symlinked ancestor.
+    const target = path.join(link, "scripts", "new-file.mjs");
+    const resolved = realpathNearestExisting(target);
+    // The symlink is resolved to its real path, with the nonexistent tail rejoined.
+    assert.equal(resolved, path.join(realpathSync(real), "scripts", "new-file.mjs").replace(/\\/g, "/"));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("realpathNearestExisting returns an existing path's realpath unchanged (normalized)", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "wg-rpne2-"));
+  try {
+    assert.equal(realpathNearestExisting(base), realpathSync(base).replace(/\\/g, "/"));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// resolveTrackedFromCheckIgnore (AC4 fail-safe) — the hook's real seam
+// ---------------------------------------------------------------------------
+
+test("resolveTrackedFromCheckIgnore maps check-ignore exit status to guarded/allowed, failing safe on the unresolvable case (AC4)", () => {
+  assert.equal(resolveTrackedFromCheckIgnore(0), false); // exit 0 = gitignored → not guarded (allow)
+  assert.equal(resolveTrackedFromCheckIgnore(1), true); // exit 1 = not-ignored → guarded (deny)
+  // Unresolvable (git error / could not run) MUST fail safe to guarded (deny).
+  assert.equal(resolveTrackedFromCheckIgnore(128), true);
+  assert.equal(resolveTrackedFromCheckIgnore(null), true);
+  assert.equal(resolveTrackedFromCheckIgnore(undefined), true);
 });
