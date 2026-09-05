@@ -2680,13 +2680,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;
   // PENDING-REVIEW RESOLUTION (#1912): GitHub allows only ONE pending review
-  // per user per PR, so a --gate review --submit re-run must RESOLVE the
-  // caller's own same-head pending review (submit it via /events, or discard
-  // it) rather than POST a second one, which 422s. The pending review is
-  // author-only so the same-head marker scan (summarizeExistingComment, keyed
-  // on marker.visible) never sees it; detect it directly off the raw reviews
-  // list. Resolved BEFORE resolveFindingSurface so the submit/discard paths
-  // skip the round/inline-comment reads a create would need.
+  // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
+  // re-run must RESOLVE the caller's own pending review rather than POST a
+  // second one, which 422s regardless of the pending review's head. The
+  // pending review is author-only so the same-head marker scan
+  // (summarizeExistingComment, keyed on marker.visible) never sees it; detect
+  // it directly off the raw reviews list. Resolved BEFORE resolveFindingSurface
+  // so the submit/discard paths skip the round/inline-comment reads a create
+  // would need.
   if (isReviewGate) {
     const ownPending = await findOwnPendingReview({ repo: options.repo, pr: options.pr, headSha: canonicalHeadSha }, gh);
     const baseResult = {
@@ -2703,28 +2704,39 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     };
     if (reviewSubmitMode === "discard") {
-      // Discard deletes the caller's own pending review; with none present it is
-      // a no-op (nothing to delete) and must NOT fall through to create one.
+      // Discard deletes the caller's own pending review (any head); with none
+      // present it is a no-op (nothing to delete) and must NOT fall through to
+      // create one.
       if (ownPending) {
         await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
       }
       return { ...baseResult, action: ownPending ? "discarded" : "noop", commentId: ownPending ? ownPending.id : null };
     }
-    if (ownPending) {
-      // Leave pending: keep the author-only draft in place (idempotent no-op).
+    if (ownPending && ownPending.sameHead) {
+      // Leave pending: keep the author-only same-head draft in place (noop).
       if (reviewSubmitMode === "pending") {
         return { ...baseResult, action: "noop", commentId: ownPending.id };
       }
-      // comment | request-changes | approve: submit the existing pending review
-      // via /events with the mapped event, preserving its inline comments.
+      // comment | request-changes | approve: submit the existing same-head
+      // pending review via /events with the mapped event, preserving its inline
+      // comments.
       const submitted = await submitPendingReview(
         { repo: options.repo, pr: options.pr, reviewId: ownPending.id, event: resolveReviewSubmitEvent(reviewSubmitMode) },
         gh,
       );
       return { ...baseResult, action: "submitted", commentId: submitted.reviewId, commentUrl: submitted.reviewUrl };
     }
-    // No own pending review on this head: fall through to the create path below
-    // (unchanged behavior — a fresh review is posted for the round).
+    if (ownPending) {
+      // STALE pending on a DIFFERENT head (or a commit_id-less draft): it is not
+      // this round's surface, but GitHub's one-pending-per-PR-per-user limit
+      // means it would 422 the create below. Delete it, then fall through to
+      // create a fresh review (or fresh pending) at the current head. (#1912
+      // draft_gate correctness finding: head-scoped detection alone left this
+      // create path still 422-ing.)
+      await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
+    }
+    // No own pending review (or a stale one just cleared): fall through to the
+    // create path below (a fresh review is posted for the round).
   }
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,

@@ -155,18 +155,23 @@ refuses those modes even WITH the token. Headless/agent callers may use
 `--submit pending` or `--submit comment`.
 
 Submit-existing-pending (#1912, part of `GATE-REVIEW-SUBMIT-MODES`): GitHub
-allows only ONE pending review per user per PR. When the caller already has an
-own PENDING review on the same PR and head, a
-`--submit comment|request-changes|approve` re-run SUBMITS that existing pending
-review via `POST /pulls/<pr>/reviews/<id>/events` (mapped event, preserving the
-pending review's inline comments) instead of POSTing a second review — a second
-create returns HTTP 422. `--submit discard` DELETES it; `--submit pending`
-(leave-pending) leaves it in place (a noop). The own pending review is
-author-only, so its verdict marker is not `visible` and the same-head marker
-scan (`summarizeExistingComment`) cannot see it; the submit path detects it
-directly off the raw reviews list (which returns a pending review only to its
-own author) and matches on `commit_id === headSha` so a stale pending review on
-an earlier head is not mistaken for this round's surface.
+allows only ONE pending review per user per PR, and that limit is PR-scoped, NOT
+head-scoped — so ANY create (even a same-round `COMMENT` submit) returns HTTP
+422 while a pending review exists on the PR, whatever head it sits on. When the
+caller already has an own SAME-HEAD PENDING review, a
+`--submit comment|request-changes|approve` re-run SUBMITS it via
+`POST /pulls/<pr>/reviews/<id>/events` (mapped event, preserving the pending
+review's inline comments) instead of POSTing a second review; `--submit discard`
+DELETES it; `--submit pending` (leave-pending) leaves it in place (a noop). A
+STALE own pending review on a DIFFERENT head is NOT this round's surface, so it
+is DELETED before the round falls through to create a fresh review at the
+current head (leaving it would 422 the create; submitting it would submit
+stale-head content). `--submit discard` deletes the caller's own pending review
+regardless of head. The own pending review is author-only, so its verdict
+marker is not `visible` and the same-head marker scan
+(`summarizeExistingComment`) cannot see it; the submit path detects it directly
+off the raw reviews list (which returns a pending review only to its own author,
+at most one per PR).
 
 Separately, a `fanout_fanin` verdict posted with `--findings-json` but NO
 `--findings-ledger` emits a one-line advisory warning naming `--findings-ledger`

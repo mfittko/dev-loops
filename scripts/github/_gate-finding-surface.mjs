@@ -978,32 +978,39 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
 
 /**
  * Find the authenticated caller's own PENDING (author-only draft) review on
- * this PR at `headSha`. GitHub allows only ONE pending review per user per PR,
- * so a `--gate review --submit` re-run for the same round must SUBMIT this
- * existing pending review (via `submitPendingReview`) rather than POST a second
- * one — the second POST 422s (#1912). A pending review is author-only, so its
- * marker is never `visible`, which is exactly why the same-head marker scan
- * misses it; this reads the raw reviews list instead of the marker.
+ * this PR. GitHub allows only ONE pending review per user per PR — and that
+ * constraint is PR-scoped, NOT head-scoped — so ANY create (even a same-round
+ * COMMENT submit) 422s while a pending review exists, whatever head it sits on
+ * (#1912). A `--gate review --submit` re-run must therefore resolve that
+ * pending review (submit it via `submitPendingReview`, or delete it) rather
+ * than POST a second one. A pending review is author-only, so its marker is
+ * never `visible`, which is exactly why the same-head marker scan misses it;
+ * this reads the raw reviews list instead of the marker.
  *
  * No author-identity check is needed: GitHub's list-reviews endpoint returns a
  * PENDING review ONLY to the token that authored it (other users' pending
  * reviews are never listed), so any `state === "PENDING"` entry here is already
- * the caller's own. Matches on `commit_id === headSha` so a stale pending
- * review left on an earlier head is NOT mistaken for this round's surface. A
- * pending review missing an integer `id` or a `commit_id` is treated as
- * non-matching (fail-closed: fall through to the create path rather than
- * submit/delete an ambiguous draft). Returns `{ id, commitId, body }` or
- * `null`.
+ * the caller's own, and there is at most one. The returned `sameHead` flag
+ * reports whether its `commit_id` matches this round's head so the caller can
+ * submit a same-head pending as-is but clear a STALE (different-head, or
+ * `commit_id`-less) one before creating fresh — leaving a stale pending in
+ * place would 422 the create. A pending review missing an integer `id` is
+ * treated as absent (nothing to resolve). Returns `{ id, commitId, body,
+ * sameHead }` or `null`.
  */
 export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
   const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
   const match = flattenPaginatedSlurp(payload).find((r) =>
-    r?.state === "PENDING"
-    && typeof r?.commit_id === "string" && r.commit_id === headSha
-    && Number.isInteger(r?.id),
+    r?.state === "PENDING" && Number.isInteger(r?.id),
   );
   if (!match) return null;
-  return { id: match.id, commitId: match.commit_id, body: typeof match.body === "string" ? match.body : "" };
+  const commitId = typeof match.commit_id === "string" ? match.commit_id : null;
+  return {
+    id: match.id,
+    commitId,
+    body: typeof match.body === "string" ? match.body : "",
+    sameHead: commitId !== null && commitId === headSha,
+  };
 }
 
 /**
