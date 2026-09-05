@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { runNode, writeGhStub } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode, writeGhStub } from "../_helpers.mjs";
 
 import {
   buildMeritRationale,
@@ -65,8 +65,18 @@ async function withLedgerFile(ledger, fn) {
 async function withGhStub(entries, fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-gh-"));
   try {
-    const { env, ghPath } = await writeGhStub(tmpDir, entries);
-    return await fn({ env, ghCommand: ghPath, repoRoot: tmpDir });
+    const { runChild } = makeGhMock(entries);
+    return await fn({ env: runIdFreeEnv(), ghCommand: "gh", runChild, repoRoot: tmpDir });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function withCliGhStub(entries, fn) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-gh-cli-"));
+  try {
+    const { env } = await writeGhStub(tmpDir, entries);
+    return await fn({ env, repoRoot: tmpDir });
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -310,8 +320,8 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
     // Exactly the five read calls: a POST review / issue comment / files fetch
     // would overflow the stub (exit 97) and fail this run.
     roundEntries({ issueComments: [{ id: 1, body: verdictBody("pre_approval_gate") }] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.deepEqual(result, {
         ok: true,
         repo: REPO,
@@ -355,8 +365,8 @@ test("round source (A): a findings-review artifact and a deferred-summary commen
         { id: 4, body: legacyDeferredSummary },
       ],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       // 2 genuine verdict surfaces (distinct reviewed heads) — never 4.
       assert.equal(result.round, 2);
     },
@@ -368,8 +378,8 @@ test("round source (A): N genuine verdict surfaces for THIS gate count exactly N
     roundEntries({
       issueComments: [...roundHistory("draft_gate", 3), { id: 4, body: verdictBody("pre_approval_gate", nthHeadSha(9)) }],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 3);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 3);
     },
   ));
 });
@@ -378,8 +388,8 @@ test("round source (A): a comment merely QUOTING the verdict header (a blockquot
   const quotedHeaderReply = `> ${verdictBody("draft_gate").split("\n")[0]}\nAgreed, looks good.`;
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ issueComments: [{ id: 1, body: verdictBody("draft_gate") }, { id: 2, body: quotedHeaderReply }] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 1);
     },
   ));
 });
@@ -394,8 +404,8 @@ test("round source (A): the SAME reviewed head's verdict on BOTH the review and 
       reviews: [{ id: 501, body: verdictBody("pre_approval_gate") }],
       issueComments: [{ id: 1, body: verdictBody("pre_approval_gate") }],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 1);
     },
   ));
 });
@@ -406,8 +416,8 @@ test("round source (A): DISTINCT reviewed heads across the review and issue-comm
       reviews: [{ id: 501, body: verdictBody("pre_approval_gate", HEAD_SHA) }],
       issueComments: [{ id: 1, body: verdictBody("pre_approval_gate", nthHeadSha(1)) }],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 2);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 2);
     },
   ));
 });
@@ -419,8 +429,8 @@ test("round source (A): a PR review merely quoting the verdict header, with no p
       reviews: [{ id: 501, body: headerOnlyNoHeadSha }],
       issueComments: [{ id: 1, body: verdictBody("pre_approval_gate") }],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 1);
     },
   ));
 });
@@ -438,8 +448,8 @@ test("round source (B): a gate-header marker's round wins over a lower verdict-s
   ].join("\n");
   await withLedgerFile(makeLedger({ findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ reviews: [{ id: 600, body: priorReview }], issueComments: [{ id: 1, body: verdictBody("pre_approval_gate") }] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 5);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 5);
     },
   ));
 });
@@ -452,8 +462,8 @@ test("round source (B): the cross-check never mixes gates — a HIGHER round on 
       reviews: [{ id: 601, body: draftGateReview }, { id: 602, body: preApprovalReview }],
       issueComments: [],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 2);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 2);
     },
   ));
 });
@@ -461,7 +471,7 @@ test("round source (B): the cross-check never mixes gates — a HIGHER round on 
 test("round source (C): real <gate>-*.json findings-log files under --tmp-root count, ignoring the other gate's and non-.json files", async () => {
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries(),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
       await writeFile(path.join(findingsDir, `draft_gate-${HEAD_SHA}.json`), "{}", "utf8");
@@ -469,7 +479,7 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
       await writeFile(path.join(findingsDir, `pre_approval_gate-${HEAD_SHA}.json`), "{}", "utf8"); // other gate — excluded
       await writeFile(path.join(findingsDir, `draft_gate-${HEAD_SHA}.txt`), "not json", "utf8"); // wrong extension — excluded
 
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       // Verdict-surface count is 1; the local fallback (2 real draft_gate-*.json
       // files) pushes the round up to 2.
       assert.equal(result.round, 2);
@@ -535,8 +545,8 @@ test("an open worth-fixing-now thread stays unresolved AT ROUND 3 EXACTLY (the f
   const thread = openWfnThread({ commentId: 6002 });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 3);
       assert.equal(result.deferredResolved, 0);
     },
@@ -555,8 +565,8 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
       postReplyEntry(6002, { id: 7001 }),
       resolveThreadEntry("THREAD_D"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.followUpIssueNumber, 9500);
@@ -583,8 +593,8 @@ test("an unresolved nice-to-have thread with no operatorVisible signal is resolv
       },
       resolveThreadEntry("THREAD_DEFER"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
@@ -609,8 +619,8 @@ test("an unresolved OPERATOR-VISIBLE low thread is replied-to + resolved AND fil
       postReplyEntry(6210, { id: 7110 }),
       resolveThreadEntry("THREAD_VISIBLE_LOW"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
@@ -644,8 +654,8 @@ test("#1882: a malformed fileable target is isolated (no partial stamp) and does
       postReplyEntry(9300, { id: 7300 }),
       resolveThreadEntry("THREAD_OK"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1, "the well-formed target still resolves");
       assert.equal(result.unresolvedGateThreadCount, 1, "the malformed target stays unresolved, keeping the gate blocked");
       assert.equal(result.followUpIssueNumber, 9500);
@@ -673,8 +683,8 @@ test("an unresolved nit thread is resolved in-thread immediately, at round 1, an
       },
       resolveThreadEntry("THREAD_NIT"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
@@ -695,8 +705,8 @@ test("#1973: a bare governing-issue ref in a finding summary is fail-closed with
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     // No POST/resolve entries: the guard refuses BEFORE any mutating gh call.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
       assert.equal(result.dispositionFailures.length, 1);
@@ -722,8 +732,8 @@ test("#1973: a whitelisted governing-issue ref passes with --allowed-refs", asyn
       },
       resolveThreadEntry("THREAD_GOVREF_OK"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
       assert.equal(result.dispositionFailures, undefined);
@@ -753,8 +763,8 @@ test("#1973: --allowed-refs also opens the guard on the fileable (filed-to-follo
       },
       resolveThreadEntry("THREAD_GOVREF_FILE"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
       assert.equal(result.followUpIssueNumber, 9500);
@@ -804,8 +814,8 @@ test("#1846: a mixed round files ONLY the fileable subset into ONE follow-up iss
       postReplyEntry(9104, { id: 9204 }),
       resolveThreadEntry("THREAD_MIX_ILOW"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 4);
       assert.equal(result.unresolvedGateThreadCount, 0);
@@ -825,8 +835,8 @@ test("an unresolved question thread is never auto-defer-closed (still blocks gat
     // them for a question thread — withGhStub fails the test if an
     // unexpected gh invocation is made.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
@@ -852,8 +862,8 @@ test("a legacy severity=defer marker posts a reply in the canonical vocabulary",
       },
       resolveThreadEntry("THREAD_LEGACY"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.followUpIssueNumber, undefined);
@@ -869,8 +879,8 @@ test("marker provenance: a FOREIGN-authored thread past the fix window, carrying
     // No GET/PATCH/reply/resolve entries: a regression that mutates this
     // foreign-authored thread would overflow the stub and fail the run.
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [foreign] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 0);
     },
@@ -893,8 +903,8 @@ test("a deferral target whose REST-fetched body has LEADING WHITESPACE before th
       postReplyEntry(6600, { id: 7600 }),
       resolveThreadEntry("THREAD_WS"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 1);
     },
   ));
 });
@@ -914,8 +924,8 @@ test("a finding whose own text quotes the literal 'disposition=deferred' token s
       postReplyEntry(6500, { id: 7500 }),
       resolveThreadEntry("THREAD_D"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 1);
     },
   ));
 });
@@ -941,8 +951,8 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
       postReplyEntry(6501, { id: 7501 }),
       resolveThreadEntry("THREAD_D"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.followUpIssueNumber, 9500);
     },
@@ -974,8 +984,8 @@ test("a disposition pass where EVERY target is already stamped performs no creat
       postReplyEntry(6802, { id: 7802 }),
       resolveThreadEntry("THREAD_B"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 2);
       assert.equal(result.followUpIssueNumber, 9500);
     },
@@ -1005,8 +1015,8 @@ test("a mixed disposition pass appends once, for only the unstamped target, reus
       postReplyEntry(6902, { id: 7902 }),
       resolveThreadEntry("THREAD_UNSTAMPED"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 2);
       assert.equal(result.followUpIssueNumber, 9500);
     },
@@ -1032,8 +1042,8 @@ test("#1809: no local issue= marker yet, but GitHub already has this PR's follow
       postReplyEntry(6700, { id: 7700 }),
       resolveThreadEntry("THREAD_XPATH"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.followUpIssueNumber, 4242, "links judge-pass's already-created issue, never a new one");
     },
@@ -1055,8 +1065,8 @@ test("#1672 (a): a round-1 medium thread is NOT defer-closed (stays unresolved, 
     // No GET/PATCH/reply/resolve entries: a regression that defer-closed this
     // in-window medium thread would overflow the stub and fail the run.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
@@ -1073,8 +1083,8 @@ test("#1672 (b): a question thread is NOT defer-closed (stays unresolved, must b
     // No disposition entries: a regression that defer-closed this question
     // thread would overflow the stub and fail the run.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
@@ -1097,8 +1107,8 @@ test("#1672 (c): a round-4 medium thread IS defer-closed (past the default windo
       postReplyEntry(9003, { id: 9103 }),
       resolveThreadEntry("THREAD_MED_R4"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 1);
     },
@@ -1114,8 +1124,8 @@ test("#1672 (d): a high thread is never defer-closed (even past the fix window)"
     // No disposition entries: a regression that defer-closed this high thread
     // would overflow the stub and fail the run.
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 0);
     },
@@ -1132,9 +1142,9 @@ test("#1672 guard: a disposition=deferred stamp on a question thread is rejected
     // No GET/PATCH/reply/resolve entries: the scan runs before any of those,
     // and a regression that proceeded to stamp/resolve would overflow the stub.
     roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*reason=out-of-window/s,
       );
     },
@@ -1150,9 +1160,9 @@ test("#1672 guard: a disposition=deferred stamp on an in-window medium thread is
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     // No GET/PATCH/reply/resolve entries: the scan runs before any of those.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*round=1.*reason=out-of-window/s,
       );
     },
@@ -1174,9 +1184,9 @@ test("#1807 guard: a disposition=deferred stamp with no linked follow-up issue n
     // No issue-create/GET/PATCH/reply/resolve entries: the scan runs before
     // any of those, and a regression that proceeded would overflow the stub.
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=missing-issue-link/s,
       );
     },
@@ -1191,9 +1201,9 @@ test("#1846 guard: a disposition=deferred stamp on a nit thread is rejected (nit
   const thread = threadNode({ id: "THREAD_NIT_STAMPED", path: "src/naming.mjs", line: 4, commentId: 9008, body: stampedNit });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         // #1853 hygiene: the error message itself names the nit rejection
         // case (diagnosable without cross-referencing the code), in addition
         // to the per-thread detail already asserted.
@@ -1212,9 +1222,9 @@ test("#1846 guard: a disposition=deferred stamp on a NON-operator-visible low th
   const thread = threadNode({ id: "THREAD_LOW_STAMPED", path: "src/naming.mjs", line: 4, commentId: 9009, body: stampedLow });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         // #1853 hygiene: the error message names the low/operatorVisible
         // rejection case explicitly, in addition to the per-thread detail.
         /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=out-of-window.*a low must carry operatorVisible=true/s,
@@ -1230,9 +1240,9 @@ test("a gate-authored thread selected for deferral with no resolvable comment id
   const thread = threadNode({ id: "THREAD_NO_COMMENT_ID", path: "src/naming.mjs", line: 3, commentId: null, body: shortBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /THREAD_NO_COMMENT_ID carries a gate-authored finding marker.*no resolvable comment id/s,
       );
     },
@@ -1247,9 +1257,9 @@ test("fetchThreadsWithFullBodies fails closed when the full-body join misses a t
   const thread = threadNode({ id: "THREAD_MISS", path: "src/cache.mjs", line: 9, commentId: 7000, body: "x".repeat(220) });
   await withLedgerFile(makeLedger({ findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread], fullBodyThreads: [] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /Could not resolve the full body/,
       );
     },
@@ -1260,9 +1270,9 @@ test("fetchThreadsWithFullBodies fails closed for a truncated thread that carrie
   const thread = threadNode({ id: "THREAD_NO_ID", path: "src/cache.mjs", line: 9, commentId: null, body: "y".repeat(220) });
   await withLedgerFile(makeLedger({ findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread], fullBodyThreads: [] }),
-    async ({ env, ghCommand, repoRoot }) => {
+    async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
-        () => closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot }),
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /Could not resolve the full body for review thread THREAD_NO_ID/,
       );
     },
@@ -1277,8 +1287,8 @@ test("a join miss on a SHORT body (never truncated) does not fail closed — the
   const thread = threadNode({ id: "THREAD_SHORT", path: "src/naming.mjs", line: 3, commentId: 7100, body: shortBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread], fullBodyThreads: [] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 0);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 0);
     },
   ));
 });
@@ -1288,8 +1298,8 @@ test("a join miss on a SHORT body that legitimately ends with its own ellipsis c
   const thread = threadNode({ id: "THREAD_ELLIPSIS", path: "src/naming.mjs", line: 3, commentId: 7101, body });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread], fullBodyThreads: [] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 0);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 0);
     },
   ));
 });
@@ -1310,8 +1320,8 @@ test("a thread whose body exceeds the 200-char listing excerpt is disposed from 
       postReplyEntry(6400, { id: 7400 }),
       resolveThreadEntry("THREAD_LONG"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).deferredResolved, 1);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 1);
     },
   ));
 });
@@ -1332,8 +1342,8 @@ test("a paginated (--slurp page-array) reviews response is flattened, not just t
       threadsEntry([]),
       threadsEntry([]),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot })).round, 7);
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).round, 7);
     },
   ));
 });
@@ -1360,7 +1370,7 @@ test("close-gate-findings.mjs: --help documents the shared --jq/--silent flags",
 
 test("close-gate-findings.mjs: --jq filters the result and exits 0", async () => {
   const ledger = makeLedger({ gate: "draft_gate", findings: [] });
-  await withLedgerFile(ledger, (ledgerPath) => withGhStub(roundEntries(), async ({ env, repoRoot }) => {
+  await withLedgerFile(ledger, (ledgerPath) => withCliGhStub(roundEntries(), async ({ env, repoRoot }) => {
     const { code, stdout, stderr } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--jq", ".round"], {
       env: { ...env, PATH: env.PATH },
       cwd: repoRoot,
@@ -1373,7 +1383,7 @@ test("close-gate-findings.mjs: --jq filters the result and exits 0", async () =>
 
 test("close-gate-findings.mjs: --silent suppresses stdout and maps to exit code only", async () => {
   const ledger = makeLedger({ gate: "draft_gate", findings: [] });
-  await withLedgerFile(ledger, (ledgerPath) => withGhStub(roundEntries(), async ({ env, repoRoot }) => {
+  await withLedgerFile(ledger, (ledgerPath) => withCliGhStub(roundEntries(), async ({ env, repoRoot }) => {
     const { code, stdout } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--silent"], { env, cwd: repoRoot });
     assert.equal(code, 0);
     assert.equal(stdout, "");
@@ -1382,7 +1392,7 @@ test("close-gate-findings.mjs: --silent suppresses stdout and maps to exit code 
 
 test("close-gate-findings.mjs: an invalid --jq filter fails closed: stderr + exit 2", async () => {
   const ledger = makeLedger({ gate: "draft_gate", findings: [] });
-  await withLedgerFile(ledger, (ledgerPath) => withGhStub(roundEntries(), async ({ env, repoRoot }) => {
+  await withLedgerFile(ledger, (ledgerPath) => withCliGhStub(roundEntries(), async ({ env, repoRoot }) => {
     const { code, stdout, stderr } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--jq", "bogus!!"], { env, cwd: repoRoot });
     assert.equal(code, 2);
     assert.equal(stdout, "");
@@ -1432,8 +1442,8 @@ test("#1581 (a): a per-gate worthFixingNowFixWindow is honored by the dispositio
       resolveThreadEntry("THREAD_D"),
     ],
     { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 3);
       assert.equal(result.deferredResolved, 1);
     },
@@ -1447,8 +1457,8 @@ test("#1581 (a): a WFN thread stays open at round == window (boundary is inclusi
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
     roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
     { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 2);
       assert.equal(result.deferredResolved, 0);
     },
@@ -1465,8 +1475,8 @@ test("#1581 (b): draft_gate rounds do not consume pre_approval_gate's worth-fixi
       issueComments: [...roundHistory("draft_gate", 9), ...roundHistory("pre_approval_gate", 2)],
       threads: [thread],
     }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 2);
       assert.equal(result.deferredResolved, 0);
     },
@@ -1481,8 +1491,8 @@ test("#1581 (c): an open must-fix finding forces continuation (never deferred pa
     // No GET/PATCH/reply/resolve entries: a regression that deferred this
     // must-fix thread would overflow the stub and fail the run.
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 0);
     },
@@ -1498,8 +1508,8 @@ test("#1581 (d): must-fix escalates (not defers) at round-cap exhaustion", async
     // No disposition entries: must-fix must not be deferred even at round 10.
     roundEntries({ issueComments: roundHistory("draft_gate", 10), threads: [thread] }),
     { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 10);
       assert.equal(result.deferredResolved, 0);
     },
@@ -1529,8 +1539,8 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
       postReplyEntry(8002, { id: 7800 }),
       resolveThreadEntry("THREAD_NTH"),
     ],
-    async ({ env, ghCommand, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       // 2 unresolved gate-authored threads pre-defer, 1 resolved => 1 remains.
       assert.equal(result.unresolvedGateThreadCount, 1);
