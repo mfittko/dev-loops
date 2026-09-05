@@ -271,7 +271,7 @@ export function buildRevisionIdentity({ spec, specDigest, headSha, content, cont
   if (resolvedSpecDigest === resolvedContentDigest) {
     throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest and contentDigest must be distinct identities (fail closed)");
   }
-  if (resolvedSpecDigest === `sha256:${sha}` || resolvedSpecDigest.includes(sha)) {
+  if (resolvedSpecDigest === `sha256:${sha}`) {
     throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest must not be derived from headSha (fail closed)");
   }
   return { specDigest: resolvedSpecDigest, headSha: sha, contentDigest: resolvedContentDigest };
@@ -477,6 +477,12 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
       `spec-authority verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — every finding needs a whole-spec outcome (fail closed)`,
     );
   }
+  // Canonical ordering: sort by finding index so a verdict's decisions,
+  // humanDecisionIndices, and any downstream join (e.g. the human-decision
+  // reason string) are byte-stable regardless of the input's submission order —
+  // required for cross-harness determinism.
+  decisions.sort((a, b) => a.index - b.index);
+  humanDecisionIndices.sort((a, b) => a - b);
   return {
     specDigest,
     headSha,

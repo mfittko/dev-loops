@@ -87,6 +87,18 @@ describe("revision identities", () => {
   test("buildRevisionIdentity rejects a non-hex head SHA", () => {
     assert.throws(() => buildRevisionIdentity({ spec: SPEC, headSha: "not-a-sha", content: "x" }), /hex git SHA/);
   });
+
+  test("buildRevisionIdentity fails closed when specDigest and contentDigest collide", () => {
+    const d = computeSpecDigest(SPEC);
+    assert.throws(() => buildRevisionIdentity({ specDigest: d, headSha: HEAD_A, contentDigest: d }), /distinct identities/);
+  });
+
+  test("buildRevisionIdentity fails closed when specDigest is the head SHA", () => {
+    assert.throws(
+      () => buildRevisionIdentity({ specDigest: `sha256:${HEAD_A.padEnd(64, "0")}`, headSha: HEAD_A.padEnd(64, "0"), content: "x" }),
+      /must not be derived from headSha/,
+    );
+  });
 });
 
 describe("whole-spec judge disposition", () => {
@@ -185,6 +197,22 @@ describe("verdict-level coverage and escalation", () => {
     const d = { ...wholeSpecDecision(SPEC), ...id };
     const verdict = { ...id, decisions: [{ ...d, index: 0 }, { ...d, index: 0 }] };
     assert.throws(() => validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds: specCriterionIds(SPEC) }), /duplicate decision/);
+  });
+
+  test("decisions and humanDecisionIndices are returned in canonical (index-sorted) order regardless of submission order", () => {
+    const id = identities();
+    const mk = (index, outcome, extra = {}) => ({
+      ...id, index, outcome, checkedCriteria: specCriterionIds(SPEC), rationale: "r", ...extra,
+    });
+    // Submit out of order: index 2 (human), then 0, then 1.
+    const decisions = [
+      mk(2, SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE),
+      mk(0, SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT, { authorizedRemediation: "x" }),
+      mk(1, SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE),
+    ];
+    const out = validateSpecAuthorityVerdict({ ...id, decisions }, { findingsCount: 3, criterionIds: specCriterionIds(SPEC) });
+    assert.deepEqual(out.decisions.map((d) => d.index), [0, 1, 2]);
+    assert.deepEqual(out.humanDecisionIndices, [1, 2]);
   });
 
   test("a spec_cannot_decide decision surfaces the human-decision requirement", () => {

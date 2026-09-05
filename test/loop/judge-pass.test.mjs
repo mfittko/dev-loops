@@ -676,8 +676,109 @@ test("judgePassCli wires resolveCriterionInvalidation: a spec change stales all 
   assert.deepEqual(payload.specAuthority.invalidation.stale.sort(), [...criterionIds].sort());
   const persisted = JSON.parse(await readFile(path.join(tmpDir, "approvals.json"), "utf8"));
   assert.equal(persisted.specDigest, specDigest);
-  assert.deepEqual(persisted.approvedCriteria, criterionIds);
+  // The single finding still relevance-acts, so the round is NOT clean and
+  // approves nothing (no premature approval when open work remains).
+  assert.deepEqual(persisted.approvedCriteria, []);
   assert.equal(persisted.invalidation.specChanged, true);
+});
+
+test("judgePassCli approves the whole criterion set only on a clean round (no act findings)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-clean-approve-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const findings = [finding()];
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  // Relevance-reject the only finding so the act list is empty -> clean round.
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out of scope NG" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    ] }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+      approvalsOut: "./approvals.json",
+    },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.actCount, 0);
+  const persisted = JSON.parse(await readFile(path.join(tmpDir, "approvals.json"), "utf8"));
+  assert.deepEqual(persisted.approvedCriteria, criterionIds);
+});
+
+test("judgePassCli rejects a finding_conflicts finding even when its relevance disposition is defer (no follow-up)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-conflict-defer-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const findings = [finding({ severity: "low", summary: "would-be follow-up" })];
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "belongs in follow-up", followUpDraft: { title: "t", body: "b" } }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "finding_conflicts", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, conflictingCriteria: ["ng:0"], rationale: "conflicts with a non-goal" },
+    ] }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  // Stub issue deps: a finding_conflicts finding must NOT spawn a follow-up.
+  const deps = stubIssueDeps();
+  const [opts] = specAuthorityArgs(tmpDir, contentDigest);
+  const payload = await judgePassCli(opts, { repoRoot: tmpDir, ...deps });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.counts.reject, 1);
+  assert.equal(payload.counts.defer, 0, "the defer was overridden to reject by finding_conflicts");
+  assert.equal(deps.createCalls.length, 0, "no follow-up issue for a spec-rejected finding");
+});
+
+test("judgePassCli flags a remediation_conflicts finding as remediationRejected but keeps it actionable", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-remedy-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const findings = [finding({ summary: "valid repetition finding" })];
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "real defect" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "remediation_conflicts", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, conflictingCriteria: ["ng:0"], rationale: "proposed remedy flattens voice; route to a compliant alternative" },
+    ] }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
+  assert.equal(payload.actCount, 1, "the finding stays actionable");
+  assert.equal(payload.act[0].remediationRejected, true);
+});
+
+test("judgePassCli fails closed on a malformed --prior-approvals record", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-badprior-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+  ] }));
+  await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, approvedCriteria: "not-an-array" }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await assert.rejects(
+    judgePassCli({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json", priorApprovals: "./prior.json",
+    }, { repoRoot: tmpDir }),
+    /prior-approvals record is malformed/,
+  );
+});
+
+test("validateCliArgs: --content-digest and --approvals-out each require --spec-file", () => {
+  const base = { repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json" };
+  assert.throws(() => validateCliArgs({ ...base, contentDigest: "sha256:" + "a".repeat(64) }), /--content-digest requires --spec-file/);
+  assert.throws(() => validateCliArgs({ ...base, approvalsOut: "./a.json" }), /--approvals-out requires --spec-file/);
 });
 
 test("validateCliArgs: --prior-approvals requires --spec-file", () => {
@@ -688,4 +789,44 @@ test("validateCliArgs: --prior-approvals requires --spec-file", () => {
     }),
     /--prior-approvals requires --spec-file/,
   );
+});
+
+test("judgePassCli fails closed when the verdict's specDigest mismatches the computed spec (CLI stale-verdict seam)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-staleverdict-"));
+  const { computeSpecDigest } = await import("@dev-loops/core/loop/spec-authority");
+  const { contentDigest, criterionIds } = await specDigests();
+  const wrong = computeSpecDigest({ ...SPEC_FIXTURE, nonGoals: ["totally different non-goal"] });
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  // Verdict is internally consistent but pins a DIFFERENT (wrong) specDigest.
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest: wrong, headSha: HEAD, contentDigest, decisions: [
+    { index: 0, outcome: "valid_compliant", specDigest: wrong, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+  ] }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await assert.rejects(judgePassCli(...specAuthorityArgs(tmpDir, contentDigest)), /does not match the current spec digest/);
+});
+
+test("judgePassCli --carry-forward-proof carries an unaffected criterion at the same specDigest", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-carry-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+  ] }));
+  // Prior approvals at the SAME specDigest; proof carries ac:0, others stale.
+  await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
+  await writeFile(path.join(tmpDir, "proof.json"), JSON.stringify({ "ac:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true } }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    priorApprovals: "./prior.json", carryForwardProof: "./proof.json", approvalsOut: "./approvals.json",
+  }, { repoRoot: tmpDir });
+  assert.equal(payload.specAuthority.invalidation.specChanged, false);
+  assert.deepEqual(payload.specAuthority.invalidation.carried, ["ac:0"]);
+  assert.ok(payload.specAuthority.invalidation.stale.length >= 1);
 });

@@ -68,7 +68,7 @@ Write a single JSON object to the deterministic path the conductor names (under 
 
 The canonical tracker AC/DoD/Non-goals are immutable spec authority for the run — see `skills/docs/spec-authority-contract.md` (the normative source; do not restate its rules). You may report and dispose, never add, remove, weaken, override, or reinterpret the spec.
 
-When the conductor runs the spec-authority gate (it passes the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest`), you additionally emit a spec-authority verdict validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
+When the conductor engages the spec-authority gate (the opt-in path where judge-pass is invoked with `--spec-file`/`--content-digest`/`--spec-authority-verdict`; passing you the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest`), you additionally emit a spec-authority verdict validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). This section summarizes the outcomes for that path; the normative rules live in the contract. For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
 
 - `valid_compliant` — finding valid and remedy compliant; name an `authorizedRemediation`.
 - `finding_conflicts` — the finding conflicts with the spec; reject autonomously and name the `conflictingCriteria`.

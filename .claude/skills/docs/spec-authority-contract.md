@@ -2,7 +2,9 @@
 
 Canonical owner for immutable spec authority across the review / judge / fixer / gate / re-entry pipeline. The canonical tracker artifact's Acceptance Criteria, Definition of Done, and Non-goals are the immutable spec authority for a run. Reviewers report evidence and propose remedies; judges decide dispositions; fixers choose and validate implementation. None of those roles may add, remove, weaken, override, silently reinterpret, or replace the canonical spec.
 
-The deterministic enforcement lives in `packages/core/src/loop/spec-authority.mjs`; the judge-pass bridge (`scripts/loop/judge-pass.mjs`) enforces it at the seam between fan-in and the fixer. This document is the normative source; other docs and harness prompts MAY summarize or link it but MUST NOT restate its rules.
+The deterministic enforcement lives in `packages/core/src/loop/spec-authority.mjs`; the judge-pass bridge (`scripts/loop/judge-pass.mjs`) enforces it at the seam between fan-in and the fixer. This document is the normative source; other docs and harness prompts MAY summarize the outcomes and identities for operational guidance, but MUST NOT redefine, weaken, or override the rules defined here.
+
+Adoption: the enforcement is engaged for a run by invoking the judge-pass bridge with `--spec-file` (plus `--content-digest` and the judge's `--spec-authority-verdict`). Making the live dev-loop conductor pass those on every gate round by default is a separate adoption/rollout step tracked as follow-up work — this contract defines the mechanism and its tooling seam, not a change to how every existing run is invoked.
 
 ## Two independent revision identities
 
