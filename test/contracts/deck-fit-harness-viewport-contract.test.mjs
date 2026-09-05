@@ -27,3 +27,14 @@ test('deck-fit harness slugs the mobile viewport via `viewport:`, not a name-hac
     'stateName must not encode a viewport label — the slug carries it',
   );
 });
+
+test('deck-fit captures wait for top alignment and current visible chrome', async () => {
+  const source = await readFile(new URL('../../test/playwright/harness/deck-fit-harness.mjs', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /scrollIntoViewIfNeeded/, 'conditional scrolling can capture a partially settled slide');
+  assert.match(source, /scrollIntoView\(\{ behavior: "auto", block: "start"/, 'capture scrolling must be instant and top-aligned');
+  assert.match(source, /captured section must be aligned to the viewport top/, 'capture must assert the target geometry');
+  assert.match(source, /visible slide counter must match the section being captured/, 'capture must assert the visible counter');
+  assert.match(source, /visible progress must match the section being captured/, 'capture must assert the rendered progress width');
+  assert.match(source, /capture-state assertion fails on stale chrome/, 'the shared suite must retain a stale-chrome negative control');
+});

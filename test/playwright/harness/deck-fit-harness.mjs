@@ -201,6 +201,50 @@ function captureRuntimeErrors(page) {
   return report;
 }
 
+export async function assertDeckChromeState(page, section, index, total, { timeout = 5_000 } = {}) {
+  const expectedCount = `${String(index + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
+  const count = page.locator(".count");
+  if (await count.count()) {
+    await expect(count, "visible slide counter must match the section being captured").toHaveText(expectedCount, { timeout });
+  } else {
+    const footer = section.locator(".footer");
+    if (await footer.count()) {
+      await expect(footer, "visible slide footer must match the section being captured").toHaveText(expectedCount, { timeout });
+    }
+  }
+
+  const progress = page.locator(".chrome .bar, #progress");
+  await expect(progress, "deck must expose one visible progress indicator").toHaveCount(1);
+  await expect(progress).toBeVisible();
+  const expectedRatio = (index + 1) / total;
+  await expect.poll(
+    () => progress.evaluate((element) => {
+      const width = element.getBoundingClientRect().width;
+      const containerWidth = element.parentElement?.getBoundingClientRect().width || window.innerWidth;
+      return width / containerWidth;
+    }),
+    { timeout, message: "visible progress must match the section being captured" },
+  ).toBeCloseTo(expectedRatio, 2);
+}
+
+export async function alignDeckSectionForCapture(page, section, index, total) {
+  await section.evaluate((element) => {
+    document.documentElement.style.scrollBehavior = "auto";
+    document.body.style.scrollBehavior = "auto";
+    element.scrollIntoView({ behavior: "auto", block: "start", inline: "nearest" });
+  });
+  await expect.poll(
+    () => section.evaluate((element) => element.getBoundingClientRect().top),
+    { message: "captured section must be aligned to the viewport top" },
+  ).toBeCloseTo(0, 0);
+  await expect(section).toBeVisible();
+  await page.evaluate(async () => {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  await assertDeckChromeState(page, section, index, total);
+}
+
 // Registry-driven runner: defines the full per-deck suite from one data entry.
 //   { sliceId, deckPath, sectionIds, mobileCapture: { id, stateName } }
 // `sectionIds` may be plain ids or { id, stateName, capture } entries; entries
@@ -234,10 +278,9 @@ export function defineDeckSuite({
       if (desktopFit) assertDesktopFit(await measureFit(page));
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
-      for (const { id, stateName, capture } of states) {
+      for (const [index, { id, stateName, capture }] of states.entries()) {
         const section = page.locator(`#${id}`);
-        await section.scrollIntoViewIfNeeded();
-        await expect(section).toBeVisible();
+        await alignDeckSectionForCapture(page, section, index, ids.length);
         if (!capture) continue;
         await captureNamedUiState({
           page,
@@ -321,8 +364,7 @@ export function defineDeckSuite({
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
-      await section.scrollIntoViewIfNeeded();
-      await expect(section).toBeVisible();
+      await alignDeckSectionForCapture(page, section, ids.indexOf(mobileCapture.id), ids.length);
       await captureNamedUiState({
         page,
         testInfo,
@@ -371,6 +413,30 @@ export function defineDeckSuite({
       });
       const m = await measureFit(page);
       expect(() => assertMobileFit(m)).toThrow(/sections exceed the mobile viewport height/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} capture-state assertion fails on stale chrome`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const targetIndex = Math.min(1, ids.length - 1);
+      const section = page.locator(`#${ids[targetIndex]}`);
+      await alignDeckSectionForCapture(page, section, targetIndex, ids.length);
+      await page.evaluate(() => {
+        const count = document.querySelector(".count");
+        if (count) count.textContent = "01 / 99";
+        else {
+          const progress = document.querySelector("#progress, .progress");
+          progress?.style.setProperty("transition", "none", "important");
+          progress?.style.setProperty("width", "1px", "important");
+        }
+      });
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow();
     } finally {
       await stopFixtureServer(server);
     }
