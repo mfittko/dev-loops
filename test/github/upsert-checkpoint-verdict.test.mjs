@@ -6413,8 +6413,12 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
 // which is itself the proof that none of them ran.
 // ---------------------------------------------------------------------------
 
-function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], threads = [], files = [] } = {}) {
+function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], threads = [], files = [], pendingReviews = [] } = {}) {
   return [
+    // #1912: findOwnPendingReview scans the raw reviews list FIRST (before the
+    // resolveFindingSurface reads below) to decide submit-existing-pending vs.
+    // create. Default [] = no own pending review, so the create path is taken.
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(pendingReviews) + "\n" },
     { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
@@ -6809,6 +6813,411 @@ test("upsert-checkpoint-verdict --gate review --submit pending creates the revie
     // carries the complete verdict for the human to inspect before submitting.
     assert.match(postedPayload.body, /### Gate review: `review`/);
   }, { prefix: "dev-loops-upsert-review-submit-pending-" });
+});
+
+// ---------------------------------------------------------------------------
+// #1912 — pending -> submit re-run no longer 422s: when the caller already has
+// an own PENDING review on the same head, a --gate review --submit re-run
+// SUBMITS that pending review via /reviews/<id>/events (mapped event),
+// preserving its inline comments; discard DELETEs it; leave-pending is a noop;
+// the create path is unchanged when no own pending exists.
+// ---------------------------------------------------------------------------
+
+// An own PENDING review on the same head, as GitHub's list-reviews endpoint
+// returns it to its own author (author-only, so no visible marker — exactly
+// what the same-head marker scan misses). `id` 8001, on SINGLE_SURFACE_HEAD.
+const OWN_PENDING_REVIEW = { id: 8001, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "### Gate review: `review`\n(pending draft)" };
+
+for (const { submit, expectedEvent, needsConfirm } of [
+  { submit: "comment", expectedEvent: "COMMENT", needsConfirm: false },
+  { submit: "request-changes", expectedEvent: "REQUEST_CHANGES", needsConfirm: true },
+  { submit: "approve", expectedEvent: "APPROVE", needsConfirm: true },
+]) {
+  test(`#1912: --gate review --submit ${submit} with an own same-head PENDING review SUBMITS it via /events (event ${expectedEvent}), never creating a second review (no 422)`, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+      const entries = [
+        // findOwnPendingReview scan: the caller's own pending review is present.
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+        // The ONLY mutation is the events submit — never a create POST.
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+          stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+        },
+      ];
+      const { runChild, calls } = makeGhMock(entries);
+      const result = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit,
+        ...(needsConfirm ? { interactiveConfirm: true } : {}),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.action, "submitted");
+      assert.equal(result.submit, submit);
+      assert.equal(result.commentId, 8001);
+      // The events submit carries the mapped event.
+      const eventsCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+      assert.ok(eventsCall, "expected a /reviews/8001/events submit call");
+      assert.equal(JSON.parse(eventsCall.stdinText).event, expectedEvent);
+      // No create-review POST ever reached GitHub (the 422 path is not taken).
+      const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+      assert.equal(createCall, undefined);
+    }, { prefix: "dev-loops-upsert-review-submit-pending-events-" });
+  });
+}
+
+test("#1912: submitting an own pending review via /events preserves its inline comments (the draft is submitted as-is — no re-post, no comments key)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+        stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const eventsCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+    const payload = JSON.parse(eventsCall.stdinText);
+    // The events endpoint submits the pending review's existing inline comments
+    // as-is; the submit payload never re-sends a `comments` array (which would
+    // duplicate or drop them).
+    assert.equal("comments" in payload, false);
+    assert.equal(payload.event, "COMMENT");
+  }, { prefix: "dev-loops-upsert-review-submit-preserve-inline-" });
+});
+
+test("#1912: --gate review --submit discard DELETEs the caller's own same-head pending review (and never creates one)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+      { assertArgs: ["api", "-X", "DELETE", "repos/owner/repo/pulls/17/reviews/8001"], stdout: "" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "discard",
+      interactiveConfirm: true,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "discarded");
+    assert.equal(result.commentId, 8001);
+    const deleteCall = calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/8001"));
+    assert.ok(deleteCall, "expected a DELETE /reviews/8001 call");
+    const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    assert.equal(createCall, undefined);
+  }, { prefix: "dev-loops-upsert-review-discard-" });
+});
+
+test("#1912: --gate review --submit discard requires --interactive-confirm (fail closed; no DELETE without it)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const { runChild, calls } = makeGhMock([]);
+    await assert.rejects(
+      upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit: "discard",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /--submit discard requires --interactive-confirm/i,
+    );
+    // Fail-closed BEFORE any GitHub read/mutation.
+    assert.equal(calls.length, 0);
+  }, { prefix: "dev-loops-upsert-review-discard-noconfirm-" });
+});
+
+test("#1912: --gate review --submit pending with an own same-head PENDING review is a noop (leave-pending leaves it in place — no create, no submit, no delete)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "pending",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "noop");
+    assert.equal(result.commentId, 8001);
+    // Only the pending-scan read ran; no mutation of any kind.
+    assert.equal(calls.filter((c) => c.args.includes("POST") || c.args.includes("DELETE") || c.args.includes("PUT")).length, 0);
+  }, { prefix: "dev-loops-upsert-review-leave-pending-" });
+});
+
+test("#1912: a STALE own pending review on a DIFFERENT head is DELETEd before falling through to create (GitHub's one-pending-per-PR limit is PR-scoped, so leaving it would 422 the create)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A pending review left on an EARLIER head is not this round's surface, but
+    // GitHub's one-pending-per-PR-per-user limit means it would 422 any create
+    // while present — so it must be deleted before the create, never submitted
+    // via /events (its inline comments point at the stale head).
+    const stalePending = { id: 7777, state: "PENDING", commit_id: "def45670000000000000000000000000000000000", user: { login: "gate-bot" }, body: "### Gate review: `review`\n**Reviewed head SHA:** `def45670000000000000000000000000000000000`\n(stale draft)" };
+    const entries = [
+      // findOwnPendingReview scan finds the stale (wrong-head) pending.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([stalePending]) + "\n" },
+      // It is deleted (cleared) so the create below cannot 422.
+      { assertArgs: ["api", "-X", "DELETE", "repos/owner/repo/pulls/17/reviews/7777"], stdout: "" },
+      // Then the create path runs (resolveFindingSurface reads + POST create).
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":960,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-960"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // The stale pending was DELETEd (the create can no longer 422).
+    assert.ok(calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/7777")), "expected a DELETE of the stale pending review");
+    // It was never submitted via /events (its content is stale).
+    assert.equal(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/7777/events")), undefined);
+  }, { prefix: "dev-loops-upsert-review-stale-pending-" });
+});
+
+test("#1912: --gate review --submit discard with NO own pending review is a noop (nothing to delete; never falls through to create)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "discard",
+      interactiveConfirm: true,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "noop");
+    assert.equal(result.commentId, null);
+    // No DELETE and no create POST — nothing to do.
+    assert.equal(calls.filter((c) => c.args.includes("DELETE") || c.args.includes("POST")).length, 0);
+  }, { prefix: "dev-loops-upsert-review-discard-nopending-" });
+});
+
+test("#1912: findOwnPendingReview fail-closed guard — a pending entry with a non-integer id is treated as absent, so the create path runs (no submit/delete against an unidentifiable draft)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A malformed pending review (id is not an integer) must not be treated as
+    // a resolvable own pending — it is skipped and the round creates fresh.
+    const malformed = { id: "not-an-int", state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" } };
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([malformed]) + "\n" },
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":962,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-962"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // No DELETE/events against the malformed entry.
+    assert.equal(calls.find((c) => c.args.includes("DELETE")), undefined);
+  }, { prefix: "dev-loops-upsert-review-malformed-pending-" });
+});
+
+test("#1912 (Copilot): a FOREIGN same-head pending review (no dev-loops gate-review header — e.g. a human's manual draft) is NEVER submitted or deleted (data-loss guard); the round falls through to create", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A manual review-in-progress on the same token: same head, integer id. Its
+    // body QUOTES the dev-loops header lower down (citing another comment) but
+    // does NOT start with it — the start-anchored guard must treat it as absent
+    // so the tool never clobbers the human's draft (#1912 Copilot round 2).
+    const foreignPending = { id: 5555, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "WIP: still drafting my own comments\n\n> quoting the bot: ### Gate review: `review`\n" };
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([foreignPending]) + "\n" },
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":963,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-963"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // The human's draft (id 5555) is never submitted or deleted.
+    assert.equal(calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/5555")), undefined);
+    assert.equal(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/5555/events")), undefined);
+  }, { prefix: "dev-loops-upsert-review-foreign-pending-" });
+});
+
+test("#1912: --gate review --submit comment with NO own pending review creates a fresh review (no regression to the create path)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":961,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-961"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    assert.equal(result.submit, "comment");
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.equal(JSON.parse(postCall.stdinText).event, "COMMENT");
+    // No events submit path was taken.
+    assert.equal(calls.find((c) => c.args.some((a) => a.includes("/reviews/") && a.endsWith("/events"))), undefined);
+  }, { prefix: "dev-loops-upsert-review-create-no-pending-" });
+});
+
+test("#1912: a fanout_fanin round posted with --findings-json and NO --findings-ledger emits a one-line warning naming --findings-ledger as the inline-comment source", async () => {
+  await withTempDir(async (tempDir) => {
+    const findingsJsonPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsJsonPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "medium", summary: "a finding with no ledger" }] },
+    ]), "utf8");
+    // Routed through --gate review (no coordination-context reads): the footgun
+    // is gate-agnostic, and review keeps the mock to the pending-scan + create.
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":970,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-970"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "one finding",
+      findingsJson: findingsJsonPath,
+      findingsSeverityCounts: { medium: 1 },
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.ok(result.findingsLedgerWarning, "expected a findingsLedgerWarning");
+    assert.match(result.findingsLedgerWarning, /--findings-ledger/);
+    assert.match(result.findingsLedgerWarning, /inline comment/i);
+  }, { prefix: "dev-loops-upsert-findings-json-no-ledger-warn-" });
+});
+
+test("#1912: a fanout_fanin round WITH --findings-ledger emits NO findings-source warning (the footgun does not fire on the correct combination)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":971,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-971"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.findingsLedgerWarning, undefined);
+  }, { prefix: "dev-loops-upsert-ledger-no-warn-" });
 });
 
 test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
