@@ -253,7 +253,7 @@ function defaultCaptureConsole() {
   return null;
 }
 
-export async function captureNamedUiState({ page, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
+export async function captureNamedUiState({ page, screenshotTarget, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
   const resolvedOutputDir = outputDir ?? testInfo?.project?.outputDir ?? testInfo?.config?.outputDir ?? testInfo?.outputDir;
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: resolvedOutputDir,
@@ -277,7 +277,8 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   claimedStatePaths.set(paths.statePath, stateName);
 
   await mkdir(paths.artifactDir, { recursive: true });
-  await page.screenshot({ path: paths.screenshotPath, fullPage });
+  if (screenshotTarget) await screenshotTarget.screenshot({ path: paths.screenshotPath });
+  else await page.screenshot({ path: paths.screenshotPath, fullPage });
 
   // Semantic snapshot: the accessibility tree next to the pixels. Captured
   // best-effort — Playwright's `page.accessibility` is a deprecated API that is

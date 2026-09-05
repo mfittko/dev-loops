@@ -157,6 +157,37 @@ test('captureNamedUiState writes the deterministic screenshot and state artifact
   }
 });
 
+test('captureNamedUiState can capture an aligned element without resetting WebKit scroll', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-element-'));
+  const screenshots = [];
+
+  try {
+    await captureNamedUiState({
+      page: {
+        async screenshot() {
+          assert.fail('page screenshot must not run when an aligned target is supplied');
+        },
+      },
+      screenshotTarget: {
+        async screenshot(options) {
+          screenshots.push(options);
+        },
+      },
+      runAxe: async () => null,
+      captureConsole: async () => null,
+      outputDir: tempDir,
+      sliceId: 'viewport-capture',
+      stateName: 'Scrolled state',
+      fullPage: false,
+    });
+
+    assert.match(screenshots[0].path, /screenshot\.png$/);
+    assert.equal(screenshots[0].fullPage, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('captureNamedUiState fails closed on a within-run duplicate slug instead of overwriting', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-dup-'));
 

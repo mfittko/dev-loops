@@ -49,6 +49,7 @@ export async function settleMobile(page, url) {
 export async function measureFit(page) {
   return page.evaluate(() => {
     const iw = window.innerWidth;
+    const minimumContentInset = 16;
     const hOffenders = [];
     for (const el of document.querySelectorAll("body *")) {
       const r = el.getBoundingClientRect();
@@ -62,6 +63,8 @@ export async function measureFit(page) {
     // own overflow-y is hidden has cut-off content.
     const clipped = [];
     const oversizedSections = [];
+    const contentEdgeOffenders = [];
+    const contentInsets = [];
     for (const el of document.querySelectorAll("section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
@@ -71,11 +74,28 @@ export async function measureFit(page) {
       if (height > window.innerHeight + 1) {
         oversizedSections.push(`<${el.tagName.toLowerCase()} id="${el.id}"> height=${Math.round(height)} viewport=${window.innerHeight}`);
       }
+      const sectionRect = el.getBoundingClientRect();
+      for (const child of el.children) {
+        const position = getComputedStyle(child).position;
+        if (position === "absolute" || position === "fixed") continue;
+        const childRect = child.getBoundingClientRect();
+        if (childRect.width === 0 || childRect.height === 0) continue;
+        const topInset = childRect.top - sectionRect.top;
+        const bottomInset = sectionRect.bottom - childRect.bottom;
+        contentInsets.push({ sectionId: el.id, topInset, bottomInset });
+        if (topInset < minimumContentInset || bottomInset < minimumContentInset) {
+          contentEdgeOffenders.push(
+            `<section id="${el.id}"> <${child.tagName.toLowerCase()} class="${child.className}"> top=${Math.round(topInset)} bottom=${Math.round(bottomInset)}`,
+          );
+        }
+      }
     }
     return {
       hOffenders,
       clipped,
       oversizedSections,
+      contentEdgeOffenders,
+      contentInsets,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -163,6 +183,10 @@ export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
   // line rarely fires on its own — the per-element check above is the real catch.
   expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
   expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
+  expect(
+    m.contentEdgeOffenders ?? [],
+    `section content violates the ${viewportLabel} safe area (minimum 16px top/bottom inset):\n${(m.contentEdgeOffenders ?? []).join("\n")}`,
+  ).toEqual([]);
 }
 
 export function assertMobileFit(m) {
@@ -179,6 +203,16 @@ export function assertArticleFit(m) {
 export function assertDesktopFit(m) {
   assertDeckFit(m, "1280x800 desktop viewport");
   expect(m.oversizedSections, `sections exceed the desktop viewport height:\n${m.oversizedSections.join("\n")}`).toEqual([]);
+}
+
+export function assertContentSafeArea(m, { sectionIds, minimumInset }) {
+  const targetedInsets = m.contentInsets.filter(({ sectionId }) => sectionIds.includes(sectionId));
+  expect(targetedInsets.map(({ sectionId }) => sectionId).sort(), "content-safe-area sections must resolve to normal-flow children").toEqual([...sectionIds].sort());
+  const offenders = targetedInsets.filter(({ topInset, bottomInset }) => topInset < minimumInset || bottomInset < minimumInset);
+  expect(
+    offenders,
+    `section content must retain at least ${minimumInset}px of deliberate top/bottom inset:\n${offenders.map(({ sectionId, topInset, bottomInset }) => `${sectionId}: top=${Math.round(topInset)} bottom=${Math.round(bottomInset)}`).join("\n")}`,
+  ).toEqual([]);
 }
 
 export function assertA11yClean(results) {
@@ -255,6 +289,7 @@ export function defineDeckSuite({
   sectionIds,
   mobileCapture,
   desktopFit = false,
+  desktopContentSafeArea,
   mobileFit = false,
   evidenceAssertions = false,
   navigationAssertions = false,
@@ -275,15 +310,24 @@ export function defineDeckSuite({
       await page.evaluate(() => document.fonts.ready);
       await assertSectionIdsAndNoHorizontalScroll(page, ids);
       await assertCspMeta(page);
-      if (desktopFit) assertDesktopFit(await measureFit(page));
+      if (desktopFit) {
+        const fit = await measureFit(page);
+        assertDesktopFit(fit);
+        if (desktopContentSafeArea) assertContentSafeArea(fit, desktopContentSafeArea);
+      }
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       for (const [index, { id, stateName, capture }] of states.entries()) {
-        const section = page.locator(`#${id}`);
-        await alignDeckSectionForCapture(page, section, index, ids.length);
         if (!capture) continue;
+        // Start each WebKit capture from a fresh top-of-document paint. A
+        // viewport-height section that was already scrolled into view can be
+        // rasterized from a stale tile even though its DOM geometry is current.
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await page.evaluate(() => document.fonts.ready);
+        const section = page.locator(`#${id}`);
         await captureNamedUiState({
           page,
+          screenshotTarget: section,
           testInfo,
           sliceId,
           stateName,
@@ -297,6 +341,7 @@ export function defineDeckSuite({
           },
           captureConsole: async () => runtimeReport,
         });
+        await assertDeckChromeState(page, section, index, ids.length);
       }
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
@@ -353,6 +398,28 @@ export function defineDeckSuite({
     }
   });
 
+  if (desktopFit) test(`${sliceId} desktop fit check fails when content is pressed against the viewport edge`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => {
+        const section = document.querySelector("section");
+        const content = section?.firstElementChild;
+        if (section && content) {
+          const sectionTop = section.getBoundingClientRect().top;
+          const contentTop = content.getBoundingClientRect().top;
+          content.style.transform = `translateY(-${contentTop - sectionTop}px)`;
+        }
+      });
+      const m = await measureFit(page);
+      expect(m.contentEdgeOffenders.length).toBeGreaterThan(0);
+      expect(() => assertDesktopFit(m)).toThrow(/safe area/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
   test(`webkit ${sliceId} fits the mobile viewport (no horizontal scroll, no vertical clip)`, async ({ page }, testInfo) => {
     const { server, url } = await startServer();
     const runtimeReport = captureRuntimeErrors(page);
@@ -364,9 +431,9 @@ export function defineDeckSuite({
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
-      await alignDeckSectionForCapture(page, section, ids.indexOf(mobileCapture.id), ids.length);
       await captureNamedUiState({
         page,
+        screenshotTarget: section,
         testInfo,
         sliceId,
         stateName: mobileCapture.stateName,
@@ -380,6 +447,7 @@ export function defineDeckSuite({
         },
         captureConsole: async () => runtimeReport,
       });
+      await assertDeckChromeState(page, section, ids.indexOf(mobileCapture.id), ids.length);
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);
@@ -465,6 +533,10 @@ export const DECK_REGISTRY = {
     sliceId: "how-decided-deck",
     deck: "how-dev-loops-decided-itself.html",
     mobileCapture: { id: "the-log", stateName: "The log" },
+    desktopContentSafeArea: {
+      sectionIds: ["the-log", "self-review", "outcomes"],
+      minimumInset: 230,
+    },
     sectionIds: [
       { id: "hero", stateName: "Hero", capture: true },
       { id: "the-log", stateName: "The log", capture: true },
