@@ -12,6 +12,7 @@ import {
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -302,6 +303,49 @@ test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings
       // orchestrator hand-off (#1616).
       assert.deepEqual(written, { overallVerdict: result.overallVerdict, findings: result.findings });
       assert.equal(result.findings.length, 1);
+    },
+  );
+});
+
+// #1922: a reviewer's own incidental `#<digits>` issue/PR reference in a finding
+// summary/recommendation used to trip upsert-checkpoint-verdict.mjs's comment-id
+// guard (fail-closed on a bare auto-link token), forcing the operator to hand-
+// sanitize the consolidated JSON before the verdict could post. consolidateGateFanin
+// now neutralizes bare refs at the fan-in seam, once, so BOTH downstream shapes
+// (flat --ledger-out findings AND nested --out findingsJson) are guard-safe and a
+// rendered verdict body no longer refuses to post.
+test("consolidateGateFanin neutralizes bare #<digits> refs in finding summary/recommendation across both output shapes (#1922)", async () => {
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{
+          severity: "must-fix",
+          summary: "duplicates #1807 and ##1584 behavior",
+          recommendation: "align with #1731 guard",
+          file: "src/a.mjs",
+        }],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      // Flat ledger shape: the leading `#`(s) are stripped, the id digits kept.
+      const flat = result.findings.find((f) => f.angle === "scope");
+      assert.equal(flat.summary, "duplicates 1807 and 1584 behavior");
+      assert.equal(flat.recommendation, "align with 1731 guard");
+      assert.doesNotMatch(flat.summary, /#\d/);
+      assert.doesNotMatch(flat.recommendation, /#\d/);
+      // Nested findingsJson shape (--out) carries the SAME neutralized text.
+      const nested = result.findingsJson.find((a) => a.angle === "scope").findings[0];
+      assert.equal(nested.summary, "duplicates 1807 and 1584 behavior");
+      assert.equal(nested.recommendation, "align with 1731 guard");
+      // End to end: the neutralized text now passes the comment-id guard that
+      // used to fail-close on the raw `#1807` — the whole point of the fix.
+      assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(nested.summary));
+      assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(nested.recommendation));
+      // The rendered verdict body (the real render path) no longer throws.
+      assert.doesNotThrow(() => assertRendersWithoutThrowing(result.findingsJson));
     },
   );
 });
