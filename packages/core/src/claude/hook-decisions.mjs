@@ -455,7 +455,7 @@ export function decideWorktreeCheckoutGuard({
     decision: "deny",
     reason:
       `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — a worktree cycle is active ` +
-      `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's tracked file ` +
+      `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's non-gitignored file ` +
       `"${filePath}".${fix} A file mutation that lands on the main checkout while a worktree is ` +
       "active is silently lost from the branch. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate " +
       "main-checkout edit. See skills/docs/worktree-guidance.md.",

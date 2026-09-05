@@ -230,8 +230,10 @@ commit. The "active worktree" is the one CONTAINING the call context's `cwd`
 (anchoring on cwd, not on the mere existence of a worktree, keeps the guard
 immune to the many stale `tmp/worktrees/` worktrees a long-lived checkout
 accumulates). A write is refused when cwd sits inside a listed worktree and the
-target resolves to a TRACKED file in the main checkout; the refusal names the
-worktree-local path to use instead. Unlike the branch/commit-msg guards above,
+target resolves to a non-gitignored file in the main checkout (the check is
+`git check-ignore`, so a not-yet-tracked new source file is caught too, not only
+already-tracked ones); the refusal names the worktree-local path to use instead.
+Unlike the branch/commit-msg guards above,
 this one is ALWAYS ON (not best-effort), because it needs no hook install — it
 runs in-process on every `Edit`/`Write`.
 
