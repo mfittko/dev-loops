@@ -510,3 +510,56 @@ test("docs index references sub-issue-tree-contract.md", async () => {
   const indexContent = await readRepo("docs/index.md");
   assert.match(indexContent, /sub-issue-tree-contract\.md/i);
 });
+// #1993: the sanctioned close-gate-findings disposition-pass invocation MUST carry
+// --allowed-refs <governing-issue> so a deferred finding that cites the PR's own
+// governing issue is not fail-closed by close-gate-findings.mjs's bare-#N comment-id
+// guard (shipped in #1992). The flag was plumbed through the script but the SKILL
+// invocation was never updated, leaving #1992 inert. This pins the wire across every
+// sanctioned invocation (source + .claude mirror) and guards against regressing to a
+// bare `--ledger`-only call.
+test("sanctioned close-gate-findings invocations pass --allowed-refs <governing-issue> (source + mirror)", async () => {
+  const invocationDocs = [
+    "skills/copilot-pr-followup/SKILL.md",
+    ".claude/skills/copilot-pr-followup/SKILL.md",
+    "skills/docs/gate-review-sub-loop-contract.md",
+    ".claude/skills/docs/gate-review-sub-loop-contract.md",
+  ];
+  // Match an executable invocation: the script name immediately followed by --ledger
+  // and a <placeholder> value (prose mentions of the script name carry no --ledger).
+  const invocationPattern = /close-gate-findings\.mjs --ledger <[^>]+>([^\n`]*)/g;
+  let totalInvocations = 0;
+  for (const relPath of invocationDocs) {
+    const content = await readRepo(relPath);
+    const matches = [...content.matchAll(invocationPattern)];
+    assert.ok(matches.length > 0, `${relPath} must contain at least one close-gate-findings invocation`);
+    for (const match of matches) {
+      totalInvocations += 1;
+      assert.match(
+        match[1],
+        /--allowed-refs <governing-issue>/,
+        `${relPath}: every close-gate-findings invocation must carry --allowed-refs <governing-issue> (found bare: "${match[0].trim()}")`,
+      );
+    }
+  }
+  // Sanity: all four docs contributed at least one invocation.
+  assert.ok(totalInvocations >= 4, `expected >= 4 sanctioned invocations across docs, found ${totalInvocations}`);
+});
+test("close-gate-findings --allowed-refs governing issue is resolved deterministically, not hardcoded", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  // The authoritative resolution note lives in copilot-pr-followup Step 7: the
+  // governing issue is the PR's closingIssuesReferences, resolved deterministically,
+  // never a hardcoded literal.
+  assert.match(skill, /<governing-issue>` is the PR's governing \(closing\) issue resolved DETERMINISTICALLY/i);
+  assert.match(skill, /closingIssuesReferences/);
+  assert.match(skill, /NEVER a hardcoded literal/i);
+  // Scoped allowlist, not a blanket bypass: an unrelated bare ref stays fail-closed.
+  assert.match(skill, /UNrelated issue stays fail-closed/i);
+  // Guard against a literal issue number slipping into the sanctioned invocation.
+  const invocationLine = skill.match(/close-gate-findings\.mjs --ledger <[^>]+> --allowed-refs [^\n`]*/);
+  assert.ok(invocationLine, "copilot-pr-followup Step 7 close-gate-findings invocation not found");
+  assert.doesNotMatch(
+    invocationLine[0],
+    /--allowed-refs\s+\d/,
+    "the sanctioned invocation must pass the <governing-issue> placeholder, never a hardcoded numeric id",
+  );
+});
