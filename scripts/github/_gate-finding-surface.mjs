@@ -27,7 +27,7 @@ import { flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, ru
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
-import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
 // Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
@@ -284,18 +284,10 @@ export function collectFingerprints(text, set) {
 //
 // Runs on the RAW summary/angle text, BEFORE sanitizeInline/sanitizeCodeSpan:
 // those sanitizers emit their own numeric character references (e.g. `&#91;`
-// for `[`), and this regex does not distinguish an entity's digits from a bare
-// id's — neutralizing post-sanitize would re-match and corrupt an
-// already-emitted entity (`&#91;` -> `&&#35;91;`).
-// Strip EVERY number-sign in a consecutive run immediately before a digit, not
-// just the innermost one: `#123` and `##123` alike must leave `123` with no
-// residual number-sign, or the leftover still auto-links AND trips the
-// decode-aware guard. A lookahead consumes only the number-sign(s), keeping the
-// digits.
-const BARE_ISSUE_PR_ID_RE = /#+(?=\d)/g;
-function neutralizeBareIssuePrIds(value) {
-  return String(value).replace(BARE_ISSUE_PR_ID_RE, "");
-}
+// for `[`), which a bare-id strip would corrupt — see neutralizeBareIssuePrIds'
+// own doc (@dev-loops/core/github/comment-id-guard, the shared helper this used
+// to duplicate; #1922 hoisted it there so the fan-in consolidation seam and this
+// defer path share one implementation).
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
