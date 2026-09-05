@@ -121,9 +121,9 @@ authorizes nothing this contract's two gates require.
 ### `review` gate submit modes (#1840)
 
 `GATE-REVIEW-SUBMIT-MODES`: `upsert-checkpoint-verdict.mjs`'s `--submit
-<pending|comment|request-changes|approve>` flag is SCOPED TO `--gate review`
-ONLY — passing it on `draft_gate`/`pre_approval_gate` is rejected with a named
-error (never silently ignored); those two gates always submit a `COMMENT`
+<pending|comment|request-changes|approve|discard>` flag is SCOPED TO `--gate
+review` ONLY — passing it on `draft_gate`/`pre_approval_gate` is rejected with a
+named error (never silently ignored); those two gates always submit a `COMMENT`
 review per `GATE-COMMENT-SINGLE-SURFACE` (`GATE-COMMENT-NON-SUBSTITUTION`: a
 clean pre-approval must stay a submitted, visible evidence surface, never
 substitutable by a differently-submitted review).
@@ -134,23 +134,45 @@ substitutable by a differently-submitted review).
 | `comment` (default when `--submit` is omitted) | `COMMENT` | Submits the review immediately (today's behavior, unchanged) |
 | `request-changes` | `REQUEST_CHANGES` | Submits the review; a GitHub-native branch-protection signal that can BLOCK merge until dismissed |
 | `approve` | `APPROVE` | Submits the review; a GitHub-native branch-protection signal that SATISFIES a required-approvals rule |
+| `discard` | n/a (DELETE) | Deletes the caller's own pending draft review (`DELETE /pulls/reviews/<id>`); leaves nothing behind |
 
 `request-changes`/`approve` carry GitHub-native branch-protection effects
 independent of any dev-loops gate. A headless/non-interactive review run
 (`--auto`) is restricted to `pending`/`comment` — `--submit
-approve`/`--submit request-changes` are REFUSED headless, so automation can
-never auto-approve or auto-block a PR; they are reachable only through the
-[Review skill](../review/SKILL.md)'s interactive multiple-choice submit step.
+approve`/`--submit request-changes`/`--submit discard` are REFUSED headless, so
+automation can never auto-approve, auto-block, or auto-delete a PR review; they
+are reachable only through the [Review skill](../review/SKILL.md)'s interactive
+multiple-choice submit step.
 
 Since #1888 that guarantee is STRUCTURAL, not caller self-identification:
 the absence of `--auto` proves nothing (a headless caller can simply omit
-the flag), so `approve`/`request-changes` additionally REQUIRE the explicit
-`--interactive-confirm` token — passed only by the review skill's
-interactive submit step after a human made the choice — and are REFUSED
+the flag), so `approve`/`request-changes` (and `discard`, #1912) additionally
+REQUIRE the explicit `--interactive-confirm` token — passed only by the review
+skill's interactive submit step after a human made the choice — and are REFUSED
 without it, both at CLI parse time and in the `upsertCheckpointVerdict()`
 runtime entry (direct callers cannot bypass the CLI parser). `--auto` still
 refuses those modes even WITH the token. Headless/agent callers may use
 `--submit pending` or `--submit comment`.
+
+Submit-existing-pending (#1912, part of `GATE-REVIEW-SUBMIT-MODES`): GitHub
+allows only ONE pending review per user per PR. When the caller already has an
+own PENDING review on the same PR and head, a
+`--submit comment|request-changes|approve` re-run SUBMITS that existing pending
+review via `POST /pulls/<pr>/reviews/<id>/events` (mapped event, preserving the
+pending review's inline comments) instead of POSTing a second review — a second
+create returns HTTP 422. `--submit discard` DELETES it; `--submit pending`
+(leave-pending) leaves it in place (a noop). The own pending review is
+author-only, so its verdict marker is not `visible` and the same-head marker
+scan (`summarizeExistingComment`) cannot see it; the submit path detects it
+directly off the raw reviews list (which returns a pending review only to its
+own author) and matches on `commit_id === headSha` so a stale pending review on
+an earlier head is not mistaken for this round's surface.
+
+Separately, a `fanout_fanin` verdict posted with `--findings-json` but NO
+`--findings-ledger` emits a one-line advisory warning naming `--findings-ledger`
+as the missing inline-comment source: `--findings-json` alone renders body-filed
+findings only, so that combination silently files ZERO inline comments. The
+warning never blocks the post.
 
 Every submit mode — including `approve` — stays a NON-evidence `review`
 verdict for dev-loops gates: the authoritative-`review`-header guard above

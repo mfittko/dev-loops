@@ -976,6 +976,74 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
   return parseReviewMutationResponse(parseJsonText(result.stdout, { label: "gh api pulls reviews (PUT)" }));
 }
 
+/**
+ * Find the authenticated caller's own PENDING (author-only draft) review on
+ * this PR at `headSha`. GitHub allows only ONE pending review per user per PR,
+ * so a `--gate review --submit` re-run for the same round must SUBMIT this
+ * existing pending review (via `submitPendingReview`) rather than POST a second
+ * one — the second POST 422s (#1912). A pending review is author-only, so its
+ * marker is never `visible`, which is exactly why the same-head marker scan
+ * misses it; this reads the raw reviews list instead of the marker.
+ *
+ * No author-identity check is needed: GitHub's list-reviews endpoint returns a
+ * PENDING review ONLY to the token that authored it (other users' pending
+ * reviews are never listed), so any `state === "PENDING"` entry here is already
+ * the caller's own. Matches on `commit_id === headSha` so a stale pending
+ * review left on an earlier head is NOT mistaken for this round's surface. A
+ * pending review missing an integer `id` or a `commit_id` is treated as
+ * non-matching (fail-closed: fall through to the create path rather than
+ * submit/delete an ambiguous draft). Returns `{ id, commitId, body }` or
+ * `null`.
+ */
+export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
+  const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
+  const match = flattenPaginatedSlurp(payload).find((r) =>
+    r?.state === "PENDING"
+    && typeof r?.commit_id === "string" && r.commit_id === headSha
+    && Number.isInteger(r?.id),
+  );
+  if (!match) return null;
+  return { id: match.id, commitId: match.commit_id, body: typeof match.body === "string" ? match.body : "" };
+}
+
+/**
+ * Submit an existing PENDING review via
+ * `POST /repos/<owner>/<repo>/pulls/<pr>/reviews/<id>/events`, mapping the
+ * review-gate submit mode's event (`COMMENT` | `REQUEST_CHANGES` | `APPROVE`).
+ * This preserves the pending review's already-attached inline comments — the
+ * events endpoint submits the draft as-is; only the event (and an optional body
+ * override) are sent. Distinct from `createGateReview`, which would 422 when a
+ * pending review already exists (#1912).
+ */
+export async function submitPendingReview({ repo, pr, reviewId, event, body }, { env, ghCommand, runChild = defaultRunChild }) {
+  const payload = { event, ...(typeof body === "string" && body.length > 0 ? { body } : {}) };
+  const result = await runChild(
+    ghCommand,
+    ["api", "-X", "POST", `repos/${repo}/pulls/${pr}/reviews/${reviewId}/events`, "--input", "-"],
+    env,
+    `${JSON.stringify(payload)}\n`,
+  );
+  assertGhSuccess(result);
+  return parseReviewMutationResponse(parseJsonText(result.stdout, { label: "gh api pulls reviews events (POST)" }));
+}
+
+/**
+ * Delete an existing PENDING review via
+ * `DELETE /repos/<owner>/<repo>/pulls/<pr>/reviews/<id>` — the "Discard" submit
+ * choice (#1912), distinct from "Leave pending" which leaves the draft in
+ * place. Only ever called on the caller's OWN pending review (resolved via
+ * `findOwnPendingReview`).
+ */
+export async function discardPendingReview({ repo, pr, reviewId }, { env, ghCommand, runChild = defaultRunChild }) {
+  const result = await runChild(
+    ghCommand,
+    ["api", "-X", "DELETE", `repos/${repo}/pulls/${pr}/reviews/${reviewId}`],
+    env,
+  );
+  assertGhSuccess(result);
+  return { reviewId };
+}
+
 // ---------------------------------------------------------------------------
 // Round determination
 // ---------------------------------------------------------------------------

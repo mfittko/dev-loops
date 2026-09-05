@@ -27,13 +27,16 @@ import {
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   createGateReview,
+  discardPendingReview,
   fetchPrFiles,
+  findOwnPendingReview,
   fingerprintFinding,
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
   renderInlineCommentBody,
   resolveGateRound,
+  submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
@@ -44,16 +47,22 @@ const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // resolveReviewSubmitEvent below: "pending" maps to a falsy value so
 // createGateReview (_gate-finding-surface.mjs) omits `event` from the payload
 // entirely, which is what leaves the review PENDING (author-only draft).
-const REVIEW_SUBMIT_MODES = new Set(["pending", "comment", "request-changes", "approve"]);
+// `discard` (#1912) deletes the caller's own pending review; like
+// approve/request-changes it is a deliberate interactive choice (destructive),
+// so it stays OUT of HEADLESS_ALLOWED and requires --interactive-confirm.
+const REVIEW_SUBMIT_MODES = new Set(["pending", "comment", "request-changes", "approve", "discard"]);
 const DEFAULT_REVIEW_SUBMIT_MODE = "comment";
 // Only these two modes may ever be reached without a deliberate interactive
 // choice (--auto/headless review runs, and the default when --submit is
-// omitted). approve/request-changes are reachable only via the review skill's
-// interactive multiple-choice, never automatically.
+// omitted). approve/request-changes/discard are reachable only via the review
+// skill's interactive multiple-choice, never automatically.
 const HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES = new Set(["pending", "comment"]);
 function resolveReviewSubmitEvent(mode) {
   switch (mode) {
     case "pending": return null;
+    // discard never submits a review event — it deletes the pending draft — so
+    // it maps to a falsy event and is dispatched on its own path (#1912).
+    case "discard": return null;
     case "comment": return "COMMENT";
     case "approve": return "APPROVE";
     case "request-changes": return "REQUEST_CHANGES";
@@ -193,7 +202,7 @@ Optional:
   --gate <draft_gate|pre_approval_gate|review>     Auto-resolved from coordination state (draft_gate/pre_approval_gate only; review is never auto-resolved)
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
-  --submit <pending|comment|request-changes|approve>
+  --submit <pending|comment|request-changes|approve|discard>
                                             SCOPED TO --gate review ONLY (#1840):
                                             how the review's own PR review is
                                             submitted. Passing --submit on
@@ -213,14 +222,23 @@ Optional:
                                             with that GitHub review event — a
                                             native GitHub branch-protection
                                             signal independent of any dev-loops
-                                            gate. --auto (headless) allows only
+                                            gate. When the caller already has an
+                                            own PENDING review on the same head,
+                                            \`comment\`/\`request-changes\`/
+                                            \`approve\` SUBMIT that pending review
+                                            via /reviews/<id>/events (preserving
+                                            its inline comments) instead of
+                                            creating a second one, which 422s
+                                            (#1912). \`discard\` DELETES the
+                                            caller's own pending review. --auto
+                                            (headless) allows only
                                             \`pending\`/\`comment\`; \`approve\`/
-                                            \`request-changes\` are REFUSED
-                                            headless so automation can never
-                                            auto-approve or auto-block a PR —
-                                            they are reachable only through an
-                                            interactive choice. #1888: they
-                                            additionally REQUIRE
+                                            \`request-changes\`/\`discard\` are
+                                            REFUSED headless so automation can
+                                            never auto-approve, auto-block, or
+                                            auto-delete — they are reachable only
+                                            through an interactive choice. #1888/
+                                            #1912: they additionally REQUIRE
                                             --interactive-confirm even WITHOUT
                                             --auto (the flag's absence proves
                                             nothing — a headless caller can
@@ -228,7 +246,8 @@ Optional:
                                             closed unless provably interactive.
   --interactive-confirm                    The explicit interactive-confirmation
                                             token for --submit
-                                            approve|request-changes (#1888).
+                                            approve|request-changes|discard
+                                            (#1888/#1912).
                                             Pass it ONLY from the review skill's
                                             interactive multiple-choice submit
                                             step after a human made the choice;
@@ -687,7 +706,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (token.name === "submit") {
       const raw = requireTokenValue(token, parseError).trim().toLowerCase();
       if (!REVIEW_SUBMIT_MODES.has(raw)) {
-        throw parseError("--submit must be one of: pending, comment, request-changes, approve");
+        throw parseError("--submit must be one of: pending, comment, request-changes, approve, discard");
       }
       options.submit = raw;
       continue;
@@ -771,6 +790,16 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
       `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+    );
+  }
+  // Discard is destructive (deletes the caller's own pending review, #1912),
+  // so it fails closed exactly like approve/request-changes: reachable only via
+  // the interactive submit choice, never headless. Its own message so a
+  // discard caller is told precisely what is required. Checked before the
+  // approve/request-changes guard so discard never borrows their wording.
+  if (options.gate === "review" && options.submit === "discard" && !options.interactiveConfirm) {
+    throw parseError(
+      `--submit discard requires --interactive-confirm (fail closed, #1912): discarding deletes the caller's own pending review, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
     );
   }
   // PROVABLE interactivity, not caller self-identification (#1888): the
@@ -2058,6 +2087,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
     if (options.interactiveConfirm !== true) {
+      if (reviewSubmitMode === "discard") {
+        throw new Error(
+          `--submit discard requires --interactive-confirm (fail closed, #1912): discarding deletes the caller's own pending review, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
+        );
+      }
       throw new Error(
         `--submit approve|request-changes requires --interactive-confirm (fail closed unless provably interactive, #1888): these are GitHub-native branch-protection signals, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
       );
@@ -2636,6 +2670,62 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // FINDINGS-SOURCE FOOTGUN WARNING (#1912): a fanout_fanin round posted with
+  // --findings-json but no --findings-ledger silently files ZERO inline
+  // comments — the --findings-ledger (consolidate-fanin --ledger-out →
+  // write-gate-findings-log) is the ONLY inline-comment source. Name the
+  // missing source so the caller knows why no inline comments appeared.
+  // Advisory only: it never blocks the post and is surfaced on every path.
+  const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
+    ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
+    : null;
+  // PENDING-REVIEW RESOLUTION (#1912): GitHub allows only ONE pending review
+  // per user per PR, so a --gate review --submit re-run must RESOLVE the
+  // caller's own same-head pending review (submit it via /events, or discard
+  // it) rather than POST a second one, which 422s. The pending review is
+  // author-only so the same-head marker scan (summarizeExistingComment, keyed
+  // on marker.visible) never sees it; detect it directly off the raw reviews
+  // list. Resolved BEFORE resolveFindingSurface so the submit/discard paths
+  // skip the round/inline-comment reads a create would need.
+  if (isReviewGate) {
+    const ownPending = await findOwnPendingReview({ repo: options.repo, pr: options.pr, headSha: canonicalHeadSha }, gh);
+    const baseResult = {
+      ok: true,
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: canonicalHeadSha,
+      currentHeadSha: evidence?.currentHeadSha ?? canonicalHeadSha,
+      surface: "review",
+      submit: reviewSubmitMode,
+      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
+    };
+    if (reviewSubmitMode === "discard") {
+      // Discard deletes the caller's own pending review; with none present it is
+      // a no-op (nothing to delete) and must NOT fall through to create one.
+      if (ownPending) {
+        await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
+      }
+      return { ...baseResult, action: ownPending ? "discarded" : "noop", commentId: ownPending ? ownPending.id : null };
+    }
+    if (ownPending) {
+      // Leave pending: keep the author-only draft in place (idempotent no-op).
+      if (reviewSubmitMode === "pending") {
+        return { ...baseResult, action: "noop", commentId: ownPending.id };
+      }
+      // comment | request-changes | approve: submit the existing pending review
+      // via /events with the mapped event, preserving its inline comments.
+      const submitted = await submitPendingReview(
+        { repo: options.repo, pr: options.pr, reviewId: ownPending.id, event: resolveReviewSubmitEvent(reviewSubmitMode) },
+        gh,
+      );
+      return { ...baseResult, action: "submitted", commentId: submitted.reviewId, commentUrl: submitted.reviewUrl };
+    }
+    // No own pending review on this head: fall through to the create path below
+    // (unchanged behavior — a fresh review is posted for the round).
+  }
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
@@ -2755,6 +2845,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...findingSurfaceFields,
       ...(existingInlineReason ? { inlineReason: existingInlineReason } : {}),
       ...(warning ? { warning } : {}),
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
   }
@@ -2802,6 +2893,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...findingSurfaceFields,
       ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
@@ -2861,6 +2953,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(isReviewGate ? { submit: reviewSubmitMode } : {}),
     ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
+    ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
   };
@@ -2894,6 +2987,12 @@ async function main() {
     // Suppress it under --silent, which contracts to zero output (exit code only).
     if (inlineWarning && !options.silent) {
       process.stderr.write(`${inlineWarning}\n`);
+    }
+    // Surface the findings-source footgun warning (#1912) on stderr too, so a
+    // CLI caller sees why a --findings-json-only fanout round filed no inline
+    // comments. Same success-only, --silent-suppressed posture as above.
+    if (result?.findingsLedgerWarning && !options.silent) {
+      process.stderr.write(`${result.findingsLedgerWarning}\n`);
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
