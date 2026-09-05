@@ -731,6 +731,38 @@ test("#1973: a whitelisted governing-issue ref passes with --allowed-refs", asyn
   ));
 });
 
+// #1973: the FILEABLE reply site (operator-visible low -> follow-up issue) also
+// threads --allowed-refs. Same governing-issue ref, but now the disposition
+// reply that names the follow-up issue also embeds the finding summary's bare
+// ref; --allowed-refs must open the guard for the filed path exactly like the
+// unfiled one, so the stamp+file+reply+resolve completes.
+test("#1973: --allowed-refs also opens the guard on the fileable (filed-to-follow-up) reply path", async () => {
+  const visibleLowBody = `${buildFindingMarker({ fp: "abcabcabcabcfff0", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): mirror the guard fix for #1951 governing issue`;
+  const thread = threadNode({ id: "THREAD_GOVREF_FILE", path: "src/x.mjs", line: 4, commentId: 6290, body: visibleLowBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      listFollowUpIssuesEntry(),
+      createFollowUpIssueEntry(9500),
+      getReviewCommentEntry(6290, visibleLowBody),
+      patchReviewCommentEntry(6290),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6290/replies`, "--input", "-"],
+        assertStdinIncludes: ["#1951"],
+        stdout: `${JSON.stringify({ id: 7170, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7170` })}\n`,
+      },
+      resolveThreadEntry("THREAD_GOVREF_FILE"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
+      assert.equal(result.followUpIssueNumber, 9500);
+      assert.equal(result.dispositionFailures, undefined);
+    },
+  ));
+});
+
 // #1846: a MIXED round — an out-of-window medium (fileable), an
 // operator-visible low (fileable), a nit (never fileable), and a
 // non-operator-visible low (not fileable) — files ONE follow-up issue
