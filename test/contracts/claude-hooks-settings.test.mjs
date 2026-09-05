@@ -267,7 +267,7 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
 });
 
 // ---------------------------------------------------------------------------
-// Wrong-checkout guard (#1994) — e2e hook script behavior (boundary 1)
+// Wrong-checkout guard — e2e hook script behavior (boundary 1)
 // ---------------------------------------------------------------------------
 // The pure decider is unit-tested in packages/core/test/claude-hook-decisions.test.mjs;
 // these exercise the hand-authored hook WIRING end to end: the git-worktree-list /

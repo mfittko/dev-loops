@@ -346,7 +346,7 @@ test("resolveContainingWorktreeRoot: resolves the containing worktree root from 
 });
 
 // ---------------------------------------------------------------------------
-// realpathNearestExisting (#1994) — a Write target may not exist yet
+// realpathNearestExisting — a Write target may not exist yet
 // ---------------------------------------------------------------------------
 
 test("realpathNearestExisting resolves a nonexistent leaf via its nearest existing ancestor (symlinked ancestor)", () => {
@@ -376,7 +376,7 @@ test("realpathNearestExisting returns an existing path's realpath unchanged (nor
 });
 
 // ---------------------------------------------------------------------------
-// resolveTrackedFromCheckIgnore (#1994, AC4 fail-safe) — the hook's real seam
+// resolveTrackedFromCheckIgnore (AC4 fail-safe) — the hook's real seam
 // ---------------------------------------------------------------------------
 
 test("resolveTrackedFromCheckIgnore maps check-ignore exit status to guarded/allowed, failing safe on the unresolvable case (AC4)", () => {

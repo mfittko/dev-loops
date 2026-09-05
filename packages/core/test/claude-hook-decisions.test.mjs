@@ -725,7 +725,7 @@ test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independent
 });
 
 // ---------------------------------------------------------------------------
-// decideWorktreeCheckoutGuard (#1994)
+// decideWorktreeCheckoutGuard
 // ---------------------------------------------------------------------------
 
 const WCG_WT = "/repo/tmp/worktrees/dev-loops/issue-1994";

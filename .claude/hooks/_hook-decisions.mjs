@@ -387,8 +387,8 @@ export const WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV = "DEVLOOPS_ALLOW_MAIN";
  * After `ensure-worktree.mjs` establishes an isolated worktree for a cycle, an
  * absolute-path `Edit`/`Write` that names the main-checkout copy of a source
  * file lands the change on the wrong checkout — silently, until a `git status`
- * in the worktree turns up empty (observed on #1973: six edits hit main before
- * a self-caught restore). This guard catches that before it reaches a commit.
+ * in the worktree turns up empty (observed in practice: six edits hit main
+ * before a self-caught restore). This guard catches that before it reaches a commit.
  *
  * The "active worktree" is anchored to the CALL CONTEXT's cwd, not to a durable
  * marker: this repo accumulates many stale `tmp/worktrees/` worktrees, so "a
