@@ -3,12 +3,28 @@
 // gate validation) and verify-briefing-prefixes.mjs (wrong-gate scope check) so
 // the two can never drift.
 //
-// `review` (#1808) is a THIRD, standalone gate: reachable on any PR with NO
-// gate obligations (it never blocks merge/ready, never satisfies draft_gate or
-// pre_approval_gate evidence, and carries no config section of its own — see
-// resolveReviewGateAngles in write-gate-context.mjs and the deliberate absence
-// of a "review" entry in GATE_CONFIG_KEY, @dev-loops/core/loop/gate-fanin).
-export const GATE_NAMES = ["draft_gate", "pre_approval_gate", "review"];
+// The vocabulary is TIERED, not flat, so "gate" implies gating. The
+// discriminator is one question: DOES IT BLOCK A LIFECYCLE TRANSITION?
+//
+// - LIFECYCLE_GATES answer YES: `draft_gate` blocks draft→ready and
+//   `pre_approval_gate` blocks ready→merge. These are the gates a "run through
+//   the gates" / "gate this PR" request means.
+// - REVIEW_GATE (`review`, #1808) answers NO: it is a standalone informational
+//   pass reachable on any PR with NO gate obligations (it never blocks
+//   merge/ready, never satisfies draft_gate or pre_approval_gate evidence, and
+//   carries no config section of its own — see resolveReviewGateAngles in
+//   write-gate-context.mjs and the deliberate absence of a "review" entry in
+//   GATE_CONFIG_KEY, @dev-loops/core/loop/gate-fanin). It gates nothing, so a
+//   "run the gates" request must NOT route to it (see the review-intent
+//   short-circuit carve-out in skills/dev-loop/SKILL.md).
+//
+// `GATE_NAMES` is DERIVED from the two tiers below so the tier is load-bearing,
+// not a parallel comment that can drift — its value/order stays exactly
+// ["draft_gate", "pre_approval_gate", "review"], so every existing consumer is
+// unaffected.
+export const LIFECYCLE_GATES = ["draft_gate", "pre_approval_gate"];
+export const REVIEW_GATE = "review";
+export const GATE_NAMES = [...LIFECYCLE_GATES, REVIEW_GATE];
 
 // Canonical gate-verdict vocabulary — the single source of truth shared by
 // every gate-review script that parses/validates a --verdict or ledger

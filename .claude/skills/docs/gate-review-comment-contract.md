@@ -3,6 +3,22 @@
 Canonical owner for gate-review **verdict field** rules for the two gate boundaries in
 the dev-loop workflow: `draft_gate` and `pre_approval_gate`.
 
+## Gate tiers (issue #1913)
+
+The gate vocabulary is tiered, not flat. The discriminator is one question: **does it
+block a lifecycle transition?** The canonical encoding lives in
+`scripts/github/_gate-names.mjs` (`LIFECYCLE_GATES` / `REVIEW_GATE`).
+
+| Gate | Tier | Blocks a transition? | Verdict evidence? |
+|---|---|---|---|
+| `draft_gate` | lifecycle | yes — draft→ready | yes (this contract) |
+| `pre_approval_gate` | lifecycle | yes — ready→merge | yes (this contract) |
+| `review` | informational | no — gates nothing | no (never satisfies lifecycle-gate evidence) |
+
+A "run through the gates" / "gate this PR" request means the lifecycle gates, never the
+informational `review` pass — see the review-intent short-circuit carve-out in
+[Dev Loop Skill](../dev-loop/SKILL.md).
+
 ## Purpose
 
 Gate-review verdicts make the workflow auditable and transparent from the PR
