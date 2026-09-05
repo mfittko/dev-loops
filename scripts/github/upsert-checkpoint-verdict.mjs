@@ -2324,7 +2324,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // matrix. ANY unchecked `- [ ]` in the PR body's Acceptance criteria or
   // Definition of done sections fails the round closed — a PR cannot reach
   // approval with an open acceptance criterion. This is the deterministic
-  // replacement for the soft pr-checklist-matrix reviewer judgment: it
+  // replacement for the soft pr-checklist reviewer judgment: it
   // enforces COMPLETENESS (nothing left unchecked/forgotten), NOT
   // truthfulness — a dishonestly-ticked `[x]` passes this mechanical check
   // and stays the reviewer/judge's responsibility. It composes with

@@ -4853,7 +4853,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
     await writeFile(
       findingsPath,
       JSON.stringify([
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },
@@ -4878,18 +4878,18 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
   }, { prefix: "dev-loops-upsert-angle-coverage-foreign-" });
 });
 
-test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix angle outside the gate's configured pool (#1494)", async () => {
+test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist angle outside the gate's configured pool (#1494)", async () => {
   await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // consolidate-fanin --out shape: draft-pool angles plus the synthetic
-    // matrix entry its --pr-checklist-matrix clean flag upserts. draft_gate's
-    // pool does not list pr-checklist-matrix; the upsert must not reject it.
+    // matrix entry its --pr-checklist clean flag upserts. draft_gate's
+    // pool does not list pr-checklist; the upsert must not reject it.
     await writeFile(
       findingsPath,
       JSON.stringify([
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "scope", verdict: "clean", findings: [] },
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -5333,7 +5333,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         },
         // pre_approval_gate's configured mandatory angles (gates.preApproval.mandatoryAngles):
         // a fanout_fanin verdict's structured per-angle results must cover them.
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },

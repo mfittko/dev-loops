@@ -113,7 +113,7 @@ Output (stdout, JSON):
       "status": "present",
       "specSource": "linked_issue",
       "reason": "...",
-      "finding": "missing_refinement_artifact" | "missing_dod_checklist" | "missing_ac_checklist" | "missing_explicit_non_goals" | null
+      "finding": "missing_refinement_artifact" | "missing_ac_dod_matrix" | "malformed_ac_dod_matrix" | "missing_explicit_non_goals" | null
     },
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
@@ -728,11 +728,11 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     reason: isUmbrella
       ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
       : first.reason,
-    // #1877: thread the detector's per-finding taxonomy through (an AC-only
-    // linked issue is a missing_dod_checklist matrix miss, not a bare
-    // artifact miss) so the draft gate — the unconditional backstop for the
-    // enqueue gate's full-matrix floor — surfaces the same finding vocabulary
-    // and guidance naming the actually-missing arm. The umbrella arm keeps the
+    // #1951: thread the detector's per-finding taxonomy through (a checklist-only
+    // linked issue is a missing_ac_dod_matrix miss, not a bare artifact miss)
+    // so the draft gate — the unconditional backstop for the enqueue gate's
+    // matrix floor — surfaces the same finding vocabulary and guidance naming
+    // the actually-missing/invalid artifact. The umbrella arm keeps the
     // generic finding: the first evaluated issue is not necessarily the one
     // whose specific matrix arm is missing across the umbrella's scope.
     finding: isUmbrella ? "missing_refinement_artifact" : (first.finding ?? "missing_refinement_artifact"),

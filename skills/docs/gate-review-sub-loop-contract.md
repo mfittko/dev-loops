@@ -1225,8 +1225,8 @@ included — plus the `{ overallVerdict, findings }` wrapper (written to
 threads `overallVerdict` into the durable ledger for verdict-consistency
 enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
 an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
-the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
-asked (`--pr-checklist-matrix clean`; since #1877 the completeness half of that
+the overall verdict, upserting the mandatory `pr-checklist` entry when
+asked (`--pr-checklist clean`; since #1877 the completeness half of that
 angle is enforced deterministically by the pre-approval unchecked-box block, so
 this upsert records the fan-in bookkeeping entry, not the enforcement itself —
 see [Acceptance Criteria Verification](acceptance-criteria-verification.md)).
@@ -2208,7 +2208,7 @@ dynamic resolution may legitimately dispatch catalog angles then, with a
 disabled entry still a hard ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
 to only the current head's delta) counts toward its base angle for both checks.
 Fan-in synthetic angles (`FANIN_SYNTHETIC_ANGLES` from `@dev-loops/core/loop/gate-fanin`;
-currently `pr-checklist-matrix`, the entry `consolidate-fanin --pr-checklist-matrix clean`
+currently `pr-checklist`, the entry `consolidate-fanin --pr-checklist clean`
 upserts) are always legal in the foreign-angle check, regardless of pool config,
 `gates.rejectForeignAngles`, or an `enabled: false` entry for the angle. The entry is
 minted by the fan-in itself, never dispatched from the pool, so a gate whose pool omits
@@ -2216,7 +2216,7 @@ the angle (e.g. the shipped draft pool) accepts it without listing it per-gate; 
 disabled-entry ceiling above still governs pool WIDENING (dynamic dispatch), while this
 exemption covers only the fan-in-minted recorded entry. The angle may additionally be
 pool-configured where a gate wants it reviewed as a real angle — the shipped preApproval
-pool lists `pr-checklist-matrix` as mandatory. Since #1877 the angle's completeness duty is
+pool lists `pr-checklist` as mandatory. Since #1877 the angle's completeness duty is
 machine-backed: the deterministic pre-approval block (`upsert-checkpoint-verdict.mjs`, see
 [Acceptance Criteria Verification](acceptance-criteria-verification.md) step 7) fails the gate
 closed on any unchecked `- [ ]` in the PR body's AC/DoD checklist, so the angle's reviewer

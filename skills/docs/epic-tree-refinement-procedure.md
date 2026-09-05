@@ -23,7 +23,7 @@ enough that a fresh agent can run it without prior context about the tree.
 | **Leaf** | An issue with no sub-issue children |
 | **Phase table** | A section of the root/parent body that names each child and what it owns vs excludes |
 | **Scope boundary** | Explicit text in an issue body: `"This issue owns X. It does NOT own Y (#NNN)."` |
-| **AC/DoD matrix** | A two-column table mapping each acceptance criterion to its corresponding DoD checklist item(s) |
+| **AC/DoD matrix** | A two-column table mapping each acceptance-criterion outcome to its required completion evidence — the authoritative AC→DoD artifact (#1951); the PR carries the derived list-form checklists |
 
 ---
 
@@ -62,10 +62,8 @@ For the root issue:
 2. Confirm the problem statement is clear and scoped
 3. Confirm a **phase scope table** exists — one row per immediate child naming what each child
    owns and what it excludes; add or update this table if missing
-4. Confirm **AC checklist** covers the end-to-end goal (not the implementation details owned by children)
-5. Confirm **DoD checklist** — merge-ready condition for the root issue as a whole
-6. Confirm **AC/DoD matrix** — each AC maps to at least one DoD item
-7. Confirm **non-goals** section — prevents scope creep into adjacent areas
+4. Confirm the **AC/DoD matrix** — a two-column table mapping each acceptance-criterion outcome (the end-to-end goal, not the implementation details owned by children) to its required completion evidence (the merge-ready condition for the root issue as a whole). This mapping matrix is the authoritative AC→DoD artifact (#1951); do NOT author separate interactive issue-side AC / DoD checklists — the PR carries the derived list-form checklists
+5. Confirm **non-goals** section — prevents scope creep into adjacent areas
 8. Write the updated body to a tmp file: `tmp/issues/<root>/refinement/root-body.md`
 9. Show the diff and obtain confirmation before mutating GitHub
 10. Apply: `dev-loops issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
@@ -89,9 +87,7 @@ parent's updated body, not each other's output.
 4. Identify any overlap with sibling issues (read sibling titles/bodies if needed)
 5. Refine the child body with:
    - **Scope boundary** (explicit): `"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
-   - **AC checklist** specific to this child's bounded scope
-   - **DoD checklist** — when is this child independently closable?
-   - **AC/DoD matrix**
+   - **AC/DoD matrix** specific to this child's bounded scope — each criterion outcome (when is this child independently closable?) mapped to its required completion evidence. This is the authoritative AC→DoD artifact (#1951); do NOT author separate interactive issue-side AC / DoD checklists
    - **Non-goals** — what this child intentionally excludes
 6. Write refined body to `tmp/issues/<child>/refinement/child-body.md`
 7. Show the diff and obtain confirmation before mutating (unless running unattended with explicit authorization)
@@ -164,9 +160,14 @@ stay in the GitHub sub-issues API, not prose parent/child links or a duplicated 
 checklist in parent bodies.
 
 <!-- rule: EPIC-REFINEMENT-REQUIRED-CONTRACTS -->
-Each issue in the tree MUST carry: an AC checklist, a DoD checklist, a non-goals section, an
-AC/DoD matrix, and an explicit scope boundary in the format
-`"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
+Each issue in the tree MUST carry: the authoritative AC→DoD mapping matrix (a two-column
+table mapping each acceptance-criterion outcome to its required completion evidence), a
+non-goals section, and an explicit scope boundary in the format
+`"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."` (#1951). Interactive issue-side
+AC / DoD checklists are NOT required — the matrix is the authoritative AC→DoD artifact and
+`loop-grill` synthesizes a matrix-only body; the PR carries the derived list-form checklists.
+The deterministic verifier is `refinement-completeness-checker.mjs` (shares `detectAcDodMatrix`
+with the enqueue/draft gate), which rejects a missing/empty/identifier-only matrix.
 
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
 `EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
@@ -200,9 +201,7 @@ The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-R
 
 | Check | How to verify |
 |---|---|
-| AC checklist present | Issue body contains `## Acceptance Criteria` with at least one `- [ ]` item |
-| DoD checklist present | Issue body contains `## Definition of Done` with at least one `- [ ]` item |
-| AC/DoD matrix present | Issue body contains a two-column table mapping AC items to DoD items |
+| AC/DoD matrix present + valid | Issue body contains a two-column `## AC / DoD matrix` table mapping each criterion outcome to concrete completion evidence (empty or identifier-only tables are rejected); this is the authoritative AC→DoD artifact (#1951) |
 | Non-goals present | Issue body contains `## Non-goals` section |
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |

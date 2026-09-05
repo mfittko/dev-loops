@@ -2,16 +2,35 @@
  * Deterministic issue refinement-artifact detection.
  *
  * Implements the bounded refinement check required by the draft gate per
- * issue #532: a draft PR cannot leave draft unless the linked issue has an
- * explicit refinement artifact — the full matrix of an Acceptance criteria
- * checklist plus a Definition of done checklist plus an explicit Non-goals
- * section, or a linked refinement doc that is a complete artifact on its own —
- * that the pre-approval gate can verify against. An issue missing any matrix
- * part fails closed with the matching finding (`missing_dod_checklist`,
- * `missing_ac_checklist`, `missing_explicit_non_goals`, or
+ * issue #532, reshaped by #1951 to honor "matrix on the issue, checklist on
+ * the PR" WITHOUT duplicate issue-side checklists: a draft PR cannot leave
+ * draft unless the linked issue carries the authoritative semantic AC→DoD
+ * mapping MATRIX (a real two-column table mapping each acceptance-criterion
+ * outcome to its required completion evidence) plus an explicit Non-goals
+ * section — or a linked refinement doc that is a complete artifact on its own
+ * (the doc carries the matrix). Interactive issue-side Acceptance criteria /
+ * Definition of done CHECKLISTS are NO LONGER required merely to satisfy
+ * detection (#1951 AC1): the matrix is the authoritative issue artifact, and
+ * the PR carries the derived self-contained list-form AC/DoD checklists
+ * (`derivePrChecklistsFromIssueMatrix`; the PR body is validated by
+ * `validateTrackerBackedPrBodySpec`, never this predicate).
+ *
+ * Detection validates the structural PRESENCE and SHAPE of the mapping table,
+ * not its semantic truthfulness (that stays a reviewer responsibility). An
+ * issue whose AC content, DoD content, and Non-goals are present but whose
+ * mapping table is absent, empty, malformed, or identifier-only fails closed
+ * (#1951 AC2) with the matching finding (`missing_ac_dod_matrix`,
+ * `malformed_ac_dod_matrix`, `missing_explicit_non_goals`, or
  * `missing_refinement_artifact`); prose-only issues (Problem / Root Cause /
  * Fix) cause the draft gate to post `verdict=blocked` with the
  * `missing_refinement_artifact` finding.
+ *
+ * Migration (#1951 AC7/D7): existing checklist-bearing issues stay readable —
+ * the parser still extracts their AC/DoD checklist content — but a body that
+ * carries only checklists and no mapping matrix now fails closed with
+ * `missing_ac_dod_matrix` and is re-grilled (loop-grill synthesizes the
+ * matrix) rather than being silently grandfathered. No compatibility alias is
+ * retained.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -29,6 +48,7 @@ import path from "node:path";
  */
 
 export const REFINEMENT_SOURCE = Object.freeze({
+  ISSUE_BODY_MATRIX: "issue-body-matrix",
   ISSUE_BODY_AC: "issue-body-ac",
   ISSUE_BODY_DOD: "issue-body-dod",
   LINKED_DOC: "linked-doc",
@@ -37,13 +57,14 @@ export const REFINEMENT_SOURCE = Object.freeze({
 
 const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
-// REFINEMENT_ARTIFACT_SOURCES: the full-matrix floor vocabulary (#1877). The
-// refinement floor is the FULL AC/DoD/Non-goals matrix (a linked refinement
-// doc remains a complete artifact on its own) — this list is the shape of a
-// COMPLETE artifact, not a menu where any one entry suffices.
+// REFINEMENT_ARTIFACT_SOURCES: the refinement floor vocabulary (#1951). The
+// floor is the authoritative AC→DoD mapping MATRIX plus an explicit Non-goals
+// section (a linked refinement doc remains a complete artifact on its own) —
+// this list is the shape of a COMPLETE artifact, not a menu where any one
+// entry suffices.
 export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
-  "Acceptance criteria section",
-  "Definition of done section",
+  "AC→DoD mapping matrix (a two-column table)",
+  "explicit Non-goals section",
   "linked refinement doc",
 ]);
 
@@ -57,22 +78,23 @@ export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
 export const MISSING_EXPLICIT_NON_GOALS_FINDING = "missing_explicit_non_goals";
 
 /**
- * #1877: finding reported when the issue body carries an AC checklist (and
- * the Non-goals floor is met) but NO DoD checklist — the tracker-backed
- * refinement floor is the full AC/DoD/Non-goals matrix (each AC mapped to its
- * DoD item(s), plus explicit Non-goals), not AC-or-DoD. This lifts the
- * epic-only matrix requirement (epic-tree-refinement-procedure.md) into the
- * general refinement predicate, reconciled with #1866's Non-goals parity.
+ * #1951: finding reported when the issue body carries refinement content (AC
+ * content, DoD content, and/or a Non-goals section) but NO authoritative
+ * AC→DoD mapping matrix table. Under "matrix on the issue, checklist on the
+ * PR" the mapping table is the authoritative issue artifact; interactive
+ * issue-side AC/DoD checklists are not a substitute for it. Fails closed so
+ * the issue is re-grilled to add the matrix.
  */
-export const MISSING_DOD_CHECKLIST_FINDING = "missing_dod_checklist";
+export const MISSING_AC_DOD_MATRIX_FINDING = "missing_ac_dod_matrix";
 
 /**
- * #1877: the symmetric matrix miss — a DoD checklist with no Acceptance
- * criteria checklist. The matrix is authored at refinement on the issue; the
- * PR then carries the derived checklist whose boxes the pre-approval gate
- * requires all ticked.
+ * #1951: finding reported when the issue body carries an AC→DoD mapping table
+ * but it is empty (header/separator only, no data rows) or identifier-only /
+ * tautological (cells such as `AC1 → D1` with no concrete criterion or
+ * completion-evidence prose). Structural shape validation only — semantic
+ * truthfulness of the mapping stays a reviewer responsibility.
  */
-export const MISSING_AC_CHECKLIST_FINDING = "missing_ac_checklist";
+export const MALFORMED_AC_DOD_MATRIX_FINDING = "malformed_ac_dod_matrix";
 
 /**
  * Canonical list of section headings that satisfy the refinement check.
@@ -419,6 +441,214 @@ export function extractUncheckedChecklistItems(sectionBody) {
     .map((item) => item.text);
 }
 
+// ---------------------------------------------------------------------------
+// AC→DoD mapping matrix detection (#1951)
+// ---------------------------------------------------------------------------
+// The authoritative refined-issue artifact is a semantic AC→DoD mapping table:
+// a GFM pipe table whose rows map each acceptance-criterion outcome to its
+// required completion evidence. This is the "matrix on the issue" half of
+// "matrix on the issue, checklist on the PR". Detection validates the table's
+// PRESENCE and SHAPE only — its semantic truthfulness stays a reviewer duty.
+
+// Heading families that name the mapping-matrix section. A qualifying table
+// under one of these headings is treated as the matrix even when its column
+// headers do not name criterion/evidence explicitly.
+const MATRIX_SECTION_PATTERNS = Object.freeze([
+  /\bac\b.*\bdod\b.*\b(matrix|mapping|map)\b/i,
+  /\b(acceptance|criteri\w*)\b.*\b(matrix|mapping|map)\b/i,
+  /\bmapping (matrix|table)\b/i,
+  /\bac\s*(?:\/|→|->|to)\s*dod\b/i,
+]);
+
+// Header column families: col0 names the criterion side, col1 the evidence
+// side. Used to recognize an unheaded (not under a matrix heading) but clearly
+// criterion→evidence table anywhere in the body. Kept STRONG on purpose (#1951
+// draft_gate correctness review): a generic status table like `| Outcome |
+// Done |` must NOT be mistaken for the refinement matrix — only headers that
+// explicitly name acceptance criteria AND completion evidence / DoD qualify
+// without a matrix heading. A matrix under a weaker header still qualifies via
+// its `## AC / DoD matrix` heading (MATRIX_SECTION_PATTERNS), which is what the
+// loop-grill synthesis and the epic procedure both write.
+const MATRIX_CRITERION_HEADER = /\b(criteri\w*|acceptance|ac)\b/i;
+const MATRIX_EVIDENCE_HEADER = /\b(evidence|dod|definition of done)\b/i;
+
+const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/u;
+
+/** Split one GFM table row into trimmed cell strings (drops leading/trailing pipes). */
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  // ponytail: no escaped-pipe (`\|`) handling — refined-issue matrix cells are
+  // short prose, not pipe-bearing code. Add a split-on-unescaped-pipe pass only
+  // if a real matrix cell ever needs a literal `|`.
+  return s.split("|").map((c) => c.trim());
+}
+
+/**
+ * Count real prose words in a matrix cell: runs of >=3 letters that are not the
+ * `dod` identifier token. Bare identifiers (`AC1`, `D1`, `DoD`), arrows, and
+ * digits contribute nothing, so a tautological/identifier-only cell scores 0.
+ */
+function cellProseWordCount(cell) {
+  if (typeof cell !== "string") return 0;
+  const stripped = cell.replace(/[*_`]+/gu, " ");
+  const runs = stripped.match(/[A-Za-z]{3,}/gu) ?? [];
+  return runs.filter((w) => w.toLowerCase() !== "dod").length;
+}
+
+// A matrix data row is semantic when BOTH mapped cells carry at least one real
+// prose word (a letter-run of >=3 chars, excluding the `dod` token). This
+// rejects the identifier-only/tautological rows the contract names — `AC1 | D1`,
+// `AC1 → D1`, `DoD`, and empty cells (all 0 prose words) — WITHOUT false-
+// rejecting a legitimately terse-but-real mapping (e.g. `Feature works |
+// Regression test added`). The threshold is deliberately >=1, not >=2: the goal
+// is to reject bare identifiers, not to mandate a minimum verbosity (#1951
+// draft_gate/Copilot review).
+function rowIsSemantic(criterion, evidence) {
+  return cellProseWordCount(criterion) >= 1 && cellProseWordCount(evidence) >= 1;
+}
+
+/**
+ * Parse every GFM pipe table in a Markdown body (skipping fenced code spans via
+ * the shared `stepFence`). Returns an array of
+ * `{ heading, headerCells, rows }` where `rows` is the list of data rows (each
+ * an array of trimmed cell strings). A table is a header line containing `|`,
+ * a delimiter row (`|---|---|`), and >=0 data rows.
+ */
+function parseMarkdownTables(body) {
+  if (typeof body !== "string" || body.length === 0) return [];
+  const lines = body.split(/\r?\n/u);
+  const tables = [];
+  let fence = null;
+  let heading = null;
+  let i = 0;
+  while (i < lines.length) {
+    const step = stepFence(fence, lines[i]);
+    fence = step.fence;
+    if (step.insideFence) {
+      i += 1;
+      continue;
+    }
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/u.exec(lines[i]);
+    if (headingMatch) {
+      heading = normalizeHeadingName(headingMatch[2]);
+      i += 1;
+      continue;
+    }
+    const header = lines[i];
+    const delim = lines[i + 1];
+    if (header.includes("|") && typeof delim === "string" && TABLE_DELIMITER_RE.test(delim)) {
+      const headerCells = splitTableRow(header);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length) {
+        const rowStep = stepFence(fence, lines[j]);
+        // A table ends at the first non-fence line without a pipe, or a heading.
+        if (rowStep.insideFence) break;
+        if (!lines[j].includes("|") || /^#{1,6}\s+/u.test(lines[j])) break;
+        rows.push(splitTableRow(lines[j]));
+        j += 1;
+      }
+      tables.push({ heading, headerCells, rows });
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return tables;
+}
+
+/**
+ * Detect the authoritative AC→DoD mapping matrix in an issue body.
+ *
+ * A qualifying table has >=2 columns and EITHER sits under a matrix-named
+ * heading ({@link MATRIX_SECTION_PATTERNS}) OR names criterion/evidence-like
+ * columns in its header. The matrix is VALID when it carries at least one
+ * SEMANTIC data row (both mapped cells carry real prose — see
+ * {@link rowIsSemantic}); a header/separator-only table (no data rows) or a
+ * table whose rows are all identifier-only/tautological (`AC1 → D1`) is
+ * malformed.
+ *
+ * @param {string} [body]
+ * @returns {{ found: boolean, valid: boolean, rowCount: number, rows: { criterion: string, evidence: string }[], reason: string }}
+ */
+export function detectAcDodMatrix(body = "") {
+  const tables = parseMarkdownTables(body);
+  const candidates = tables.filter((t) => {
+    if (!Array.isArray(t.headerCells) || t.headerCells.length < 2) return false;
+    const underHeading = typeof t.heading === "string" &&
+      MATRIX_SECTION_PATTERNS.some((p) => p.test(t.heading));
+    const headerNamesMap =
+      MATRIX_CRITERION_HEADER.test(t.headerCells[0] ?? "") &&
+      MATRIX_EVIDENCE_HEADER.test(t.headerCells[1] ?? "");
+    return underHeading || headerNamesMap;
+  });
+  if (candidates.length === 0) {
+    return { found: false, valid: false, rowCount: 0, rows: [], reason: "No AC→DoD mapping matrix table found." };
+  }
+  // Prefer the first candidate that has >=1 semantic row; otherwise report the
+  // first candidate as malformed.
+  for (const table of candidates) {
+    const semanticRows = [];
+    for (const cells of table.rows) {
+      if (cells.length < 2) continue;
+      const criterion = cells[0] ?? "";
+      const evidence = cells[1] ?? "";
+      if (rowIsSemantic(criterion, evidence)) {
+        semanticRows.push({ criterion, evidence });
+      }
+    }
+    if (semanticRows.length > 0) {
+      return {
+        found: true,
+        valid: true,
+        rowCount: semanticRows.length,
+        rows: semanticRows,
+        reason: `Found an AC→DoD mapping matrix with ${semanticRows.length} semantic row(s).`,
+      };
+    }
+  }
+  const dataRowCount = candidates[0].rows.length;
+  return {
+    found: true,
+    valid: false,
+    rowCount: 0,
+    rows: [],
+    reason: dataRowCount === 0
+      ? "AC→DoD mapping matrix table is empty (header/separator only, no data rows)."
+      : "AC→DoD mapping matrix table is identifier-only/tautological (no row maps a concrete criterion to concrete completion evidence).",
+  };
+}
+
+/**
+ * Project an issue's AC→DoD mapping matrix into self-contained list-form PR
+ * checklists (#1951 AC4): the PR carries list-form Acceptance criteria and
+ * Definition of done checkboxes derived from the matrix — never a matrix/table,
+ * never checkboxes inside table cells. Accepts a pre-parsed `matrix` (from
+ * {@link detectAcDodMatrix}) or a raw `body` to parse. Fails closed on a
+ * missing/malformed matrix rather than emitting empty checklists.
+ *
+ * @param {{ matrix?: ReturnType<typeof detectAcDodMatrix>, body?: string }} input
+ * @returns {{ acChecklist: string[], dodChecklist: string[], markdown: string }}
+ */
+export function derivePrChecklistsFromIssueMatrix({ matrix = null, body = "" } = {}) {
+  const m = matrix ?? detectAcDodMatrix(body);
+  if (!m || !m.found || !m.valid || !Array.isArray(m.rows) || m.rows.length === 0) {
+    throw Object.assign(
+      new Error(`derivePrChecklistsFromIssueMatrix: ${m?.reason ?? "no valid AC→DoD mapping matrix to project"}`),
+      { code: "MALFORMED_MATRIX_SOURCE" },
+    );
+  }
+  const dedupe = (items) => [...new Set(items.map((s) => s.trim()).filter((s) => s.length > 0))];
+  const acChecklist = dedupe(m.rows.map((r) => r.criterion));
+  const dodChecklist = dedupe(m.rows.map((r) => r.evidence));
+  const render = (heading, items) =>
+    `## ${heading}\n\n${items.map((t) => `- [ ] ${t}`).join("\n")}\n`;
+  const markdown = `${render("Acceptance criteria", acChecklist)}\n${render("Definition of done", dodChecklist)}`;
+  return { acChecklist, dodChecklist, markdown };
+}
+
 /**
  * Detect a linked refinement doc path from the issue body.
  * Looks for explicit `tmp/refinement/<n>-plan.md` style paths and the
@@ -476,9 +706,12 @@ export function detectLinkedRefinementDoc(body) {
  * `validatePrBodySpec` (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns`),
  * so the two spec surfaces cannot drift on what counts as an explicit
  * Non-goals section. `hasACs` keeps its caller-facing meaning: true only when
- * the FULL check passes, so every `.hasACs` consumer (enqueue gate, draft
- * gate, parked-items discovery, gate context) fails closed with no call-site
- * change.
+ * the FULL check passes (#1951: a valid AC→DoD mapping matrix plus an explicit
+ * Non-goals section, or a resolvable linked refinement doc plus Non-goals), so
+ * every `.hasACs` consumer (enqueue gate, draft gate, parked-items discovery,
+ * gate context) fails closed with no call-site change. `acItems`/`dodItems`
+ * stay populated for downstream consumers: from the issue's own checklist
+ * sections when present, otherwise projected from the matrix rows.
  *
  * `resolveLinkedDoc` (optional, #1866): a `(path) => boolean` callback used to
  * verify that a linked `tmp/refinement/*.md` doc actually resolves (e.g.
@@ -508,6 +741,7 @@ export function detectLinkedRefinementDoc(body) {
  *   dodItems: string[],
  *   sections: string[],
  *   linkedDoc: { found: boolean, path: string|null, reason: string, resolves?: boolean },
+ *   matrix: { found: boolean, valid: boolean, rowCount: number, rows: { criterion: string, evidence: string }[], reason: string },
  *   reason: string,
  *   finding: string|null,
  * }}
@@ -523,7 +757,8 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
       dodItems: [],
       sections: [],
       linkedDoc: { found: false, path: null, reason: "empty-body" },
-      reason: "Issue body is empty; no ACs/DoD/linked-doc can be detected.",
+      matrix: { found: false, valid: false, rowCount: 0, rows: [], reason: "empty-body" },
+      reason: "Issue body is empty; no matrix/ACs/DoD/linked-doc can be detected.",
       finding: REFINEMENT_ARTIFACT_FINDING,
     };
   }
@@ -569,13 +804,15 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
     findSectionByPatterns(sections, PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns),
   );
 
-  const artifactSource = acItems.length > 0
-    ? REFINEMENT_SOURCE.ISSUE_BODY_AC
-    : dodItems.length > 0
-      ? REFINEMENT_SOURCE.ISSUE_BODY_DOD
-      : linkedDocResolves
-        ? REFINEMENT_SOURCE.LINKED_DOC
-        : null;
+  // #1951: the authoritative issue artifact is the AC→DoD mapping MATRIX, not
+  // duplicate interactive issue-side checklists. Detect its presence + shape.
+  const matrix = detectAcDodMatrix(body);
+
+  // Keep acItems/dodItems populated for downstream consumers (gate context,
+  // coordination state) even when the issue carries only the matrix and no
+  // interactive checklists: project the matrix rows into AC/DoD items.
+  const effectiveAcItems = acItems.length > 0 ? acItems : matrix.rows.map((r) => r.criterion.trim()).filter(Boolean);
+  const effectiveDodItems = dodItems.length > 0 ? dodItems : matrix.rows.map((r) => r.evidence.trim()).filter(Boolean);
 
   const base = {
     hasNonGoals,
@@ -584,62 +821,22 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
     dodItems,
     sections: sectionNames,
     linkedDoc,
+    matrix,
   };
 
-  if (artifactSource !== null) {
+  // A linked refinement doc remains a complete artifact on its own (the doc
+  // carries the matrix). It still requires an explicit Non-goals section.
+  if (linkedDocResolves) {
     if (!hasNonGoals) {
       return {
         ...base,
         hasACs: false,
-        source: artifactSource,
+        source: REFINEMENT_SOURCE.LINKED_DOC,
         reason:
-          `Issue body carries a refinement artifact (${artifactSource}) but no explicit Non-goals section; ` +
+          "Issue body links a refinement doc but has no explicit Non-goals section; " +
           "the tracker-backed refinement contract requires one (rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; " +
           "e.g. run the loop-grill synthesis). Refusing: the refinement check fails closed without an explicit Non-goals section.",
         finding: MISSING_EXPLICIT_NON_GOALS_FINDING,
-      };
-    }
-    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_AC) {
-      // #1877 matrix floor: an AC checklist alone is no longer a complete
-      // refinement artifact on a tracker-backed issue — the matrix is each AC
-      // mapped to its DoD item(s) plus explicit Non-goals, so a missing DoD
-      // checklist fails closed with its own finding. A linked refinement doc
-      // stays a complete artifact on its own (the doc itself carries the
-      // matrix).
-      if (dodItems.length === 0) {
-        return {
-          ...base,
-          hasACs: false,
-          source: artifactSource,
-          reason:
-            "Issue body carries an Acceptance criteria checklist but no Definition of done checklist; " +
-            "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
-            "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
-            "without a DoD checklist mapped to the acceptance criteria.",
-          finding: MISSING_DOD_CHECKLIST_FINDING,
-        };
-      }
-      return {
-        ...base,
-        hasACs: true,
-        source: REFINEMENT_SOURCE.ISSUE_BODY_AC,
-        reason: `Found ${acItems.length} Acceptance criteria checklist item(s) in the issue body.`,
-        finding: null,
-      };
-    }
-    if (artifactSource === REFINEMENT_SOURCE.ISSUE_BODY_DOD) {
-      // #1877 matrix floor, symmetric arm: a DoD checklist with no Acceptance
-      // criteria checklist is an incomplete matrix, not a refined issue.
-      return {
-        ...base,
-        hasACs: false,
-        source: REFINEMENT_SOURCE.ISSUE_BODY_DOD,
-        reason:
-          "Issue body carries a Definition of done checklist but no Acceptance criteria checklist; " +
-          "the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix " +
-          "(#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR). Refusing: the refinement check fails closed " +
-          "without acceptance criteria for the DoD items to map to.",
-        finding: MISSING_AC_CHECKLIST_FINDING,
       };
     }
     return {
@@ -654,6 +851,67 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
     };
   }
 
+  // Matrix present but empty/malformed/identifier-only: fail closed (#1951 AC2).
+  if (matrix.found && !matrix.valid) {
+    return {
+      ...base,
+      hasACs: false,
+      source: REFINEMENT_SOURCE.ISSUE_BODY_MATRIX,
+      reason:
+        `Issue body carries an AC→DoD mapping matrix but it is not a valid semantic mapping (${matrix.reason}); ` +
+        "the refinement contract requires a real criterion→completion-evidence mapping " +
+        "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run the loop-grill synthesis). " +
+        "Refusing: the refinement check fails closed on a malformed/identifier-only matrix.",
+      finding: MALFORMED_AC_DOD_MATRIX_FINDING,
+    };
+  }
+
+  // Matrix present and valid: the refinement floor is the matrix + explicit
+  // Non-goals. Interactive issue-side AC/DoD checklists are NOT required.
+  if (matrix.found && matrix.valid) {
+    if (!hasNonGoals) {
+      return {
+        ...base,
+        hasACs: false,
+        source: REFINEMENT_SOURCE.ISSUE_BODY_MATRIX,
+        reason:
+          "Issue body carries a valid AC→DoD mapping matrix but no explicit Non-goals section; " +
+          "the tracker-backed refinement contract requires one (rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; " +
+          "e.g. run the loop-grill synthesis). Refusing: the refinement check fails closed without an explicit Non-goals section.",
+        finding: MISSING_EXPLICIT_NON_GOALS_FINDING,
+      };
+    }
+    return {
+      ...base,
+      hasACs: true,
+      source: REFINEMENT_SOURCE.ISSUE_BODY_MATRIX,
+      acItems: effectiveAcItems,
+      dodItems: effectiveDodItems,
+      reason: `Found a valid AC→DoD mapping matrix with ${matrix.rowCount} semantic row(s) and an explicit Non-goals section.`,
+      finding: null,
+    };
+  }
+
+  // Matrix absent. If the body carries AC/DoD checklist content it is a
+  // checklist-bearing issue missing the authoritative matrix (#1951 AC2 /
+  // migration): fail closed on the missing matrix so it is re-grilled. A body
+  // with no matrix and no AC/DoD content (prose-only, or only a Non-goals
+  // section / an unresolved linked-doc mention) stays the pre-existing
+  // missing_refinement_artifact.
+  if (acItems.length > 0 || dodItems.length > 0) {
+    return {
+      ...base,
+      hasACs: false,
+      source: REFINEMENT_SOURCE.MISSING,
+      reason:
+        "Issue body carries Acceptance criteria / Definition of done content but no authoritative AC→DoD mapping matrix table; " +
+        "under matrix-on-issue/checklist-on-PR the mapping table is the authoritative issue artifact " +
+        "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run the loop-grill synthesis). " +
+        "Refusing: the refinement check fails closed without the mapping matrix.",
+      finding: MISSING_AC_DOD_MATRIX_FINDING,
+    };
+  }
+
   return {
     ...base,
     hasACs: false,
@@ -661,7 +919,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
     acItems: [],
     uncheckedAcItems: [],
     dodItems: [],
-    reason: "Issue body has no Acceptance criteria section, no DoD section, and no linked refinement doc.",
+    reason: "Issue body has no AC→DoD mapping matrix, no Acceptance criteria/DoD content, and no linked refinement doc.",
     finding: REFINEMENT_ARTIFACT_FINDING,
   };
 }
@@ -1004,9 +1262,9 @@ export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
  */
 export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
   // `artifact.finding === null` is the explicit "passes the full refinement
-  // check" signal (artifact AND — since #1866 — an explicit Non-goals
-  // section AND — since #1877 — the full AC/DoD checklist matrix), clearer
-  // than reading `hasACs`, whose name understates what it covers.
+  // check" signal (a valid AC→DoD mapping matrix + an explicit Non-goals
+  // section, or a resolvable linked refinement doc + Non-goals), clearer than
+  // reading `hasACs`, whose name understates what it covers.
   if (!targetIsPickup || artifact.finding === null) {
     return { action: "enqueue" };
   }
@@ -1019,27 +1277,28 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
       "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without an explicit Non-goals section.";
     return { action: auto ? "divert" : "block", reason, missing: ["explicit Non-goals section"] };
   }
-  // #1877 matrix arms: name the actual missing matrix arm — an AC-only or
-  // DoD-only issue is NOT artifact-less, so the generic reason below would be
-  // factually wrong and would misdirect the fix.
-  if (artifact.finding === MISSING_DOD_CHECKLIST_FINDING) {
+  // #1951: matrix present but empty/malformed/identifier-only — name the shape
+  // defect so the fix targets the mapping table, not a missing section.
+  if (artifact.finding === MALFORMED_AC_DOD_MATRIX_FINDING) {
     const reason =
-      "Issue carries an Acceptance criteria checklist but no Definition of done checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
-      "Add a Definition of done checklist to the issue body (mapped to the acceptance criteria) " +
-      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
-    return { action: auto ? "divert" : "block", reason, missing: ["Definition of done checklist"] };
+      "Issue carries an AC→DoD mapping matrix but it is empty, malformed, or identifier-only/tautological (e.g. `AC1 → D1`). " +
+      "Rewrite the mapping table so each row maps a concrete acceptance-criterion outcome to concrete completion evidence " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue on a malformed matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["valid AC→DoD mapping matrix"] };
   }
-  if (artifact.finding === MISSING_AC_CHECKLIST_FINDING) {
+  // #1951: matrix absent (whether or not the body carries duplicate issue-side
+  // checklists) — the mapping table is the authoritative issue artifact.
+  if (artifact.finding === MISSING_AC_DOD_MATRIX_FINDING) {
     const reason =
-      "Issue carries a Definition of done checklist but no Acceptance criteria checklist — the refinement floor is the full AC/DoD/Non-goals matrix (#1877). " +
-      "Add an Acceptance criteria checklist to the issue body (for the DoD items to map to) " +
-      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the full matrix.";
-    return { action: auto ? "divert" : "block", reason, missing: ["Acceptance criteria checklist"] };
+      "Issue carries Acceptance criteria / Definition of done content but no authoritative AC→DoD mapping matrix — under matrix-on-issue/checklist-on-PR the mapping table is the authoritative issue artifact (#1951). " +
+      "Add a semantic AC→DoD mapping table to the issue body (each acceptance-criterion outcome mapped to its required completion evidence), and an explicit Non-goals section if one is not already present " +
+      "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the mapping matrix.";
+    return { action: auto ? "divert" : "block", reason, missing: ["AC→DoD mapping matrix"] };
   }
   const missing = [...REFINEMENT_ARTIFACT_SOURCES];
   const reason =
     `Issue has no refinement artifact (none of: ${missing.join(", ")}). ` +
-    "Refine the issue to the full AC/DoD/Non-goals matrix — an Acceptance criteria checklist, a Definition of done checklist, and an explicit Non-goals section — " +
+    "Refine the issue to the authoritative AC→DoD mapping matrix (a two-column table mapping each acceptance-criterion outcome to its required completion evidence) plus an explicit Non-goals section — " +
     "or link a refinement doc (tmp/refinement/*.md), which is a complete artifact on its own " +
     "(e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself), or the refiner) — before it enters the pickup queue.";
   return { action: auto ? "divert" : "block", reason, missing };
