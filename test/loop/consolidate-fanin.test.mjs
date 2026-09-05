@@ -3255,11 +3255,28 @@ test("detectMisplacedFindingsDiagnostic: empty string for a single-checkout run 
   }
 });
 
-test("detectMisplacedFindingsDiagnostic: empty string when the primary checkout has no stray artifacts (#1978)", async () => {
+test("detectMisplacedFindingsDiagnostic: empty string when the primary-checkout dir exists but holds no *.json (stray.length === 0 branch) (#1978)", async () => {
   const { primary, worktree } = await makePrimaryAndWorktree();
   try {
     const rel = "tmp/gate-reviews/owner-repo/pr-9/pre_approval_gate-abc123";
+    // Dir PRESENT in the primary checkout, but only a non-JSON file — exercises
+    // the `stray.length === 0` branch, distinct from the missing-dir readdir catch.
+    await mkdir(path.join(primary, rel), { recursive: true });
+    await writeFile(path.join(primary, rel, "notes.txt"), "not a findings artifact", "utf8");
     const diag = await detectMisplacedFindingsDiagnostic(path.join(worktree, rel), worktree);
+    assert.equal(diag, "");
+  } finally {
+    await rm(primary, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("detectMisplacedFindingsDiagnostic: empty string when --findings-dir is outside the worktree (rel guard) (#1978)", async () => {
+  const { primary, worktree } = await makePrimaryAndWorktree();
+  try {
+    // An absolute findings dir that is NOT under the worktree — the rel guard
+    // (rel.startsWith("..") || path.isAbsolute(rel)) short-circuits to "".
+    const outside = path.join(os.tmpdir(), "fanin-outside-abc");
+    const diag = await detectMisplacedFindingsDiagnostic(outside, worktree);
     assert.equal(diag, "");
   } finally {
     await rm(primary, { recursive: true, force: true }).catch(() => {});
@@ -3277,6 +3294,32 @@ test("consolidateGateFanin: the empty --findings-dir error carries the misplaced
     await assert.rejects(
       () => consolidateGateFanin({ findingsDir: worktreeFindingsDir, repoRoot: worktree }),
       /contains no \*\.json findings artifacts.*MISPLACED FINDINGS.*PRIMARY checkout/s,
+    );
+  } finally {
+    await rm(primary, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// #1978 (coverage medium): the GATE-EXEC-RESOLVED-ANGLE-EVIDENCE throw is the
+// second, primary real-world wiring of the diagnostic — it is the exact failure
+// mode PR #1976 surfaced. A round that is otherwise "clean" but names a resolved
+// angle with no evidence, whose artifact was stranded in the primary checkout,
+// must carry the misplaced-findings diagnostic in that throw too.
+test("consolidateGateFanin: the GATE-EXEC-RESOLVED-ANGLE-EVIDENCE error carries the misplaced-findings diagnostic (#1978)", async () => {
+  const { primary, worktree } = await makePrimaryAndWorktree();
+  try {
+    const rel = "tmp/gate-reviews/owner-repo/pr-9/pre_approval_gate-abc123";
+    const worktreeFindingsDir = path.join(worktree, rel);
+    await mkdir(worktreeFindingsDir, { recursive: true });
+    // A clean artifact for one angle lives in the worktree (round computes "clean")...
+    await writeFile(path.join(worktreeFindingsDir, "correctness.json"), JSON.stringify({ angle: "correctness", verdict: "clean", findings: [] }), "utf8");
+    // ...but "security" (a resolved angle) has no worktree artifact — its
+    // reviewer wrote it to the PRIMARY checkout instead.
+    await mkdir(path.join(primary, rel), { recursive: true });
+    await writeFile(path.join(primary, rel, "security.json"), "{}", "utf8");
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: worktreeFindingsDir, repoRoot: worktree, resolvedAngles: ["correctness", "security"] }),
+      /GATE-EXEC-RESOLVED-ANGLE-EVIDENCE.*security.*MISPLACED FINDINGS.*PRIMARY checkout.*security\.json/s,
     );
   } finally {
     await rm(primary, { recursive: true, force: true }).catch(() => {});
